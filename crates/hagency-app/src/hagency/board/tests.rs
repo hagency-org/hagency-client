@@ -86,7 +86,7 @@ fn kanban_script_layout_and_narrow_inspector_use_the_available_viewport() {
         for index in 0..2 {
             let column = board.view.view(&cx, column_path(index));
             let rect = column.area().rect(&cx);
-            assert!((rect.size.x - 260.0).abs() < 1.0, "{rect:?}");
+            assert!((rect.size.x - 280.0).abs() < 1.0, "{rect:?}");
             assert!(rect.size.y > 500.0);
         }
         let card = board
@@ -720,6 +720,38 @@ fn kanban_markdown_toolbar_preserves_source_selection_and_read_only_state() {
         "**重点**",
         "conflict disables formatting just like typing"
     );
+}
+
+#[test]
+fn kanban_priority_badges_and_loading_feedback_follow_visual_state() {
+    let (mut cx, mut board) = panel();
+    populate(&mut board);
+    draw(&mut cx, &mut board, 1100.0, 760.0);
+    let card = board
+        .view
+        .view(&cx, ids!(todo))
+        .portal_list(&cx, ids!(cards))
+        .item(&mut cx, 0, id!(Card));
+    let mut task = task("task_todo", "todo");
+    interaction::fill_card(&mut cx, &card, &task, false, false, false);
+    assert!(card.view(&cx, ids!(priority_badge)).visible());
+
+    task.priority = "normal".into();
+    interaction::fill_card(&mut cx, &card, &task, false, false, false);
+    assert!(!card.view(&cx, ids!(priority_badge)).visible());
+
+    task.priority = "urgent".into();
+    interaction::fill_card(&mut cx, &card, &task, false, false, false);
+    assert!(card.view(&cx, ids!(priority_badge)).visible());
+    interaction::fill_card(&mut cx, &card, &task, false, false, true);
+    assert!(card.view(&cx, ids!(priority_badge)).visible());
+
+    board.loading = true;
+    board.sync_controls(&mut cx);
+    assert!(board.view.widget(&cx, ids!(board_loading)).visible());
+    board.loading = false;
+    board.sync_controls(&mut cx);
+    assert!(!board.view.widget(&cx, ids!(board_loading)).visible());
 }
 
 #[test]

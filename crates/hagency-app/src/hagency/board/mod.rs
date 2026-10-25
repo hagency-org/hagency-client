@@ -84,7 +84,15 @@ impl Widget for KanbanCard {
                 self.focused = false;
                 self.view.redraw(cx);
             }
-            Hit::FingerHoverIn(_) => cx.set_cursor(MouseCursor::Hand),
+            Hit::FingerHoverIn(_) => {
+                cx.set_cursor(MouseCursor::Hand);
+                script_apply_eval!(cx, self.view, {draw_bg.hover: 1.0});
+                self.view.redraw(cx);
+            }
+            Hit::FingerHoverOut(_) => {
+                script_apply_eval!(cx, self.view, {draw_bg.hover: 0.0});
+                self.view.redraw(cx);
+            }
             _ => (),
         }
         self.view.handle_event(cx, event, scope);
