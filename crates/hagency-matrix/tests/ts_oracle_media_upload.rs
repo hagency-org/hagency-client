@@ -124,8 +124,9 @@ async fn ts_upload_body_is_the_raw_bytes_not_json_wrapped() {
     let cancel = CancellationToken::new();
     let (result, ()) = tokio::join!(attempt.send(&cancel), async {
         let request = fake.next().await;
+        // Ciphertext can start with any byte, including '{'. Exact equality
+        // rejects a JSON wrapper without making assumptions about random bytes.
         assert_eq!(request.body, cipher, "the body is the exact bytes");
-        assert_ne!(request.body.first(), Some(&b'{'), "not a JSON wrapper");
         request.json(200, json!({"content_uri":"mxc://fake.test/xyz"}));
     });
     result.unwrap();
