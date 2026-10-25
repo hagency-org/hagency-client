@@ -745,6 +745,21 @@ fn kanban_priority_badges_and_loading_feedback_follow_visual_state() {
     assert!(card.view(&cx, ids!(priority_badge)).visible());
     interaction::fill_card(&mut cx, &card, &task, false, false, true);
     assert!(card.view(&cx, ids!(priority_badge)).visible());
+    let badge = card.view(&cx, ids!(priority_badge));
+    let mut color = [0.0; 4];
+    badge
+        .borrow()
+        .unwrap()
+        .draw_bg
+        .get_instance(&mut cx, id!(color), &mut color);
+    assert_eq!(color[3], 0.0, "the lifted source badge must be transparent");
+    interaction::fill_card(&mut cx, &card, &task, false, false, false);
+    badge
+        .borrow()
+        .unwrap()
+        .draw_bg
+        .get_instance(&mut cx, id!(color), &mut color);
+    assert!(color[3] > 0.0, "the badge must return after the drag ends");
 
     board.loading = true;
     board.sync_controls(&mut cx);

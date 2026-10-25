@@ -498,7 +498,7 @@ impl ProjectBoard {
             if selected {
                 script_apply_eval!(cx, button, {draw_bg +: {color:mod.widgets.RINX_SURFACE color_hover:mod.widgets.RINX_SURFACE color_focus:mod.widgets.RINX_SURFACE} draw_text.color:mod.widgets.RINX_ACCENT});
             } else {
-                script_apply_eval!(cx, button, {draw_bg +: {color:#0000 color_focus:#0000} draw_text.color:mod.widgets.RINX_MUTED});
+                script_apply_eval!(cx, button, {draw_bg +: {color:#0000 color_hover:mod.widgets.RINX_HOVER color_focus:#0000} draw_text.color:mod.widgets.RINX_MUTED});
             }
         }
         self.view

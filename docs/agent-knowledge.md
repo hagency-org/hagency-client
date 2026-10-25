@@ -5321,3 +5321,10 @@ Desktop CI repair is verified on main 6e81c157 (2026-10-12): all five desktop ta
 ## 看板原生图片链路（2026-10-23）
 
 附件上传必须同时满足 Server 入口和 NativeOwner board-command 的请求预算。2 MiB 二进制需要约 2.8 MiB Base64，NativeOwner 不能沿用普通看板命令的 128 KiB 上限。上传回执使用稳定 attachment ID 插入 attachment: Markdown，回执只修改当前范围的草稿。Makepad TextInput.replace_range 拒绝只读字段，ACK 后先解除临时写锁；Tooltip.hide 即使已关闭仍请求重绘，不能在空闲 draw 中反复调用。刷新同一任务的历史不要先清空，否则滚动区域会收缩；切卡时则必须先清空。
+
+## 看板视觉状态审查（2026-10-25）
+
+`script_apply_eval!` 合并而非重置属性。页签选中时覆写的 `color_hover`，
+必须在未选中分支显式恢复，否则切换后旧页签会保留选中悬停底色。
+优先级徽章在拖拽源占位中保持几何尺寸但背景透明，结束拖拽后恢复底色。
+PR #8 审查及验证记录见 `dev-vibe/pr-8-board-ux-review-2026-10-25.zh.md`。
