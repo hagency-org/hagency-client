@@ -83,7 +83,7 @@ impl Widget for ProjectBoard {
                         viewport.pos.x - self.view.view(cx, column_path(*i)).area().rect(cx).pos.x
                     })
                     .unwrap_or(0.0);
-                let extent = (visible.len() as f64 * 272.0 - 12.0 - viewport.size.x).max(0.0);
+                let extent = (visible.len() as f64 * 292.0 - 12.0 - viewport.size.x).max(0.0);
                 self.scroll_x = (actual + step).clamp(0.0, extent);
                 self.view
                     .view(cx, ids!(board_scroll))
@@ -672,7 +672,23 @@ impl Widget for ProjectBoard {
                     .drag
                     .as_ref()
                     .is_some_and(|d| d.moved && column.area().rect(cx).contains(d.at));
-                script_apply_eval!(cx,column,{draw_bg +: {border_size:#(if highlighted{2.0}else{0.0}) border_color:mod.widgets.RINX_ACCENT}});
+                let blocked = highlighted
+                    && self.drag.as_ref().is_some_and(|drag| {
+                        lane.is_some_and(|lane| {
+                            lane.state != drag.task.state
+                                && lane.wip_limit.is_some_and(|limit| lane.task_count >= limit)
+                        })
+                    });
+                if highlighted {
+                    script_apply_eval!(cx,column,{draw_bg +: {color:mod.widgets.RINX_SELECTED border_size:2.0}});
+                } else {
+                    script_apply_eval!(cx,column,{draw_bg +: {color:mod.widgets.RINX_PANEL_BG border_size:0.0}});
+                }
+                if blocked {
+                    script_apply_eval!(cx,column,{draw_bg.border_color:mod.widgets.RINX_WARNING_FG});
+                } else {
+                    script_apply_eval!(cx,column,{draw_bg.border_color:mod.widgets.RINX_ACCENT});
+                }
             }
         }
         while let Some(step) = self.view.draw_walk(cx, scope, walk).step() {
@@ -901,12 +917,17 @@ pub(super) fn fill_card(
         script_apply_eval!(cx,due,{draw_text.color:mod.widgets.RINX_MUTED});
     }
     let mut priority = card.label(cx, ids!(priority));
+    let mut priority_badge = card.view(cx, ids!(priority_badge));
+    priority_badge.set_visible(cx, task.priority != "normal");
     if task.priority == "urgent" {
         script_apply_eval!(cx,priority,{draw_text.color:mod.widgets.RINX_WARNING_FG});
+        script_apply_eval!(cx,priority_badge,{draw_bg.color:mod.widgets.RINX_SELECTED});
     } else if task.priority == "high" {
         script_apply_eval!(cx,priority,{draw_text.color:mod.widgets.RINX_ACCENT});
+        script_apply_eval!(cx,priority_badge,{draw_bg.color:mod.widgets.RINX_SELECTED});
     } else {
         script_apply_eval!(cx,priority,{draw_text.color:mod.widgets.RINX_MUTED});
+        script_apply_eval!(cx,priority_badge,{draw_bg.color:mod.widgets.RINX_PANEL_BG});
     }
     let mut card_bg = card.clone();
 
@@ -919,6 +940,7 @@ pub(super) fn fill_card(
     let mut bg = card.clone();
     script_apply_eval!(cx,bg,{draw_bg.lifted:#(if lifted {1.0} else {0.0})});
     if lifted {
+        script_apply_eval!(cx,priority_badge,{draw_bg.color:#0000});
         for id in [
             ids!(number),
             ids!(title),

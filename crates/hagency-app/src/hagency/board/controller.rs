@@ -496,9 +496,9 @@ impl ProjectBoard {
         ] {
             let mut button = self.view.button(cx, id);
             if selected {
-                script_apply_eval!(cx, button, {draw_bg +: {color:mod.widgets.RINX_PANEL_BG color_focus:mod.widgets.RINX_PANEL_BG} draw_text.color:mod.widgets.RINX_ACCENT});
+                script_apply_eval!(cx, button, {draw_bg +: {color:mod.widgets.RINX_SURFACE color_hover:mod.widgets.RINX_SURFACE color_focus:mod.widgets.RINX_SURFACE} draw_text.color:mod.widgets.RINX_ACCENT});
             } else {
-                script_apply_eval!(cx, button, {draw_bg +: {color:#0000 color_focus:#0000} draw_text.color:mod.widgets.RINX_INK});
+                script_apply_eval!(cx, button, {draw_bg +: {color:#0000 color_hover:mod.widgets.RINX_HOVER color_focus:#0000} draw_text.color:mod.widgets.RINX_MUTED});
             }
         }
         self.view
@@ -658,6 +658,9 @@ impl ProjectBoard {
                 "Close"
             }),
         );
+        self.view
+            .widget(cx, ids!(board_loading))
+            .set_visible(cx, self.loading);
         self.view.label(cx, ids!(sync_status)).set_text(
             cx,
             tr(if self.loading {
