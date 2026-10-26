@@ -373,3 +373,10 @@ Runtime file opt-in stays off until bounded receive/private publication and dura
 send/status tools are complete. Server95, Agent116+3+8 and engine255 pass; broad
 Client qualification still fails its existing real two-agent placeholder. See
 agent-file-transfer-validation in dev-vibe. A2/A4/A3 and remaining gates stay open.
+
+
+A2 receive checkpoint (2026-10-27): current runtime incoming tools, SDK bounded
+reads/decryption, persistent one-shot custody and private atomic publication are
+connected on macOS/Linux. Engine256, Agent125+3+8 and App618 pass locally with
+original ignores. Sender/delivery state and true joint/platform qualification are
+next; A2/A4/A3 and remaining gates stay open. See agent-file-receive-validation.

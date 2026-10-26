@@ -14277,3 +14277,30 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 - A1 run40363073237 now has successful Linux/Windows native jobs, macOS cancelled;
   original historical caller-loss cause remains unproven. A6 CI passes while its
   full/App matrix is still pending. Actual A2 byte tools and A4/A3 remain work.
+
+
+## 2026-10-27: Original Agent attachment receive connected
+
+- Current Codex host conditionally opts into file requests only with explicit
+  programming/Room-file capability, current SDK source and Server metadata
+  support. list_received_files/receive_file select only the original event.
+  Server/device/lease/source and current local policy fences precede effects.
+- Owner proposals exclude MXC/key; the current SDK performs bounded authenticated
+  reads and v2 verification/decryption. Durable reserved/write_possible/ready or
+  prewrite-failed records retain original custody. Generated private no-replace
+  publication verifies physical root/parent/file and byte hash. Unknown, changed
+  files and restored snapshots never recreate download/write ownership.
+- Fixed receive context settlement and exact usage-gap invalidation after the
+  new namespace initially failed AFTER actual file completion. Original logs
+  retained. The integrated fake model now reads actual bytes and completes with
+  lease renewal and original reply; separate real SDK/TCP crypto transport passes.
+- Agent125+programming3+runtime8, engine256, App618 pass with original3/7/2 ignores.
+  Strict3-package all-targets no-deps Clippy, core/new-SDK format, callers/spec
+  bindings pass. Whole-App format fails existing unmodified baseline files; no
+  broad format rewrite. See agent-file-receive-validation for logs/limits.
+- Earlier metadata Client/Server CI pass; Mac full-matrix inventory fails its
+  ten-minute cold compile/list deadline. Added exact-scope no-run build steps to
+  CI before the unchanged bounded verifier; remote revalidation is still owed.
+- No real homeserver/model/manual desktop joint receive or Windows publication
+  qualification. send_file/get_file_delivery, A4 encrypted execution/remote
+  approval, A3 collaboration and remaining earlier gates stay active goals.

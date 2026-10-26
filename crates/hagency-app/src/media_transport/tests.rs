@@ -9,14 +9,14 @@ use std::{
 };
 use matrix_sdk::ruma::api::MatrixVersion;
 
-struct Server {
-    url: String,
-    requests: Arc<Mutex<Vec<String>>>,
+pub(crate) struct Server {
+    pub(crate) url: String,
+    pub(crate) requests: Arc<Mutex<Vec<String>>>,
     done: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 impl Server {
-    fn new(ciphertext: Vec<u8>) -> Self {
+    pub(crate) fn new(ciphertext: Vec<u8>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -94,7 +94,7 @@ impl Server {
             thread: Some(thread),
         }
     }
-    async fn client(&self, version: MatrixVersion) -> Client {
+    pub(crate) async fn client(&self, version: MatrixVersion) -> Client {
         let client = Client::builder()
             .http_client(
                 matrix_sdk::reqwest::Client::builder()

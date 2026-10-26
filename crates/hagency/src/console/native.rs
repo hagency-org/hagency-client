@@ -63,7 +63,21 @@ pub struct ContinuationMessage {
     pub body: String,
     pub require_encrypted: bool,
 }
+pub use hagency_agent_local::attachments::Attachment as AgentAttachment;
+pub const MAX_AGENT_FILE_BYTES: usize = hagency_agent_local::received_files::MAX_BYTES;
 pub trait MatrixTokenSource: Send + Sync {
+    fn supports_agent_file_receive(&self) -> bool {
+        false
+    }
+    fn fetch_agent_attachment(
+        &self,
+        _attachment: AgentAttachment,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Vec<u8>, NativeError>> + Send + '_>,
+    > {
+        Box::pin(async { Err(failure(503, "agent_file_transport_unavailable")) })
+    }
+
     fn send_continuation(
         &self,
         _message: ContinuationMessage,

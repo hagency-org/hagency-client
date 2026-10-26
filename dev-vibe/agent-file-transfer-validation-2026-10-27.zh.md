@@ -1,6 +1,6 @@
 # Agent 文件收发：当前实现和验收
 
-2026年10月27日。A2 进行中，当前仅完成跨 Server/Client 的原请求附件描述协议。
+2026年10月27日。A2 进行中。本页保留第一批附件描述协议证据；当前已进一步接通接收工具，见 [原请求附件接收验收](agent-file-receive-validation-2026-10-27.zh.md)。下述“尚未启用”描述是第一批提交的历史状态。
 本功能分支 `codex/agent-file-transfer` 基于 A1/A7/A5/A6 实现；已重新拉取并确认
 包含最新 Client main `42e59b9e`。配套 Server 基于 main `6340df32`，第一批提交
 `c98e210`，详见其 `dev-vibe/agent-file-metadata-contract-2026-10-27.zh.md`。

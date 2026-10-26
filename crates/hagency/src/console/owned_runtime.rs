@@ -1,4 +1,6 @@
 //! Explicit owner-started, chat-only Codex host. No legacy execution fallback.
+#[cfg(unix)]
+mod received_files;
 mod service;
 use super::{
     AuthorizedDevice, Console,
@@ -1188,6 +1190,7 @@ impl Transport for PinnedConsole {
                 | Op::Start { .. }
                 | Op::Processing { .. }
                 | Op::AuthorizeTool { .. }
+                | Op::Attachments { .. }
                 | Op::Reply { .. }
                 | Op::ReconcileKnownReply { .. }
                 | Op::Finish { .. }
@@ -1847,6 +1850,8 @@ async fn execution_loop_admitted<T: Transport>(
     let mut reported = BTreeSet::new();
     let mut reply_cursor = String::new();
     let mut finish_cursors = [String::new(), String::new(), String::new()];
+    #[cfg(unix)]
+    let mut attachment_check = None::<(Instant, bool)>;
     loop {
         if *cancel.borrow() {
             return Err(RuntimeError::Stopped);
@@ -1929,13 +1934,33 @@ async fn execution_loop_admitted<T: Transport>(
             tokio::select! {biased;_=canceled(cancel)=>return Err(RuntimeError::Stopped),_=tokio::time::sleep(Duration::from_millis(250))=>{}}
             continue;
         }
+        #[cfg(unix)]
+        let incoming_files = if let Some((at, enabled)) = attachment_check
+            && at.elapsed() < Duration::from_secs(30)
+        {
+            enabled
+        } else {
+            let enabled = received_files::enabled(console, config).await?;
+            attachment_check = Some((Instant::now(), enabled));
+            enabled
+        };
+        #[cfg(not(unix))]
+        let incoming_files = false;
         let events = match operation(
             console,
             cancel,
-            Op::Poll {
-                lease: lease.clone(),
-                binding_id: config.binding_id.clone(),
-                limit: 1,
+            if incoming_files {
+                Op::PollFiles {
+                    lease: lease.clone(),
+                    binding_id: config.binding_id.clone(),
+                    limit: 1,
+                }
+            } else {
+                Op::Poll {
+                    lease: lease.clone(),
+                    binding_id: config.binding_id.clone(),
+                    limit: 1,
+                }
             },
         )
         .await
@@ -2548,6 +2573,10 @@ async fn run_turn<T: Transport>(
         {
             return Err(RuntimeError::Profile);
         }
+    }
+    #[cfg(unix)]
+    if let Some(console)=&host {
+        received_files::attach(&mut provider.session,console,config,lease,&prepared,&profile.cwd,cancel).await?;
     }
     let has_approval_host = host.is_some();
     let bridge = host.map(|console| {

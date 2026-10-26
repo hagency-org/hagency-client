@@ -33,6 +33,7 @@ fn event(id: &str, epoch: i64) -> Value {
 struct WireState {
     epoch: i64,
     attachment_response: Option<Value>,
+    incoming_attachment: Option<Value>,
     attachment_input: Option<Value>,
     restore_scope: bool,
     binding_states: BTreeMap<String, String>,
@@ -67,7 +68,7 @@ impl WireState {
         match path {
             "/hagency/api/v1/discovery" => (
                 200,
-                json!({"product":"hagency-server","version":"0.1.0","protocolVersion":3,"capabilities":["pasion-oauth","owner-agent-appservice-v1","global-agent-identity-v2","execution-device-v1","owner-direct-v1"],"homeserver":origin,"issuer":format!("{origin}auth/")}),
+                json!({"product":"hagency-server","version":"0.1.0","protocolVersion":3,"capabilities":(["pasion-oauth","owner-agent-appservice-v1","global-agent-identity-v2","execution-device-v1","owner-direct-v1"].into_iter().chain(self.incoming_attachment.as_ref().map(|_|hagency_agent_local::attachments::CAPABILITY)).collect::<Vec<_>>()),"homeserver":origin,"issuer":format!("{origin}auth/")}),
             ),
             "/hagency/api/v1/agents/agent-a" if self.restore_scope => (
                 200,
@@ -127,6 +128,9 @@ impl WireState {
                 }
             }
             "/hagency/api/v1/execution/events/poll" => {
+                if self.incoming_attachment.is_some() {
+                    assert_eq!(input["acceptFiles"], true);
+                }
                 assert!(
                     input["bindingId"] == "binding-a"
                         || self
@@ -175,9 +179,13 @@ impl WireState {
                 self.attachment_input = Some(input.clone());
                 (
                     200,
-                    self.attachment_response
-                        .clone()
-                        .expect("fixture attachment response must be explicit"),
+                    if let Some(attachment) = &self.incoming_attachment {
+                        json!({"dispatchId":input["dispatchId"],"executionId":input["executionId"],"attachments":[attachment]})
+                    } else {
+                        self.attachment_response
+                            .clone()
+                            .expect("fixture attachment response must be explicit")
+                    },
                 )
             }
             "/hagency/api/v1/execution/events/authorize-tool" => (
@@ -369,6 +377,12 @@ async fn host_round(
     restart: bool,
 ) {
     let device = console.authorized_device().await.unwrap();
+    let diagnostic = config
+        .profile
+        .executable
+        .parent()
+        .unwrap()
+        .join("turns-receive-stderr");
     let (initial, _binding_handle, _) = binding_work(config);
     let local_path = path.clone();
     let device_profile = profile_identity(
@@ -444,6 +458,22 @@ async fn host_round(
         .await
         .unwrap()
         .unwrap();
+    if !matches!(ready, Ok(true)) {
+        let ledger = Ledger::open_scoped(&local_path, OWNER, &device_profile).unwrap();
+        eprintln!(
+            "original fixture stderr: {}",
+            std::fs::read_to_string(&diagnostic)
+                .unwrap_or_default()
+                .chars()
+                .take(8192)
+                .collect::<String>()
+        );
+        eprintln!(
+            "original failed runtime event: {:?}; audit: {:?}",
+            state.lock().unwrap().events,
+            ledger.approval_history(OWNER, "agent-a", None)
+        );
+    }
     assert!(
         matches!(ready, Ok(true)),
         "runtime ended before completion: {result:?}; binding={:?}; paths={:?}",
@@ -460,16 +490,26 @@ async fn fixture(unknown: bool, budget: u64) {
     fixture_with_processing_failure(unknown, budget, 0).await;
 }
 async fn fixture_with_processing_failure(unknown: bool, budget: u64, processing_failure: u8) {
+    fixture_with_receive(unknown, budget, processing_failure, false).await;
+}
+async fn fixture_with_receive(unknown: bool, budget: u64, processing_failure: u8, receive: bool) {
     use hagency_agent_local::{
         Budget, Layer, Limit, ModelProfile, Period, Policy, RequestPolicy, ToolPolicy,
     };
     let (origin, state, server) = server(unknown, processing_failure).await;
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();
-    let native =
-        NativeOwner::open_with_matrix(&root.join("state"), &origin, OWNER, Arc::new(Source))
-            .await
-            .unwrap();
+    if receive {
+        state.lock().unwrap().incoming_attachment=Some(serde_json::to_value(hagency_agent_local::attachments::Attachment::from_content(&json!({"msgtype":"m.file","body":"inbound.txt","url":"mxc://media.test/incoming","info":{"size":5}})).unwrap()).unwrap());
+    }
+    let source: Arc<dyn MatrixTokenSource> = if receive {
+        Arc::new(FileSource)
+    } else {
+        Arc::new(Source)
+    };
+    let native = NativeOwner::open_with_matrix(&root.join("state"), &origin, OWNER, source)
+        .await
+        .unwrap();
     let console = native.test_console().clone();
     let device = console.authorized_device().await.unwrap();
     let path = ledger_path(
@@ -499,6 +539,9 @@ async fn fixture_with_processing_failure(unknown: bool, budget: u64, processing_
     let marker = root.join("turns");
     std::fs::write(&marker, "").unwrap();
     provider(&script, &marker, &path, unknown);
+    if receive {
+        receive_provider(&script);
+    }
     let scope = inbox::Dispatch {
         id: "dispatch-a".into(),
         binding_id: "binding-a".into(),
@@ -548,6 +591,42 @@ async fn fixture_with_processing_failure(unknown: bool, budget: u64, processing_
             },
         )
         .unwrap();
+    if receive {
+        let incoming_workspace =
+            hagency_agent_local::room_files::Workspace::open(directory, OWNER, &scope).unwrap();
+        let directory = incoming_workspace
+            .canonical_directory()
+            .to_string_lossy()
+            .into_owned();
+        drop(incoming_workspace);
+        for layer in [Layer::Agent, Layer::Room, Layer::Requester] {
+            let current = ledger.policy_snapshot(&scope).unwrap()[match layer {
+                Layer::Agent => 0,
+                Layer::Room => 1,
+                Layer::Requester => 2,
+            }]
+            .clone();
+            ledger
+                .set_policy(
+                    OWNER,
+                    &scope,
+                    layer,
+                    current.revision,
+                    &Policy {
+                        budget: Budget {
+                            limit: Limit::Tokens(budget),
+                            period: Period::Lifetime,
+                        },
+                        requests: RequestPolicy::Allow,
+                        high_risk: ToolPolicy::AllowWithRules {
+                            tools: vec!["matrix.receive_file".into()],
+                            directories: vec![directory.clone()],
+                        },
+                    },
+                )
+                .unwrap();
+        }
+    }
     drop(ledger);
     let config = || StartConfig {
         agent_id: "agent-a".into(),
@@ -566,7 +645,7 @@ async fn fixture_with_processing_failure(unknown: bool, budget: u64, processing_
         mode: BudgetMode::Estimated { reservation: 10 },
         credential_ref: "keychain:fixture".into(),
         takeover: Takeover::Never,
-        host_files: false,
+        host_files: receive,
         owner_direct: false,
         recovery_device_id: None,
         recovery_consent_id: None,
@@ -1401,4 +1480,76 @@ async fn typed_http_attachment_response_is_private_and_pinned_to_original_execut
     };
     assert_eq!(error.code, "invalid_execution_response");
     server.abort();
+}
+
+struct FileSource;
+impl MatrixTokenSource for FileSource {
+    fn supports_agent_file_receive(&self) -> bool {
+        true
+    }
+    fn fetch_agent_attachment(
+        &self,
+        attachment: super::super::native::AgentAttachment,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Vec<u8>, NativeError>> + Send + '_>,
+    > {
+        Box::pin(async move {
+            attachment.validate().unwrap();
+            assert_eq!(attachment.source["url"], "mxc://media.test/incoming");
+            Ok(b"hello".to_vec())
+        })
+    }
+    fn access_token(
+        &self,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<MatrixAccessToken, NativeError>> + Send + '_>,
+    > {
+        Source.access_token()
+    }
+}
+fn receive_provider(path: &std::path::Path) {
+    let source = std::fs::read_to_string(path).unwrap();
+    let start = source.find("  time.sleep(6)").unwrap();
+    let end = source[start..].find(" else: raise Exception(m)").unwrap() + start;
+    let source = format!(
+        "{}{}{}",
+        &source[..start],
+        "  emit('item/tool/call',{'threadId':'thread-a','turnId':'turn-a','callId':'list-incoming','tool':'list_received_files','arguments':{}},'host-list')\n",
+        &source[end..]
+    );
+    let branch = r#" if m is None:
+  assert f['result']['success']
+  result=json.loads(f['result']['contentItems'][0]['text'])
+  assert 'mxc://' not in str(result)
+  if f['id']=='host-list':
+   assert result['files'][0]['event_id']=='$dispatch-a:test'
+   emit('item/tool/call',{'threadId':'thread-a','turnId':'turn-a','callId':'receive-incoming','tool':'receive_file','arguments':{'event_id':'$dispatch-a:test'}},'host-receive')
+  else:
+   assert f['id']=='host-receive'
+   assert result['bytes']==5
+   assert open(result['path'],'rb').read()==b'hello'
+   time.sleep(6)
+   emit('thread/tokenUsage/updated',{'threadId':'thread-a','turnId':'turn-a','tokenUsage':{'total':{'inputTokens':3,'outputTokens':2,'cachedInputTokens':0,'reasoningOutputTokens':0,'totalTokens':5},'last':{'inputTokens':3,'outputTokens':2,'cachedInputTokens':0,'reasoningOutputTokens':0,'totalTokens':5}}})
+   emit('item/completed',{'threadId':'thread-a','turnId':'turn-a','item':{'id':'message-a','type':'agentMessage','text':'isolated fixture answer'}})
+   emit('turn/completed',{'threadId':'thread-a','turn':{'id':'turn-a','status':'completed'}})
+  continue
+"#;
+    let source=source.replace(" def emit(m,p): print(json.dumps({'method':m,'params':p}),flush=True)"," def emit(m,p,i=None): print(json.dumps(dict({'method':m,'params':p},**({'id':i} if i is not None else {}))),flush=True)");
+    let source=source.replace(" elif m in ['thread/start','thread/resume']:\n", " elif m in ['thread/start','thread/resume']:\n  assert {'receive_file','list_received_files'} <= {t['name'] for t in p['dynamicTools']}\n  assert 'mxc://' not in str(p)\n");
+    let source = source.replace(
+        " if m=='initialize':",
+        &format!("{branch} if m=='initialize':"),
+    );
+    let source=source.replace("for raw in sys.stdin:","sys.stderr=open(marker+'-receive-stderr','a')\nfor raw in sys.stdin:\n with open(marker+'-receive-frames','a') as trace:trace.write(raw)");
+    std::fs::write(path, source).unwrap();
+}
+#[tokio::test]
+async fn typed_http_current_runtime_receives_original_file_into_private_workspace() {
+    if std::env::var_os("HAGENCY_RECEIVE_TEST_DIAGNOSTICS").is_some() {
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .with_test_writer()
+            .try_init();
+    }
+    fixture_with_receive(false, 100, 0, true).await;
 }

@@ -516,6 +516,24 @@ impl Session {
             _ => Err(Error::Profile("host files not released for this runtime")),
         }
     }
+    #[cfg(unix)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn enable_received_files(
+        &mut self,
+        receiver: crate::received_files::Receiver,
+        host: std::sync::Arc<dyn codex::AttachmentHost>,
+        dispatch: String,
+        execution: String,
+        event: String,
+        source: Option<crate::attachments::Attachment>,
+    ) -> Result<()> {
+        match self {
+            Self::Codex(session) => {
+                session.enable_received_files(receiver, host, dispatch, execution, event, source)
+            }
+            _ => Err(Error::Profile("attachment tools require Codex")),
+        }
+    }
     pub async fn open_context(
         &mut self,
         ledger: &mut Ledger,

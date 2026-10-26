@@ -3,6 +3,17 @@
 
 # Repository audit knowledge
 
+- **Original attachment receive, 2026-10-27:** Receiver reservations mint one
+  non-Clone custody; commit write_possible before filesystem effects. Ready paths
+  require original file/workspace/parent identity and hash, never content-only
+  reconstruction. Lost custody and restored snapshots cannot redownload/overwrite.
+  Current SDK bounded authenticated downloads bypass preview cache and verify v2
+  ciphertext. Model receives safe metadata and generated paths only. Receive
+  contexts must be accepted by exact settlement validation AND usage-gap baseline
+  reset; omitting either can create unknown or mischarge after actual publication.
+  Current publication is macOS/Linux; sender/encrypted Room execution remain work.
+
+
 - **Agent attachment protocol, 2026-10-27:** Server records descriptors in the
   original owner-event transaction; legacy Poll excludes them before LIMIT.
   Explicit PollFiles is reserved for a fully wired host. Read metadata only for
