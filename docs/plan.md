@@ -355,3 +355,12 @@ outcomes; native owner history and real Codex 5/5 receipt evidence pass. A6 rema
 in progress: stopped-dispatch inspection, current file digests, explicit owner notes
 and continuation are next. A2/A4/A3 and manual/cross-platform gates remain open.
 See dev-vibe/owner-agent-capabilities-plan-2026-10-26.zh.md for current scope.
+
+
+Owner recovery checkpoint (2026-10-27): A6 now has native stopped-request/file
+inspection, original input archives, observed stop scope, owner dispositions and
+one-shot explicit continuation through the current Matrix SDK. Original unknown
+and charges remain. Agent113+3+8, engine252, App617, actual SDK local HTTP send and
+native OAuth/disk checks pass; manual/encrypted/cross-platform qualification remains
+open. Next implementation is A2 Agent file tools, followed by A4 encrypted Room
+execution/remote approvals and A3 collaboration. Full A2-A7 goal is still active.

@@ -280,7 +280,7 @@ fn original_v1_snapshot_restores_without_fabricating_usage_dates() {
     let source = populated(&tmp.path().join("original.sqlite"));
     source
         .db
-        .execute_batch("DROP TABLE call_observations; DROP TABLE usage_alerts; DROP TABLE approval_audit_events; DROP TABLE approval_audit")
+        .execute_batch("DROP TABLE call_observations; DROP TABLE usage_alerts; DROP TABLE execution_stops; DROP TABLE execution_inputs; DROP TABLE recovery_actions; DROP TABLE recovery_reviews; DROP TABLE execution_workspaces; DROP TABLE approval_audit_events; DROP TABLE approval_audit")
         .unwrap();
     let old = source.snapshot(OWNER, &profile(), 123).unwrap();
     let mut target = Ledger::open_scoped(":memory:", OWNER, &profile()).unwrap();
@@ -312,7 +312,7 @@ fn pre_audit_snapshot_keeps_usage_and_does_not_invent_approval_history() {
     let source = populated(&tmp.path().join("usage-only.sqlite"));
     source
         .db
-        .execute_batch("DROP TABLE approval_audit_events; DROP TABLE approval_audit")
+        .execute_batch("DROP TABLE execution_stops; DROP TABLE execution_inputs; DROP TABLE recovery_actions; DROP TABLE recovery_reviews; DROP TABLE execution_workspaces; DROP TABLE approval_audit_events; DROP TABLE approval_audit")
         .unwrap();
     let original_dates = rows(&source.db, "call_observations");
     assert_eq!(original_dates.len(), 2);
@@ -327,6 +327,58 @@ fn pre_audit_snapshot_keeps_usage_and_does_not_invent_approval_history() {
             .records
             .is_empty()
     );
+    assert_eq!(
+        target
+            .account(&scope(), Layer::Agent, Period::Lifetime, 200)
+            .unwrap(),
+        (35, 200)
+    );
+}
+
+#[test]
+fn published_audit_snapshot_migrates_empty_recovery_without_inventing_stop_proofs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut source = populated(&tmp.path().join("audit-only.sqlite"));
+    let proposal = crate::ToolProposal {
+        scope: scope(),
+        dispatch: "original".into(),
+        tool: "codex.command".into(),
+        arguments: serde_json::json!({"command":"echo original"}),
+        canonical_directory: "/workspace".into(),
+        risk: "high".into(),
+        policy_revision: [1; 3],
+        expires: 500,
+    };
+    let id = source.begin_approval_audit(OWNER, &proposal, 100).unwrap();
+    source
+        .record_approval_event(
+            OWNER,
+            &id,
+            crate::audit::Phase::OwnerAllowed,
+            101,
+            &serde_json::json!({"device":"original"}),
+        )
+        .unwrap();
+    source.db.execute_batch("DROP TABLE recovery_actions; DROP TABLE recovery_reviews; DROP TABLE execution_inputs; DROP TABLE execution_stops; DROP TABLE execution_workspaces").unwrap();
+    let snapshot = source.snapshot(OWNER, &profile(), 123).unwrap();
+    let mut target = Ledger::open_scoped(":memory:", OWNER, &profile()).unwrap();
+    target
+        .restore_snapshot(OWNER, &profile(), &snapshot)
+        .unwrap();
+    assert_eq!(
+        target
+            .approval_record(OWNER, "agent", &id)
+            .unwrap()
+            .proposal,
+        proposal
+    );
+    assert_eq!(
+        target.approval_phase(OWNER, &id).unwrap(),
+        crate::audit::Phase::OwnerAllowed
+    );
+    assert!(rows(&target.db, "execution_stops").is_empty());
+    assert!(rows(&target.db, "execution_inputs").is_empty());
+    assert!(rows(&target.db, "recovery_actions").is_empty());
     assert_eq!(
         target
             .account(&scope(), Layer::Agent, Period::Lifetime, 200)

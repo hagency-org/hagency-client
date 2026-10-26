@@ -201,6 +201,7 @@ pub enum Finish {
 /// Compact only a terminal record with an exact, retained settlement proof.
 /// This neither deletes started witnesses nor changes calls/accounts/holds.
 fn compact_known_terminals(db: &rusqlite::Connection) -> Result<()> {
+    crate::recovery::preserve_inputs(db)?;
     let mut stmt = db.prepare("SELECT id,envelope,execution_id,state FROM local_inbox WHERE state IN ('rejected','failed','unknown') AND json_extract(envelope,'$.body')!=''")?;
     let rows = stmt
         .query_map([], |r| {

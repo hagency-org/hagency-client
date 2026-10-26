@@ -1394,6 +1394,21 @@ async fn stop_provider(provider: &mut runtime::Process) -> Result<(), RuntimeErr
         RuntimeError::Execution("agent_shutdown_unconfirmed")
     })
 }
+async fn stop_execution_provider(
+    provider: &mut runtime::Process,
+    ledger: &mut Ledger,
+    owner: &str,
+    prepared: &inbox::Prepared,
+) -> Result<(), RuntimeError> {
+    stop_provider(provider).await?;
+    local(ledger.record_execution_stop(
+        owner,
+        &prepared.dispatch.id,
+        &prepared.execution_id,
+        provider.stop_scope(),
+        now(),
+    ))
+}
 /// Consume stable metadata pages without retaining unbounded message/history payloads.
 async fn history_coverage<T: Transport>(
     transport: &T,
@@ -2495,6 +2510,14 @@ async fn run_turn<T: Transport>(
     } else {
         None
     };
+    local(ledger.record_execution_workspace(
+        owner,
+        &prepared.dispatch.id,
+        &prepared.execution_id,
+        &profile.cwd,
+        profile.programming.enabled,
+        now(),
+    ))?;
     let mut provider = tokio::select! {biased; _=canceled(cancel)=>return Err(RuntimeError::Stopped), p=runtime::spawn_for_scope(&profile,&config.credential_ref,ledger,&scope)=>p.map_err(|error|provider_failure("provider_spawn", &error))?};
     let mut stopped = false;
     let outcome = async {
@@ -2564,7 +2587,7 @@ async fn run_turn<T: Transport>(
         }
     };
     if !allow {
-        stop_provider(&mut provider).await?; stopped = true;
+        stop_execution_provider(&mut provider,ledger,owner,&prepared).await?; stopped = true;
         return if *cancel.borrow() {
             Err(RuntimeError::Stopped)
         } else {
@@ -2609,11 +2632,11 @@ async fn run_turn<T: Transport>(
         Ok(completed)=>Ok(Ok(completed)),
         Err(codex::Error::Ledger(hagency_agent_local::Error::Denied))=>Ok(Err("⏸️ 本次请求未获 Agent 主人的处理授权，未调用模型。")),
         Err(codex::Error::Ledger(hagency_agent_local::Error::Budget))=>Ok(Err("⏸️ 暂停处理：Token 可用额度不足，无法为本次请求预留额度。请联系 Agent 主人调整配额。本次未调用模型。")),
-        Err(codex::Error::Failed)=>{stop_provider(&mut provider).await?; stopped = true;return Ok(Some(Finish::Failed));},
+        Err(codex::Error::Failed)=>{stop_execution_provider(&mut provider,ledger,owner,&prepared).await?; stopped = true;return Ok(Some(Finish::Failed));},
         Err(error)=>Err(provider_failure("agent_turn_result", &error)),
     }};
     // Dropping a running turn first seals its reservation; then kill the child.
-    stop_provider(&mut provider).await?; stopped = true;
+    stop_execution_provider(&mut provider,ledger,owner,&prepared).await?; stopped = true;
     let completed = match result? {
         Ok(completed) => completed,
         Err(reason) => {
@@ -2647,7 +2670,7 @@ async fn run_turn<T: Transport>(
     Ok(None)
     }.await;
     if !stopped {
-        stop_provider(&mut provider).await?;
+        stop_execution_provider(&mut provider, ledger, owner, &prepared).await?;
     }
     outcome
 }

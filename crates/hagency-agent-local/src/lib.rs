@@ -7,6 +7,7 @@ pub mod backup;
 pub mod codex;
 pub mod inbox;
 pub mod process_cleanup;
+pub mod recovery;
 #[cfg(unix)]
 pub mod room_files;
 pub mod runtime;
@@ -292,6 +293,7 @@ impl Ledger {
         db.execute_batch("CREATE TABLE IF NOT EXISTS external_sessions (scope TEXT NOT NULL, profile TEXT NOT NULL, session TEXT NOT NULL, counters TEXT NOT NULL DEFAULT '', PRIMARY KEY(scope,profile))")?;
         db.execute_batch(usage::SCHEMA)?;
         db.execute_batch(audit::SCHEMA)?;
+        db.execute_batch(recovery::SCHEMA)?;
         db.execute_batch("COMMIT")?;
         db.pragma_update(None, "foreign_keys", true)?;
         Ok(Self {

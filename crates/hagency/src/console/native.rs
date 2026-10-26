@@ -7,6 +7,9 @@ mod speech;
 mod usage;
 use super::*;
 use crate::owner_host::OwnerHost;
+pub use hagency_agent_local::recovery::{
+    Disposition as RecoveryDisposition, Input as RecoveryInput,
+};
 pub use hagency_agent_local::usage::{Group as UsageGroup, Query as UsageQuery};
 pub use history::HistoryAction;
 use salvo::test::{ResponseExt, TestClient};
@@ -49,7 +52,26 @@ pub(in crate::console) fn sdk_source_failure(error: NativeError) -> &'static str
         _ => "matrix_authorization_required",
     }
 }
+/// One explicit owner message, armed once by the local recovery ledger.
+#[derive(Clone)]
+pub struct ContinuationMessage {
+    pub owner: String,
+    pub room: String,
+    pub thread: String,
+    pub agent_mxid: String,
+    pub transaction_id: String,
+    pub body: String,
+    pub require_encrypted: bool,
+}
 pub trait MatrixTokenSource: Send + Sync {
+    fn send_continuation(
+        &self,
+        _message: ContinuationMessage,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, NativeError>> + Send + '_>>
+    {
+        Box::pin(async { Err(failure(503, "continuation_transport_unavailable")) })
+    }
+
     /// Return the current SDK token, checking its account epoch before and after
     /// awaiting. Implementations must not call this native service recursively.
     fn access_token(

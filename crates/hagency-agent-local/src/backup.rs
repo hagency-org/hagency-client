@@ -87,6 +87,7 @@ impl Snapshot {
         // alerts. Older version-1 snapshots retain their original call rows.
         db.execute_batch(crate::usage::SCHEMA)?;
         db.execute_batch(crate::audit::SCHEMA)?;
+        db.execute_batch(crate::recovery::SCHEMA)?;
         Ok(db)
     }
 }
@@ -267,7 +268,12 @@ fn validate(db: &Connection, owner: &str, profile: &str) -> Result<()> {
     let expected = Ledger::open_scoped(":memory:", owner, profile)?;
     let stored = objects(db)?;
     let current = objects(&expected.db)?;
-    let before_audit: Vec<_> = current
+    let before_recovery: Vec<_> = current
+        .iter()
+        .filter(|(_, name, _)| !crate::recovery::OBJECTS.contains(&name.as_str()))
+        .cloned()
+        .collect();
+    let before_audit: Vec<_> = before_recovery
         .iter()
         .filter(|(_, name, _)| !crate::audit::OBJECTS.contains(&name.as_str()))
         .cloned()
@@ -289,7 +295,8 @@ fn validate(db: &Connection, owner: &str, profile: &str) -> Result<()> {
         })
         .cloned()
         .collect();
-    if stored != current && stored != before_audit && stored != legacy {
+    if stored != current && stored != before_recovery && stored != before_audit && stored != legacy
+    {
         return Err(Error::ForeignDatabase);
     }
     let identities: Vec<String> = db

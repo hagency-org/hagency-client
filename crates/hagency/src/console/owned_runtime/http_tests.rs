@@ -569,7 +569,7 @@ async fn fixture_with_processing_failure(unknown: bool, budget: u64, processing_
         false,
     )
     .await;
-    let ledger = Ledger::open_scoped(&path, OWNER, &profile_id).unwrap();
+    let mut ledger = Ledger::open_scoped(&path, OWNER, &profile_id).unwrap();
     let expected_turns = if unknown { 2 } else { usize::from(budget > 0) };
     assert_eq!(
         std::fs::read_to_string(&marker).unwrap().lines().count(),
@@ -579,6 +579,13 @@ async fn fixture_with_processing_failure(unknown: bool, budget: u64, processing_
         .account(&scope, Layer::Room, Period::Lifetime, now())
         .unwrap();
     if unknown {
+        let review = ledger
+            .inspect_recovery(OWNER, "agent-a", "dispatch-a", &[], now())
+            .unwrap();
+        assert_eq!(review.evidence.stop_scope.as_deref(), Some("leader"));
+        assert_eq!(review.evidence.workspace.as_deref(), workspace.to_str());
+        assert_eq!(review.evidence.input, "isolated fixture request");
+        assert!(!review.evidence.requires_tree);
         assert_eq!(account, (5, 0));
         assert!(ledger.outstanding_calls(OWNER).unwrap().is_empty());
         assert_eq!(
@@ -1332,3 +1339,5 @@ async fn heartbeat_retries_transport_failure_but_never_extends_unconfirmed_lease
         server.abort();
     }
 }
+
+mod recovery;

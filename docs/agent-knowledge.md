@@ -3,6 +3,16 @@
 
 # Repository audit knowledge
 
+- **Stopped request recovery, 2026-10-27:** Keep a separate copy of unknown/failed
+  input before compacting inbox bodies. Workspace and observed stop scope bind
+  the original execution; programming continuation requires the original whole
+  tree stop record. Owner confirmation is separate evidence, never an execution
+  outcome rewrite. Reviews expire and rehash files; one new action consumes one
+  review. Commit send_possible before SDK IO; only its first caller gets send
+  custody. Same-ID retry/backup restore never rearm it. Continuation uses the
+  actual current owner in the original Room/thread, with a fresh normal request
+  and new accounting. Missing old input/workspace/stop evidence stays missing.
+
 - **Approval audit, 2026-10-27:** OwnerAllowed is a durable decision, Applying
   precedes permission consumption, Submitted requires the actual provider write,
   and Completed requires an exact tool receipt (or a persisted model.request reply).

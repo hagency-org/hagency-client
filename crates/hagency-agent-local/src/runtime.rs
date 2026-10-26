@@ -161,6 +161,19 @@ pub struct Process {
     child: Option<codex::Child>,
 }
 impl Process {
+    /// Describes the successful stop contract, never a stop receipt by itself.
+    pub fn stop_scope(&self) -> &'static str {
+        match &self.session {
+            Session::Codex(_) => {
+                if matches!(&self.child, Some(codex::Child::Supervised { .. })) {
+                    "whole_tree"
+                } else {
+                    "leader"
+                }
+            }
+            Session::Claude { .. } | Session::Octos { .. } => "whole_tree",
+        }
+    }
     pub async fn stop(&mut self) -> Result<()> {
         match &mut self.session {
             Session::Codex(_) => {

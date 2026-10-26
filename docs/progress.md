@@ -14230,3 +14230,29 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   Closed notice streams still fail; no retry or deadline/assertion relaxation.
   Complete local execution42/42, strict all-targets no-deps Clippy and format pass.
   Windows revalidation remains pending; this change does not claim a root fix.
+
+
+## 2026-10-27: Stopped request inspection and explicit owner continuation
+
+- Added original execution workspace/stop evidence, input archive before terminal
+  compaction, bounded current file hashes, paged unknown/failed history and native
+  Recovery UI. Owner notes/confirmation remain separate from machine outcomes.
+  Programming continuation requires actual whole-tree stop evidence; no missing
+  legacy input/workspace/stop fact is invented.
+- One review binds exact bytes/digest for300s, rehashes files, permits one new
+  disposition and freezes owner confirmation. Original action ID retains its
+  exact input/deciding device and cannot reacquire send custody after unknown,
+  cancellation, restart or snapshot restore. Original unknown/accounting remain.
+- New continuation is an actual current-owner Matrix SDK message in the original
+  Room/thread with exact Agent mention and fixed transaction ID. Binding/owner/
+  account/encrypted-private-room gates precede it. Acceptance is a new request,
+  not model completion; the UI tells the owner to start the stopped service.
+- Final Agent113+3+8/3 existing ignored, engine252/7 existing ignored, App617/2
+  existing ignored pass. Actual provider subprocess test observes bound original
+  stop/input; native OAuth/TCP/disk lost-delivery test sends once; actual SDK local
+  HTTP sync/send proves body/thread/txn/account fences. Strict3-package all-targets
+  no-deps Clippy, fmt, i18n2471/1863/0, caller and whitespace gates pass. Reports and
+  original failure/correction details are in owner-stopped-recovery-validation.
+- Real encrypted owner-direct -> Server -> new Agent execution, manual desktop
+  interaction and cross-platform acceptance remain unqualified. A2/A4/A3 stay in
+  scope; no goal-complete claim, deployment or reconstructed task-writer state.
