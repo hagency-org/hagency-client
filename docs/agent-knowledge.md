@@ -3,6 +3,14 @@
 
 # Repository audit knowledge
 
+- **Client file delivery protocol, 2026-10-27:** Manifest/Target/Delivery and
+  typed prepare/chunk/queue/status carry no byte or send custody. Retain the
+  original manifest/request/file expectation locally and validate each response;
+  status sends only the original target, never an expired lease or arbitrary
+  destination. Sent requires an actual original event ID, including modern
+  opaque IDs without colon. Capture/approval/durable local ownership remain
+  necessary before exposing dynamic sender tools.
+
 - **Server original file delivery, 2026-10-27:** Separate durable upload/send
   custody commits before IO. Fresh Matrix facts and exact execution device/lease
   bind each phase; lock actual device/session/user rows and recheck real clocks

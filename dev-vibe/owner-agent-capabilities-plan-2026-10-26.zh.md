@@ -35,3 +35,5 @@
 2026年10月27日：阶段4进一步接通 list_received_files/receive_file、当前 SDK 的认证有界下载、v2 校验解密、持久接收所有权及原子落盘。元数据、审批和返回值不含私有源；未知写入与快照恢复不能重建写权限。详情见 [接收验收](agent-file-receive-validation-2026-10-27.zh.md)。发送/投递状态和真实联合/平台资格仍需完成，A2继续进行。
 
 2026年10月27日：阶段4的Server发送基础已实现，含原请求分块暂存、实际字节摘要、上传/消息两阶段一次性所有权、未知不重发、安全投递历史与原可信事件确认。Server103项（含全部PG）及严格检查通过，见 [Server PR7](https://github.com/hagency-org/hagency-server/pull/7) 中的 agent-file-delivery-contract。Client 的冻结字节、审批、send_file/get_file_delivery 接线和完整联合资格仍需完成；A2保持进行中。Client接收的1bbff570 CI和App CI已成功，完整平台矩阵仍在运行。
+
+2026年10月27日：阶段4继续补齐Client类型化发送协议，原manifest/target/历史回执校验及64KiB分块、只读status实际TCP验证通过。Agent127/3原忽略、运行引擎258/7原忽略与严格检查通过。见 [发送协议当前验收](agent-file-delivery-validation-2026-10-27.zh.md)。尚未启用动态发送工具；冻结字节、审批和本地一次性登记继续实施，A2未完成。

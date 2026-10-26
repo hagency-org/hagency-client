@@ -14321,3 +14321,22 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 - Client1bbff570 CI/App CI succeeded; full Windows/macOS matrix still pending.
   Client send_file/get_file_delivery/capture/approval wiring remains next, then
   A4/A3 and qualification. No A2/whole-goal completion or deployment claim.
+
+
+## 2026-10-27: Client typed original-file delivery protocol
+
+- Added source-free Manifest/Target/Delivery validation and exact original
+  expectation checks to device prepare/chunk/queue/status operations. 64KiB
+  chunks retain the existing 128KiB HTTP bound; status carries no lease or
+  destination and cannot reupload/requeue. Modern opaque Matrix event IDs work.
+- Actual NativeOwner OAuth/device/TCP verifies all four payloads, original byte
+  encoding, unknown non-replay and changed/private receipt rejection. This is
+  typed transport evidence, not Server/model/owner-approval joint qualification.
+- Agent127/3 existing ignored and engine258/7 existing ignored pass. Strict
+  two-package all-targets Clippy, core fmt, caller/guard checks and1155 bound
+  selectors pass (original superseded entries retained). See the
+  delivery validation report for logs. Capture/approval/one-shot local state and
+  dynamic sender tools remain next; A2 and the whole goal remain active.
+- Server03c9e0b fixes a CI spelling-only fixture failure without changing original
+  bytes/assertions. Matching typos1.48 and targeted test pass; Server CI40389964561 now succeeds
+  at03c9e0b, including PostgreSQL, backend/frontend tests and WASM Clippy.

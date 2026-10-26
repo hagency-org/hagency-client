@@ -6,6 +6,7 @@ pub mod attachments;
 pub mod audit;
 pub mod backup;
 pub mod codex;
+pub mod file_delivery;
 pub mod inbox;
 pub mod process_cleanup;
 pub mod received_files;

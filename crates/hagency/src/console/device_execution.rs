@@ -1,6 +1,9 @@
 //! Host-only device transport. This module performs no model/tool execution and
 //! never ACKs automatically: callers must durably persist events before ACK.
 use super::{AuthorizedDevice, Console};
+use hagency_agent_local::file_delivery::{
+    self, Delivery as FileDelivery, Manifest as FileManifest, Target as FileTarget,
+};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -274,7 +277,61 @@ impl ExecutionAttachments {
         Ok(())
     }
 }
+/// Local original metadata used to validate every later response. Only target
+/// is serialized; this value never grants file-byte or send ownership.
+#[derive(Clone)]
+pub struct FileExpectation {
+    pub target: FileTarget,
+    pub request_id: String,
+    pub file: FileManifest,
+}
+impl FileExpectation {
+    fn validate(&self) -> Result<(), DeviceError> {
+        self.target
+            .validate()
+            .map_err(|_| error(400, "invalid_file_target"))?;
+        id(&self.request_id)?;
+        self.file
+            .validate()
+            .map_err(|_| error(400, "invalid_file_manifest"))
+    }
+    fn check(&self, delivery: &FileDelivery) -> Result<(), DeviceError> {
+        delivery
+            .validate(
+                &self.target.dispatch_id,
+                &self.target.execution_id,
+                &self.request_id,
+                &self.file,
+            )
+            .map_err(|_| error(502, "invalid_file_delivery_response"))?;
+        if delivery.id != self.target.file_id {
+            return Err(error(502, "execution_scope_mismatch"));
+        }
+        Ok(())
+    }
+}
 pub enum DeviceOperation {
+    PrepareFile {
+        lease: LeaseRef,
+        dispatch_id: String,
+        execution_id: String,
+        request_id: String,
+        file: FileManifest,
+    },
+    StageFileChunk {
+        lease: LeaseRef,
+        expected: FileExpectation,
+        offset: u64,
+        bytes: Vec<u8>,
+    },
+    QueueFile {
+        lease: LeaseRef,
+        expected: FileExpectation,
+    },
+    /// Historical status only: no previous lease is supplied or renewed.
+    FileDelivery {
+        expected: FileExpectation,
+    },
     History {
         agent_id: String,
         cursor: Option<String>,
@@ -347,6 +404,7 @@ pub enum DeviceOperation {
     },
 }
 pub enum DeviceResponse {
+    FileDelivery(FileDelivery),
     History(ExecutionHistory),
     Lease(Lease),
     Released,
@@ -362,8 +420,11 @@ pub enum DeviceResponse {
 impl DeviceOperation {
     fn lease(&self) -> Option<&LeaseRef> {
         match self {
-            Self::Acquire { .. } | Self::History { .. } => None,
-            Self::Renew { lease, .. }
+            Self::Acquire { .. } | Self::History { .. } | Self::FileDelivery { .. } => None,
+            Self::PrepareFile { lease, .. }
+            | Self::StageFileChunk { lease, .. }
+            | Self::QueueFile { lease, .. }
+            | Self::Renew { lease, .. }
             | Self::Release { lease }
             | Self::Poll { lease, .. }
             | Self::PollFiles { lease, .. }
@@ -382,6 +443,57 @@ impl DeviceOperation {
             lease.validate()?;
         }
         let (path, body) = match self {
+            Self::PrepareFile {
+                lease,
+                dispatch_id,
+                execution_id,
+                request_id,
+                file,
+            } => {
+                id(dispatch_id)?;
+                id(execution_id)?;
+                id(request_id)?;
+                file.validate()
+                    .map_err(|_| error(400, "invalid_file_manifest"))?;
+                (
+                    "files/prepare",
+                    json!({"lease":lease,"dispatchId":dispatch_id,"executionId":execution_id,"requestId":request_id,"file":file}),
+                )
+            }
+            Self::StageFileChunk {
+                lease,
+                expected,
+                offset,
+                bytes,
+            } => {
+                use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
+                expected.validate()?;
+                if bytes.is_empty()
+                    || bytes.len() > file_delivery::CHUNK_BYTES
+                    || offset.saturating_add(bytes.len() as u64) > expected.file.bytes
+                {
+                    return Err(error(400, "invalid_file_chunk"));
+                }
+                (
+                    "files/chunk",
+                    json!({"lease":lease,"target":expected.target,"offset":offset,"data":STANDARD_NO_PAD.encode(bytes)}),
+                )
+            }
+            Self::QueueFile { lease, expected } => {
+                expected.validate()?;
+                (
+                    "files/queue",
+                    json!({"lease":lease,"target":expected.target}),
+                )
+            }
+            Self::FileDelivery { expected } => {
+                expected.validate()?;
+                (
+                    "files/status",
+                    serde_json::to_value(&expected.target)
+                        .map_err(|_| error(400, "invalid_file_target"))?,
+                )
+            }
             Self::History {
                 agent_id,
                 cursor,
@@ -663,6 +775,44 @@ fn parse_response(
 ) -> Result<DeviceResponse, DeviceError> {
     let invalid = || error(502, "invalid_execution_response");
     match operation {
+        DeviceOperation::PrepareFile {
+            dispatch_id,
+            execution_id,
+            request_id,
+            file,
+            ..
+        } => {
+            let delivery: FileDelivery = decode(&value, "delivery")?;
+            delivery
+                .validate(dispatch_id, execution_id, request_id, file)
+                .map_err(|_| error(502, "invalid_file_delivery_response"))?;
+            Ok(DeviceResponse::FileDelivery(delivery))
+        }
+        DeviceOperation::StageFileChunk {
+            expected,
+            offset,
+            bytes,
+            ..
+        } => {
+            let delivery: FileDelivery = decode(&value, "delivery")?;
+            expected.check(&delivery)?;
+            if delivery.state != "staging"
+                || delivery.received_bytes < offset.saturating_add(bytes.len() as u64)
+            {
+                return Err(error(502, "invalid_file_delivery_response"));
+            }
+            Ok(DeviceResponse::FileDelivery(delivery))
+        }
+        DeviceOperation::QueueFile { expected, .. }
+        | DeviceOperation::FileDelivery { expected } => {
+            let delivery: FileDelivery = decode(&value, "delivery")?;
+            expected.check(&delivery)?;
+            if matches!(operation, DeviceOperation::QueueFile { .. }) && delivery.state == "staging"
+            {
+                return Err(error(502, "invalid_file_delivery_response"));
+            }
+            Ok(DeviceResponse::FileDelivery(delivery))
+        }
         DeviceOperation::History {
             agent_id,
             cursor,
@@ -1073,6 +1223,84 @@ mod attachment_tests {
                 .unwrap()
                 .validate("dispatch-a", "execution-a")
                 .is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod file_delivery_tests {
+    use super::*;
+    fn expected() -> FileExpectation {
+        FileExpectation {
+            target: FileTarget {
+                dispatch_id: "dispatch-a".into(),
+                execution_id: "execution-a".into(),
+                file_id: "file-a".into(),
+            },
+            request_id: "request-a".into(),
+            file: FileManifest {
+                filename: "report.bin".into(),
+                caption: None,
+                bytes: file_delivery::MAX_BYTES as u64,
+                sha256: "0".repeat(64),
+            },
+        }
+    }
+    #[test]
+    fn file_wire_is_bounded_and_status_never_carries_a_lease_or_destination() {
+        let lease = LeaseRef {
+            agent_id: "agent-a".into(),
+            epoch: 1,
+        };
+        let original = expected();
+        let chunk = DeviceOperation::StageFileChunk {
+            lease: lease.clone(),
+            expected: original.clone(),
+            offset: 0,
+            bytes: vec![255; file_delivery::CHUNK_BYTES],
+        };
+        let (route, bytes) = chunk.request().unwrap();
+        assert_eq!(route, "files/chunk");
+        assert!(bytes.len() < MAX_WIRE_BYTES);
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value.as_object().unwrap().len(), 4);
+        assert_eq!(
+            value["target"],
+            serde_json::to_value(&original.target).unwrap()
+        );
+        use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
+        assert_eq!(
+            STANDARD_NO_PAD
+                .decode(value["data"].as_str().unwrap())
+                .unwrap(),
+            vec![255; file_delivery::CHUNK_BYTES]
+        );
+        for (offset, length) in [
+            (0, 0),
+            (0, file_delivery::CHUNK_BYTES + 1),
+            (file_delivery::MAX_BYTES as u64, 1),
+            (u64::MAX, 1),
+        ] {
+            assert!(
+                DeviceOperation::StageFileChunk {
+                    lease: lease.clone(),
+                    expected: original.clone(),
+                    offset,
+                    bytes: vec![0; length]
+                }
+                .request()
+                .is_err()
+            );
+        }
+        let status = DeviceOperation::FileDelivery {
+            expected: original.clone(),
+        };
+        assert!(status.lease().is_none());
+        let (route, bytes) = status.request().unwrap();
+        assert_eq!(route, "files/status");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&bytes).unwrap(),
+            serde_json::to_value(original.target).unwrap()
         );
     }
 }

@@ -35,6 +35,8 @@ struct WireState {
     attachment_response: Option<Value>,
     incoming_attachment: Option<Value>,
     attachment_input: Option<Value>,
+    file_delivery_response: Option<Value>,
+    file_delivery_input: Option<Value>,
     restore_scope: bool,
     binding_states: BTreeMap<String, String>,
     no_messages: bool,
@@ -173,6 +175,16 @@ impl WireState {
                 (
                     200,
                     json!({"processing":{"id":"processing-a","dispatchId":input["dispatchId"],"executionId":input["executionId"],"state":"pending","matrixEventId":null}}),
+                )
+            }
+            "/hagency/api/v1/execution/files/prepare"
+            | "/hagency/api/v1/execution/files/chunk"
+            | "/hagency/api/v1/execution/files/queue"
+            | "/hagency/api/v1/execution/files/status" => {
+                self.file_delivery_input = Some(input.clone());
+                (
+                    200,
+                    json!({"delivery":self.file_delivery_response.clone().expect("explicit original file response")}),
                 )
             }
             "/hagency/api/v1/execution/files/attachments" => {
@@ -1552,4 +1564,162 @@ async fn typed_http_current_runtime_receives_original_file_into_private_workspac
             .try_init();
     }
     fixture_with_receive(false, 100, 0, true).await;
+}
+
+#[tokio::test]
+async fn typed_http_file_delivery_pins_manifest_and_preserves_unknown_without_sending_again() {
+    use super::super::device_execution::FileExpectation;
+    use hagency_agent_local::file_delivery::{Manifest, Target};
+    let (origin, state, server) = server(false, 0).await;
+    let temp = tempfile::tempdir().unwrap();
+    let native = NativeOwner::open_with_matrix(
+        &temp.path().canonicalize().unwrap().join("state"),
+        &origin,
+        OWNER,
+        Arc::new(Source),
+    )
+    .await
+    .unwrap();
+    let console = native.test_console();
+    let file = Manifest {
+        filename: "report.bin".into(),
+        caption: Some("Exact caption".into()),
+        bytes: 5,
+        sha256: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824".into(),
+    };
+    let expected = FileExpectation {
+        target: Target {
+            dispatch_id: "dispatch-a".into(),
+            execution_id: "execution-a".into(),
+            file_id: "file-a".into(),
+        },
+        request_id: "call-a".into(),
+        file: file.clone(),
+    };
+    let lease = LeaseRef {
+        agent_id: "agent-a".into(),
+        epoch: 1,
+    };
+    let mut delivery = json!({"id":"file-a","dispatchId":"dispatch-a","executionId":"execution-a","requestId":"call-a","createdAtMs":1,"manifest":file,"manifestDigest":file.digest().unwrap(),"receivedBytes":0,"state":"staging","uploadAccepted":false,"matrixEventId":null});
+    state.lock().unwrap().file_delivery_response = Some(delivery.clone());
+    assert!(matches!(
+        console
+            .execution_api(Op::PrepareFile {
+                lease: lease.clone(),
+                dispatch_id: "dispatch-a".into(),
+                execution_id: "execution-a".into(),
+                request_id: "call-a".into(),
+                file: file.clone()
+            })
+            .await
+            .unwrap(),
+        Response::FileDelivery(_)
+    ));
+    assert_eq!(
+        state.lock().unwrap().file_delivery_input,
+        Some(
+            json!({"lease":lease,"dispatchId":"dispatch-a","executionId":"execution-a","requestId":"call-a","file":file})
+        )
+    );
+    delivery["receivedBytes"] = 5.into();
+    state.lock().unwrap().file_delivery_response = Some(delivery.clone());
+    console
+        .execution_api(Op::StageFileChunk {
+            lease: lease.clone(),
+            expected: expected.clone(),
+            offset: 0,
+            bytes: b"hello".to_vec(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        state.lock().unwrap().file_delivery_input,
+        Some(json!({"lease":lease,"target":expected.target,"offset":0,"data":"aGVsbG8"}))
+    );
+    delivery["state"] = "queued".into();
+    state.lock().unwrap().file_delivery_response = Some(delivery.clone());
+    console
+        .execution_api(Op::QueueFile {
+            lease: lease.clone(),
+            expected: expected.clone(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        state.lock().unwrap().file_delivery_input,
+        Some(json!({"lease":lease,"target":expected.target}))
+    );
+    delivery["state"] = "unknown".into();
+    delivery["uploadAccepted"] = true.into();
+    state.lock().unwrap().file_delivery_response = Some(delivery.clone());
+    let Response::FileDelivery(receipt) = console
+        .execution_api(Op::FileDelivery {
+            expected: expected.clone(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("wrong response")
+    };
+    assert_eq!(receipt.state, "unknown");
+    assert!(receipt.matrix_event_id.is_none());
+    assert_eq!(
+        state.lock().unwrap().file_delivery_input,
+        Some(json!(expected.target))
+    );
+    for key in ["id", "requestId", "executionId", "manifestDigest"] {
+        let mut changed = delivery.clone();
+        changed[key] = "foreign".into();
+        state.lock().unwrap().file_delivery_response = Some(changed);
+        assert!(
+            console
+                .execution_api(Op::FileDelivery {
+                    expected: expected.clone()
+                })
+                .await
+                .is_err()
+        );
+    }
+    let mut private = delivery.clone();
+    private["mxcUrl"] = "mxc://private.test/blob".into();
+    state.lock().unwrap().file_delivery_response = Some(private);
+    assert!(
+        console
+            .execution_api(Op::FileDelivery {
+                expected: expected.clone()
+            })
+            .await
+            .is_err()
+    );
+    // Modern event IDs are opaque; a colon is not required for the actual receipt.
+    delivery["state"] = "sent".into();
+    delivery["matrixEventId"] = "$actualOpaqueEventId".into();
+    state.lock().unwrap().file_delivery_response = Some(delivery);
+    let Response::FileDelivery(sent) = console
+        .execution_api(Op::FileDelivery { expected })
+        .await
+        .unwrap()
+    else {
+        panic!("wrong response")
+    };
+    assert_eq!(
+        sent.matrix_event_id.as_deref(),
+        Some("$actualOpaqueEventId")
+    );
+    {
+        let wire = state.lock().unwrap();
+        for suffix in ["prepare", "chunk", "queue"] {
+            assert_eq!(
+                wire.paths
+                    .iter()
+                    .filter(|p| p.ends_with(&format!("/files/{suffix}")))
+                    .count(),
+                1,
+                "status cannot resend"
+            );
+        }
+    }
+    native.shutdown().await;
+    server.abort();
+    let _ = server.await;
 }

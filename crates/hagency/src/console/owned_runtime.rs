@@ -1191,6 +1191,9 @@ impl Transport for PinnedConsole {
                 | Op::Processing { .. }
                 | Op::AuthorizeTool { .. }
                 | Op::Attachments { .. }
+                | Op::PrepareFile { .. }
+                | Op::StageFileChunk { .. }
+                | Op::QueueFile { .. }
                 | Op::Reply { .. }
                 | Op::ReconcileKnownReply { .. }
                 | Op::Finish { .. }
