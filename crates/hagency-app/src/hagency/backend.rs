@@ -107,6 +107,19 @@ fn log_runtime_recovery(result: Result<Value, NativeError>) {
     }
 }
 
+/// Bounded attachment transport shared by native owner hosts. The caller must
+/// retain current account liveness and separately authorize the original Agent
+/// dispatch/approval; returned bytes do not confer execution or write custody.
+pub async fn fetch_agent_attachment_bytes(
+    client: &matrix_sdk::Client,
+    origin: &str,
+    owner: &str,
+    attachment: &::hagency::native_owner::AgentAttachment,
+    live: impl Fn() -> Result<(), NativeError>,
+) -> Result<Vec<u8>, NativeError> {
+    agent_files::fetch(client, origin, owner, attachment, live).await
+}
+
 struct SdkTokens(Weak<Inner>);
 fn source_error(code: &str) -> NativeError {
     NativeError {
@@ -121,7 +134,7 @@ impl MatrixTokenSource for SdkTokens {
             self.access_token().await?;
             let service=Service(self.0.upgrade().ok_or_else(||source_error("matrix_account_changed"))?);
             let client=crate::sliding_sync::get_client().ok_or_else(||source_error("matrix_sign_in_required"))?;
-            agent_files::fetch(&client,&service.0.origin,&service.0.owner,&attachment,||service.check().map_err(|e|source_error(&e))).await
+            fetch_agent_attachment_bytes(&client,&service.0.origin,&service.0.owner,&attachment,||service.check().map_err(|e|source_error(&e))).await
         })
     }
 

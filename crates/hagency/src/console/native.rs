@@ -404,7 +404,7 @@ fn key(id: &str) -> Result<(), NativeError> {
 fn segment(id: &str) -> Result<String, NativeError> {
     if id.len() > 255
         || !id.starts_with('!')
-        || !id.contains(':')
+        || !super::matrix_identifiers::room_id(id)
         || id
             .chars()
             .any(|c| c.is_whitespace() || c.is_control() || ['/', '\\', '?', '#', '%'].contains(&c))
@@ -1894,5 +1894,49 @@ mod owner_scope_command_tests {
             })
             .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod version12_route_tests {
+    use super::*;
+    #[test]
+    fn version12_native_room_routes_encode_the_original_hash_without_weakening_path_checks() {
+        let room = "!xBwLsfb3tVTO0jgpqkLGnxHIT4qWA6yILBlXdpHMSmY";
+        let (method, path, body) = request(Command::ScopeServiceState {
+            project_id: "project".into(),
+            room_id: Some(room.into()),
+        })
+        .unwrap();
+        assert_eq!(method, "GET");
+        assert!(body.is_none());
+        assert_eq!(
+            percent_encoding::percent_decode_str(
+                path.split("/rooms/")
+                    .nth(1)
+                    .unwrap()
+                    .split('/')
+                    .next()
+                    .unwrap()
+            )
+            .decode_utf8()
+            .unwrap(),
+            room
+        );
+        for invalid in [
+            "!bad/path:test",
+            "!bad%2fpath:test",
+            "!bad?query:test",
+            "!bad#fragment:test",
+            "!truncated",
+        ] {
+            assert!(
+                request(Command::RoomRoster {
+                    project_id: "project".into(),
+                    room_id: invalid.into()
+                })
+                .is_err()
+            );
+        }
     }
 }

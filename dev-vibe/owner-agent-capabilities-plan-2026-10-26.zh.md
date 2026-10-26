@@ -43,3 +43,5 @@
 2026年10月27日：主人历史列表、详情、只读刷新及最终未准备证据结清已接入当前NativeOwner和桌面组件。保留原unknown审计、永久发送见证和旧快照兼容，查询途中SDK变更不能释放容量。见 [历史投递验收](agent-file-history-validation-2026-10-27.zh.md)。下一步是真实联合、Windows与平台资格，再继续A4/A3；A2及总目标保持进行中。
 
 2026年10月27日：当前Client/Server真实HTTP、PG、AS和worker跨仓库链已验证大于128KiB文件、丢失queue响应、原回执和双端重启不重放；公开NativeOwner及真实Codex完成原文件处理、发送、四项工具审计及38,950实际Token结算。身份/Matrix仍为明确fixture，原驱动失败与后续只读核验分开记录。见 [联合与真实模型验收](agent-file-joint-validation-2026-10-27.zh.md)。真实Matrix/SDK、人工、Windows和A4/A3等门槛仍保留。
+
+2026年10月27日：阶段4继续经过真实Synapse、桌面SDK和实际Codex验证原附件、生成文件、原事件回执及39310 Token结算，并修复真实v12 Room hash和创建者权限兼容。首轮验收驱动失败与修正后原结果只读核验分别保留；未重发原文件。见 [真实Matrix与v12验收](agent-file-synapse-validation-2026-10-27.zh.md)。生产OAuth、桌面人工、Windows与A4/A3门槛继续保留。

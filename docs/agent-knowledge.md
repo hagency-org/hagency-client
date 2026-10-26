@@ -5454,3 +5454,6 @@ PR #8 审查及验证记录见 `dev-vibe/pr-8-board-ux-review-2026-10-25.zh.md`�
 - A failed qualification driver after a sent receipt must verify that original
   outcome, not rerun paid inference or reconstruct send custody. Explicit
   VERIFY_EXISTING stops the original intent and only checks receipts/audits/fees.
+
+
+- **Actual v12/SDK files, 2026-10-27:** Room hashes have43 URL-safe characters and no server suffix; user IDs still require servers. V12 creators/additional_creators have authority outside power users, only from current trusted create state; legacy claims never escalate and membership remains separate. Use the shared SDK bounded fetch helper, current SDK token for readback, and exact original Agent/Room/text completion markers: user file instructions can contain the same marker. Synapse Docker callbacks may need its private host IPv4 when IPv6 is unreachable; never fake readiness. Failed or pending originals stay retained and cannot be rearmed by a new fixture.

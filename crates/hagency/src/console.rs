@@ -13,6 +13,7 @@ mod exec_policy;
 mod graphs;
 mod invites;
 mod matrix_diag;
+mod matrix_identifiers;
 pub(crate) mod native;
 mod offer_book;
 mod owned_agents;

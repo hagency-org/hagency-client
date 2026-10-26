@@ -36,11 +36,7 @@ fn room(value: &str) -> Result<String, OwnerError> {
         .decode_utf8()
         .map_err(|_| error(400, "invalid_arguments"))?
         .into_owned();
-    if !decoded.starts_with('!')
-        || decoded.len() > 255
-        || !decoded[1..]
-            .split_once(':')
-            .is_some_and(|(a, b)| !a.is_empty() && !b.is_empty())
+    if !super::matrix_identifiers::room_id(&decoded)
         || decoded.chars().any(|c| {
             c.is_whitespace() || c.is_control() || matches!(c, '/' | '\\' | '?' | '#' | '%')
         })

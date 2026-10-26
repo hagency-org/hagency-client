@@ -4954,6 +4954,7 @@ dependencies = [
  "futures",
  "futures-util",
  "hagency",
+ "hagency-agent-local",
  "hagency-history",
  "hagency-updater",
  "hashbrown 0.16.1 (registry+https://github.com/rust-lang/crates.io-index)",

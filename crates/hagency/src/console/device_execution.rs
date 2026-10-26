@@ -69,12 +69,14 @@ fn id(value: &str) -> Result<(), DeviceError> {
     }
 }
 fn matrix(value: &str, prefix: char) -> Result<(), DeviceError> {
-    if value.starts_with(prefix)
-        && value.len() <= 255
-        && value[1..]
-            .split_once(':')
-            .is_some_and(|(a, b)| !a.is_empty() && !b.is_empty())
-        && !value.chars().any(|c| c.is_control() || c.is_whitespace())
+    if (prefix == '!' && super::matrix_identifiers::room_id(value))
+        || (prefix != '!'
+            && value.starts_with(prefix)
+            && value.len() <= 255
+            && value[1..]
+                .split_once(':')
+                .is_some_and(|(a, b)| !a.is_empty() && !b.is_empty())
+            && !value.chars().any(|c| c.is_control() || c.is_whitespace()))
     {
         Ok(())
     } else {

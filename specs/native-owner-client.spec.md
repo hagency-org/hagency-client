@@ -65,3 +65,9 @@ guardian entry before owner initialization. It requires explicit paid opt-in and
 an isolated loopback Server fixture. A libtest executable is not a programming
 guardian and cannot substitute for this entry. See the cross-repository file
 validation report for exact commands, original failures and remaining gates.
+
+- Matrix v12 Room hashes retain their exact original identity in native policy,
+  device execution, workspace preparation and encoded project management paths.
+  User identities still require their server suffix and path injection stays refused.
+  Test: version12_rooms_keep_exact_identity_and_reject_truncated_or_foreign_sigil
+  Test: version12_native_room_routes_encode_the_original_hash_without_weakening_path_checks

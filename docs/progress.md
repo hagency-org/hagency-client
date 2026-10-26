@@ -14451,3 +14451,14 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   Current local all-targets Clippy, format/spelling,46 guards, one caller and1161
   bindings pass with no missing/deferred/platform gaps. Real Matrix/SDK,
   desktop/manual, Windows tools and A4/A3/earlier gates remain unqualified.
+
+## 2026-10-27: Actual Synapse SDK files and v12 authority
+
+- Previous goal turn changed authoritative state: pushed Clientbbab2f1e and Servercab1ae1. Their fast CI/Server CI and spelling passed; original Client full40418590223 remains independently observed. Latest fetched main still an ancestor before current changes.
+- Started only a new isolated Synapse1.163.2 official digest container, actual loopback media/messages/AS/state. OAuth introspection remains an explicit bridge. Actual desktop SDK helper verifies131073 plain/v2 decrypted bytes and rejects a modified hash.
+- Live v12 exposed colon-only Room validation and missing creator authority. Server regression first failed, then current Domain/Gateway fixes pass110 tests including PG. Client native/device/workspace/project policies now accept exact v12 hashes while retaining user servers/path checks. Engine263/9 ignores passes (7 original+2 external).
+- Public NativeOwner/actual Codex received/transformed/sent131089 exact bytes to the real original Room/thread/Agent. One settled call38892+418=39310, cache24832 subset, all holds/pending/unreported zero, four completed audits, whole_tree stop.
+- Preserve failed drivers: old Client ID guard denied before events; incoming marker false-positive stopped a pending request with zero calls/accounts, not replayed. Actual successful execution's final readback used old fake token and returned401. Current explicit VERIFY_EXISTING validates the same original bytes/receipt/audits/fees and checked shutdown with no inference/acquire/upload/resend. No fresh default paid rerun claim.
+- Added marker origin/type negative regression, actual SDK example and shared qualification runner, private Synapse setup script and detailed report. Production OAuth, manual desktop, Windows file tools, A4/A3 and earlier gates remain; goal stays active.
+
+- Final local proof: App620/2 original ignores; completion-origin regression1; current core/App strict default-feature all-targets Clippy, core format/spelling,46 guards, one caller and1163 selector bindings pass with no missing/deferred/platform gaps. Server110 and strict/contract checks pass. Real3 original-state verification exits0; original driver401 stays failed. New-head remote validation remains distinct from previous bbab2f1e fast CI40418585682/Servercab1ae1 CI40418520999 successes and still-live full40418590223.

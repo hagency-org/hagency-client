@@ -50,12 +50,14 @@ fn key(value: &str) -> Result<(), OwnerError> {
     }
 }
 fn matrix(value: &str, prefix: char) -> Result<(), OwnerError> {
-    if value.len() <= 255
-        && value.starts_with(prefix)
-        && value[1..]
-            .split_once(':')
-            .is_some_and(|(a, b)| !a.is_empty() && !b.is_empty())
-        && !value.chars().any(|c| c.is_whitespace() || c.is_control())
+    if (prefix == '!' && super::matrix_identifiers::room_id(value))
+        || (prefix != '!'
+            && value.len() <= 255
+            && value.starts_with(prefix)
+            && value[1..]
+                .split_once(':')
+                .is_some_and(|(a, b)| !a.is_empty() && !b.is_empty())
+            && !value.chars().any(|c| c.is_whitespace() || c.is_control()))
     {
         Ok(())
     } else {
