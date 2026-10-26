@@ -3,6 +3,16 @@
 
 # Repository audit knowledge
 
+- **Frozen Agent sender, 2026-10-27:** Capture real nofollow workspace/parent/file
+  objects and bytes before exact approval; recheck the original objects at begin.
+  First committed sent_files insertion alone mints non-Clone custody, before
+  Server IO. Exact old intent and unresolved path/content cannot rearm by a new
+  call ID, copied file, changed workspace, reopen or snapshot restore. Send only
+  frozen bytes; later reads are original-ID status, never upload continuation.
+  Late sent is historical evidence, not an original unknown audit rewrite.
+  Combined file contexts need exact settlement AND usage-gap reset handling.
+  Owner historical refresh and real joint/Windows qualification remain required.
+
 - **Client file delivery protocol, 2026-10-27:** Manifest/Target/Delivery and
   typed prepare/chunk/queue/status carry no byte or send custody. Retain the
   original manifest/request/file expectation locally and validate each response;

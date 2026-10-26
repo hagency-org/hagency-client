@@ -14340,3 +14340,45 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 - Server03c9e0b fixes a CI spelling-only fixture failure without changing original
   bytes/assertions. Matching typos1.48 and targeted test pass; Server CI40389964561 now succeeds
   at03c9e0b, including PostgreSQL, backend/frontend tests and WASM Clippy.
+
+
+## 2026-10-27: Frozen Agent sender connected to current Codex
+
+- Added bounded physical-source capture, exact owner policy/approval, persistent
+  one-shot sent_files witness before Server IO, 64KiB staged delivery and
+  get_file_delivery for original local IDs. New call IDs, changed workspace,
+  restart and restored snapshots cannot recreate original send custody.
+- NativeOwner capability opt-in connects ordinary text or attachment requests
+  to current restricted-file/programming Codex sessions. New context namespace
+  settlement and usage-gap handling are covered. Windows execution stays open.
+- Real owner-queue/file/TCP/runtime tests cover original bytes, denial/revocation,
+  changed source/parents, unknown queue acknowledgement, no resend, late actual
+  receipt, original reply/restart/renewal and accounting. Local policy denial
+  during a status read suppresses the model response. Actual Server/Matrix/real
+  model joint and manual proof remain distinct, unqualified gates.
+- Agent137+programming3+runtime8/3 existing ignores, engine260/7 ignores, App618/2
+  ignores and strict core/App Clippy pass. Core format/caller/spec guards pass;
+  final inventory logs and original fixture/compiler/lint failures are in the
+  send validation report. No failure was changed into a pass by retry/timeout.
+- Next: owner historical delivery refresh/settlement after execution end, actual
+  joint and Windows qualification, then A4/A3 and remaining earlier gates. Whole
+  goal and A2 remain active; no deployment or task-writer reconstruction.
+
+- Final review found Server completed-task file intents could rearm after a
+  requester/speaking/encryption denial, because completed outcomes cannot be
+  rewritten. New regression reproduced the bug. A permanent original-event
+  file-denial journal now fences old active/pending files, preserving completed
+  outcomes and late actual receipts; new requests remain independent. True old
+  03-format migration preserves all9 file/199 event/14 reply rows exactly. Final
+  fresh-PG serial Server106, strict checks pass; remote revalidation remains.
+- Room replies now append deterministic unconfirmed/cancelled file notices from
+  validated original receipts. A third persistent-unknown Native/TCP scenario
+  proves ordinary text cannot hide it, while replies/fees/restart stay correct.
+- Final frozen-source inventory:1155 bindings, no missing/deferred/platform gaps;
+  46 guards and one production caller pass. Both latest remote mains remain
+  ancestors (Client42e59b9e, Server6340df32). Server denial fix f5ac86c is pushed;
+  its CI40404302743 is pending. Client sender is ready for feature-branch push.
+- Historical refresh must also resolve lost prepare acknowledgements by original
+  request ID. Temporary absence is not cancellation and never grants a retry;
+  preserve custody/audit witnesses and require authoritative terminal evidence
+  before releasing a final-absence hold.

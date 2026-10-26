@@ -534,6 +534,19 @@ impl Session {
             _ => Err(Error::Profile("attachment tools require Codex")),
         }
     }
+    #[cfg(unix)]
+    pub fn enable_sent_files(
+        &mut self,
+        sender: crate::sent_files::Sender,
+        host: std::sync::Arc<dyn codex::FileDeliveryHost>,
+        dispatch: String,
+        execution: String,
+    ) -> Result<()> {
+        match self {
+            Self::Codex(session) => session.enable_sent_files(sender, host, dispatch, execution),
+            _ => Err(Error::Profile("file delivery requires Codex")),
+        }
+    }
     pub async fn open_context(
         &mut self,
         ledger: &mut Ledger,

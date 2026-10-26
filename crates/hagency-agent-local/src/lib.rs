@@ -14,6 +14,7 @@ pub mod recovery;
 #[cfg(unix)]
 pub mod room_files;
 pub mod runtime;
+pub mod sent_files;
 pub mod usage;
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
@@ -298,6 +299,7 @@ impl Ledger {
         db.execute_batch(audit::SCHEMA)?;
         db.execute_batch(recovery::SCHEMA)?;
         db.execute_batch(received_files::SCHEMA)?;
+        db.execute_batch(sent_files::SCHEMA)?;
         db.execute_batch("COMMIT")?;
         db.pragma_update(None, "foreign_keys", true)?;
         Ok(Self {
@@ -679,6 +681,7 @@ impl Ledger {
         let bases = [
             base.clone(),
             format!("{}:{base}", crate::received_files::CAPABILITY_VERSION),
+            format!("{}:{base}", crate::sent_files::CAPABILITY_VERSION),
         ];
         let valid = bases.iter().any(|base| {
             let valid = context == base
@@ -1080,6 +1083,7 @@ fn mark_usage_gap(tx: &rusqlite::Transaction, scope: &Scope, owner: &str) -> Res
     let bases = [
         context.clone(),
         format!("{}:{context}", crate::received_files::CAPABILITY_VERSION),
+        format!("{}:{context}", crate::sent_files::CAPABILITY_VERSION),
     ];
     #[cfg(unix)]
     let contexts = bases

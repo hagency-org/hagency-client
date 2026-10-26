@@ -37,6 +37,11 @@ struct WireState {
     attachment_input: Option<Value>,
     file_delivery_response: Option<Value>,
     file_delivery_input: Option<Value>,
+    send_mode: u8,
+    sent_remote: Option<Value>,
+    sent_bytes: Vec<u8>,
+    sent_queues: usize,
+    sent_status: usize,
     restore_scope: bool,
     binding_states: BTreeMap<String, String>,
     no_messages: bool,
@@ -70,7 +75,7 @@ impl WireState {
         match path {
             "/hagency/api/v1/discovery" => (
                 200,
-                json!({"product":"hagency-server","version":"0.1.0","protocolVersion":3,"capabilities":(["pasion-oauth","owner-agent-appservice-v1","global-agent-identity-v2","execution-device-v1","owner-direct-v1"].into_iter().chain(self.incoming_attachment.as_ref().map(|_|hagency_agent_local::attachments::CAPABILITY)).collect::<Vec<_>>()),"homeserver":origin,"issuer":format!("{origin}auth/")}),
+                json!({"product":"hagency-server","version":"0.1.0","protocolVersion":3,"capabilities":(["pasion-oauth","owner-agent-appservice-v1","global-agent-identity-v2","execution-device-v1","owner-direct-v1"].into_iter().chain((self.incoming_attachment.is_some()||self.send_mode>0).then_some(hagency_agent_local::attachments::CAPABILITY)).chain((self.send_mode>0).then_some(hagency_agent_local::file_delivery::CAPABILITY)).collect::<Vec<_>>()),"homeserver":origin,"issuer":format!("{origin}auth/")}),
             ),
             "/hagency/api/v1/agents/agent-a" if self.restore_scope => (
                 200,
@@ -181,6 +186,9 @@ impl WireState {
             | "/hagency/api/v1/execution/files/chunk"
             | "/hagency/api/v1/execution/files/queue"
             | "/hagency/api/v1/execution/files/status" => {
+                if self.send_mode > 0 {
+                    return self.deliver_file(path, input);
+                }
                 self.file_delivery_input = Some(input.clone());
                 (
                     200,
@@ -193,6 +201,8 @@ impl WireState {
                     200,
                     if let Some(attachment) = &self.incoming_attachment {
                         json!({"dispatchId":input["dispatchId"],"executionId":input["executionId"],"attachments":[attachment]})
+                    } else if self.send_mode > 0 {
+                        json!({"dispatchId":input["dispatchId"],"executionId":input["executionId"],"attachments":[]})
                     } else {
                         self.attachment_response
                             .clone()
@@ -505,16 +515,27 @@ async fn fixture_with_processing_failure(unknown: bool, budget: u64, processing_
     fixture_with_receive(unknown, budget, processing_failure, false).await;
 }
 async fn fixture_with_receive(unknown: bool, budget: u64, processing_failure: u8, receive: bool) {
+    fixture_with_files(unknown, budget, processing_failure, receive, 0).await;
+}
+async fn fixture_with_files(
+    unknown: bool,
+    budget: u64,
+    processing_failure: u8,
+    receive: bool,
+    send_mode: u8,
+) {
+    let sending = send_mode > 0;
     use hagency_agent_local::{
         Budget, Layer, Limit, ModelProfile, Period, Policy, RequestPolicy, ToolPolicy,
     };
     let (origin, state, server) = server(unknown, processing_failure).await;
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();
+    state.lock().unwrap().send_mode = send_mode;
     if receive {
         state.lock().unwrap().incoming_attachment=Some(serde_json::to_value(hagency_agent_local::attachments::Attachment::from_content(&json!({"msgtype":"m.file","body":"inbound.txt","url":"mxc://media.test/incoming","info":{"size":5}})).unwrap()).unwrap());
     }
-    let source: Arc<dyn MatrixTokenSource> = if receive {
+    let source: Arc<dyn MatrixTokenSource> = if receive || sending {
         Arc::new(FileSource)
     } else {
         Arc::new(Source)
@@ -553,6 +574,9 @@ async fn fixture_with_receive(unknown: bool, budget: u64, processing_failure: u8
     provider(&script, &marker, &path, unknown);
     if receive {
         receive_provider(&script);
+    }
+    if sending {
+        send_provider(&script, send_mode >= 2, send_mode == 3);
     }
     let scope = inbox::Dispatch {
         id: "dispatch-a".into(),
@@ -603,13 +627,20 @@ async fn fixture_with_receive(unknown: bool, budget: u64, processing_failure: u8
             },
         )
         .unwrap();
-    if receive {
+    if receive || sending {
         let incoming_workspace =
             hagency_agent_local::room_files::Workspace::open(directory, OWNER, &scope).unwrap();
         let directory = incoming_workspace
             .canonical_directory()
             .to_string_lossy()
             .into_owned();
+        if sending {
+            std::fs::write(
+                incoming_workspace.canonical_directory().join("result.txt"),
+                b"hello",
+            )
+            .unwrap();
+        }
         drop(incoming_workspace);
         for layer in [Layer::Agent, Layer::Room, Layer::Requester] {
             let current = ledger.policy_snapshot(&scope).unwrap()[match layer {
@@ -631,7 +662,11 @@ async fn fixture_with_receive(unknown: bool, budget: u64, processing_failure: u8
                         },
                         requests: RequestPolicy::Allow,
                         high_risk: ToolPolicy::AllowWithRules {
-                            tools: vec!["matrix.receive_file".into()],
+                            tools: if sending {
+                                vec!["matrix.send_file".into()]
+                            } else {
+                                vec!["matrix.receive_file".into()]
+                            },
                             directories: vec![directory.clone()],
                         },
                     },
@@ -657,7 +692,7 @@ async fn fixture_with_receive(unknown: bool, budget: u64, processing_failure: u8
         mode: BudgetMode::Estimated { reservation: 10 },
         credential_ref: "keychain:fixture".into(),
         takeover: Takeover::Never,
-        host_files: receive,
+        host_files: receive || sending,
         owner_direct: false,
         recovery_device_id: None,
         recovery_consent_id: None,
@@ -672,6 +707,35 @@ async fn fixture_with_receive(unknown: bool, budget: u64, processing_failure: u8
     )
     .await;
     let mut ledger = Ledger::open_scoped(&path, OWNER, &profile_id).unwrap();
+    if sending {
+        let audit = ledger
+            .approval_history(OWNER, "agent-a", None)
+            .unwrap()
+            .records
+            .into_iter()
+            .find(|a| a.tool == "matrix.send_file")
+            .unwrap();
+        assert_eq!(
+            audit.phase,
+            if send_mode >= 2 {
+                hagency_agent_local::audit::Phase::Unknown
+            } else {
+                hagency_agent_local::audit::Phase::Completed
+            }
+        );
+        let wire = state.lock().unwrap();
+        assert_eq!(wire.sent_bytes, b"hello");
+        assert_eq!(wire.sent_queues, 1);
+        assert!(wire.sent_status >= 1);
+        if send_mode == 3 {
+            assert!(wire.sent_remote.as_ref().unwrap()["matrixEventId"].is_null());
+        } else {
+            assert_eq!(
+                wire.sent_remote.as_ref().unwrap()["matrixEventId"],
+                "$fixtureFileSent"
+            );
+        }
+    }
     let expected_turns = if unknown { 2 } else { usize::from(budget > 0) };
     assert_eq!(
         std::fs::read_to_string(&marker).unwrap().lines().count(),
@@ -718,6 +782,13 @@ async fn fixture_with_receive(unknown: bool, budget: u64, processing_failure: u8
             assert!(reply.contains("可用额度不足"));
             assert!(reply.contains("本次未调用模型"));
             assert!(!reply.contains("本轮处理已结束"));
+        }
+        if sending {
+            assert_eq!(
+                reply.contains("尚未取得 1 个文件的投递回执"),
+                send_mode == 3,
+                "ordinary reply must not hide an unknown file"
+            );
         }
         assert!(!reply.contains("Agent 配额"));
         assert_eq!(
@@ -1722,4 +1793,140 @@ async fn typed_http_file_delivery_pins_manifest_and_preserves_unknown_without_se
     native.shutdown().await;
     server.abort();
     let _ = server.await;
+}
+
+impl WireState {
+    fn deliver_file(&mut self, path: &str, input: &Value) -> (u16, Value) {
+        use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
+        if path.ends_with("/prepare") {
+            assert!(self.sent_remote.is_none());
+            let file: hagency_agent_local::file_delivery::Manifest =
+                serde_json::from_value(input["file"].clone()).unwrap();
+            file.validate().unwrap();
+            assert_eq!(file.filename, "report.txt");
+            assert_eq!(file.caption.as_deref(), Some("Exact original"));
+            self.sent_remote = Some(
+                json!({"id":"fil_fixture","dispatchId":input["dispatchId"],"executionId":input["executionId"],"requestId":input["requestId"],"createdAtMs":1,"manifest":file,"manifestDigest":file.digest().unwrap(),"receivedBytes":0,"state":"staging","uploadAccepted":false,"matrixEventId":null}),
+            );
+        } else {
+            let r = self.sent_remote.as_mut().unwrap();
+            let target = if path.ends_with("/status") {
+                input
+            } else {
+                &input["target"]
+            };
+            assert_eq!(
+                target,
+                &json!({"dispatchId":r["dispatchId"],"executionId":r["executionId"],"fileId":r["id"]})
+            );
+            if path.ends_with("/chunk") {
+                assert_eq!(
+                    input["offset"].as_u64().unwrap(),
+                    self.sent_bytes.len() as u64
+                );
+                self.sent_bytes.extend(
+                    STANDARD_NO_PAD
+                        .decode(input["data"].as_str().unwrap())
+                        .unwrap(),
+                );
+                r["receivedBytes"] = self.sent_bytes.len().into();
+            } else if path.ends_with("/queue") {
+                self.sent_queues += 1;
+                assert_eq!(self.sent_queues, 1);
+                assert_eq!(self.sent_bytes, b"hello");
+                assert_eq!(
+                    r["manifest"]["sha256"],
+                    format!("{:x}", Sha256::digest(&self.sent_bytes))
+                );
+                r["state"] = if self.send_mode >= 2 {
+                    "unknown"
+                } else {
+                    "queued"
+                }
+                .into();
+                if self.send_mode >= 2 {
+                    return (503, json!({"code":"fixture_queue_ack_lost"}));
+                }
+            } else {
+                assert!(path.ends_with("/status"));
+                assert!(input.get("lease").is_none());
+                self.sent_status += 1;
+                if self.send_mode == 3 {
+                    r["state"] = "unknown".into();
+                } else {
+                    r["state"] = "sent".into();
+                    r["uploadAccepted"] = true.into();
+                    r["matrixEventId"] = "$fixtureFileSent".into();
+                }
+            }
+        }
+        (200, json!({"delivery":self.sent_remote.as_ref().unwrap()}))
+    }
+}
+fn send_provider(path: &std::path::Path, lost: bool, unconfirmed: bool) {
+    let source = std::fs::read_to_string(path).unwrap();
+    let start = source.find("  time.sleep(6)").unwrap();
+    let end = source[start..].find(" else: raise Exception(m)").unwrap() + start;
+    let source = format!(
+        "{}{}{}",
+        &source[..start],
+        "  emit('item/tool/call',{'threadId':'thread-a','turnId':'turn-a','callId':'send-original','tool':'send_file','arguments':{'path':'result.txt','filename':'report.txt','caption':'Exact original'}},'host-send')\n",
+        &source[end..]
+    );
+    let branch=r#" if m is None:
+  assert f['result']['success'],str(f)
+  result=json.loads(f['result']['contentItems'][0]['text'])
+  assert 'mxc://' not in str(result)
+  if f['id']=='host-send':
+   assert result['state']==EXPECTED_STATE,str(result)
+   emit('item/tool/call',{'threadId':'thread-a','turnId':'turn-a','callId':'query-original','tool':'get_file_delivery','arguments':{'delivery_id':result['delivery_id']}},'host-status')
+  else:
+   assert f['id']=='host-status'
+   assert (result['state']=='unknown' and result['matrix_event_id'] is None) if UNCONFIRMED else (result['state']=='sent' and result['matrix_event_id']=='$fixtureFileSent'),str(result)
+   time.sleep(6)
+   emit('thread/tokenUsage/updated',{'threadId':'thread-a','turnId':'turn-a','tokenUsage':{'total':{'inputTokens':3,'outputTokens':2,'cachedInputTokens':0,'reasoningOutputTokens':0,'totalTokens':5},'last':{'inputTokens':3,'outputTokens':2,'cachedInputTokens':0,'reasoningOutputTokens':0,'totalTokens':5}}})
+   emit('item/completed',{'threadId':'thread-a','turnId':'turn-a','item':{'id':'message-a','type':'agentMessage','text':'isolated fixture answer'}})
+   emit('turn/completed',{'threadId':'thread-a','turn':{'id':'turn-a','status':'completed'}})
+  continue
+"#.replace("EXPECTED_STATE",if lost{"'unknown'"}else{"'sent'"}).replace("UNCONFIRMED",if unconfirmed{"True"}else{"False"});
+    let source=source.replace(" def emit(m,p): print(json.dumps({'method':m,'params':p}),flush=True)"," def emit(m,p,i=None): print(json.dumps(dict({'method':m,'params':p},**({'id':i} if i is not None else {}))),flush=True)");
+    let source=source.replace(" elif m in ['thread/start','thread/resume']:\n"," elif m in ['thread/start','thread/resume']:\n  assert {'send_file','get_file_delivery'} <= {t['name'] for t in p['dynamicTools']}\n  assert 'mxc://' not in str(p)\n");
+    let source = source.replace(
+        " if m=='initialize':",
+        &format!("{branch} if m=='initialize':"),
+    );
+    let source=source.replace("for raw in sys.stdin:","sys.stderr=open(marker+'-receive-stderr','a')\nfor raw in sys.stdin:\n with open(marker+'-receive-frames','a') as trace:trace.write(raw)");
+    std::fs::write(path, source).unwrap();
+}
+#[tokio::test]
+async fn typed_http_current_runtime_sends_frozen_file_and_queries_original_lost_ack() {
+    fixture_with_files(false, 100, 0, false, 1).await;
+    fixture_with_files(false, 100, 0, false, 2).await;
+    fixture_with_files(false, 100, 0, false, 3).await;
+}
+
+#[test]
+fn original_file_delivery_notice_cannot_be_hidden_by_model_text_or_large_utf8_reply() {
+    use hagency_agent_local::sent_files::DeliverySummary;
+    let unknown = DeliverySummary {
+        sent: 0,
+        cancelled: 1,
+        unconfirmed: 2,
+    };
+    let text = "已全部发送".repeat(3584);
+    let reply = with_file_delivery_notice(text, &unknown);
+    assert!(reply.len() <= 65_536);
+    assert!(reply.contains("本轮结束时尚未取得 2 个文件的投递回执"));
+    assert!(reply.contains("1 个文件投递已取消"));
+    assert_eq!(
+        with_file_delivery_notice(
+            "original".into(),
+            &DeliverySummary {
+                sent: 1,
+                cancelled: 0,
+                unconfirmed: 0
+            }
+        ),
+        "original"
+    );
 }

@@ -1,6 +1,8 @@
 //! Explicit owner-started, chat-only Codex host. No legacy execution fallback.
 #[cfg(unix)]
 mod received_files;
+#[cfg(unix)]
+mod sent_files;
 mod service;
 use super::{
     AuthorizedDevice, Console,
@@ -2692,6 +2694,8 @@ async fn run_turn<T: Transport>(
         return Err(RuntimeError::Profile);
     }
     let body = completion_body(&completed);
+    let file_summary=local(ledger.sent_file_summary(&scope,&prepared.dispatch.id,&prepared.execution_id))?;
+    let body=with_file_delivery_notice(body,&file_summary);
     let body = with_owner_budget(body, ledger, owner, &scope, config.owner_direct)?;
     local(ledger.persist_execution_reply(
         owner,
@@ -2707,6 +2711,23 @@ async fn run_turn<T: Transport>(
     outcome
 }
 
+fn with_file_delivery_notice(
+    body: String,
+    files: &hagency_agent_local::sent_files::DeliverySummary,
+) -> String {
+    let mut notices = Vec::new();
+    if files.unconfirmed > 0 {
+        notices.push(format!("📎 本轮结束时尚未取得 {} 个文件的投递回执，不能确认已送达。排队、上传和未知均不代表消息投递；请以实际文件消息或原投递状态为准。",files.unconfirmed));
+    }
+    if files.cancelled > 0 {
+        notices.push(format!("📎 {} 个文件投递已取消。", files.cancelled));
+    }
+    if notices.is_empty() {
+        body
+    } else {
+        append_summary(&body, &notices.join("\n"))
+    }
+}
 fn completion_body(completed: &codex::Completed) -> String {
     // Cached input/reasoning output are subsets, not additional charge.
     let summary = format!(

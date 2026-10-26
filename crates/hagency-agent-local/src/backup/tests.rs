@@ -280,7 +280,7 @@ fn original_v1_snapshot_restores_without_fabricating_usage_dates() {
     let source = populated(&tmp.path().join("original.sqlite"));
     source
         .db
-        .execute_batch("DROP TABLE received_files; DROP TABLE call_observations; DROP TABLE usage_alerts; DROP TABLE execution_stops; DROP TABLE execution_inputs; DROP TABLE recovery_actions; DROP TABLE recovery_reviews; DROP TABLE execution_workspaces; DROP TABLE approval_audit_events; DROP TABLE approval_audit")
+        .execute_batch("DROP TABLE sent_files; DROP TABLE received_files; DROP TABLE call_observations; DROP TABLE usage_alerts; DROP TABLE execution_stops; DROP TABLE execution_inputs; DROP TABLE recovery_actions; DROP TABLE recovery_reviews; DROP TABLE execution_workspaces; DROP TABLE approval_audit_events; DROP TABLE approval_audit")
         .unwrap();
     let old = source.snapshot(OWNER, &profile(), 123).unwrap();
     let mut target = Ledger::open_scoped(":memory:", OWNER, &profile()).unwrap();
@@ -312,7 +312,7 @@ fn pre_audit_snapshot_keeps_usage_and_does_not_invent_approval_history() {
     let source = populated(&tmp.path().join("usage-only.sqlite"));
     source
         .db
-        .execute_batch("DROP TABLE received_files; DROP TABLE execution_stops; DROP TABLE execution_inputs; DROP TABLE recovery_actions; DROP TABLE recovery_reviews; DROP TABLE execution_workspaces; DROP TABLE approval_audit_events; DROP TABLE approval_audit")
+        .execute_batch("DROP TABLE sent_files; DROP TABLE received_files; DROP TABLE execution_stops; DROP TABLE execution_inputs; DROP TABLE recovery_actions; DROP TABLE recovery_reviews; DROP TABLE execution_workspaces; DROP TABLE approval_audit_events; DROP TABLE approval_audit")
         .unwrap();
     let original_dates = rows(&source.db, "call_observations");
     assert_eq!(original_dates.len(), 2);
@@ -359,7 +359,7 @@ fn published_audit_snapshot_migrates_empty_recovery_without_inventing_stop_proof
             &serde_json::json!({"device":"original"}),
         )
         .unwrap();
-    source.db.execute_batch("DROP TABLE received_files; DROP TABLE recovery_actions; DROP TABLE recovery_reviews; DROP TABLE execution_inputs; DROP TABLE execution_stops; DROP TABLE execution_workspaces").unwrap();
+    source.db.execute_batch("DROP TABLE sent_files; DROP TABLE received_files; DROP TABLE recovery_actions; DROP TABLE recovery_reviews; DROP TABLE execution_inputs; DROP TABLE execution_stops; DROP TABLE execution_workspaces").unwrap();
     let snapshot = source.snapshot(OWNER, &profile(), 123).unwrap();
     let mut target = Ledger::open_scoped(":memory:", OWNER, &profile()).unwrap();
     target

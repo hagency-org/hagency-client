@@ -83,7 +83,8 @@ pub(super) async fn attach(
             prepared.dispatch.event_id.clone(),
             attachment,
         )
-        .map_err(|_| RuntimeError::Profile)
+        .map_err(|_| RuntimeError::Profile)?;
+    super::sent_files::attach(session, host, lease, prepared, workspace, cancel).await
 }
 struct LiveAttachmentHost {
     gate: LiveToolGate,

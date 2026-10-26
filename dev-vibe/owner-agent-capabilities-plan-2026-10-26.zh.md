@@ -37,3 +37,5 @@
 2026年10月27日：阶段4的Server发送基础已实现，含原请求分块暂存、实际字节摘要、上传/消息两阶段一次性所有权、未知不重发、安全投递历史与原可信事件确认。Server103项（含全部PG）及严格检查通过，见 [Server PR7](https://github.com/hagency-org/hagency-server/pull/7) 中的 agent-file-delivery-contract。Client 的冻结字节、审批、send_file/get_file_delivery 接线和完整联合资格仍需完成；A2保持进行中。Client接收的1bbff570 CI和App CI已成功，完整平台矩阵仍在运行。
 
 2026年10月27日：阶段4继续补齐Client类型化发送协议，原manifest/target/历史回执校验及64KiB分块、只读status实际TCP验证通过。Agent127/3原忽略、运行引擎258/7原忽略与严格检查通过。见 [发送协议当前验收](agent-file-delivery-validation-2026-10-27.zh.md)。尚未启用动态发送工具；冻结字节、审批和本地一次性登记继续实施，A2未完成。
+
+2026年10月27日：阶段4已接入冻结真实字节、精确主人审批、发送前永久见证、64KiB分块和原投递只读观察；新call编号/恢复快照不能重建所有权。macOS/Linux当前Codex动态发送/查询、实际NativeOwner TCP链及账本回归通过，见 [发送工具验收](agent-file-send-validation-2026-10-27.zh.md)。下一批完成主人历史投递刷新、真实联合/Windows资格；A4/A3和前阶段剩余门槛保留，未宣布A2或总目标完成。
