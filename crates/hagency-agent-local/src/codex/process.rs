@@ -3,7 +3,7 @@ use super::*;
 pub type Reader = Box<dyn AsyncRead + Unpin + Send>;
 pub type Writer = Box<dyn AsyncWrite + Unpin + Send>;
 pub(crate) enum Child {
-    Direct(crate::process_cleanup::RetainedChild),
+    Direct(Box<crate::process_cleanup::RetainedChild>),
     Supervised {
         owner: hagency_platform::SupervisedProcess,
         stderr: tokio::task::JoinHandle<()>,

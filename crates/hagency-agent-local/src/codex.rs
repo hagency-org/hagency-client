@@ -354,7 +354,7 @@ impl Profile {
                 session.web_search = self.web_search;
                 session
             },
-            child: Child::Direct(child),
+            child: Child::Direct(Box::new(child)),
         })
     }
 }

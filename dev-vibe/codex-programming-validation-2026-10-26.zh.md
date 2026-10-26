@@ -49,3 +49,14 @@ cargo run --locked -p hagency-agent-local --example codex_programming_handshake 
 ```
 
 传入第二个现有 Codex 登录目录参数会启动真实模型并产生 provider 用量；不传时只进行无推理探针。
+
+## 远端 CI 跟进
+
+PR #9 首轮 Windows 严格 Clippy 发现 `codex::process::Child` 的 Direct
+分支在 Windows 达到 272 字节，触发 `large_enum_variant`。现在使用 Box
+保存直接子进程句柄，保留原有停止与 Drop 行为。修正后的本地完整
+hagency-agent-local 测试及所有 targets 严格 Clippy、rustfmt 均通过；
+Windows 的修正结果以新提交对应的远端 CI 为准。
+
+本轮再次执行 `git fetch origin main`，远端仍为 `42e59b9e`，也是分支的
+merge-base。未在 main 上直接修改。
