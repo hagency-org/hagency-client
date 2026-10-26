@@ -2,7 +2,7 @@
 //! custody; reopened ledgers and restored snapshots expose history only.
 use crate::{
     Error, Ledger, Result, Scope,
-    file_delivery::{Delivery, Manifest},
+    file_delivery::{Delivery, FileLookup, FileObservation, Manifest},
     json,
 };
 #[cfg(unix)]
@@ -12,6 +12,22 @@ use rusqlite::TransactionBehavior;
 use serde::{Deserialize, Serialize};
 pub const CAPABILITY_VERSION: &str = "hagency-agent-files-v1";
 pub(crate) const SCHEMA: &str = include_str!("sent_files/schema.sql");
+pub(crate) const HISTORY_SCHEMA: &str = include_str!("sent_files/history_schema.sql");
+pub(crate) const HISTORY_OBJECTS: &[&str] = &[
+    "sent_file_absence",
+    "valid_sent_file_absence",
+    "retain_sent_file_absence",
+    "immutable_sent_file_absence",
+    "reject_absent_file_update",
+];
+mod history;
+pub use history::{Entry, Page};
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Absence {
+    pub observation: FileObservation,
+    pub observed_at: i64,
+}
 pub(crate) const OBJECTS: &[&str] = &["sent_files", "retain_sent_file", "immutable_sent_file"];
 #[cfg(unix)]
 mod capture;
@@ -25,6 +41,7 @@ pub struct Record {
     pub manifest: Manifest,
     pub remote: Option<Delivery>,
     pub audit: String,
+    pub absence: Option<Absence>,
 }
 #[cfg(unix)]
 pub struct Custody {
@@ -60,6 +77,7 @@ pub struct DeliverySummary {
     pub sent: u64,
     pub cancelled: u64,
     pub unconfirmed: u64,
+    pub not_prepared: u64,
 }
 impl Ledger {
     /// Observed original file outcomes only. Model text is never a receipt.
@@ -74,6 +92,10 @@ impl Ledger {
         let mut summary = DeliverySummary::default();
         for id in ids {
             let r = record(&self.db, scope, dispatch, execution, &id)?.ok_or(Error::Unknown)?;
+            if r.absence.is_some() {
+                summary.not_prepared += 1;
+                continue;
+            }
             match r.remote.as_ref().map(|r| r.state.as_str()) {
                 Some("sent") => summary.sent += 1,
                 Some("cancelled") => summary.cancelled += 1,
@@ -108,6 +130,9 @@ impl Ledger {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut record = record(&tx, scope, dispatch, execution, id)?.ok_or(Error::Unauthorized)?;
         receipt.validate(dispatch, execution, &record.request_id, &record.manifest)?;
+        if record.absence.is_some() {
+            return Err(Error::Conflict);
+        }
         if let Some(old) = &record.remote
             && (old.id != receipt.id
                 || old.created_at_ms != receipt.created_at_ms
@@ -143,12 +168,44 @@ fn record(
         if let Some(d) = &remote {
             d.validate(dispatch, execution, &request_id, &manifest)?;
         }
+        let absence: Option<(String, i64)> = db
+            .query_row(
+                "SELECT proof,observed_at FROM sent_file_absence WHERE id=?",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let absence = absence
+            .map(|(proof, observed_at)| -> Result<Absence> {
+                let observation: FileObservation = serde_json::from_str(&proof)?;
+                observation.validate(
+                    &FileLookup {
+                        dispatch_id: dispatch.into(),
+                        execution_id: execution.into(),
+                        request_id: request_id.clone(),
+                    },
+                    &manifest,
+                )?;
+                if remote.is_some()
+                    || observation.delivery.is_some()
+                    || !observation.preparation_closed
+                    || observed_at < 0
+                {
+                    return Err(Error::Conflict);
+                }
+                Ok(Absence {
+                    observation,
+                    observed_at,
+                })
+            })
+            .transpose()?;
         Ok(Record {
             id: id.into(),
             request_id,
             manifest,
             remote,
             audit,
+            absence,
         })
     })
     .transpose()
@@ -200,7 +257,7 @@ impl Sender {
             return Err(Error::Unknown);
         }
         reject_pending(&tx, &captured)?;
-        let (count,held):(u64,u64)=tx.query_row("SELECT count(*),coalesce(sum(CASE WHEN json_extract(remote,'$.state') IN ('sent','cancelled') THEN 0 ELSE json_extract(manifest,'$.bytes') END),0) FROM sent_files",[],|r|Ok((r.get(0)?,r.get(1)?)))?;
+        let (count,held):(u64,u64)=tx.query_row("SELECT count(*),coalesce(sum(CASE WHEN EXISTS(SELECT 1 FROM sent_file_absence a WHERE a.id=sent_files.id) OR json_extract(remote,'$.state') IN ('sent','cancelled') THEN 0 ELSE json_extract(manifest,'$.bytes') END),0) FROM sent_files",[],|r|Ok((r.get(0)?,r.get(1)?)))?;
         if count >= 4096 || held.saturating_add(captured.manifest.bytes) > 128 * 1024 * 1024 {
             return Err(Error::Invalid("sent file quota"));
         }
@@ -213,13 +270,14 @@ impl Sender {
             manifest: captured.manifest.clone(),
             remote: None,
             audit: audit.into(),
+            absence: None,
         };
         Ok(Custody { captured, record })
     }
 }
 #[cfg(unix)]
 fn reject_pending(db: &rusqlite::Connection, c: &Captured) -> Result<()> {
-    let pending:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM sent_files WHERE scope=? AND dispatch=? AND execution=? AND (relative_path=? OR content_hash=?) AND (remote IS NULL OR json_extract(remote,'$.state') NOT IN ('sent','cancelled')))",rusqlite::params![json(&c.proposal.scope)?,c.proposal.dispatch,c.execution,c.relative_path,c.manifest.sha256],|r|r.get(0))?;
+    let pending:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM sent_files WHERE scope=? AND dispatch=? AND execution=? AND (relative_path=? OR content_hash=?) AND (remote IS NULL OR json_extract(remote,'$.state') NOT IN ('sent','cancelled')) AND NOT EXISTS(SELECT 1 FROM sent_file_absence a WHERE a.id=sent_files.id))",rusqlite::params![json(&c.proposal.scope)?,c.proposal.dispatch,c.execution,c.relative_path,c.manifest.sha256],|r|r.get(0))?;
     if pending { Err(Error::Unknown) } else { Ok(()) }
 }
 #[cfg(all(test, unix))]

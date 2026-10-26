@@ -14399,3 +14399,27 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 - Owner historical list/refresh UI and durable final-absence capacity settlement
   are still next, followed by actual joint/Windows qualification and A4/A3. No
   model restart or write-custody reconstruction was introduced; A2 stays open.
+
+## 2026-10-27: Owner file history and final-absence settlement
+
+- Added exact owner/Agent paged file history, original detail and read-only refresh
+  in NativeOwner and the desktop File delivery tab with English/Chinese text.
+  Fresh SDK/device/profile checks after IO prevent stale authorization evidence
+  from releasing capacity. No model/lease restart or upload/queue operation.
+- Permanent final-absence evidence releases actual file capacity while retaining
+  original send/audit witnesses. Temporary absence remains unknown. Restore keeps
+  its INSERT validation active by inserting original witnesses first. Legacy
+  snapshots add empty evidence only; original identities cannot regain custody.
+- Real disk/SQLite tests pass142/3 original ignores; Native OAuth/device/TCP and
+  Makepad component tests pass. Full library regression/current Clippy/spec and
+  guard evidence are recorded in the new history validation report. Original
+  fixture, restore-order, compiler and DSL failures are retained.
+- Server0a1ef55 CI40406382037 passed. Client fe000bb7 remote runs remain separate
+  from this new source. Next: true joint/manual/Windows qualification, A4/A3 and
+  earlier open gates. Whole objective remains active; no deployment or messages.
+- Final frozen-source regression: Agent142/3 original ignores, engine261/7 and
+  App620/2 all pass; programming3/runtime8 pass. Strict current core/App/miniapp
+  Clippy including pinned Sparkle passes. Format, spelling,46 guards, one caller
+  and1160 bindings pass, no missing/deferred/current-platform gaps. Original
+  platform-annotation ordering failure stays in the first inventory log; only
+  the spec's metadata order was corrected. Latest fetched main remains42e59b9e.

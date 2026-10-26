@@ -2719,6 +2719,12 @@ fn with_file_delivery_notice(
     if files.unconfirmed > 0 {
         notices.push(format!("📎 本轮结束时尚未取得 {} 个文件的投递回执，不能确认已送达。排队、上传和未知均不代表消息投递；请以实际文件消息或原投递状态为准。",files.unconfirmed));
     }
+    if files.not_prepared > 0 {
+        notices.push(format!(
+            "📎 Server已确认 {} 个文件在原执行关闭前未准备，未发生这些原投递。",
+            files.not_prepared
+        ));
+    }
     if files.cancelled > 0 {
         notices.push(format!("📎 {} 个文件投递已取消。", files.cancelled));
     }

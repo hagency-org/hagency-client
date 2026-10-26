@@ -28,3 +28,25 @@ other contracts are retired evidence, never relabelled as passed.
 The desktop OAuth integration tests also live in hagency-app/src/login/oauth_tests.rs.
 The normal desktop CI runs them with all application library tests. No test uses
 personal provider credentials or paid model inference.
+
+## Original file delivery history
+
+- Owner history refreshes the exact ended execution and original request without
+  acquiring a lease, restarting a model, preparing bytes or sending a replacement.
+  SDK identity loss during the read cannot release a local capacity hold.
+  Test-Platforms: [linux, macos]
+  Test: native_owner_file_history_refreshes_ended_originals_without_restarting_or_resending
+- Final preparation absence retains immutable original send and approval evidence
+  across reopen/restore, and never grants a second send for the original identity.
+  Test-Platforms: [linux, macos]
+  Test: history_final_absence_is_permanent_scoped_and_never_a_new_send_grant
+- Pre-history snapshots preserve existing file witnesses without inventing proof.
+  Test-Platforms: [linux, macos]
+  Test: pre_history_snapshot_preserves_existing_sender_witness_and_adds_no_absence
+- Bounded owner/Agent pages preserve exact original scopes and stable ordering.
+  Test-Platforms: [linux, macos]
+  Test: file_history_pages_preserve_scope_order_and_exact_original_receipts
+- Temporary absence retains the actual128MiB capacity hold; only authoritative
+  final absence releases file capacity while retaining the original identity.
+  Test-Platforms: [linux, macos]
+  Test: final_absence_releases_actual_capacity_but_not_permanent_identity

@@ -51,12 +51,14 @@ pub(super) fn specifications() -> Value {
 fn output(record: &Record, phase: Phase) -> Value {
     let remote = record.remote.as_ref();
     let server_state = remote.map(|r| r.state.as_str()).unwrap_or("unknown");
-    let state = if phase == Phase::Unknown && !matches!(server_state, "sent" | "cancelled") {
+    let state = if record.absence.is_some() {
+        "not_prepared"
+    } else if phase == Phase::Unknown && !matches!(server_state, "sent" | "cancelled") {
         "unknown"
     } else {
         server_state
     };
-    value!({"success":true,"contentItems":[{"type":"inputText","text":value!({"delivery_id":record.id,"file":record.manifest,"state":state,"last_observed_server_state":server_state,"matrix_event_id":remote.and_then(|r|r.matrix_event_id.as_deref()),"guidance":if state=="sent" {"Original Matrix event receipt observed."}else if state=="cancelled" {"Original delivery cancelled. No message receipt observed."}else{"Not proven delivered. Query only this original delivery_id; do not send another file to clear pending/unknown. Upload acceptance is not message delivery."}}).to_string()}]})
+    value!({"success":true,"contentItems":[{"type":"inputText","text":value!({"delivery_id":record.id,"file":record.manifest,"state":state,"last_observed_server_state":server_state,"matrix_event_id":remote.and_then(|r|r.matrix_event_id.as_deref()),"guidance":if state=="sent" {"Original Matrix event receipt observed."}else if state=="not_prepared" {"Server confirmed no preparation before the original execution closed. Original custody remains consumed; this is not a retry grant."}else if state=="cancelled" {"Original delivery cancelled. No message receipt observed."}else{"Not proven delivered. Query only this original delivery_id; do not send another file to clear pending/unknown. Upload acceptance is not message delivery."}}).to_string()}]})
 }
 fn failure(code: &str) -> Value {
     value!({"success":false,"contentItems":[{"type":"inputText","text":code}]})

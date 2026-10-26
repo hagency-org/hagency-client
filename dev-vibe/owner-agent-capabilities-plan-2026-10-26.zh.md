@@ -39,3 +39,5 @@
 2026年10月27日：阶段4继续补齐Client类型化发送协议，原manifest/target/历史回执校验及64KiB分块、只读status实际TCP验证通过。Agent127/3原忽略、运行引擎258/7原忽略与严格检查通过。见 [发送协议当前验收](agent-file-delivery-validation-2026-10-27.zh.md)。尚未启用动态发送工具；冻结字节、审批和本地一次性登记继续实施，A2未完成。
 
 2026年10月27日：阶段4已接入冻结真实字节、精确主人审批、发送前永久见证、64KiB分块和原投递只读观察；新call编号/恢复快照不能重建所有权。macOS/Linux当前Codex动态发送/查询、实际NativeOwner TCP链及账本回归通过，见 [发送工具验收](agent-file-send-validation-2026-10-27.zh.md)。下一批完成主人历史投递刷新、真实联合/Windows资格；A4/A3和前阶段剩余门槛保留，未宣布A2或总目标完成。
+
+2026年10月27日：主人历史列表、详情、只读刷新及最终未准备证据结清已接入当前NativeOwner和桌面组件。保留原unknown审计、永久发送见证和旧快照兼容，查询途中SDK变更不能释放容量。见 [历史投递验收](agent-file-history-validation-2026-10-27.zh.md)。下一步是真实联合、Windows与平台资格，再继续A4/A3；A2及总目标保持进行中。

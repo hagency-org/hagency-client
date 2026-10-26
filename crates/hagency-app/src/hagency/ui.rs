@@ -10,6 +10,7 @@ use crate::shared::{feedback::{InlineNoticeWidgetExt,InlineNoticeWidgetRefExt}, 
 mod ledger;
 mod usage;
 mod history;
+mod file_history;
 mod recovery;
 
 #[derive(Clone, Debug)]
@@ -48,6 +49,8 @@ enum Target {
     Stopped,RecoveryReview,RecoveryDecision,
     History,
     HistoryDetail,
+    Files,
+    FileDetail,
     Usage,
     Ledger,
     Journal,
@@ -444,6 +447,10 @@ fn user_error(error: &str) -> &str {
         "continuation_route_unavailable" => "The Agent or original Room binding is no longer available for continuation.",
         "continuation_transport_unavailable" => "Continuation requires the current signed-in Matrix client.",
         "invalid_history_query" => "The approval history selection is no longer valid. Refresh the Agent history.",
+        "file_history_upgrade_required" => "This Server needs the original file history upgrade before receipts can be refreshed.",
+        "file_history_changed" => "Original file evidence conflicts with this receipt. Refresh the list; the last observed status is preserved.",
+        "invalid_file_history_query" => "Select an original file delivery from this Agent history.",
+        "file_history_unavailable" => "File receipts could not be refreshed. The last observed status is preserved.",
         "owner_history_unavailable" => "Approval history could not be read from this device's ledger. Check local storage and retry.",
         "invalid_usage_query" => "Select the scope and enter valid UTC dates (YYYY-MM-DD). Daily reports support up to 366 days; monthly reports support up to 10 years.",
         "usage_report_unavailable" => "Usage could not be read from this device's ledger. Check local storage and retry.",
@@ -778,6 +785,7 @@ script_mod! {
                         runtime_tab := Action {text: #(crate::i18n::tr("Service")) i18n_text: "Service"}
                         usage_tab := Action {text: #(crate::i18n::tr("Usage & alerts")) i18n_text: "Usage & alerts"}
                         recovery_tab := Action {text: #(crate::i18n::tr("Recovery")) i18n_text: "Recovery"}
+                        files_tab := Action {text: #(crate::i18n::tr("File delivery")) i18n_text: "File delivery"}
                         history_tab := Action {text: #(crate::i18n::tr("Approval history")) i18n_text: "Approval history"}
                     }
                     recovery_section := Section {visible: false width: Fill height: Fit flow: Down spacing: 8
@@ -810,6 +818,17 @@ script_mod! {
                                 recovery_cancel := Action {text: #(crate::i18n::tr("Cancel")) i18n_text: "Cancel"}
                             }
                         }
+                    }
+                    files_section := Section {visible: false width: Fill height: Fit flow: Down spacing: 8
+                        Text {text: #(crate::i18n::tr("File delivery")) i18n_text: "File delivery"}
+                        Text {text: #(crate::i18n::tr("Only an original Matrix event receipt proves delivery. Refresh reads the original request; it never uploads, resends or restarts the model.")) i18n_text: "Only an original Matrix event receipt proves delivery. Refresh reads the original request; it never uploads, resends or restarts the model." draw_text.color: mod.widgets.RINX_MUTED}
+                        file_records := Select {labels: [#(crate::i18n::tr("Select a file delivery"))]}
+                        View {width: Fill height: Fit flow: Flow.Right{wrap: true} spacing: 8
+                            file_newest := Action {text: #(crate::i18n::tr("Newest records")) i18n_text: "Newest records"}
+                            file_older := Action {text: #(crate::i18n::tr("Older records")) i18n_text: "Older records"}
+                            file_refresh := Action {text: #(crate::i18n::tr("Refresh delivery receipt")) i18n_text: "Refresh delivery receipt"}
+                        }
+                        file_details := Text {}
                     }
                     history_section := Section {visible: false width: Fill height: Fit flow: Down spacing: 8
                         Text {text: #(crate::i18n::tr("Approval evidence on this device")) i18n_text: "Approval evidence on this device" draw_text.text_style: theme.font_bold{font_size: mod.widgets.RINX_TITLE_SIZE}}
@@ -1103,6 +1122,10 @@ pub struct HagencyPanel {
     #[rust] usage_report: Value,
     #[rust] usage_agent: String,
     #[rust] usage_cursor: Option<String>,
+    #[rust] file_page: Value,
+    #[rust] file_detail: Value,
+    #[rust] file_selected: String,
+    #[rust] file_cursor: Option<String>,
     #[rust] history_page: Value,
     #[rust] history_detail: Value,
     #[rust] history_selected: String,
@@ -1780,6 +1803,7 @@ impl HagencyPanel {
         self.view.view(cx, ids!(agent_create)).set_visible(cx,true);
     }
     fn agent_detail(&mut self, cx: &mut Cx, index: usize) {
+        self.reset_file_history(cx);
         let Some(a) = self.agents.get(index).cloned() else {
             return;
         };
@@ -2182,6 +2206,7 @@ impl HagencyPanel {
         self.render_ledger(cx);
         self.render_usage_controls(cx);
         self.render_history_controls(cx);
+        self.render_file_controls(cx);
         self.render_recovery_controls(cx);
         if self.page == Page::Projects && self.view.view(cx, ids!(project_form)).visible() {
             let title = self.view.label(cx, ids!(creation_heading)).text();
@@ -2297,6 +2322,7 @@ impl HagencyPanel {
             ids!(runtime_section),
             ids!(usage_section),
             ids!(history_section),
+            ids!(files_section),
             ids!(recovery_section),
         ] {
             self.view.view(cx, id).set_visible(cx, id == selected);
@@ -2308,6 +2334,7 @@ impl HagencyPanel {
             (ids!(runtime_tab), ids!(runtime_section)),
             (ids!(usage_tab), ids!(usage_section)),
             (ids!(history_tab), ids!(history_section)),
+            (ids!(files_tab), ids!(files_section)),
             (ids!(recovery_tab), ids!(recovery_section)),
         ] {
             let mut button = self.view.button(cx, tab);
@@ -2653,6 +2680,7 @@ impl HagencyPanel {
         match target {
             Target::Stopped|Target::RecoveryReview|Target::RecoveryDecision=>self.apply_recovery(cx,target,value),
             Target::History|Target::HistoryDetail=>self.apply_history(cx,target,value),
+            Target::Files|Target::FileDetail=>self.apply_file_history(cx,target,value),
             Target::Usage => self.apply_usage(cx,value),
             Target::Ledger => self.apply_ledger(cx, value),
             Target::Members => {
@@ -3659,6 +3687,7 @@ impl Widget for HagencyPanel {
         if self.ledger_actions(cx,actions) {return;}
         if self.usage_actions(cx,actions) {return;}
         if self.history_actions(cx,actions) {return;}
+        if self.file_history_actions(cx,actions) {return;}
         if self.recovery_actions(cx,actions) {return;}
         if self.view.inline_notice(cx,ids!(status_holder)).action_clicked(cx,actions) {
             self.list_page(cx);self.run(cx,Target::AgentJournal,Command::AgentCommands);return;
@@ -4733,7 +4762,7 @@ impl HagencyPanelRef {
         let identity = service.identity();
         if panel.identity != identity {
             panel.stopped_page=Value::Null;panel.recovery_review=Value::Null;panel.recovery_selected.clear();panel.recovery_cursor=None;panel.recovery_pending=None;
-            panel.history_page=Value::Null;panel.history_detail=Value::Null;panel.history_selected.clear();panel.history_cursor=None;
+            panel.file_page=Value::Null;panel.file_detail=Value::Null;panel.file_selected.clear();panel.file_cursor=None;panel.history_page=Value::Null;panel.history_detail=Value::Null;panel.history_selected.clear();panel.history_cursor=None;
             panel.usage_report=Value::Null;panel.usage_agent.clear();panel.usage_cursor=None;
             panel.ledger_open=false;panel.ledger_preview=Value::Null;panel.ledger_file=None;
             panel.view.text_input(cx,ids!(ledger_path)).set_text(cx,"");

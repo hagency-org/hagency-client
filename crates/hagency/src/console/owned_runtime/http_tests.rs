@@ -37,6 +37,8 @@ struct WireState {
     attachment_input: Option<Value>,
     file_delivery_response: Option<Value>,
     file_delivery_input: Option<Value>,
+    file_history: bool,
+    file_lookup_deny: Option<Arc<std::sync::atomic::AtomicBool>>,
     send_mode: u8,
     sent_remote: Option<Value>,
     sent_bytes: Vec<u8>,
@@ -75,7 +77,7 @@ impl WireState {
         match path {
             "/hagency/api/v1/discovery" => (
                 200,
-                json!({"product":"hagency-server","version":"0.1.0","protocolVersion":3,"capabilities":(["pasion-oauth","owner-agent-appservice-v1","global-agent-identity-v2","execution-device-v1","owner-direct-v1"].into_iter().chain((self.incoming_attachment.is_some()||self.send_mode>0).then_some(hagency_agent_local::attachments::CAPABILITY)).chain((self.send_mode>0).then_some(hagency_agent_local::file_delivery::CAPABILITY)).collect::<Vec<_>>()),"homeserver":origin,"issuer":format!("{origin}auth/")}),
+                json!({"product":"hagency-server","version":"0.1.0","protocolVersion":3,"capabilities":(["pasion-oauth","owner-agent-appservice-v1","global-agent-identity-v2","execution-device-v1","owner-direct-v1"].into_iter().chain((self.incoming_attachment.is_some()||self.send_mode>0).then_some(hagency_agent_local::attachments::CAPABILITY)).chain((self.send_mode>0).then_some(hagency_agent_local::file_delivery::CAPABILITY)).chain(self.file_history.then_some(hagency_agent_local::file_delivery::HISTORY_CAPABILITY)).collect::<Vec<_>>()),"homeserver":origin,"issuer":format!("{origin}auth/")}),
             ),
             "/hagency/api/v1/agents/agent-a" if self.restore_scope => (
                 200,
@@ -196,6 +198,9 @@ impl WireState {
                 )
             }
             "/hagency/api/v1/execution/files/lookup" => {
+                if let Some(deny) = &self.file_lookup_deny {
+                    deny.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
                 self.file_delivery_input = Some(input.clone());
                 (
                     200,
@@ -1520,6 +1525,7 @@ async fn heartbeat_retries_transport_failure_but_never_extends_unconfirmed_lease
     }
 }
 
+mod file_history;
 mod recovery;
 
 #[tokio::test]
@@ -1963,6 +1969,7 @@ async fn typed_http_current_runtime_sends_frozen_file_and_queries_original_lost_
 fn original_file_delivery_notice_cannot_be_hidden_by_model_text_or_large_utf8_reply() {
     use hagency_agent_local::sent_files::DeliverySummary;
     let unknown = DeliverySummary {
+        not_prepared: 0,
         sent: 0,
         cancelled: 1,
         unconfirmed: 2,
@@ -1978,7 +1985,8 @@ fn original_file_delivery_notice_cannot_be_hidden_by_model_text_or_large_utf8_re
             &DeliverySummary {
                 sent: 1,
                 cancelled: 0,
-                unconfirmed: 0
+                unconfirmed: 0,
+                not_prepared: 0
             }
         ),
         "original"

@@ -5433,3 +5433,13 @@ PR #8 审查及验证记录见 `dev-vibe/pr-8-board-ux-review-2026-10-25.zh.md`�
   prepare/terminal transitions. A present delivery always keeps its own state;
   closed does not mean sent/cancelled. Client owner history must retain this
   proof separately rather than forge a delivery or reconstruct write custody.
+
+- File history observations live separately from write custody. Final absence is
+  an immutable sent_file_absence row bound to the exact original request with no
+  delivery and Server preparationClosed=true; it releases only file bytes, never
+  Token reservations or the permanent witness. SDK/device/profile must be checked
+  again after the lookup and before storing it. Unknown audits stay unknown.
+- SQLite deferred FKs do not defer INSERT triggers. Snapshot restoration must
+  insert sent_files before sent_file_absence so its original-record validation
+  remains active. Keep explicit pre-history schema compatibility and add only
+  empty observation metadata when restoring older snapshots.

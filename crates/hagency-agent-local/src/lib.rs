@@ -300,6 +300,7 @@ impl Ledger {
         db.execute_batch(recovery::SCHEMA)?;
         db.execute_batch(received_files::SCHEMA)?;
         db.execute_batch(sent_files::SCHEMA)?;
+        db.execute_batch(sent_files::HISTORY_SCHEMA)?;
         db.execute_batch("COMMIT")?;
         db.pragma_update(None, "foreign_keys", true)?;
         Ok(Self {

@@ -447,7 +447,7 @@ fn replaced_workspace_and_local_policy_revocation_refuse_custody() {
 fn pre_sender_snapshot_adds_empty_history_without_inventing_custody() {
     let t = tempfile::tempdir().unwrap();
     let (l, scope, _) = ledger(&t.path().join("ledger"));
-    l.db.execute_batch("DROP TABLE sent_files").unwrap();
+    l.db.execute_batch("DROP TRIGGER reject_absent_file_update; DROP TABLE sent_file_absence; DROP TABLE sent_files").unwrap();
     let profile = "a".repeat(64);
     let snapshot = l.snapshot(OWNER, &profile, 30).unwrap();
     let mut target = Ledger::open_scoped(":memory:", OWNER, &profile).unwrap();
@@ -528,5 +528,290 @@ fn actual_unresolved_byte_quota_is_retained_without_storing_file_blobs() {
             .get::<_, u64>(0))
             .unwrap(),
         16
+    );
+}
+
+fn lookup(r: &Record, execution: &str, closed: bool) -> FileObservation {
+    FileObservation {
+        request: FileLookup {
+            dispatch_id: "dispatch".into(),
+            execution_id: execution.into(),
+            request_id: r.request_id.clone(),
+        },
+        delivery: None,
+        preparation_closed: closed,
+    }
+}
+#[test]
+fn history_final_absence_is_permanent_scoped_and_never_a_new_send_grant() {
+    let _lock = LOCK.blocking_lock();
+    let t = tempfile::tempdir().unwrap();
+    let cwd = t.path().canonicalize().unwrap();
+    std::fs::write(cwd.join("file.txt"), b"hello").unwrap();
+    let (mut l, scope, execution) = ledger(&cwd.join("ledger"));
+    let sender = Sender::open(&cwd).unwrap();
+    let c = capture(&sender, &l, &scope, &execution, "file.txt", "first");
+    let audit = approve(&mut l, &c);
+    let custody = sender.begin(&mut l, c, &audit, 20).unwrap();
+    let r = custody.record().clone();
+    drop(custody);
+    assert!(l.sent_file_record("@foreign:test", "agent", &r.id).is_err());
+    assert!(l.sent_file_record(OWNER, "other-agent", &r.id).is_err());
+    let temporary = l
+        .observe_file_lookup(
+            &scope,
+            "dispatch",
+            &execution,
+            &r.id,
+            lookup(&r, &execution, false),
+            30,
+        )
+        .unwrap();
+    assert!(temporary.absence.is_none());
+    assert_eq!(
+        l.sent_file_summary(&scope, "dispatch", &execution)
+            .unwrap()
+            .unconfirmed,
+        1
+    );
+    let mut wrong = lookup(&r, &execution, true);
+    wrong.request.request_id = "other".into();
+    assert!(
+        l.observe_file_lookup(&scope, "dispatch", &execution, &r.id, wrong, 31)
+            .is_err()
+    );
+    let final_record = l
+        .observe_file_lookup(
+            &scope,
+            "dispatch",
+            &execution,
+            &r.id,
+            lookup(&r, &execution, true),
+            32,
+        )
+        .unwrap();
+    assert!(final_record.remote.is_none());
+    assert_eq!(final_record.absence.as_ref().unwrap().observed_at, 32);
+    assert_eq!(
+        l.sent_file_summary(&scope, "dispatch", &execution)
+            .unwrap()
+            .not_prepared,
+        1
+    );
+    assert_eq!(
+        l.sent_file_summary(&scope, "dispatch", &execution)
+            .unwrap()
+            .unconfirmed,
+        0
+    );
+    assert!(
+        l.observe_file_lookup(
+            &scope,
+            "dispatch",
+            &execution,
+            &r.id,
+            lookup(&r, &execution, false),
+            33
+        )
+        .is_err()
+    );
+    assert_eq!(
+        l.observe_file_lookup(
+            &scope,
+            "dispatch",
+            &execution,
+            &r.id,
+            lookup(&r, &execution, true),
+            34
+        )
+        .unwrap()
+        .absence
+        .unwrap()
+        .observed_at,
+        32
+    );
+    for sql in [
+        "DELETE FROM sent_file_absence",
+        "UPDATE sent_file_absence SET observed_at=33",
+        "UPDATE sent_files SET remote='{}'",
+    ] {
+        assert!(l.db.execute(sql, []).is_err());
+    }
+    let snapshot = l.snapshot(OWNER, &"a".repeat(64), 35).unwrap();
+    let mut restored = Ledger::open_scoped(":memory:", OWNER, &"a".repeat(64)).unwrap();
+    restored
+        .restore_snapshot(OWNER, &"a".repeat(64), &snapshot)
+        .unwrap();
+    assert!(
+        restored
+            .sent_file_record(OWNER, "agent", &r.id)
+            .unwrap()
+            .record
+            .absence
+            .is_some()
+    );
+    let c = capture(
+        &sender, &restored, &scope, &execution, "file.txt", "new-call",
+    );
+    assert_eq!(c.id(), r.id);
+    let audit = approve(&mut restored, &c);
+    assert!(matches!(
+        sender.begin(&mut restored, c, &audit, 36),
+        Err(Error::Unknown)
+    ));
+    drop(l);
+    let reopened = Ledger::open_scoped(cwd.join("ledger"), OWNER, &"a".repeat(64)).unwrap();
+    assert!(
+        reopened
+            .sent_file_record(OWNER, "agent", &r.id)
+            .unwrap()
+            .record
+            .absence
+            .is_some()
+    );
+}
+#[test]
+fn pre_history_snapshot_preserves_existing_sender_witness_and_adds_no_absence() {
+    let _lock = LOCK.blocking_lock();
+    let t = tempfile::tempdir().unwrap();
+    let cwd = t.path().canonicalize().unwrap();
+    std::fs::write(cwd.join("file.txt"), b"hello").unwrap();
+    let (mut l, scope, execution) = ledger(&cwd.join("ledger"));
+    let sender = Sender::open(&cwd).unwrap();
+    let c = capture(&sender, &l, &scope, &execution, "file.txt", "first");
+    let audit = approve(&mut l, &c);
+    let r = sender
+        .begin(&mut l, c, &audit, 20)
+        .unwrap()
+        .record()
+        .clone();
+    l.db.execute_batch("DROP TRIGGER reject_absent_file_update; DROP TABLE sent_file_absence")
+        .unwrap();
+    let snapshot = l.snapshot(OWNER, &"a".repeat(64), 30).unwrap();
+    let mut restored = Ledger::open_scoped(":memory:", OWNER, &"a".repeat(64)).unwrap();
+    restored
+        .restore_snapshot(OWNER, &"a".repeat(64), &snapshot)
+        .unwrap();
+    let old = restored.sent_file_record(OWNER, "agent", &r.id).unwrap();
+    assert!(old.record.absence.is_none());
+    assert!(old.record.remote.is_none());
+    assert_eq!(old.record.request_id, r.request_id);
+    assert_eq!(old.record.audit, r.audit);
+    let c = capture(
+        &sender,
+        &restored,
+        &scope,
+        &execution,
+        "file.txt",
+        "after-restore",
+    );
+    let audit = approve(&mut restored, &c);
+    assert!(matches!(
+        sender.begin(&mut restored, c, &audit, 31),
+        Err(Error::Unknown)
+    ));
+}
+#[test]
+fn file_history_pages_preserve_scope_order_and_exact_original_receipts() {
+    let _lock = LOCK.blocking_lock();
+    let t = tempfile::tempdir().unwrap();
+    let cwd = t.path().canonicalize().unwrap();
+    let (mut l, scope, execution) = ledger(&cwd.join("ledger"));
+    let sender = Sender::open(&cwd).unwrap();
+    for i in 0..101 {
+        let name = format!("file-{i}.txt");
+        std::fs::write(cwd.join(&name), format!("original-{i}")).unwrap();
+        let c = capture(&sender, &l, &scope, &execution, &name, &format!("call-{i}"));
+        let audit = approve(&mut l, &c);
+        drop(sender.begin(&mut l, c, &audit, 20).unwrap());
+    }
+    let first = l.sent_file_history(OWNER, "agent", None).unwrap();
+    assert_eq!(first.records.len(), 100);
+    let second = l
+        .sent_file_history(OWNER, "agent", first.next_cursor.as_deref())
+        .unwrap();
+    assert_eq!(second.records.len(), 1);
+    assert!(second.next_cursor.is_none());
+    assert!(
+        first
+            .records
+            .windows(2)
+            .all(|p| p[0].record.id > p[1].record.id)
+    );
+    assert!(
+        first.records.iter().all(|r| r.scope == scope
+            && r.execution_id == execution
+            && r.dispatch_id == "dispatch")
+    );
+    assert!(
+        l.sent_file_history(OWNER, "other-agent", first.next_cursor.as_deref())
+            .is_err()
+    );
+}
+
+#[test]
+fn final_absence_releases_actual_capacity_but_not_permanent_identity() {
+    use std::io::Write;
+    let _lock = LOCK.blocking_lock();
+    let t = tempfile::tempdir().unwrap();
+    let cwd = t.path().canonicalize().unwrap();
+    let (mut l, scope, execution) = ledger(&cwd.join("ledger"));
+    let sender = Sender::open(&cwd).unwrap();
+    let mut original = None;
+    for i in 0u8..16 {
+        let name = format!("large-{i}.bin");
+        let mut f = std::fs::File::create(cwd.join(&name)).unwrap();
+        f.set_len(crate::file_delivery::MAX_BYTES as u64).unwrap();
+        f.write_all(&[i]).unwrap();
+        drop(f);
+        let c = capture(&sender, &l, &scope, &execution, &name, &format!("call-{i}"));
+        let audit = approve(&mut l, &c);
+        let custody = sender.begin(&mut l, c, &audit, 20).unwrap();
+        if i == 0 {
+            original = Some(custody.record().clone());
+        }
+    }
+    let r = original.unwrap();
+    std::fs::write(cwd.join("new.txt"), b"new approved original").unwrap();
+    l.observe_file_lookup(
+        &scope,
+        "dispatch",
+        &execution,
+        &r.id,
+        lookup(&r, &execution, false),
+        30,
+    )
+    .unwrap();
+    let c = capture(&sender, &l, &scope, &execution, "new.txt", "quota-held");
+    let audit = approve(&mut l, &c);
+    assert!(matches!(
+        sender.begin(&mut l, c, &audit, 30),
+        Err(Error::Invalid("sent file quota"))
+    ));
+    l.observe_file_lookup(
+        &scope,
+        "dispatch",
+        &execution,
+        &r.id,
+        lookup(&r, &execution, true),
+        31,
+    )
+    .unwrap();
+    let c = capture(&sender, &l, &scope, &execution, "new.txt", "quota-released");
+    let audit = approve(&mut l, &c);
+    drop(sender.begin(&mut l, c, &audit, 31).unwrap());
+    assert_eq!(
+        l.sent_file_history(OWNER, "agent", None)
+            .unwrap()
+            .records
+            .len(),
+        17
+    );
+    assert!(
+        l.sent_file_record(OWNER, "agent", &r.id)
+            .unwrap()
+            .record
+            .absence
+            .is_some()
     );
 }
