@@ -2,6 +2,7 @@
 //! A host must authenticate the owner, validate server binding records and enforce tool
 //! interception before using this library. Each call ID denotes ONE provider invocation:
 //! a retry which can charge again requires a fresh call ID under the original requester.
+pub mod backup;
 pub mod codex;
 pub mod inbox;
 pub mod process_cleanup;

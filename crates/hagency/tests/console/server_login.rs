@@ -2,6 +2,8 @@ use super::*;
 use salvo::http::Method;
 use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
+#[path = "server_login/owner_ledger.rs"]
+mod owner_ledger;
 
 #[derive(Clone)]
 struct OAuthFixture {
@@ -2672,6 +2674,7 @@ async fn native_in_process_facade_pins_matrix_account_without_exposing_credentia
     assert_eq!(candidates["spaces"].as_array().unwrap().len(), 32);
     let replay = reqwest::Client::new().get(callback).send().await.unwrap();
     assert_eq!(replay.status(), reqwest::StatusCode::BAD_REQUEST);
+    owner_ledger::roundtrip(&native, root.path()).await;
     native.shutdown().await;
     assert!(native.execute(Command::Agents).await.is_err());
     drop(native);

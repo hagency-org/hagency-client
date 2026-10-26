@@ -3,6 +3,16 @@
 
 # Repository audit knowledge
 
+- **Owner ledger snapshots, 2026-10-26:** Current-schema snapshots live in
+  hagency-agent-local::backup and are independent of retired hagency-store
+  directory backups. Read-transaction SQLite backup/VACUUM captures WAL commits;
+  schema/identity/checksum validation precedes private publication. Restore uses
+  one IMMEDIATE transaction into a fresh exact-profile ledger, preserves all
+  records/holds/replies and refuses existing history. NativeOwner commands are
+  in-process only; stop all owner services first. Provider/Matrix login and
+  service intents are outside this artifact. Actual desktop/recovery-device and
+  cross-platform acceptance remain separate gates in the dev-vibe report.
+
 - **Project kanban scope review, 2026-10-23:** The proposed shared native board
   needs Server authority/storage/API and Client UI/typed calls. Cloud's existing
   database configuration, Server image selection and host/root-prefix routing

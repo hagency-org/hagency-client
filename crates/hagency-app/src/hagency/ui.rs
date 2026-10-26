@@ -7,6 +7,7 @@ use std::{collections::HashSet, time::Instant};
 use crate::sliding_sync::spawn_async_task;
 use super::board::ProjectBoardWidgetExt;
 use crate::shared::{feedback::{InlineNoticeWidgetExt,InlineNoticeWidgetRefExt}, popup_list::PopupKind};
+mod ledger;
 
 #[derive(Clone, Debug)]
 pub enum HagencyAction {
@@ -41,6 +42,7 @@ enum Page {
 }
 #[derive(Clone, Copy, Debug)]
 enum Target {
+    Ledger,
     Journal,
     Projects,
     Rooms,
@@ -429,6 +431,14 @@ fn agent_empty_message(loaded: bool, loading: bool) -> &'static str {
 fn user_error(error: &str) -> &str {
     if let Some(message) = provider_error_message(error) { return message; }
     match error {
+        "ledger_runtime_busy" => "Stop all Agent services on this device before restoring the owner ledger.",
+        "ledger_restore_requires_empty_ledger" => "This device already has owner ledger records. Restore cannot overwrite usage or requests; use an empty ledger on a recovery device.",
+        "ledger_backup_changed" => "The backup changed after inspection. Check the backup again before restoring.",
+        "ledger_backup_owner_mismatch" => "This backup belongs to a different account or server profile.",
+        "ledger_backup_schema_unsupported" => "This backup uses an unsupported ledger schema. Use a compatible client version.",
+        "invalid_ledger_backup" => "The backup is damaged or incomplete. Choose a valid owner ledger backup.",
+        "invalid_backup_path" | "backup_destination_unavailable" => "Choose a readable backup or enter a new absolute export path. Existing files are never overwritten.",
+        "ledger_backup_unavailable" => "The ledger backup operation could not finish. Check available disk space and file permissions.",
         "invalid_agent_name" => "The Agent name must contain 1–64 characters and no control characters.",
         "invalid_arguments" => "The request contains invalid fields. Check the name and selected options; if they are valid, check that the client and server versions are compatible.",
         "idempotency_key_reused" => "This request identifier was already used with different settings. Refresh Agents and check the original request before creating again.",
@@ -597,11 +607,26 @@ script_mod! {
             loading_status := LoadingSpinner {visible: false width: 18 height: 18 draw_bg +: {color: mod.widgets.RINX_MUTED stroke_width: 2.0}}
             new_item := Primary {text: #(crate::i18n::tr("New Project")) i18n_text: "New Project"}
             refresh := Action {text: #(crate::i18n::tr("Refresh")) i18n_text: "Refresh"}
+            ledger_toggle := Action {visible: false text: #(crate::i18n::tr("Ledger backups")) i18n_text: "Ledger backups"}
         }
         owner := Text {visible: false}
         status_holder := InlineNotice {margin: Inset{right: 20}}
         login := Action {visible: false text: #(crate::i18n::tr("Sign in again")) i18n_text: "Sign in again"}
         lists_pane := View {width: Fill height: Fill margin: Inset{bottom: 16} flow: Down spacing: 8
+                ledger_panel := Section {visible: false width: Fill height: Fit flow: Down spacing: 8 margin: Inset{right: 20}
+                    Text {text: #(crate::i18n::tr("Owner ledger backup")) i18n_text: "Owner ledger backup" draw_text.text_style: theme.font_bold{font_size: mod.widgets.RINX_TITLE_SIZE}}
+                    Text {text: #(crate::i18n::tr("Includes Agent settings, usage, pending requests and saved replies on this device. Keep backups private. Provider and Matrix login files are excluded.")) i18n_text: "Includes Agent settings, usage, pending requests and saved replies on this device. Keep backups private. Provider and Matrix login files are excluded."}
+                    ledger_path := Input {empty_text: #(crate::i18n::tr("Full backup file path on this device"))}
+                    View {width: Fill height: Fit flow: Flow.Right{wrap: true} spacing: 8
+                        ledger_choose := Action {text: #(crate::i18n::tr("Choose backup")) i18n_text: "Choose backup"}
+                        ledger_export := Action {text: #(crate::i18n::tr("Export new backup")) i18n_text: "Export new backup"}
+                        ledger_inspect := Action {text: #(crate::i18n::tr("Check backup")) i18n_text: "Check backup"}
+                    }
+                    ledger_summary := Text {}
+                    Text {text: #(crate::i18n::tr("Stop all Agent services before restoring. Restore requires an empty local ledger and cannot overwrite recorded usage or requests. Restored services stay stopped.")) i18n_text: "Stop all Agent services before restoring. Restore requires an empty local ledger and cannot overwrite recorded usage or requests. Restored services stay stopped." draw_text.color: mod.widgets.RINX_MUTED}
+                    ledger_confirm := RinxCheckBox {text: #(crate::i18n::tr("Restore the checked backup into this owner's empty ledger")) i18n_text: "Restore the checked backup into this owner's empty ledger"}
+                    ledger_restore := Primary {text: #(crate::i18n::tr("Restore checked backup")) i18n_text: "Restore checked backup"}
+                }
                 agent_recovery := View {visible: false width: Fill height: Fit flow: Down margin: Inset{right: 20}
                     agent_request_list := FlatList {width: Fill height: Fit flow: Down spacing: 8
                         scroll_bars +: {show_scroll_x: false show_scroll_y: false}
@@ -980,6 +1005,9 @@ pub struct HagencyPanel {
     view: View,
     #[rust]
     active: bool,
+    #[rust] ledger_open: bool,
+    #[rust] ledger_preview: Value,
+    #[rust] ledger_file: Option<robius_file_picker::LocalFile>,
     #[rust]
     identity: String,
     #[rust]
@@ -1551,6 +1579,7 @@ impl HagencyPanel {
             ids!(web_search),
             ids!(programming),
             ids!(mcp_servers),
+            ids!(ledger_path), ids!(ledger_confirm), ids!(ledger_choose), ids!(ledger_toggle), ids!(ledger_export), ids!(ledger_inspect), ids!(ledger_restore),
         ] {
             self.view.widget(cx, id).set_disabled(cx, busy);
         }
@@ -2041,6 +2070,9 @@ impl HagencyPanel {
             .set_visible(cx, !detail);
         self.view.button(cx, ids!(refresh)).set_visible(cx, !detail);
         self.view.button(cx, ids!(back)).set_visible(cx, detail);
+        self.view.button(cx, ids!(ledger_toggle)).set_visible(cx, !detail && self.page == Page::Agents);
+        self.view.view(cx, ids!(ledger_panel)).set_visible(cx, !detail && self.page == Page::Agents && self.ledger_open);
+        self.render_ledger(cx);
         if self.page == Page::Projects && self.view.view(cx, ids!(project_form)).visible() {
             let title = self.view.label(cx, ids!(creation_heading)).text();
             self.view.label(cx, ids!(heading)).set_text(cx, &title);
@@ -2503,6 +2535,7 @@ impl HagencyPanel {
     }
     fn apply(&mut self, cx: &mut Cx, target: Target, value: &Value) {
         match target {
+            Target::Ledger => self.apply_ledger(cx, value),
             Target::Members => {
                 if !members_match(&self.members_room, value) {
                     return;
@@ -3369,6 +3402,9 @@ impl Widget for HagencyPanel {
             return;
         };
         for action in actions {
+            if let Some(done)=action.downcast_ref::<ledger::Selected>() {
+                self.accept_ledger_selection(cx,done);
+            }
             if let Some(done)=action.downcast_ref::<ConfigurationCompleted>()
                 && self.configuration_poll_request==Some(done.request) {
                 self.configuration_poll_request=None;
@@ -3501,6 +3537,7 @@ impl Widget for HagencyPanel {
         if self.busy {
             return;
         }
+        if self.ledger_actions(cx,actions) {return;}
         if self.view.inline_notice(cx,ids!(status_holder)).action_clicked(cx,actions) {
             self.list_page(cx);self.run(cx,Target::AgentJournal,Command::AgentCommands);return;
         }
@@ -4573,6 +4610,10 @@ impl HagencyPanelRef {
         panel.display_blocked=false;
         let identity = service.identity();
         if panel.identity != identity {
+            panel.ledger_open=false;panel.ledger_preview=Value::Null;panel.ledger_file=None;
+            panel.view.text_input(cx,ids!(ledger_path)).set_text(cx,"");
+            panel.view.label(cx,ids!(ledger_summary)).set_text(cx,"");
+            panel.view.check_box(cx,ids!(ledger_confirm)).set_active(cx,false,Animate::No);
             panel.model_saving=false;panel.clear_model_save_feedback(cx);
             panel.service_logs_open=false;panel.agent_service_state=Value::Null;
             panel.view.view(cx,ids!(service_logs_panel)).set_visible(cx,false);

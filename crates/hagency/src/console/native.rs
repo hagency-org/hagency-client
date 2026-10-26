@@ -1,5 +1,7 @@
 //! Token-free native commands routed through the existing authenticated service.
 mod configuration;
+mod ledger;
+pub use ledger::LedgerAction;
 mod speech;
 use super::*;
 use crate::owner_host::OwnerHost;
@@ -148,6 +150,9 @@ impl<'de> Deserialize<'de> for RoomCreationPolicy {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Command {
+    Ledger {
+        action: LedgerAction,
+    },
     ProjectBoard {
         project_id: String,
         action: hagency_core::project_board::BoardAction,
@@ -374,7 +379,8 @@ fn request(command: Command) -> Result<(&'static str, String, Option<Value>), Na
     let (method, path) = match command {
         Command::AgentConfigurationStatus { .. }
         | Command::ExecutionEnvironment { .. }
-        | Command::AgentConfiguration { .. } => {
+        | Command::AgentConfiguration { .. }
+        | Command::Ledger { .. } => {
             return Err(failure(400, "configuration_operation_unsupported"));
         }
         Command::LoginStatus => ("GET", "/console/server-login".into()),
@@ -1149,6 +1155,9 @@ impl NativeOwner {
         }
         if !matrix_managed && !matches!(command, Command::LoginStatus | Command::Logout) {
             self.identity().await?;
+        }
+        if let Command::Ledger { action } = command {
+            return ledger::execute(self, action).await;
         }
         let (method, path, body) = request(command)?;
         let cookie = self.0.cookie.lock().await.clone();
