@@ -9,6 +9,7 @@ use super::board::ProjectBoardWidgetExt;
 use crate::shared::{feedback::{InlineNoticeWidgetExt,InlineNoticeWidgetRefExt}, popup_list::PopupKind};
 mod ledger;
 mod usage;
+mod history;
 
 #[derive(Clone, Debug)]
 pub enum HagencyAction {
@@ -43,6 +44,8 @@ enum Page {
 }
 #[derive(Clone, Copy, Debug)]
 enum Target {
+    History,
+    HistoryDetail,
     Usage,
     Ledger,
     Journal,
@@ -433,6 +436,8 @@ fn agent_empty_message(loaded: bool, loading: bool) -> &'static str {
 fn user_error(error: &str) -> &str {
     if let Some(message) = provider_error_message(error) { return message; }
     match error {
+        "invalid_history_query" => "The approval history selection is no longer valid. Refresh the Agent history.",
+        "owner_history_unavailable" => "Approval history could not be read from this device's ledger. Check local storage and retry.",
         "invalid_usage_query" => "Select the scope and enter valid UTC dates (YYYY-MM-DD). Daily reports support up to 366 days; monthly reports support up to 10 years.",
         "usage_report_unavailable" => "Usage could not be read from this device's ledger. Check local storage and retry.",
         "ledger_runtime_busy" => "Stop all Agent services on this device before restoring the owner ledger.",
@@ -765,6 +770,20 @@ script_mod! {
                         policy_tab := Action {text: #(crate::i18n::tr("Limits")) i18n_text: "Limits"}
                         runtime_tab := Action {text: #(crate::i18n::tr("Service")) i18n_text: "Service"}
                         usage_tab := Action {text: #(crate::i18n::tr("Usage & alerts")) i18n_text: "Usage & alerts"}
+                        history_tab := Action {text: #(crate::i18n::tr("Approval history")) i18n_text: "Approval history"}
+                    }
+                    history_section := Section {visible: false width: Fill height: Fit flow: Down spacing: 8
+                        Text {text: #(crate::i18n::tr("Approval evidence on this device")) i18n_text: "Approval evidence on this device" draw_text.text_style: theme.font_bold{font_size: mod.widgets.RINX_TITLE_SIZE}}
+                        Text {text: #(crate::i18n::tr("A recorded owner decision is not proof of execution. Permission application, provider submission and matching tool receipts are shown separately. Missing receipts remain unknown; history never resubmits an approval.")) i18n_text: "A recorded owner decision is not proof of execution. Permission application, provider submission and matching tool receipts are shown separately. Missing receipts remain unknown; history never resubmits an approval." draw_text.color: mod.widgets.RINX_MUTED}
+                        history_records := Select {labels: [#(crate::i18n::tr("Select an approval record"))]}
+                        View {width: Fill height: Fit flow: Flow.Right{wrap: true} spacing: 8
+                            history_refresh := Action {text: #(crate::i18n::tr("Newest records")) i18n_text: "Newest records"}
+                            history_older := Action {text: #(crate::i18n::tr("Older records")) i18n_text: "Older records"}
+                        }
+                        history_details := Text {}
+                        history_proposal := Text {}
+                        Text {text: #(crate::i18n::tr("The proposal preview shows up to 16,384 characters. Copy the complete original proposal to inspect longer commands or file changes.")) i18n_text: "The proposal preview shows up to 16,384 characters. Copy the complete original proposal to inspect longer commands or file changes." draw_text.color: mod.widgets.RINX_MUTED}
+                        history_copy := Action {text: #(crate::i18n::tr("Copy complete proposal")) i18n_text: "Copy complete proposal"}
                     }
                     usage_section := View {visible: false width: Fill height: Fit flow: Down spacing: 10
                         Section {width: Fill height: Fit flow: Down spacing: 8
@@ -1045,6 +1064,10 @@ pub struct HagencyPanel {
     #[rust] usage_report: Value,
     #[rust] usage_agent: String,
     #[rust] usage_cursor: Option<String>,
+    #[rust] history_page: Value,
+    #[rust] history_detail: Value,
+    #[rust] history_selected: String,
+    #[rust] history_cursor: Option<String>,
     #[rust]
     identity: String,
     #[rust]
@@ -1618,6 +1641,7 @@ impl HagencyPanel {
             ids!(mcp_servers),
             ids!(ledger_path), ids!(ledger_confirm), ids!(ledger_choose), ids!(ledger_toggle), ids!(ledger_export), ids!(ledger_inspect), ids!(ledger_restore),
             ids!(usage_scope),ids!(usage_room),ids!(usage_requester),ids!(usage_group),ids!(usage_from),ids!(usage_until),ids!(usage_refresh),ids!(usage_alerts),ids!(usage_ack),ids!(usage_latest),ids!(usage_older),
+            ids!(history_records),ids!(history_refresh),ids!(history_older),ids!(history_copy),
         ] {
             self.view.widget(cx, id).set_disabled(cx, busy);
         }
@@ -2112,6 +2136,7 @@ impl HagencyPanel {
         self.view.view(cx, ids!(ledger_panel)).set_visible(cx, !detail && self.page == Page::Agents && self.ledger_open);
         self.render_ledger(cx);
         self.render_usage_controls(cx);
+        self.render_history_controls(cx);
         if self.page == Page::Projects && self.view.view(cx, ids!(project_form)).visible() {
             let title = self.view.label(cx, ids!(creation_heading)).text();
             self.view.label(cx, ids!(heading)).set_text(cx, &title);
@@ -2225,6 +2250,7 @@ impl HagencyPanel {
             ids!(model_section),
             ids!(runtime_section),
             ids!(usage_section),
+            ids!(history_section),
         ] {
             self.view.view(cx, id).set_visible(cx, id == selected);
         }
@@ -2234,6 +2260,7 @@ impl HagencyPanel {
             (ids!(model_tab), ids!(model_section)),
             (ids!(runtime_tab), ids!(runtime_section)),
             (ids!(usage_tab), ids!(usage_section)),
+            (ids!(history_tab), ids!(history_section)),
         ] {
             let mut button = self.view.button(cx, tab);
             if section == selected {
@@ -2576,6 +2603,7 @@ impl HagencyPanel {
     }
     fn apply(&mut self, cx: &mut Cx, target: Target, value: &Value) {
         match target {
+            Target::History|Target::HistoryDetail=>self.apply_history(cx,target,value),
             Target::Usage => self.apply_usage(cx,value),
             Target::Ledger => self.apply_ledger(cx, value),
             Target::Members => {
@@ -3581,6 +3609,7 @@ impl Widget for HagencyPanel {
         }
         if self.ledger_actions(cx,actions) {return;}
         if self.usage_actions(cx,actions) {return;}
+        if self.history_actions(cx,actions) {return;}
         if self.view.inline_notice(cx,ids!(status_holder)).action_clicked(cx,actions) {
             self.list_page(cx);self.run(cx,Target::AgentJournal,Command::AgentCommands);return;
         }
@@ -4653,6 +4682,7 @@ impl HagencyPanelRef {
         panel.display_blocked=false;
         let identity = service.identity();
         if panel.identity != identity {
+            panel.history_page=Value::Null;panel.history_detail=Value::Null;panel.history_selected.clear();panel.history_cursor=None;
             panel.usage_report=Value::Null;panel.usage_agent.clear();panel.usage_cursor=None;
             panel.ledger_open=false;panel.ledger_preview=Value::Null;panel.ledger_file=None;
             panel.view.text_input(cx,ids!(ledger_path)).set_text(cx,"");

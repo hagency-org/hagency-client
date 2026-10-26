@@ -471,6 +471,14 @@ fn identity(device: &AuthorizedDevice, agent: &str) -> String {
     ))
     .expect("string tuple")
 }
+fn approval_ledger(console: &Console, device: &AuthorizedDevice) -> Result<Ledger, RuntimeError> {
+    let (path, profile) = intent_location(console, device)?;
+    local(Ledger::open_scoped(
+        path.with_file_name("agent-local.sqlite"),
+        device.owner_mxid(),
+        &profile,
+    ))
+}
 fn local<T>(r: hagency_agent_local::Result<T>) -> Result<T, RuntimeError> {
     r.map_err(|_| RuntimeError::Profile)
 }
@@ -796,7 +804,7 @@ impl OwnedRuntime {
         &self,
         console: &Console,
         expected: &DevicePin,
-        pending: codex::PendingApproval,
+        mut pending: codex::PendingApproval,
     ) -> Result<(), RuntimeError> {
         use sha2::{Digest, Sha256};
         let device = console.authorized_device().await.map_err(device_error)?;
@@ -821,9 +829,17 @@ impl OwnedRuntime {
         {
             return Err(RuntimeError::Authorization);
         }
-        let mut nonce = [0u8; 32];
-        getrandom::fill(&mut nonce).map_err(|_| RuntimeError::Profile)?;
-        let proposal_id = format!("{:x}", Sha256::digest(nonce));
+        let mut audit = approval_ledger(console, &device)?;
+        let proposal_id = match &pending.audit_id {
+            Some(id) => {
+                local(audit.verify_approval_audit(device.owner_mxid(), id, &pending.proposal))?;
+                id.clone()
+            }
+            None => {
+                local(audit.begin_approval_audit(device.owner_mxid(), &pending.proposal, now()))?
+            }
+        };
+        pending.audit_id = Some(proposal_id.clone());
         let args_digest = format!(
             "{:x}",
             Sha256::digest(
@@ -924,7 +940,22 @@ impl OwnedRuntime {
         let pin = DevicePin::from(&device);
         let pending =
             entry.take_approval(&pin, agent, proposal_id, args_digest, &bindings, now())?;
-        pending.decide(approved);
+        let audit_id = pending.audit_id.clone().ok_or(RuntimeError::Approval)?;
+        let mut audit = approval_ledger(console, &device)?;
+        local(audit.verify_approval_audit(device.owner_mxid(), &audit_id, &pending.proposal))?;
+        device.bearer().map_err(|_| RuntimeError::Authorization)?;
+        use hagency_agent_local::audit::Phase;
+        local(audit.record_approval_event(device.owner_mxid(),&audit_id,if approved{Phase::OwnerAllowed}else{Phase::OwnerDenied},now(),&serde_json::json!({"deviceId":device.device_id(),"deviceGeneration":device.generation()})))?;
+        if !pending.decide(approved) && approved {
+            local(audit.record_approval_event(
+                device.owner_mxid(),
+                &audit_id,
+                Phase::Unknown,
+                now(),
+                &serde_json::json!({"reason":"decision_receiver_closed"}),
+            ))?;
+            return Err(RuntimeError::Approval);
+        }
         Ok(())
     }
 
@@ -2373,10 +2404,30 @@ async fn review_request<T: Transport>(
         policy_revision: revisions,
         expires: now() + 300,
     };
-    let (pending, decision) = codex::pending_approval(proposal.clone());
-    let accepted = queue.offer(pending)
-        && tokio::select! {biased;_=canceled(cancel)=>false,r=tokio::time::timeout(Duration::from_secs(300),decision)=>matches!(r,Ok(Ok(true)))};
-    Ok(accepted
+    let audit_id = local(ledger.begin_approval_audit(owner, &proposal, now()))?;
+    let (mut pending, decision) = codex::pending_approval(proposal.clone());
+    pending.audit_id = Some(audit_id.clone());
+    let verdict = if queue.offer(pending) {
+        tokio::select! {biased;_=canceled(cancel)=>None,r=tokio::time::timeout(Duration::from_secs(300),decision)=>r.ok().and_then(Result::ok)}
+    } else {
+        None
+    };
+    let accepted = verdict == Some(true);
+    use hagency_agent_local::audit::Phase;
+    if let Some(allowed) = verdict {
+        local(ledger.record_approval_event(
+            owner,
+            &audit_id,
+            if allowed {
+                Phase::OwnerAllowed
+            } else {
+                Phase::OwnerDenied
+            },
+            now(),
+            &serde_json::json!({"source":"host_queue"}),
+        ))?;
+    }
+    let applied = accepted
         && fresh_running(
             transport,
             lease,
@@ -2394,7 +2445,26 @@ async fn review_request<T: Transport>(
                 proposal.expires,
                 now(),
             )
-            .is_ok())
+            .is_ok();
+    let phase = local(ledger.approval_phase(owner, &audit_id))?;
+    if applied {
+        local(ledger.record_approval_event(
+            owner,
+            &audit_id,
+            Phase::Applying,
+            now(),
+            &serde_json::json!({"permission":"model_request"}),
+        ))?;
+    } else if !phase.terminal() {
+        local(ledger.record_approval_event(
+            owner,
+            &audit_id,
+            Phase::Expired,
+            now(),
+            &serde_json::json!({"reason":"request_not_authorized"}),
+        ))?;
+    }
+    Ok(applied)
 }
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, fields(agent_id = %config.agent_id, binding_id = %config.binding_id, dispatch_id = %prepared.dispatch.id))]

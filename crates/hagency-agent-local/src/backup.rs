@@ -86,6 +86,7 @@ impl Snapshot {
         // This additive metadata migration never invents historical dates or
         // alerts. Older version-1 snapshots retain their original call rows.
         db.execute_batch(crate::usage::SCHEMA)?;
+        db.execute_batch(crate::audit::SCHEMA)?;
         Ok(db)
     }
 }
@@ -266,7 +267,12 @@ fn validate(db: &Connection, owner: &str, profile: &str) -> Result<()> {
     let expected = Ledger::open_scoped(":memory:", owner, profile)?;
     let stored = objects(db)?;
     let current = objects(&expected.db)?;
-    let legacy: Vec<_> = current
+    let before_audit: Vec<_> = current
+        .iter()
+        .filter(|(_, name, _)| !crate::audit::OBJECTS.contains(&name.as_str()))
+        .cloned()
+        .collect();
+    let legacy: Vec<_> = before_audit
         .iter()
         .filter(|(_, name, _)| {
             !matches!(
@@ -283,7 +289,7 @@ fn validate(db: &Connection, owner: &str, profile: &str) -> Result<()> {
         })
         .cloned()
         .collect();
-    if stored != current && stored != legacy {
+    if stored != current && stored != before_audit && stored != legacy {
         return Err(Error::ForeignDatabase);
     }
     let identities: Vec<String> = db

@@ -280,7 +280,7 @@ fn original_v1_snapshot_restores_without_fabricating_usage_dates() {
     let source = populated(&tmp.path().join("original.sqlite"));
     source
         .db
-        .execute_batch("DROP TABLE call_observations; DROP TABLE usage_alerts")
+        .execute_batch("DROP TABLE call_observations; DROP TABLE usage_alerts; DROP TABLE approval_audit_events; DROP TABLE approval_audit")
         .unwrap();
     let old = source.snapshot(OWNER, &profile(), 123).unwrap();
     let mut target = Ledger::open_scoped(":memory:", OWNER, &profile()).unwrap();
@@ -304,4 +304,33 @@ fn original_v1_snapshot_restores_without_fabricating_usage_dates() {
     assert_eq!(report.undated.calls, 2);
     assert_eq!(report.undated.input, 25);
     assert_eq!(report.undated.reserved, 200);
+}
+
+#[test]
+fn pre_audit_snapshot_keeps_usage_and_does_not_invent_approval_history() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = populated(&tmp.path().join("usage-only.sqlite"));
+    source
+        .db
+        .execute_batch("DROP TABLE approval_audit_events; DROP TABLE approval_audit")
+        .unwrap();
+    let original_dates = rows(&source.db, "call_observations");
+    assert_eq!(original_dates.len(), 2);
+    let old = source.snapshot(OWNER, &profile(), 123).unwrap();
+    let mut target = Ledger::open_scoped(":memory:", OWNER, &profile()).unwrap();
+    target.restore_snapshot(OWNER, &profile(), &old).unwrap();
+    assert_eq!(rows(&target.db, "call_observations"), original_dates);
+    assert!(
+        target
+            .approval_history(OWNER, "agent", None)
+            .unwrap()
+            .records
+            .is_empty()
+    );
+    assert_eq!(
+        target
+            .account(&scope(), Layer::Agent, Period::Lifetime, 200)
+            .unwrap(),
+        (35, 200)
+    );
 }

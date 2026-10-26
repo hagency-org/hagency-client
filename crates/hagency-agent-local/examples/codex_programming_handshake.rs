@@ -212,6 +212,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return Err("actual programming effect mismatch".into());
             }
         }
+        let history = ledger.approval_history("@owner:test", &scope.agent, None)?;
+        if history.records.is_empty() || history.next_cursor.is_some() {
+            return Err("missing or excessive programming audit evidence".into());
+        }
+        for record in &history.records {
+            let evidence = ledger.approval_record("@owner:test", &scope.agent, &record.id)?;
+            println!(
+                "audit: tool={} phase={:?} events={}",
+                record.tool,
+                record.phase,
+                evidence.events.len()
+            );
+            if record.phase != hagency_agent_local::audit::Phase::Completed
+                || !evidence
+                    .events
+                    .iter()
+                    .any(|e| e.phase == hagency_agent_local::audit::Phase::OwnerAllowed)
+                || !evidence
+                    .events
+                    .iter()
+                    .any(|e| e.phase == hagency_agent_local::audit::Phase::Submitted)
+            {
+                return Err(
+                    "programming effect lacks exact approval/submission/completion evidence".into(),
+                );
+            }
+        }
         println!(
             "PASS: real model edited existing file, executed native shell, called explicit MCP, passed owner approvals and stopped whole process tree; status={:?}, input={}, output={}, tools={}/{}",
             completed.status,

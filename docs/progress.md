@@ -14187,3 +14187,33 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 - Durable80/100% alerts bind original scope/window/policy revision, retain observed spent/held and support100-row cursor history plus idempotent acknowledgement. No costs or original evidence are cleared. Late settlement uses the original budget window. Native My Agents Usage & alerts includes dates, filters, totals, history, acknowledgement and bilingual guidance.
 - Preserved known first-version ledger backups through additive metadata migration without inventing dates. Native local operations now share SDK source postchecks with ordinary management; source loss retains the established transient-versus-account-change behavior.
 - Agent98+3+8 tests/3 existing ignored, engine251/7 existing ignored, app614/2 existing ignored and actual NativeOwner OAuth HTTP/disk report+acknowledgement pass. Dedicated UI date/scope/witness and600/980px viewport tests pass. See dev-vibe/owner-usage-alerts-validation-2026-10-26.zh.md for logs and pending manual/cross-platform gates. A6/A2/A4/A3 remain active work, not complete.
+
+
+## 2026-10-27: Durable owner approval audit and native history
+
+- A6 approval audit now retains exact proposal/scope/digest, immutable decision
+  events, original deciding device, permission application/provider submission and
+  exact observed Codex tool outcomes. Missing receipts remain unknown. Model reply
+  and model-request completion commit atomically; injected audit write failure
+  rolls back the reply. Ordinary tools cannot inherit model completion.
+- Added native private owner/SDK/device-scoped history, 100-row pagination,
+  bounded Unicode preview/full proposal copy and stale Agent/selection fencing.
+  Older A7/A5 snapshots migrate empty audit tables while preserving accounting.
+  Claude/Octos submission is recorded but unmatched tool results stay unknown.
+- Actual installed Codex model edited existing.txt, ran native shell, invoked
+  explicit MCP and verified exact bytes in a disposable workspace. Five tools
+  have independent OwnerAllowed/Submitted/Completed records and whole-tree stop;
+  input16588/output246. This is a local fixture-owner decision, not remote Matrix
+  or manual desktop qualification. See owner-approval-audit-validation report.
+- Automated Agent106+3+8/3 existing ignored, engine251/7 existing ignored,
+  App615/2 existing ignored, NativeOwner HTTP/OAuth/disk history/restore pass.
+  Added pre-audit snapshot compatibility test separately passes. Strict affected
+  all-targets no-deps Clippy, format/i18n2445/1841/0, caller/whitespace checks pass.
+  Initial style lint findings were repaired without disabling warnings.
+- Re-fetched origin/main42e59b9e: it remains the branch merge-base. PR9 Windows
+  build passes but full native job fails one pre-existing execution caller-loss
+  test at a closed notice stream; source is unchanged from main and original
+  fault/stop cause is unproven. Full log retained; do not claim CI all green.
+- A6 remains in progress: stopped request/file inspection, owner disposition
+  notes and explicit continuation are next. A2/A4/A3 and real-device gates remain
+  open. No provisioned task-writer or project.spec; no substitute task state.

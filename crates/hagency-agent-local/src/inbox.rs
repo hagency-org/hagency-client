@@ -581,6 +581,7 @@ impl Ledger {
             "UPDATE local_inbox SET state='reply_ready',reply=?,reply_digest=? WHERE id=?",
             (body, digest, id),
         )?;
+        crate::audit::finalize_inbox(&tx, id, true, crate::usage::now()?)?;
         tx.commit()?;
         Ok(())
     }
@@ -671,6 +672,7 @@ impl Ledger {
             "UPDATE local_inbox SET state='reply_ready',reply=?,reply_digest=? WHERE id=?",
             (body, digest, id),
         )?;
+        crate::audit::finalize_inbox(&tx, id, false, crate::usage::now()?)?;
         tx.commit()?;
         Ok(())
     }
@@ -758,6 +760,7 @@ impl Ledger {
             )?;
         }
         tx.execute("UPDATE local_inbox SET state=? WHERE id=?", (target, id))?;
+        crate::audit::finalize_inbox(&tx, id, false, crate::usage::now()?)?;
         compact_known_terminals(&tx)?;
         tx.commit()?;
         Ok(())

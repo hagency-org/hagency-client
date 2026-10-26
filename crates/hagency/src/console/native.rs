@@ -2,11 +2,13 @@
 mod configuration;
 mod ledger;
 pub use ledger::LedgerAction;
+mod history;
 mod speech;
 mod usage;
 use super::*;
 use crate::owner_host::OwnerHost;
 pub use hagency_agent_local::usage::{Group as UsageGroup, Query as UsageQuery};
+pub use history::HistoryAction;
 use salvo::test::{ResponseExt, TestClient};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -153,6 +155,9 @@ impl<'de> Deserialize<'de> for RoomCreationPolicy {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Command {
+    AgentHistory {
+        action: HistoryAction,
+    },
     AgentUsage {
         action: UsageAction,
     },
@@ -387,7 +392,8 @@ fn request(command: Command) -> Result<(&'static str, String, Option<Value>), Na
         | Command::ExecutionEnvironment { .. }
         | Command::AgentConfiguration { .. }
         | Command::Ledger { .. }
-        | Command::AgentUsage { .. } => {
+        | Command::AgentUsage { .. }
+        | Command::AgentHistory { .. } => {
             return Err(failure(400, "configuration_operation_unsupported"));
         }
         Command::LoginStatus => ("GET", "/console/server-login".into()),
@@ -1172,6 +1178,12 @@ impl NativeOwner {
         if let Command::AgentUsage { action } = command {
             self.check_matrix_source().await?;
             let result = usage::execute(self, action).await;
+            self.check_matrix_source().await?;
+            return result;
+        }
+        if let Command::AgentHistory { action } = command {
+            self.check_matrix_source().await?;
+            let result = history::execute(self, action).await;
             self.check_matrix_source().await?;
             return result;
         }

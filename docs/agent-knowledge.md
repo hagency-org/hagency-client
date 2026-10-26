@@ -3,6 +3,15 @@
 
 # Repository audit knowledge
 
+- **Approval audit, 2026-10-27:** OwnerAllowed is a durable decision, Applying
+  precedes permission consumption, Submitted requires the actual provider write,
+  and Completed requires an exact tool receipt (or a persisted model.request reply).
+  Model text does not prove a command, file change or MCP effect. Terminal audit
+  events cannot restart; absent runtime/receipt stays unknown. History is local
+  owner/SDK/device scoped and cannot replay grants. Known older snapshots migrate
+  empty audit tables and retain original usage timestamps. A6 recovery actions
+  remain separate unfinished work.
+
 - **Usage reporting, 2026-10-27:** Provider call time is written with reserve in
   call_observations; old receipts remain undated. Cache/reasoning are subsets of
   input/output. no-provider-call-v1 rows are dedup witnesses, not provider calls.

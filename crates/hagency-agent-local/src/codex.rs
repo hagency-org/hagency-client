@@ -12,6 +12,8 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader},
     sync::{mpsc, oneshot},
 };
+#[cfg(test)]
+mod audit_tests;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -749,21 +751,29 @@ pub struct ApprovalQueue {
 }
 pub struct PendingApproval {
     pub proposal: ToolProposal,
+    pub audit_id: Option<String>,
     decision: oneshot::Sender<bool>,
 }
 impl PendingApproval {
     pub fn is_closed(&self) -> bool {
         self.decision.is_closed()
     }
-    pub fn decide(self, allow: bool) {
-        let _ = self.decision.send(allow);
+    pub fn decide(self, allow: bool) -> bool {
+        self.decision.send(allow).is_ok()
     }
 }
 /// Trusted host model-request approvals share the UI channel, but must use
 /// Ledger::approve_request_exact, never the high-risk tool permit path.
 pub fn pending_approval(proposal: ToolProposal) -> (PendingApproval, oneshot::Receiver<bool>) {
     let (decision, receiver) = oneshot::channel();
-    (PendingApproval { proposal, decision }, receiver)
+    (
+        PendingApproval {
+            proposal,
+            audit_id: None,
+            decision,
+        },
+        receiver,
+    )
 }
 impl ApprovalQueue {
     pub fn offer(&self, pending: PendingApproval) -> bool {
@@ -899,6 +909,8 @@ pub struct Session<R, W> {
     model: Option<String>,
     effort: Option<String>,
     items: BTreeMap<String, Value>,
+    audit_items: BTreeMap<String, Vec<String>>,
+    audit_pending: BTreeSet<String>,
     server_ids: std::collections::BTreeSet<String>,
     initialized: bool,
     bound_scope: Option<Scope>,
@@ -923,6 +935,8 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Session<R, W> {
             model: None,
             effort: None,
             items: BTreeMap::new(),
+            audit_items: BTreeMap::new(),
+            audit_pending: BTreeSet::new(),
             server_ids: Default::default(),
             initialized: false,
             bound_scope: None,
@@ -1364,6 +1378,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Session<R, W> {
             .await
             .map_err(|_| Error::Timeout)
             .and_then(|v| v);
+        self.finish_native_audits(charge.ledger, owner)?;
         match result {
             Ok((completed, counters)) => {
                 // usage and baseline must commit atomically: otherwise a crash after
@@ -1501,6 +1516,9 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Session<R, W> {
                         return Err(Error::Protocol("item capacity"));
                     }
                     self.items.insert(id.into(), item.clone());
+                    if method == "item/completed" {
+                        self.observe_audit_item(ledger, owner, item)?;
+                    }
                     tools.item(item, method == "item/completed");
                     if method == "item/completed" && item["type"] == "agentMessage" {
                         let message = item["text"]
@@ -1670,8 +1688,24 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Session<R, W> {
             policy_revision: versions.map(|v| v.revision),
             expires: now() + 300,
         };
+        use crate::audit::Phase;
+        let audit_id = ledger.begin_approval_audit(owner, &proposal, now())?;
         let allow = match ledger.tool_disposition(&proposal, now()) {
             Ok(ToolPolicy::AllowWithRules { .. }) => {
+                ledger.record_approval_event(
+                    owner,
+                    &audit_id,
+                    Phase::PolicyAllowed,
+                    now(),
+                    &value!({}),
+                )?;
+                ledger.record_approval_event(
+                    owner,
+                    &audit_id,
+                    Phase::Applying,
+                    now(),
+                    &value!({}),
+                )?;
                 ledger.authorize_tool(&proposal, now()).is_ok()
             }
             Ok(ToolPolicy::AskOwner) => {
@@ -1680,32 +1714,193 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Session<R, W> {
                     .sender
                     .try_send(PendingApproval {
                         proposal: proposal.clone(),
+                        audit_id: Some(audit_id.clone()),
                         decision: send,
                     })
                     .is_err()
                 {
+                    ledger.record_approval_event(
+                        owner,
+                        &audit_id,
+                        Phase::Expired,
+                        now(),
+                        &value!({"reason":"queue_unavailable"}),
+                    )?;
                     false
-                } else if matches!(
-                    tokio::time::timeout(Duration::from_secs(300), recv).await,
-                    Ok(Ok(true))
-                ) {
-                    ledger
-                        .approve_tool(owner, &proposal, now())
-                        .and_then(|_| ledger.authorize_tool(&proposal, now()))
-                        .is_ok()
                 } else {
-                    false
+                    let verdict = tokio::time::timeout(Duration::from_secs(300), recv).await;
+                    if matches!(verdict, Ok(Ok(true))) {
+                        ledger.record_approval_event(
+                            owner,
+                            &audit_id,
+                            Phase::OwnerAllowed,
+                            now(),
+                            &value!({"source":"host_queue"}),
+                        )?;
+                        ledger.record_approval_event(
+                            owner,
+                            &audit_id,
+                            Phase::Applying,
+                            now(),
+                            &value!({}),
+                        )?;
+                        ledger
+                            .approve_tool(owner, &proposal, now())
+                            .and_then(|_| ledger.authorize_tool(&proposal, now()))
+                            .is_ok()
+                    } else {
+                        let current = ledger.approval_phase(owner, &audit_id)?;
+                        if !current.terminal() {
+                            ledger.record_approval_event(
+                                owner,
+                                &audit_id,
+                                if matches!(verdict, Ok(Ok(false))) {
+                                    Phase::OwnerDenied
+                                } else {
+                                    Phase::Expired
+                                },
+                                now(),
+                                &value!({"reason":"owner_wait_ended"}),
+                            )?;
+                        }
+                        false
+                    }
                 }
             }
-            _ => false,
+            _ => {
+                ledger.record_approval_event(
+                    owner,
+                    &audit_id,
+                    Phase::PolicyDenied,
+                    now(),
+                    &value!({}),
+                )?;
+                false
+            }
         };
         let allow = allow && self.authorized_execution(dispatch).await;
+        if !allow && !ledger.approval_phase(owner, &audit_id)?.terminal() {
+            ledger.record_approval_event(
+                owner,
+                &audit_id,
+                Phase::Expired,
+                now(),
+                &value!({"reason":"authorization_not_applied"}),
+            )?;
+        }
         let result = if method == "mcpServer/elicitation/request" {
             value!({"action":if allow{"accept"}else{"decline"},"content":null,"_meta":null})
         } else {
             value!({"decision":if allow{"accept"}else{"decline"}})
         };
-        self.write(value!({"id":id,"result":result})).await
+        let written = self.write(value!({"id":id,"result":result})).await;
+        if allow {
+            ledger.record_approval_event(
+                owner,
+                &audit_id,
+                if written.is_ok() {
+                    Phase::Submitted
+                } else {
+                    Phase::Unknown
+                },
+                now(),
+                &value!({"provider":"codex"}),
+            )?;
+            if written.is_ok() {
+                self.audit_pending.insert(audit_id.clone());
+                let item_id = proposal.arguments["request"]["itemId"]
+                    .as_str()
+                    .or_else(|| proposal.arguments["item"]["id"].as_str())
+                    .or_else(|| proposal.arguments["itemId"].as_str());
+                if let Some(item_id) = item_id {
+                    self.audit_items
+                        .entry(item_id.into())
+                        .or_default()
+                        .push(audit_id);
+                }
+            }
+        }
+        written
+    }
+    fn observe_audit_item(&mut self, ledger: &mut Ledger, owner: &str, item: &Value) -> Result<()> {
+        use crate::audit::Phase;
+        let Some(item_id) = item["id"].as_str() else {
+            return Ok(());
+        };
+        let Some(ids) = self.audit_items.remove(item_id) else {
+            return Ok(());
+        };
+        for id in ids {
+            let Some(scope) = &self.bound_scope else {
+                return Err(Error::Protocol("audit scope unavailable"));
+            };
+            let record = ledger.approval_record(owner, &scope.agent, &id)?;
+            let p = &record.proposal.arguments;
+            let phase = match record.proposal.tool.as_str() {
+                "codex.command"
+                    if item["type"] == "commandExecution"
+                        && item["status"] == "completed"
+                        && item["command"] == p["command"] =>
+                {
+                    match item["exitCode"].as_i64() {
+                        Some(0) => Phase::Completed,
+                        Some(_) => Phase::Failed,
+                        None => Phase::Unknown,
+                    }
+                }
+                "codex.file_change"
+                    if item["type"] == "fileChange" && item["changes"] == p["item"]["changes"] =>
+                {
+                    if item["status"] == "completed" {
+                        Phase::Completed
+                    } else if item["status"] == "failed" {
+                        Phase::Failed
+                    } else {
+                        Phase::Unknown
+                    }
+                }
+                tool if tool.starts_with("mcp.")
+                    && item["type"] == "mcpToolCall"
+                    && item["server"] == p["item"]["server"]
+                    && item["tool"] == p["item"]["tool"]
+                    && item["arguments"] == p["item"]["arguments"] =>
+                {
+                    if item["status"] == "completed" && item["error"].is_null() {
+                        Phase::Completed
+                    } else if !item["error"].is_null() || item["status"] == "failed" {
+                        Phase::Failed
+                    } else {
+                        Phase::Unknown
+                    }
+                }
+                _ => Phase::Unknown,
+            };
+            ledger.record_approval_event(
+                owner,
+                &id,
+                phase,
+                now(),
+                &value!({"itemId":item_id,"status":item["status"],"exitCode":item["exitCode"]}),
+            )?;
+            self.audit_pending.remove(&id);
+        }
+        Ok(())
+    }
+    fn finish_native_audits(&mut self, ledger: &mut Ledger, owner: &str) -> Result<()> {
+        for id in std::mem::take(&mut self.audit_pending) {
+            let phase = ledger.approval_phase(owner, &id)?;
+            if !phase.terminal() {
+                ledger.record_approval_event(
+                    owner,
+                    &id,
+                    crate::audit::Phase::Unknown,
+                    now(),
+                    &value!({"reason":"provider_turn_ended_without_tool_receipt"}),
+                )?;
+            }
+        }
+        self.audit_items.clear();
+        Ok(())
     }
     async fn decline(&mut self, id: Value, method: &str) -> Result<()> {
         if method == "mcpServer/elicitation/request" {

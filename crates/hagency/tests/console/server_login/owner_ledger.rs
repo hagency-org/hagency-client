@@ -1,6 +1,6 @@
 //! Authenticated NativeOwner commands, real disk ledgers and local OAuth HTTP.
 use hagency::native_owner::{
-    Command, LedgerAction, NativeOwner, UsageAction, UsageGroup, UsageQuery,
+    Command, HistoryAction, LedgerAction, NativeOwner, UsageAction, UsageGroup, UsageQuery,
 };
 use hagency_agent_local::{
     Budget, Ledger, Limit, Period, Policy, RequestPolicy, Scope, ToolPolicy, Usage,
@@ -34,6 +34,38 @@ pub(super) async fn roundtrip(native: &NativeOwner, root: &std::path::Path) {
     let mut original =
         Ledger::open_scoped(root.join("original.sqlite"), &identity.owner, profile).unwrap();
     original.register_binding(&identity.owner, &scope).unwrap();
+    use hagency_agent_local::audit::Phase;
+    let proposal = hagency_agent_local::ToolProposal {
+        scope: scope.clone(),
+        dispatch: "stopped-dispatch".into(),
+        tool: "codex.command".into(),
+        arguments: serde_json::json!({"command":"echo original"}),
+        canonical_directory: "/workspace".into(),
+        risk: "high".into(),
+        policy_revision: [0; 3],
+        expires: 500,
+    };
+    let approval = original
+        .begin_approval_audit(&identity.owner, &proposal, 100)
+        .unwrap();
+    original
+        .record_approval_event(
+            &identity.owner,
+            &approval,
+            Phase::OwnerAllowed,
+            101,
+            &serde_json::json!({"deviceId":"original-device"}),
+        )
+        .unwrap();
+    original
+        .record_approval_event(
+            &identity.owner,
+            &approval,
+            Phase::Applying,
+            102,
+            &serde_json::json!({}),
+        )
+        .unwrap();
     original
         .set_agent_policy(
             &identity.owner,
@@ -113,6 +145,48 @@ pub(super) async fn roundtrip(native: &NativeOwner, root: &std::path::Path) {
         .await
         .unwrap_err();
     assert_eq!(blocked.code, "ledger_restore_requires_empty_ledger");
+    let history = native
+        .execute(Command::AgentHistory {
+            action: HistoryAction::Approvals {
+                agent: scope.agent.clone(),
+                cursor: None,
+            },
+        })
+        .await
+        .unwrap();
+    assert_eq!(history["approvals"]["records"].as_array().unwrap().len(), 1);
+    assert_eq!(history["approvals"]["records"][0]["phase"], "unknown");
+    let detail = native
+        .execute(Command::AgentHistory {
+            action: HistoryAction::Approval {
+                agent: scope.agent.clone(),
+                id: approval.clone(),
+            },
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        detail["approval"]["proposal"]["arguments"]["command"],
+        "echo original"
+    );
+    assert_eq!(detail["approval"]["events"].as_array().unwrap().len(), 4);
+    assert_eq!(
+        detail["approval"]["events"][1]["detail"]["deviceId"],
+        "original-device"
+    );
+    assert_eq!(
+        native
+            .execute(Command::AgentHistory {
+                action: HistoryAction::Approval {
+                    agent: "other".into(),
+                    id: approval
+                }
+            })
+            .await
+            .unwrap_err()
+            .code,
+        "owner_scope_required"
+    );
     let query = UsageQuery {
         agent: scope.agent.clone(),
         binding: None,
