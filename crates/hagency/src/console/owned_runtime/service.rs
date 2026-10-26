@@ -563,13 +563,17 @@ impl OwnedRuntime {
         let running = runtime.as_ref().is_some_and(|status| {
             status.phase != "stopped"
                 && status.bindings.iter().any(|child| {
-                    child.phase == "online_chat_only" || child.phase.starts_with("executing_")
+                    matches!(child.phase, "online" | "online_chat_only")
+                        || child.phase.starts_with("executing_")
                 })
+        });
+        let native = runtime.as_ref().is_some_and(|status| {
+            status.native_tools || status.bindings.iter().any(|row| row.native_tools)
         });
         Ok(serde_json::json!({"runtime":runtime,"service":{
             "enabled":intent.is_some(),"running":running,"watcherRunning":watcher_running,"warning":options_warning,"phase":health.phase,"lastError":health.last_error,"problems":health.problems,"deviceId":device.device_id(),
             "reservation":options.as_ref().map(|value|value.reservation).or_else(||intent.as_ref().map(|value|value.reservation)),"effort":options.as_ref().map(|value| &value.effort).or_else(||intent.as_ref().map(|value| &value.effort)),
-            "logs":health.logs,"modelConfigured":model_configured,"rooms":reply.value["bindings"]},"nativeTools":false,"strictTokenCap":false}))
+            "logs":health.logs,"modelConfigured":model_configured,"rooms":reply.value["bindings"]},"nativeTools":native,"strictTokenCap":false}))
     }
     pub(in crate::console) async fn stop_agent_service(
         &self,

@@ -5331,3 +5331,11 @@ PR #8 审查及验证记录见 `dev-vibe/pr-8-board-ux-review-2026-10-25.zh.md`�
 
 加密媒体上传测试应比较 HTTP body 与原密文逐字节相等，不能用“首字节不是 `{`”
 判断没有 JSON 包装；随机密文合法覆盖所有字节值，此假设导致既有上传测试偶发失败。
+
+
+## 2026-10-26: Owner-local Codex programming
+
+- Worktree codex-programming starts at fetched origin/main 42e59b9e. Programming is an explicit execution-device-local ModelProfile setting; ordinary chat/host files remain separate. Native shell/file/MCP approval uses the existing three policies plus LiveToolGate before and after owner waits. Native child custody uses guardian/Windows Job from startup.
+- Codex CLI disable arguments override ordinary feature overrides, and environments:[] disables native execution despite enabled shell flags. Programming must enable the two shell flags and omit the empty environment override. Configured MCP is pinned to local and must use prompt, without ambient headers/env/tool exceptions. Existing prefix-rule directories are refused for programming.
+- Capability contexts include programming config, workspace/model/effort/search; their usage gaps must reset only exact matching scoped baselines. ModelProfile's new field is omitted for default profiles and stripped from v1 remote configuration results; remote ordinary Codex edits preserve execution-local programming settings.
+- Actual Codex 0.164.0-alpha.11.1/gpt-6.1-sol completed exact existing-file edit, native command file, configured MCP file and byte readback with 6/6 tools and whole-tree stop. This is adapter/fixture-owner evidence, not real Matrix/desktop manual acceptance. Validation and remaining boundaries: dev-vibe/codex-programming-validation-2026-10-26.zh.md.

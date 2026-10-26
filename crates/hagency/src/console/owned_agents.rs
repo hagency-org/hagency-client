@@ -207,6 +207,13 @@ struct EditModel {
     requester: String,
     profile: ModelProfile,
 }
+fn runtime_view(state: Value) -> Value {
+    let native = state["nativeTools"] == true
+        || state["bindings"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["nativeTools"] == true));
+    json!({"runtime":state,"nativeTools":native,"strictTokenCap":false})
+}
 fn layer(value: &str) -> Result<Layer, OwnerError> {
     match value {
         "agent" => Ok(Layer::Agent),
@@ -1158,6 +1165,7 @@ async fn call(req: &mut Request, depot: &Depot) -> Result<Value, OwnerError> {
                         },
                         shared_auth: provider.shared,
                         web_search: profile.web_search,
+                        programming: profile.programming.clone(),
                     },
                     mode: hagency_agent_local::codex::BudgetMode::Estimated {
                         reservation: input.reservation,
@@ -1183,7 +1191,7 @@ async fn call(req: &mut Request, depot: &Depot) -> Result<Value, OwnerError> {
                     .status(host, &agent)
                     .await
                     .map_err(runtime_error)?;
-                return Ok(json!({"runtime":state,"nativeTools":false,"strictTokenCap":false}));
+                return Ok(runtime_view(json!(state)));
             }
             if parts.len() == 3 && parts[2] == "approvals" && method == Method::GET {
                 let approvals = host
@@ -1298,6 +1306,7 @@ async fn call(req: &mut Request, depot: &Depot) -> Result<Value, OwnerError> {
                         },
                         shared_auth: provider.shared,
                         web_search: profile.web_search,
+                        programming: profile.programming.clone(),
                     },
                     mode: hagency_agent_local::codex::BudgetMode::Estimated {
                         reservation: input.reservation,
@@ -1319,7 +1328,7 @@ async fn call(req: &mut Request, depot: &Depot) -> Result<Value, OwnerError> {
                     )
                     .await
                     .map_err(runtime_error)?;
-                return Ok(json!({"runtime":state,"nativeTools":false,"strictTokenCap":false}));
+                return Ok(runtime_view(json!(state)));
             }
             return Err(error(404, "not_found"));
         }

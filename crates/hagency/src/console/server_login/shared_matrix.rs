@@ -493,6 +493,7 @@ mod tests {
                     workspace_root: root.path().to_string_lossy().into(),
                     reasoning_effort: "low".into(),
                     web_search: true,
+                    programming: Default::default(),
                 },
             )
             .unwrap();

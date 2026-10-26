@@ -135,6 +135,7 @@ fn runtime_diagnostic(code: &str) -> String {
     let message = match code {
         "agent_model_required" => "No model is configured on this device. Open Model & resources, connect an account and save a model before starting.",
         "runtime_profile_unavailable" => "The saved local model, workspace or account is unavailable. Open Model & resources, reconnect the account and save an available model.",
+        "codex_programming_rules_unsupported" => "Programming cannot inherit Codex execution rules. Use a separate Codex sign-in and a workspace without .codex/rules.",
         "codex_provider_configuration_rejected" => "The local provider configuration failed validation. Open Service logs to identify the stage; check the provider version and configuration.",
         "codex_web_search_unavailable" => "The local provider does not support the selected web search settings. Check its version and Model & resources.",
         "codex_protocol_mismatch" => "The local provider returned an incompatible protocol response. Check its version and Service logs.",
@@ -862,6 +863,13 @@ script_mod! {
                         Text {text: #(crate::i18n::tr("Leave empty to use this Agent's private workspace. Custom directories must already exist.")) i18n_text: "Leave empty to use this Agent's private workspace. Custom directories must already exist." draw_text.color: mod.widgets.RINX_MUTED}
                         prepare_workspace := Action {text: #(crate::i18n::tr("Prepare this Agent's private workspace")) i18n_text: "Prepare this Agent's private workspace"}
                         }
+                        programming_holder := View {width: Fill height: Fit flow: Down spacing: 8
+                            programming := RinxCheckBox {text: #(crate::i18n::tr("Enable Codex programming")) i18n_text: "Enable Codex programming"}
+                            Text {text: #(crate::i18n::tr("Run commands and edit existing files in this Agent's workspace. Rooms using this Agent share that workspace. Tool policies and exact owner approvals still apply.")) i18n_text: "Run commands and edit existing files in this Agent's workspace. Rooms using this Agent share that workspace. Tool policies and exact owner approvals still apply." draw_text.color: mod.widgets.RINX_MUTED}
+                            Text {text: #(crate::i18n::tr("MCP servers (JSON)")) i18n_text: "MCP servers (JSON)"}
+                            mcp_servers := Input {height: 140 is_multiline: true submit_on_enter: false empty_text: "{}"}
+                            Text {text: #(crate::i18n::tr("Configure only servers this Agent may use. Stdio: transport, absolute command and args. HTTP: transport and URL. Personal Codex servers are not imported.")) i18n_text: "Configure only servers this Agent may use. Stdio: transport, absolute command and args. HTTP: transport and URL. Personal Codex servers are not imported." draw_text.color: mod.widgets.RINX_MUTED}
+                        }
                         credential := Text {visible: false}
                         View {width: Fill height: Fit flow: Right spacing: 10 align: Align{y:0.5}
                             save_model := Primary {text: #(crate::i18n::tr("Save local model profile")) i18n_text: "Save local model profile"}
@@ -1347,6 +1355,8 @@ impl HagencyPanel {
     fn render_models(&mut self, cx:&mut Cx) {
         let codex = self.provider_runtime(cx)=="codex";
         self.view.view(cx,ids!(web_search_holder)).set_visible(cx,codex);
+        let programming_here=codex && self.local_agent(cx);
+        self.view.view(cx,ids!(programming_holder)).set_visible(cx,programming_here);
         let configured = string(&self.policy["modelProfile"],"model");
         let previous = self.selected(cx,ids!(model),&self.provider_models).map(|m|string(&m,"model").to_owned());
         let selected = self.provider_models.iter().position(|m| string(m,"model") == configured && (string(m,"credentialRef").is_empty() || string(m,"credentialRef") == string(&self.policy["modelProfile"],"credential_ref")))
@@ -1539,6 +1549,8 @@ impl HagencyPanel {
             ids!(takeover),
             ids!(host_files),
             ids!(web_search),
+            ids!(programming),
+            ids!(mcp_servers),
         ] {
             self.view.widget(cx, id).set_disabled(cx, busy);
         }
@@ -2362,7 +2374,9 @@ impl HagencyPanel {
         });
     }
     fn model_save_input(&self, cx: &mut Cx, model: &Value, effort: &str) -> Value {
-        json!({"profile":{"model":model["model"],"credential_ref":self.selected_credential(cx),"workspace_root":self.input(cx,ids!(workspace)),"reasoning_effort":effort,"web_search":self.view.check_box(cx,ids!(web_search)).active(cx)}})
+        let mut input=json!({"profile":{"model":model["model"],"credential_ref":self.selected_credential(cx),"workspace_root":self.input(cx,ids!(workspace)),"reasoning_effort":effort,"web_search":self.view.check_box(cx,ids!(web_search)).active(cx),"programming":{"enabled":self.provider_runtime(cx)=="codex" && self.view.check_box(cx,ids!(programming)).active(cx),"mcp_servers":if self.provider_runtime(cx)=="codex" && self.view.check_box(cx,ids!(programming)).active(cx) {let text=self.input(cx,ids!(mcp_servers)); if text.trim().is_empty() {json!({})}else{serde_json::from_str::<Value>(&text).unwrap_or(Value::Null)}}else{json!({})}}}});
+        if !self.local_agent(cx) {input["profile"].as_object_mut().unwrap().remove("programming");}
+        input
     }
     fn render_model_save(&self,cx:&mut Cx) {
         self.view.button(cx,ids!(save_model)).set_text(cx,crate::i18n::tr(if self.model_saving {"Saving…"} else {"Save local model profile"}));
@@ -2396,6 +2410,9 @@ impl HagencyPanel {
     }
     fn render_policy(&self, cx: &mut Cx) {
         self.view.check_box(cx,ids!(web_search)).set_active(cx,self.policy["modelProfile"]["web_search"].as_bool().unwrap_or(true),Animate::No);
+        self.view.check_box(cx,ids!(programming)).set_active(cx,self.policy["modelProfile"]["programming"]["enabled"]==true,Animate::No);
+        let servers=&self.policy["modelProfile"]["programming"]["mcp_servers"];
+        self.view.text_input(cx,ids!(mcp_servers)).set_text(cx,&serde_json::to_string_pretty(&servers.as_object().cloned().unwrap_or_default()).unwrap_or_default());
         if self.policy["modelLoaded"] == true {
             let profile = &self.policy["modelProfile"];
             let selected=self.provider_models.iter().position(|m|string(m,"model") == string(profile,"model") && (string(m,"credentialRef").is_empty() || string(m,"credentialRef") == string(profile,"credential_ref")));
@@ -4253,7 +4270,7 @@ impl Widget for HagencyPanel {
             self.render_models(cx);
             self.run(cx,Target::ProviderModels,Command::Provider {action:ProviderAction::Models});return;
         }
-        if self.view.text_input(cx,ids!(workspace)).changed(actions).is_some() || self.view.check_box(cx,ids!(web_search)).changed(actions).is_some() {self.clear_model_save_feedback(cx);}
+        if self.view.text_input(cx,ids!(workspace)).changed(actions).is_some() || self.view.check_box(cx,ids!(web_search)).changed(actions).is_some() || self.view.check_box(cx,ids!(programming)).changed(actions).is_some() || self.view.text_input(cx,ids!(mcp_servers)).changed(actions).is_some() {self.clear_model_save_feedback(cx);}
         if self.view.drop_down(cx,ids!(model)).selected(actions).is_some() {self.clear_model_save_feedback(cx);self.render_efforts(cx);return;}
         if self.view.drop_down(cx,ids!(effort)).selected(actions).is_some() {self.clear_model_save_feedback(cx);self.render_effort_note(cx);return;}
         if self.view.button(cx, ids!(save_model)).clicked(actions) {
@@ -4276,6 +4293,7 @@ impl Widget for HagencyPanel {
             if !self.provider_authenticated || self.credential_ref.is_empty() {self.model_save_validation_failed(cx,"Connect your local account first.");return;}
             let Some(effort)=self.runtime_efforts.get(self.view.drop_down(cx,ids!(effort)).selected_item()).cloned() else {self.model_save_validation_failed(cx,"Select a supported reasoning effort.");return;};
             let input = self.model_save_input(cx,&model,&effort);
+            if self.local_agent(cx) && !input["profile"]["programming"]["mcp_servers"].is_object() {self.model_save_validation_failed(cx,"MCP servers must be a JSON object.");return;}
             self.local(cx, Target::ModelSaved, LocalAction::SaveAgentModel, Some(input));
             return;
         }
@@ -4735,6 +4753,27 @@ mod tests {
         panel.policy["modelProfile"]=saved["profile"].clone();
         panel.render_policy(&mut cx);
         assert!(!panel.view.check_box(&cx,ids!(web_search)).active(&cx));
+    }
+    #[test]
+    fn programming_settings_save_reload_and_stay_on_the_execution_device() {
+        let mut cx=Cx::new(Box::new(|_,_|{}));
+        let mut panel=cx.with_vm(|vm|{makepad_widgets::script_mod(vm);crate::app::register_widgets(vm);let value=script_eval!(vm,{mod.widgets.HagencyPanel {}});HagencyPanel::script_from_value(vm,value)});
+        panel.agents=vec![json!({"id":"agent-a"})];
+        panel.labels(&mut cx,ids!(agents),"Select",&panel.agents,"id");
+        panel.view.drop_down(&cx,ids!(agents)).set_selected_item(&mut cx,1);
+        local_device_fixture(&mut panel,"agent-a");
+        panel.policy=json!({"modelLoaded":true,"modelProfile":{"model":"probe","credential_ref":"keychain:probe","workspace_root":"/work","programming":{"enabled":true,"mcp_servers":{"docs":{"transport":"http","url":"https://example.test/mcp"}}}}});
+        panel.render_policy(&mut cx);panel.render_models(&mut cx);
+        assert!(panel.view.view(&cx,ids!(programming_holder)).visible());
+        assert!(panel.view.check_box(&cx,ids!(programming)).active(&cx));
+        let saved=panel.model_save_input(&mut cx,&json!({"model":"probe"}),"low");
+        assert_eq!(saved["profile"]["programming"]["enabled"],true);
+        assert_eq!(saved["profile"]["programming"]["mcp_servers"]["docs"]["url"],"https://example.test/mcp");
+        panel.view.text_input(&cx,ids!(mcp_servers)).set_text(&mut cx,"invalid json");
+        assert!(panel.model_save_input(&mut cx,&json!({"model":"probe"}),"low")["profile"]["programming"]["mcp_servers"].is_null());
+        panel.current_device_id="other-device".into();panel.render_models(&mut cx);
+        assert!(!panel.view.view(&cx,ids!(programming_holder)).visible());
+        assert!(panel.model_save_input(&mut cx,&json!({"model":"probe"}),"low")["profile"].get("programming").is_none());
     }
     #[test]
     fn remote_configuration_retry_window_ends_after_confirmed_save_or_validation_failure() {

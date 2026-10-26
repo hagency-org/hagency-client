@@ -196,6 +196,8 @@ pub struct ModelProfile {
     pub reasoning_effort: String,
     #[serde(default = "default_web_search")]
     pub web_search: bool,
+    #[serde(default, skip_serializing_if = "codex::Programming::is_default")]
+    pub programming: codex::Programming,
 }
 pub const fn default_web_search() -> bool {
     true
@@ -277,6 +279,12 @@ impl Ledger {
         let has_web_search: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('model_profiles') WHERE name='web_search')", [], |r|r.get(0))?;
         if !has_web_search {
             db.execute_batch("ALTER TABLE model_profiles ADD COLUMN web_search INTEGER NOT NULL DEFAULT 1 CHECK(web_search IN (0,1))")?;
+        }
+        let has_programming: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('model_profiles') WHERE name='programming')", [], |r|r.get(0))?;
+        if !has_programming {
+            db.execute_batch(
+                "ALTER TABLE model_profiles ADD COLUMN programming TEXT NOT NULL DEFAULT '{}'",
+            )?;
         }
         db.execute_batch("CREATE TABLE IF NOT EXISTS external_sessions (scope TEXT NOT NULL, profile TEXT NOT NULL, session TEXT NOT NULL, counters TEXT NOT NULL DEFAULT '', PRIMARY KEY(scope,profile))")?;
         db.execute_batch("COMMIT")?;
@@ -652,7 +660,18 @@ impl Ledger {
     ) -> Result<()> {
         verify(&self.db, scope)?;
         let base = scope.context_key(&self.owner)?;
-        let valid = context == base;
+        let valid = context == base
+            || context
+                .strip_prefix(&format!(
+                    "{}:",
+                    crate::codex::PROGRAMMING_CAPABILITY_VERSION
+                ))
+                .and_then(|v| v.split_once(':'))
+                .is_some_and(|(digest, tail)| {
+                    digest.len() == 64
+                        && digest.bytes().all(|v| v.is_ascii_hexdigit())
+                        && tail == base
+                });
         #[cfg(unix)]
         let valid = valid || context == format!("{}:{base}", crate::codex::FILE_CAPABILITY_VERSION);
         if !valid {
@@ -758,6 +777,12 @@ impl Ledger {
         self.write_model_profile(agent, profile)
     }
     fn write_model_profile(&mut self, agent: &str, profile: &ModelProfile) -> Result<()> {
+        profile.programming.validate()?;
+        if profile.programming.enabled
+            && runtime::kind(&profile.credential_ref) != runtime::Kind::Codex
+        {
+            return Err(Error::Invalid("programming requires Codex"));
+        }
         if !profile.reasoning_effort.is_empty()
             && ![
                 "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
@@ -788,7 +813,7 @@ impl Ledger {
         {
             return Err(Error::Invalid("local credential reference or workspace"));
         }
-        self.db.execute("INSERT INTO model_profiles (agent,model,credential_ref,workspace_root,reasoning_effort,web_search) VALUES (?,?,?,?,?,?) ON CONFLICT(agent) DO UPDATE SET model=excluded.model,credential_ref=excluded.credential_ref,workspace_root=excluded.workspace_root,reasoning_effort=excluded.reasoning_effort,web_search=excluded.web_search",(agent,&profile.model,&profile.credential_ref,&profile.workspace_root,&profile.reasoning_effort,profile.web_search))?;
+        self.db.execute("INSERT INTO model_profiles (agent,model,credential_ref,workspace_root,reasoning_effort,web_search,programming) VALUES (?,?,?,?,?,?,?) ON CONFLICT(agent) DO UPDATE SET model=excluded.model,credential_ref=excluded.credential_ref,workspace_root=excluded.workspace_root,reasoning_effort=excluded.reasoning_effort,web_search=excluded.web_search,programming=excluded.programming",(agent,&profile.model,&profile.credential_ref,&profile.workspace_root,&profile.reasoning_effort,profile.web_search,json(&profile.programming)?))?;
         Ok(())
     }
     pub fn model_profile(&self, scope: &Scope) -> Result<Option<ModelProfile>> {
@@ -804,7 +829,7 @@ impl Ledger {
         Ok(self
             .db
             .query_row(
-                "SELECT model,credential_ref,workspace_root,reasoning_effort,web_search FROM model_profiles WHERE agent=?",
+                "SELECT model,credential_ref,workspace_root,reasoning_effort,web_search,programming FROM model_profiles WHERE agent=?",
                 [agent],
                 |r| {
                     Ok(ModelProfile {
@@ -813,6 +838,7 @@ impl Ledger {
                         workspace_root: r.get(2)?,
                         reasoning_effort: r.get(3)?,
                         web_search: r.get(4)?,
+                        programming: serde_json::from_str(&r.get::<_,String>(5)?).map_err(|e|rusqlite::Error::FromSqlConversionFailure(5,rusqlite::types::Type::Text,Box::new(e)))?,
                     })
                 },
             )
@@ -1037,6 +1063,11 @@ fn mark_usage_gap(tx: &rusqlite::Transaction, scope: &Scope, owner: &str) -> Res
     for context in contexts {
         tx.execute("INSERT INTO codex_usage VALUES (?,'null') ON CONFLICT(scope) DO UPDATE SET counters='null'", [&context])?;
     }
+    let prefix = format!("{}:", crate::codex::PROGRAMMING_CAPABILITY_VERSION);
+    tx.execute(
+        "UPDATE codex_usage SET counters='null' WHERE substr(scope,1,?)=? AND substr(scope,?)=?",
+        (prefix.len(), &prefix, prefix.len() + 66, &context),
+    )?;
     tx.execute(
         "UPDATE external_sessions SET counters='null' WHERE scope=?",
         [&context],

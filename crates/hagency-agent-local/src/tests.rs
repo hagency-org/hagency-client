@@ -17,6 +17,7 @@ fn agent_policy_before_binding_shares_runtime_budget_and_preserves_charges() {
         workspace_root: tmp.path().to_str().unwrap().into(),
         reasoning_effort: String::new(),
         web_search: true,
+        programming: Default::default(),
     };
     l.set_agent_model_profile(OWNER, "a1", &model).unwrap();
     assert!(
@@ -384,6 +385,7 @@ fn local_model_profile_contains_only_a_keychain_reference() {
         workspace_root: tmp.path().to_string_lossy().into_owned(),
         reasoning_effort: String::new(),
         web_search: true,
+        programming: Default::default(),
     };
     assert!(l.set_model_profile(OWNER, &s, &profile).is_err());
     profile.credential_ref = "keychain:hagency/codex/alice".into();

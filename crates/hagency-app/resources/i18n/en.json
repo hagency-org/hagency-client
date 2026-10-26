@@ -2368,5 +2368,11 @@
   "Release to add attachments": "Release to add attachments",
   "Release to insert images into this draft": "Release to insert images into this draft",
   "Image uploaded, but could not be inserted. Please reopen the editor.": "Image uploaded, but could not be inserted. Please reopen the editor.",
-  "Attachment updated. Save or post your draft when ready.": "Attachment updated. Save or post your draft when ready."
+  "Attachment updated. Save or post your draft when ready.": "Attachment updated. Save or post your draft when ready.",
+  "Enable Codex programming": "Enable Codex programming",
+  "Run commands and edit existing files in this Agent's workspace. Rooms using this Agent share that workspace. Tool policies and exact owner approvals still apply.": "Run commands and edit existing files in this Agent's workspace. Rooms using this Agent share that workspace. Tool policies and exact owner approvals still apply.",
+  "MCP servers (JSON)": "MCP servers (JSON)",
+  "Configure only servers this Agent may use. Stdio: transport, absolute command and args. HTTP: transport and URL. Personal Codex servers are not imported.": "Configure only servers this Agent may use. Stdio: transport, absolute command and args. HTTP: transport and URL. Personal Codex servers are not imported.",
+  "MCP servers must be a JSON object.": "MCP servers must be a JSON object.",
+  "Programming cannot inherit Codex execution rules. Use a separate Codex sign-in and a workspace without .codex/rules.": "Programming cannot inherit Codex execution rules. Use a separate Codex sign-in and a workspace without .codex/rules."
 }

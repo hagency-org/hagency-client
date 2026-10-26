@@ -308,6 +308,11 @@ pub(super) struct RuntimeStatus {
 impl RuntimeStatus {
     fn with_capabilities(self, config: &StartConfig) -> Self {
         let mut status = self.with_host_files(config.host_files);
+        status.native_tools = config.profile.programming.enabled;
+        status.file_replace = config.profile.programming.enabled;
+        if config.profile.programming.enabled {
+            status.capability_version = Some(codex::PROGRAMMING_CAPABILITY_VERSION);
+        }
         status.web_search = config.profile.web_search
             && runtime::kind(&config.credential_ref) == runtime::Kind::Codex;
         status
@@ -558,6 +563,9 @@ impl OwnedRuntime {
         let _update_task = crate::update_guard::PROCESS
             .enter_task()
             .ok_or(RuntimeError::Execution("update_in_progress"))?;
+        if config.host_files && config.profile.programming.enabled {
+            return Err(RuntimeError::Profile);
+        }
         match config.mode {
             BudgetMode::Strict => return Err(RuntimeError::StrictUnavailable),
             BudgetMode::Estimated { reservation: 0 } => {
@@ -565,8 +573,14 @@ impl OwnedRuntime {
             }
             _ => {}
         }
-        runtime::validate(&config.profile, &config.credential_ref)
-            .map_err(|_| RuntimeError::Profile)?;
+        runtime::validate(&config.profile, &config.credential_ref).map_err(
+            |error| match error {
+                codex::Error::Profile("ambient execution rules are unsupported") => {
+                    RuntimeError::Execution("codex_programming_rules_unsupported")
+                }
+                _ => RuntimeError::Profile,
+            },
+        )?;
         if config.profile.executable
             != super::owner_provider::external::executable(runtime::kind(&config.credential_ref))
                 .map_err(|_| RuntimeError::Profile)?
@@ -1312,6 +1326,9 @@ fn provider_failure(stage: &'static str, error: &codex::Error) -> RuntimeError {
         codex::Error::Profile(
             "missing executable or directory" | "canonical absolute paths required",
         ) => RuntimeError::Profile,
+        codex::Error::Profile("ambient execution rules are unsupported") => {
+            RuntimeError::Execution("codex_programming_rules_unsupported")
+        }
         codex::Error::Profile("provider live web search unavailable") => {
             RuntimeError::Execution("codex_web_search_unavailable")
         }
@@ -1610,7 +1627,7 @@ async fn run_host(
                     stop_provider(&mut provider).await?;checked?;
                     drop(startup);
                     let mut ledger=local(Ledger::open_scoped(&path,&owner,&profile_id))?;
-                    let mut ready=RuntimeStatus::new(&work.config.agent_id,if models_allowed{"online_chat_only"}else{"ledger_recovery_required"},if models_allowed{None}else{Some("ledger_recovery_required")}).with_capabilities(&work.config);ready.binding_id=Some(work.config.binding_id.clone());work.status.send_replace(ready);
+                    let mut ready=RuntimeStatus::new(&work.config.agent_id,if models_allowed{if work.config.profile.programming.enabled{"online"}else{"online_chat_only"}}else{"ledger_recovery_required"},if models_allowed{None}else{Some("ledger_recovery_required")}).with_capabilities(&work.config);ready.binding_id=Some(work.config.binding_id.clone());work.status.send_replace(ready);
                     execution_loop_with_gate(&transport,&owner,&mut ledger,&work.config,&reference,&mut work.receiver,&work.status,models_allowed).await
                 }.await;
                 if failure_code(&result) == Some("agent_shutdown_unconfirmed") { transport.console.0.owned_runtime.shutdown_fault.store(true, std::sync::atomic::Ordering::Release); }
@@ -1702,7 +1719,8 @@ where
 }
 fn finish_queued_starts(commands: &mut mpsc::UnboundedReceiver<BindingWork>) {
     while let Ok(work) = commands.try_recv() {
-        let mut status = RuntimeStatus::new(&work.config.agent_id, "stopped", None);
+        let mut status = RuntimeStatus::new(&work.config.agent_id, "stopped", None)
+            .with_capabilities(&work.config);
         status.binding_id = Some(work.config.binding_id);
         work.status.send_replace(status);
     }
@@ -2000,6 +2018,7 @@ async fn execution_loop_admitted<T: Transport>(
                 || profile.credential_ref != config.credential_ref
                 || profile.workspace_root != config.profile.cwd.to_string_lossy()
                 || profile.web_search != config.profile.web_search
+                || profile.programming != config.profile.programming
             {
                 return Err(RuntimeError::Profile);
             }
@@ -2128,8 +2147,16 @@ async fn execution_loop_admitted<T: Transport>(
                 let record = local(ledger.inbox_record(owner, &prepared.dispatch.id))?;
                 retry_reply(console, owner, ledger, lease, cancel, &record).await?;
             }
-            let mut ready = RuntimeStatus::new(&config.agent_id, "online_chat_only", turn_error)
-                .with_capabilities(config);
+            let mut ready = RuntimeStatus::new(
+                &config.agent_id,
+                if config.profile.programming.enabled {
+                    "online"
+                } else {
+                    "online_chat_only"
+                },
+                turn_error,
+            )
+            .with_capabilities(config);
             ready.binding_id = Some(config.binding_id.clone());
             status.send_replace(ready);
             if turn_error == Some("agent_shutdown_unconfirmed") {
@@ -2189,7 +2216,6 @@ async fn fresh_running<T: Transport>(
         .await
         .is_ok()
 }
-#[cfg(unix)]
 struct LiveToolGate {
     console: PinnedConsole,
     lease: LeaseRef,
@@ -2197,8 +2223,7 @@ struct LiveToolGate {
     execution: String,
     cancel: watch::Receiver<bool>,
 }
-#[cfg(unix)]
-impl codex::HostToolGate for LiveToolGate {
+impl codex::ExecutionGate for LiveToolGate {
     fn authorize<'a>(
         &'a self,
         dispatch: &'a str,
@@ -2237,6 +2262,16 @@ impl codex::HostToolGate for LiveToolGate {
                 && event.execution_id.as_deref() == Some(execution)
                 && event.state == "running"
         })
+    }
+}
+#[cfg(unix)]
+impl codex::HostToolGate for LiveToolGate {
+    fn authorize<'a>(
+        &'a self,
+        dispatch: &'a str,
+        execution: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'a>> {
+        codex::ExecutionGate::authorize(self, dispatch, execution)
     }
 }
 /// Best-effort cancellation: 5s sampling plus at most 5s for the proof RPC.
@@ -2374,6 +2409,9 @@ async fn run_turn<T: Transport>(
     status: &watch::Sender<RuntimeStatus>,
 ) -> Result<Option<Finish>, RuntimeError> {
     let scope = prepared.dispatch.scope();
+    if config.host_files && config.profile.programming.enabled {
+        return Err(RuntimeError::Profile);
+    }
     let profile = config.profile.clone();
     #[cfg(unix)]
     let mut profile = profile;
@@ -2392,6 +2430,11 @@ async fn run_turn<T: Transport>(
     let outcome = async {
     let (queue, mut receiver) = codex::approval_queue(1).map_err(|_| RuntimeError::Profile)?;
     let host = transport.approval_host();
+    if config.profile.programming.enabled {
+        let console=host.as_ref().ok_or(RuntimeError::Profile)?;
+        let gate=Arc::new(LiveToolGate {console:console.clone(),lease:lease.clone(),expected:prepared.dispatch.clone(),execution:prepared.execution_id.clone(),cancel:cancel.clone()});
+        provider.session.enable_programming(gate,prepared.execution_id.clone()).map_err(|_|RuntimeError::Profile)?;
+    }
     if config.host_files {
         #[cfg(unix)]
         {
@@ -2466,7 +2509,9 @@ async fn run_turn<T: Transport>(
     }
     let mut executing = RuntimeStatus::new(
         &config.agent_id,
-        if config.host_files {
+        if config.profile.programming.enabled {
+            "executing"
+        } else if config.host_files {
             "executing_host_files"
         } else {
             "executing_chat_only"
@@ -3194,6 +3239,7 @@ mod tests {
                 effort: "low".into(),
                 shared_auth: false,
                 web_search: true,
+                programming: Default::default(),
             },
             mode: BudgetMode::Estimated { reservation: 10 },
             credential_ref: "keychain:test".into(),
@@ -3216,6 +3262,7 @@ mod tests {
                     workspace_root: root.to_string_lossy().into(),
                     reasoning_effort: String::new(),
                     web_search: true,
+                    programming: Default::default(),
                     credential_ref: "keychain:test".into(),
                 },
             )
@@ -4127,6 +4174,7 @@ mod tests {
                     workspace_root: config.profile.cwd.to_string_lossy().into(),
                     reasoning_effort: config.profile.effort.clone(),
                     web_search: false,
+                    programming: Default::default(),
                     credential_ref: config.credential_ref.clone(),
                 },
             )

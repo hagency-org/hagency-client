@@ -517,6 +517,7 @@ async fn fixture_with_processing_failure(unknown: bool, budget: u64, processing_
                 workspace_root: workspace.to_string_lossy().into(),
                 reasoning_effort: String::new(),
                 web_search: true,
+                programming: Default::default(),
             },
         )
         .unwrap();
@@ -549,6 +550,7 @@ async fn fixture_with_processing_failure(unknown: bool, budget: u64, processing_
             effort: "low".into(),
             shared_auth: false,
             web_search: true,
+            programming: Default::default(),
         },
         mode: BudgetMode::Estimated { reservation: 10 },
         credential_ref: "keychain:fixture".into(),
@@ -763,6 +765,7 @@ async fn typed_http_runtime_intent_recovery_rechecks_scope_and_explicit_stop_sur
             effort: saved.effort.clone(),
             shared_auth: false,
             web_search: true,
+            programming: Default::default(),
         },
         mode: BudgetMode::Estimated {
             reservation: saved.reservation,
@@ -886,6 +889,7 @@ async fn typed_http_runtime_intent_positive_restore_child() {
                 workspace_root: workspace.to_string_lossy().into(),
                 reasoning_effort: String::new(),
                 web_search: true,
+                programming: Default::default(),
             },
         )
         .unwrap();
