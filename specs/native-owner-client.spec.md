@@ -50,3 +50,18 @@ personal provider credentials or paid model inference.
   final absence releases file capacity while retaining the original identity.
   Test-Platforms: [linux, macos]
   Test: final_absence_releases_actual_capacity_but_not_permanent_identity
+
+- Cross-repository file qualification uses current Server PG/HTTP/AS/workers,
+  authenticates original bytes larger than128KiB, retains a lost queue ACK as
+  unknown audit evidence and reads original receipts after both sides restart.
+  This external fixture scenario is ignored by ordinary CI and must be run
+  explicitly; Pasion/Matrix/provider doubles are identified in its evidence.
+  Test-Platforms: [linux, macos]
+  Test: native_owner_current_server_file_round_trip_and_restart_preserve_original_bytes
+
+Real Codex file qualification uses the public NativeOwner facade in the
+native_owner_files_qualification example, whose executable implements the real
+guardian entry before owner initialization. It requires explicit paid opt-in and
+an isolated loopback Server fixture. A libtest executable is not a programming
+guardian and cannot substitute for this entry. See the cross-repository file
+validation report for exact commands, original failures and remaining gates.

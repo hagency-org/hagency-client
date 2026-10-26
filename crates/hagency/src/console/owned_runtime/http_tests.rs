@@ -1526,6 +1526,7 @@ async fn heartbeat_retries_transport_failure_but_never_extends_unconfirmed_lease
 }
 
 mod file_history;
+mod joint_files;
 mod recovery;
 
 #[tokio::test]

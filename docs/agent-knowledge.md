@@ -5443,3 +5443,14 @@ PR #8 审查及验证记录见 `dev-vibe/pr-8-board-ux-review-2026-10-25.zh.md`�
   insert sent_files before sent_file_absence so its original-record validation
   remains active. Keep explicit pre-history schema compatibility and add only
   empty observation metadata when restoring older snapshots.
+
+- Real programming qualification must use an executable implementing the real
+  guardian entry before owner initialization. libtest main interprets guardian
+  as a test filter and cannot replace that entry; never disable supervision to
+  make a probe pass. native_owner_files_qualification exercises the public facade.
+- Fixture issuers are part of permanent deployment identity. New random ports
+  require fresh isolated databases, while an original Server restart retains its
+  port/database. The fixture enforces loopback and agent_files_joint_ naming.
+- A failed qualification driver after a sent receipt must verify that original
+  outcome, not rerun paid inference or reconstruct send custody. Explicit
+  VERIFY_EXISTING stops the original intent and only checks receipts/audits/fees.

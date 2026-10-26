@@ -14423,3 +14423,31 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   and1160 bindings pass, no missing/deferred/current-platform gaps. Original
   platform-annotation ordering failure stays in the first inventory log; only
   the spec's metadata order was corrected. Latest fetched main remains42e59b9e.
+
+## 2026-10-27: Cross-repository files and real public NativeOwner qualification
+
+- Added a loopback-only Server example using actual verifier/API/PG/AS/readiness/
+  workers with explicit Pasion/Matrix doubles. Current Client worker now connects
+  to it; final normal/lost-queue-ACK runs verify131073 incoming/131089 outgoing
+  exact bytes, original sender/thread, historical receipts, restart/no replay and
+  retained unknown audit. Provider5-token values there are synthetic only.
+- Public NativeOwner example implements the real guardian entry, authenticates
+  the current managed Codex account without copying secrets, configures all
+  three policies and launches the actual model. Original execution produced one
+  sent file and one settled call:38549 input+401 output=38950, cached30976 already
+  contained in input; no pending/unreported/reserved. Four audits completed and
+  the original process stop scope was whole_tree.
+- Original real libtest failed preflight because libtest cannot act as guardian;
+  replaced the paid wrapper with an external public-example launch. The original
+  public driver then failed stopping with a missing bindingId after actual sent.
+  Preserve both failures. Corrected validation-only existing-state mode verifies
+  the same original bytes/receipt/audits/usage and checked shutdown, with no new
+  inference, lease acquisition, upload or resend. Fresh paid wrapper not run.
+- Current engine261 passes; original7 ignores plus2 explicit external gates are
+  reported separately. Core strict Clippy/format and Server strict/contract
+  checks pass. Final static/binding logs are in the joint validation report.
+- b5206bf7 CI40409737074 and App40409741968 passed; full40409746628 completed
+  with Linux/macOS/Windows jobs all success, including Windows media restoration.
+  Current local all-targets Clippy, format/spelling,46 guards, one caller and1161
+  bindings pass with no missing/deferred/platform gaps. Real Matrix/SDK,
+  desktop/manual, Windows tools and A4/A3/earlier gates remain unqualified.

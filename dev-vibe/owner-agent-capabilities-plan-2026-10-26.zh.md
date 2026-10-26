@@ -41,3 +41,5 @@
 2026年10月27日：阶段4已接入冻结真实字节、精确主人审批、发送前永久见证、64KiB分块和原投递只读观察；新call编号/恢复快照不能重建所有权。macOS/Linux当前Codex动态发送/查询、实际NativeOwner TCP链及账本回归通过，见 [发送工具验收](agent-file-send-validation-2026-10-27.zh.md)。下一批完成主人历史投递刷新、真实联合/Windows资格；A4/A3和前阶段剩余门槛保留，未宣布A2或总目标完成。
 
 2026年10月27日：主人历史列表、详情、只读刷新及最终未准备证据结清已接入当前NativeOwner和桌面组件。保留原unknown审计、永久发送见证和旧快照兼容，查询途中SDK变更不能释放容量。见 [历史投递验收](agent-file-history-validation-2026-10-27.zh.md)。下一步是真实联合、Windows与平台资格，再继续A4/A3；A2及总目标保持进行中。
+
+2026年10月27日：当前Client/Server真实HTTP、PG、AS和worker跨仓库链已验证大于128KiB文件、丢失queue响应、原回执和双端重启不重放；公开NativeOwner及真实Codex完成原文件处理、发送、四项工具审计及38,950实际Token结算。身份/Matrix仍为明确fixture，原驱动失败与后续只读核验分开记录。见 [联合与真实模型验收](agent-file-joint-validation-2026-10-27.zh.md)。真实Matrix/SDK、人工、Windows和A4/A3等门槛仍保留。
