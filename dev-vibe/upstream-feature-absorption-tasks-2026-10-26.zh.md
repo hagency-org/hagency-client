@@ -7,7 +7,7 @@
 | 编号 | 任务 | 现状与交付要求 | 状态 |
 | --- | --- | --- | --- |
 | A1 | 完整 Codex 编程执行 | 接入命令执行、已有文件修改、主人显式配置的 MCP；接通三层策略、精确审批、授权撤销、进程树清理和桌面设置。保留现有聊天及受限文件模式。 | 已实现并完成本机验收 |
-| A2 | Agent 文件收发 | 接入 send_file、投递状态、附件列表和 receive_file；覆盖原请求授权、未知结果和重复调用。普通聊天及看板附件不替代 Agent 工具。 | 待办 |
+| A2 | Agent 文件收发 | 接入 send_file、投递状态、附件列表和 receive_file；覆盖原请求授权、未知结果和重复调用。普通聊天及看板附件不替代 Agent 工具。 | 进行中：原请求附件持久化、设备限定查询及 Client 摘要协议已实现；实际字节收发和工具仍待接通 |
 | A3 | 多 Agent 协作 | 任务委派、内部会话、同伴消息、依赖图、结果回传及自提醒唤醒；映射当前主人 Agent 和项目任务权限。 | 待办 |
 | A4 | 加密 Agent 执行和远程审批 | 接通当前 Agent 的加密 Room 执行、所有者加密私聊、私密审批室与已验证设备裁决。 | 待办 |
 | A5 | 用量报表和告警 | 在现有三层预算及 spent/held 之上提供日月汇总、输入输出及缓存拆分、历史查询和告警处理。 | 已实现，自动化验证通过；桌面人工及跨平台验收待完成 |
@@ -35,3 +35,5 @@ Fleet 和 Coordinator 的资源发布、借用、委托审批，旧 CLI 和 Web 
 A1 的实现及测试见 [Codex 编程执行验收](codex-programming-validation-2026-10-26.zh.md)。A2 至 A7 按 [主人 Agent 能力实施与验收](owner-agent-capabilities-plan-2026-10-26.zh.md) 推进；A7 的实现和剩余验收见 [账本备份恢复](owner-ledger-backup-validation-2026-10-26.zh.md)。
 
 A5 的实现、统计口径及剩余验收见 [用量报表与预算告警](owner-usage-alerts-validation-2026-10-26.zh.md)。
+
+A2 当前第一批协议实现、原失败及后续门槛见 [Agent 文件收发](agent-file-transfer-validation-2026-10-27.zh.md)。

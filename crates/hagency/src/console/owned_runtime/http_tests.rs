@@ -32,6 +32,8 @@ fn event(id: &str, epoch: i64) -> Value {
 #[derive(Default)]
 struct WireState {
     epoch: i64,
+    attachment_response: Option<Value>,
+    attachment_input: Option<Value>,
     restore_scope: bool,
     binding_states: BTreeMap<String, String>,
     no_messages: bool,
@@ -167,6 +169,15 @@ impl WireState {
                 (
                     200,
                     json!({"processing":{"id":"processing-a","dispatchId":input["dispatchId"],"executionId":input["executionId"],"state":"pending","matrixEventId":null}}),
+                )
+            }
+            "/hagency/api/v1/execution/files/attachments" => {
+                self.attachment_input = Some(input.clone());
+                (
+                    200,
+                    self.attachment_response
+                        .clone()
+                        .expect("fixture attachment response must be explicit"),
                 )
             }
             "/hagency/api/v1/execution/events/authorize-tool" => (
@@ -1341,3 +1352,53 @@ async fn heartbeat_retries_transport_failure_but_never_extends_unconfirmed_lease
 }
 
 mod recovery;
+
+#[tokio::test]
+async fn typed_http_attachment_response_is_private_and_pinned_to_original_execution() {
+    let (origin, state, server) = server(false, 0).await;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap().join("state");
+    let native = NativeOwner::open_with_matrix(&root, &origin, OWNER, Arc::new(Source))
+        .await
+        .unwrap();
+    let console = native.test_console();
+    let attachment = hagency_agent_local::attachments::Attachment::from_content(&json!({"msgtype":"m.file","body":"file.txt","url":"mxc://media.test/opaque","info":{"size":5}})).unwrap();
+    let expected =
+        json!({"dispatchId":"dispatch-a","executionId":"execution-a","attachments":[attachment]});
+    state.lock().unwrap().attachment_response = Some(expected.clone());
+    let operation = || Op::Attachments {
+        lease: LeaseRef {
+            agent_id: "agent-a".into(),
+            epoch: 1,
+        },
+        dispatch_id: "dispatch-a".into(),
+        execution_id: "execution-a".into(),
+    };
+    let response = console.execution_api(operation()).await.unwrap();
+    let Response::Attachments(response) = response else {
+        panic!("wrong response")
+    };
+    assert_eq!(response.attachments, vec![attachment]);
+    assert!(!format!("{response:?}").contains("mxc://"));
+    assert_eq!(
+        state.lock().unwrap().attachment_input,
+        Some(
+            json!({"lease":{"agentId":"agent-a","epoch":1},"dispatchId":"dispatch-a","executionId":"execution-a"})
+        )
+    );
+    let mut mismatched = expected.clone();
+    mismatched["executionId"] = json!("foreign-execution");
+    state.lock().unwrap().attachment_response = Some(mismatched);
+    let Err(error) = console.execution_api(operation()).await else {
+        panic!("foreign response accepted")
+    };
+    assert_eq!(error.code, "execution_scope_mismatch");
+    let mut mutated = expected;
+    mutated["attachments"][0]["source"]["url"] = json!("mxc://media.test/replaced");
+    state.lock().unwrap().attachment_response = Some(mutated);
+    let Err(error) = console.execution_api(operation()).await else {
+        panic!("mutated response accepted")
+    };
+    assert_eq!(error.code, "invalid_execution_response");
+    server.abort();
+}

@@ -3,6 +3,18 @@
 
 # Repository audit knowledge
 
+- **Agent attachment protocol, 2026-10-27:** Server records descriptors in the
+  original owner-event transaction; legacy Poll excludes them before LIMIT.
+  Explicit PollFiles is reserved for a fully wired host. Read metadata only for
+  the exact running lease/device/execution and current Gateway facts; no arbitrary
+  Room/event/URL selectors. Sorted compact UTF-8 JSON tuple commitments are shared
+  across serde_json map feature differences. Descriptors/debug/model summaries
+  must not leak locator/key; filenames and declared size are untrusted. No actual
+  receive/send activation yet. PG service tests require a fresh DB and CI serial
+  execution: parallel migration DDL deadlocks and retained notification pagination
+  contaminate assertions. Preserve original failures; do not add IO retries.
+
+
 - **Stopped request recovery, 2026-10-27:** Keep a separate copy of unknown/failed
   input before compacting inbox bodies. Workspace and observed stop scope bind
   the original execution; programming continuation requires the original whole

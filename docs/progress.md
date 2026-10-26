@@ -14256,3 +14256,24 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 - Real encrypted owner-direct -> Server -> new Agent execution, manual desktop
   interaction and cross-platform acceptance remain unqualified. A2/A4/A3 stay in
   scope; no goal-complete claim, deployment or reconstructed task-writer state.
+
+
+## 2026-10-27: Agent file protocol foundation (A2 remains in progress)
+
+- Re-fetched Client main42e59b9e and Server main6340df32 before work; both are
+  included in their codex/agent-file-transfer branches. No direct main edits.
+- Server c98e210 atomically retains immutable canonical attachment descriptors
+  with original requests, rejects changed duplicates, filters legacy polls before
+  LIMIT, and exposes device/execution/lease/Gateway-scoped private metadata only.
+- Client validates matching dispatch/execution, portable canonical digests and
+  bounded MXC/v2 source parameters. Model Summary excludes source; ordinary
+  runtime Poll stays text-only until actual receive/send tools are ready.
+- Final fresh-PG serial Server95/0 ignored, strict Clippy/format/OpenAPI78+4 and
+  15 guards pass. Client Agent116+3+8/3 existing ignored, engine255/7 ignored,
+  actual authenticated TCP and strict affected checks pass. Broad Client tests
+  fail the existing real two-agent qualification placeholder; original failures,
+  Server parallel deadlocks and populated-test-DB pagination failures are retained
+  in the validation reports. No false all-green, transfer, deployment or A2 pass.
+- A1 run40363073237 now has successful Linux/Windows native jobs, macOS cancelled;
+  original historical caller-loss cause remains unproven. A6 CI passes while its
+  full/App matrix is still pending. Actual A2 byte tools and A4/A3 remain work.

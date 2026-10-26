@@ -250,6 +250,30 @@ impl ProcessingReceipt {
         Ok(())
     }
 }
+/// Private host response. Never include descriptors in model tool output.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecutionAttachments {
+    pub dispatch_id: String,
+    pub execution_id: String,
+    pub attachments: Vec<hagency_agent_local::attachments::Attachment>,
+}
+impl ExecutionAttachments {
+    fn validate(&self, dispatch: &str, execution: &str) -> Result<(), DeviceError> {
+        if self.dispatch_id != dispatch
+            || self.execution_id != execution
+            || self.attachments.len() > 1
+        {
+            return Err(error(502, "execution_scope_mismatch"));
+        }
+        for attachment in &self.attachments {
+            attachment
+                .validate()
+                .map_err(|_| error(502, "invalid_execution_response"))?;
+        }
+        Ok(())
+    }
+}
 pub enum DeviceOperation {
     History {
         agent_id: String,
@@ -273,6 +297,18 @@ pub enum DeviceOperation {
         lease: LeaseRef,
         binding_id: String,
         limit: usize,
+    },
+    /// Explicit opt-in for a host with working attachment tools. Ordinary Poll
+    /// stays text-only, including when a newer Server supports file admission.
+    PollFiles {
+        lease: LeaseRef,
+        binding_id: String,
+        limit: usize,
+    },
+    Attachments {
+        lease: LeaseRef,
+        dispatch_id: String,
+        execution_id: String,
     },
     Ack {
         lease: LeaseRef,
@@ -315,6 +351,7 @@ pub enum DeviceResponse {
     Lease(Lease),
     Released,
     Events(Vec<Dispatch>),
+    Attachments(ExecutionAttachments),
     Acknowledged,
     Started(ExecutionStart),
     Processing(ProcessingReceipt),
@@ -329,6 +366,8 @@ impl DeviceOperation {
             Self::Renew { lease, .. }
             | Self::Release { lease }
             | Self::Poll { lease, .. }
+            | Self::PollFiles { lease, .. }
+            | Self::Attachments { lease, .. }
             | Self::Ack { lease, .. }
             | Self::Start { lease, .. }
             | Self::Processing { lease, .. }
@@ -386,14 +425,32 @@ impl DeviceOperation {
                 lease,
                 binding_id,
                 limit,
+            }
+            | Self::PollFiles {
+                lease,
+                binding_id,
+                limit,
             } => {
                 id(binding_id)?;
                 if !(1..=100).contains(limit) {
                     return Err(error(400, "invalid_poll_limit"));
                 }
+                let mut body = json!({"lease":lease,"bindingId":binding_id,"limit":limit});
+                if matches!(self, Self::PollFiles { .. }) {
+                    body["acceptFiles"] = true.into();
+                }
+                ("events/poll", body)
+            }
+            Self::Attachments {
+                lease,
+                dispatch_id,
+                execution_id,
+            } => {
+                id(dispatch_id)?;
+                id(execution_id)?;
                 (
-                    "events/poll",
-                    json!({"lease":lease,"bindingId":binding_id,"limit":limit}),
+                    "files/attachments",
+                    json!({"lease":lease,"dispatchId":dispatch_id,"executionId":execution_id}),
                 )
             }
             Self::Ack { lease, dispatch_id } => {
@@ -689,6 +746,11 @@ fn parse_response(
             lease,
             binding_id,
             limit,
+        }
+        | DeviceOperation::PollFiles {
+            lease,
+            binding_id,
+            limit,
         } => {
             let events: Vec<Dispatch> = decode(&value, "events")?;
             if events.len() > *limit {
@@ -705,6 +767,16 @@ fn parse_response(
                 }
             }
             Ok(DeviceResponse::Events(events))
+        }
+        DeviceOperation::Attachments {
+            dispatch_id,
+            execution_id,
+            ..
+        } => {
+            let attachments: ExecutionAttachments =
+                serde_json::from_value(value).map_err(|_| invalid())?;
+            attachments.validate(dispatch_id, execution_id)?;
+            Ok(DeviceResponse::Attachments(attachments))
         }
         DeviceOperation::Start {
             lease,
@@ -923,5 +995,84 @@ mod processing_tests {
         assert!(receipt.validate("dispatch-a", "execution-a").is_err());
         receipt.state = "arbitrary".into();
         assert!(receipt.validate("dispatch-a", "execution-a").is_err());
+    }
+}
+
+#[cfg(test)]
+mod attachment_tests {
+    use super::*;
+    fn lease() -> LeaseRef {
+        LeaseRef {
+            agent_id: "agent-a".into(),
+            epoch: 1,
+        }
+    }
+    #[test]
+    fn legacy_poll_does_not_opt_in_and_attachment_lookup_cannot_choose_a_url() {
+        let legacy = DeviceOperation::Poll {
+            lease: lease(),
+            binding_id: "binding-a".into(),
+            limit: 1,
+        };
+        let capable = DeviceOperation::PollFiles {
+            lease: lease(),
+            binding_id: "binding-a".into(),
+            limit: 1,
+        };
+        let (route, bytes) = legacy.request().unwrap();
+        assert_eq!(route, "events/poll");
+        let mut expected: Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(expected.get("acceptFiles").is_none());
+        expected["acceptFiles"] = true.into();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&capable.request().unwrap().1).unwrap(),
+            expected
+        );
+        let lookup = DeviceOperation::Attachments {
+            lease: lease(),
+            dispatch_id: "dispatch-a".into(),
+            execution_id: "execution-a".into(),
+        };
+        let (route, bytes) = lookup.request().unwrap();
+        assert_eq!(route, "files/attachments");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&bytes).unwrap(),
+            json!({"lease":{"agentId":"agent-a","epoch":1},"dispatchId":"dispatch-a","executionId":"execution-a"})
+        );
+    }
+    #[test]
+    fn private_attachment_response_pins_request_and_rejects_mutated_source() {
+        let attachment = hagency_agent_local::attachments::Attachment::from_content(
+            &json!({"msgtype":"m.file","body":"report.txt","url":"mxc://media.test/opaque"}),
+        )
+        .unwrap();
+        let value = json!({"dispatchId":"dispatch-a","executionId":"execution-a","attachments":[attachment]});
+        let receipt: ExecutionAttachments = serde_json::from_value(value.clone()).unwrap();
+        receipt.validate("dispatch-a", "execution-a").unwrap();
+        assert!(receipt.validate("dispatch-b", "execution-a").is_err());
+        assert!(receipt.validate("dispatch-a", "execution-b").is_err());
+        assert!(!format!("{receipt:?}").contains("mxc://"));
+        let mut changed = value.clone();
+        changed["attachments"][0]["source"]["url"] = json!("mxc://other.test/replaced");
+        assert!(
+            serde_json::from_value::<ExecutionAttachments>(changed)
+                .unwrap()
+                .validate("dispatch-a", "execution-a")
+                .is_err()
+        );
+        let mut extra = value.clone();
+        extra["roomId"] = json!("!other:test");
+        assert!(serde_json::from_value::<ExecutionAttachments>(extra).is_err());
+        let mut many = value;
+        many["attachments"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::to_value(attachment).unwrap());
+        assert!(
+            serde_json::from_value::<ExecutionAttachments>(many)
+                .unwrap()
+                .validate("dispatch-a", "execution-a")
+                .is_err()
+        );
     }
 }

@@ -364,3 +364,12 @@ and charges remain. Agent113+3+8, engine252, App617, actual SDK local HTTP send 
 native OAuth/disk checks pass; manual/encrypted/cross-platform qualification remains
 open. Next implementation is A2 Agent file tools, followed by A4 encrypted Room
 execution/remote approvals and A3 collaboration. Full A2-A7 goal is still active.
+
+
+A2 current checkpoint (2026-10-27): original attachment descriptor protocol is
+implemented in Client and Server feature branches with exact device/execution
+lookup, immutable request association, portable digests and legacy poll isolation.
+Runtime file opt-in stays off until bounded receive/private publication and durable
+send/status tools are complete. Server95, Agent116+3+8 and engine255 pass; broad
+Client qualification still fails its existing real two-agent placeholder. See
+agent-file-transfer-validation in dev-vibe. A2/A4/A3 and remaining gates stay open.
