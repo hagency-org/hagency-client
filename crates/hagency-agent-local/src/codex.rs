@@ -2071,7 +2071,13 @@ mod tests {
                 .replace('\\', r"\\")
                 .into();
             verify_shared_configuration(&normalized, &canonical_home).unwrap();
-            verify_host_configuration(&normalized, Some(&canonical_home), false).unwrap();
+            verify_host_configuration(
+                &normalized,
+                Some(&canonical_home),
+                false,
+                &Default::default(),
+            )
+            .unwrap();
         }
         std::fs::create_dir(temp.path().join("alias")).unwrap();
         let traversal = temp

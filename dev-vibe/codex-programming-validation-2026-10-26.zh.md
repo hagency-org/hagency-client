@@ -58,5 +58,9 @@ PR #9 首轮 Windows 严格 Clippy 发现 `codex::process::Child` 的 Direct
 hagency-agent-local 测试及所有 targets 严格 Clippy、rustfmt 均通过；
 Windows 的修正结果以新提交对应的远端 CI 为准。
 
+第二轮远端检查继续发现 Linux 的 Supervised 分支较大，以及 Windows
+专属测试漏传 programming 参数。进一步将监督进程句柄装箱，并补齐测试
+参数；不改变工具授权或进程停止语义。两个平台的新结果继续由 CI 验证。
+
 本轮再次执行 `git fetch origin main`，远端仍为 `42e59b9e`，也是分支的
 merge-base。未在 main 上直接修改。

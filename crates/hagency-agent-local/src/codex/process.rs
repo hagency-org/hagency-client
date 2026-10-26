@@ -5,7 +5,7 @@ pub type Writer = Box<dyn AsyncWrite + Unpin + Send>;
 pub(crate) enum Child {
     Direct(Box<crate::process_cleanup::RetainedChild>),
     Supervised {
-        owner: hagency_platform::SupervisedProcess,
+        owner: Box<hagency_platform::SupervisedProcess>,
         stderr: tokio::task::JoinHandle<()>,
     },
 }
@@ -67,7 +67,7 @@ pub(super) fn supervised(
     Ok(Process {
         session: Session::new(Box::new(reader) as Reader, Box::new(writer) as Writer),
         child: Child::Supervised {
-            owner,
+            owner: Box::new(owner),
             stderr: tokio::spawn(async move {
                 let mut stderr = stderr;
                 let _ = tokio::io::copy(&mut stderr, &mut tokio::io::sink()).await;
