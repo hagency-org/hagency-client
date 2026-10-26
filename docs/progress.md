@@ -14304,3 +14304,20 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 - No real homeserver/model/manual desktop joint receive or Windows publication
   qualification. send_file/get_file_delivery, A4 encrypted execution/remote
   approval, A3 collaboration and remaining earlier gates stay active goals.
+
+
+## 2026-10-27: Server original file delivery foundation
+
+- Re-fetched Client main42e59b9e and Server main6340df32; both remain ancestors
+  of the current codex/agent-file-transfer branches. No direct main edits.
+- Server4f2f466 adds bounded exact original-execution preparation/chunks/queue,
+  independent upload/send custody and safe historical delivery status. Unknown
+  work cannot rearm; actual HTTP or verified AS events confirm historical sends.
+  Original sender/thread and current device/session/lease/Matrix gates remain.
+- Final fresh-PG serial Agent-service103/0 ignored, strict three-package Clippy,
+  format, OpenAPI82+4/19 negative guards pass. Local HTTP bytes and AS router
+  cover actual transport; the report retains initial reused-DB and deadline
+  fixture failures. Server PR7 updated; updated remote CI pending.
+- Client1bbff570 CI/App CI succeeded; full Windows/macOS matrix still pending.
+  Client send_file/get_file_delivery/capture/approval wiring remains next, then
+  A4/A3 and qualification. No A2/whole-goal completion or deployment claim.

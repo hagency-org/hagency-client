@@ -3,6 +3,14 @@
 
 # Repository audit knowledge
 
+- **Server original file delivery, 2026-10-27:** Separate durable upload/send
+  custody commits before IO. Fresh Matrix facts and exact execution device/lease
+  bind each phase; lock actual device/session/user rows and recheck real clocks
+  after waits/hash work. Unknown never reclaims; late upload acceptance retains
+  unknown, while actual original HTTP/verified AS message receipts may record
+  sent after revocation without authorizing new work. Safe status is historical
+  and source-free. Client sender capture/approval integration remains required.
+
 - **Original attachment receive, 2026-10-27:** Receiver reservations mint one
   non-Clone custody; commit write_possible before filesystem effects. Ready paths
   require original file/workspace/parent identity and hash, never content-only
