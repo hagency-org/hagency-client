@@ -195,6 +195,13 @@ impl WireState {
                     json!({"delivery":self.file_delivery_response.clone().expect("explicit original file response")}),
                 )
             }
+            "/hagency/api/v1/execution/files/lookup" => {
+                self.file_delivery_input = Some(input.clone());
+                (
+                    200,
+                    json!({"observation":self.file_delivery_response.clone().expect("explicit original file observation")}),
+                )
+            }
             "/hagency/api/v1/execution/files/attachments" => {
                 self.attachment_input = Some(input.clone());
                 (
@@ -1753,7 +1760,7 @@ async fn typed_http_file_delivery_pins_manifest_and_preserves_unknown_without_se
     }
     let mut private = delivery.clone();
     private["mxcUrl"] = "mxc://private.test/blob".into();
-    state.lock().unwrap().file_delivery_response = Some(private);
+    state.lock().unwrap().file_delivery_response = Some(private.clone());
     assert!(
         console
             .execution_api(Op::FileDelivery {
@@ -1762,6 +1769,53 @@ async fn typed_http_file_delivery_pins_manifest_and_preserves_unknown_without_se
             .await
             .is_err()
     );
+    let query = hagency_agent_local::file_delivery::FileLookup {
+        dispatch_id: expected.target.dispatch_id.clone(),
+        execution_id: expected.target.execution_id.clone(),
+        request_id: expected.request_id.clone(),
+    };
+    for (value, valid) in [
+        (
+            json!({"request":query,"delivery":null,"preparationClosed":false}),
+            true,
+        ),
+        (
+            json!({"request":query,"delivery":null,"preparationClosed":true}),
+            true,
+        ),
+        (
+            json!({"request":query,"delivery":delivery,"preparationClosed":true}),
+            true,
+        ),
+        (
+            json!({"request":{"dispatchId":"foreign","executionId":query.execution_id,"requestId":query.request_id},"delivery":null,"preparationClosed":true}),
+            false,
+        ),
+        (
+            json!({"request":query,"delivery":private,"preparationClosed":true}),
+            false,
+        ),
+        (
+            json!({"request":query,"delivery":null,"preparationClosed":"true"}),
+            false,
+        ),
+    ] {
+        state.lock().unwrap().file_delivery_response = Some(value.clone());
+        let observed = console
+            .execution_api(Op::LookupFile {
+                request: query.clone(),
+                file: file.clone(),
+            })
+            .await;
+        assert_eq!(observed.is_ok(), valid);
+        if let Ok(Response::FileObservation(observation)) = observed {
+            assert_eq!(serde_json::to_value(observation).unwrap(), value);
+        }
+        assert_eq!(
+            state.lock().unwrap().file_delivery_input,
+            Some(json!(query))
+        );
+    }
     // Modern event IDs are opaque; a colon is not required for the actual receipt.
     delivery["state"] = "sent".into();
     delivery["matrixEventId"] = "$actualOpaqueEventId".into();

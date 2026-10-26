@@ -332,6 +332,11 @@ pub enum DeviceOperation {
     FileDelivery {
         expected: FileExpectation,
     },
+    /// Read by original request ID when no preparation response/file ID survived.
+    LookupFile {
+        request: file_delivery::FileLookup,
+        file: FileManifest,
+    },
     History {
         agent_id: String,
         cursor: Option<String>,
@@ -404,6 +409,7 @@ pub enum DeviceOperation {
     },
 }
 pub enum DeviceResponse {
+    FileObservation(file_delivery::FileObservation),
     FileDelivery(FileDelivery),
     History(ExecutionHistory),
     Lease(Lease),
@@ -420,7 +426,10 @@ pub enum DeviceResponse {
 impl DeviceOperation {
     fn lease(&self) -> Option<&LeaseRef> {
         match self {
-            Self::Acquire { .. } | Self::History { .. } | Self::FileDelivery { .. } => None,
+            Self::Acquire { .. }
+            | Self::History { .. }
+            | Self::FileDelivery { .. }
+            | Self::LookupFile { .. } => None,
             Self::PrepareFile { lease, .. }
             | Self::StageFileChunk { lease, .. }
             | Self::QueueFile { lease, .. }
@@ -492,6 +501,16 @@ impl DeviceOperation {
                     "files/status",
                     serde_json::to_value(&expected.target)
                         .map_err(|_| error(400, "invalid_file_target"))?,
+                )
+            }
+            Self::LookupFile { request, file } => {
+                request
+                    .validate()
+                    .and_then(|_| file.validate())
+                    .map_err(|_| error(400, "invalid_file_lookup"))?;
+                (
+                    "files/lookup",
+                    serde_json::to_value(request).map_err(|_| error(400, "invalid_file_lookup"))?,
                 )
             }
             Self::History {
@@ -775,6 +794,13 @@ fn parse_response(
 ) -> Result<DeviceResponse, DeviceError> {
     let invalid = || error(502, "invalid_execution_response");
     match operation {
+        DeviceOperation::LookupFile { request, file } => {
+            let observation: file_delivery::FileObservation = decode(&value, "observation")?;
+            observation
+                .validate(request, file)
+                .map_err(|_| error(502, "invalid_file_observation_response"))?;
+            Ok(DeviceResponse::FileObservation(observation))
+        }
         DeviceOperation::PrepareFile {
             dispatch_id,
             execution_id,
@@ -1298,6 +1324,22 @@ mod file_delivery_tests {
         assert!(status.lease().is_none());
         let (route, bytes) = status.request().unwrap();
         assert_eq!(route, "files/status");
+        let lookup = DeviceOperation::LookupFile {
+            request: file_delivery::FileLookup {
+                dispatch_id: original.target.dispatch_id.clone(),
+                execution_id: original.target.execution_id.clone(),
+                request_id: original.request_id.clone(),
+            },
+            file: original.file.clone(),
+        };
+        assert!(lookup.lease().is_none());
+        let (lookup_route, lookup_bytes) = lookup.request().unwrap();
+        assert_eq!(lookup_route, "files/lookup");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&lookup_bytes).unwrap(),
+            json!({"dispatchId":original.target.dispatch_id,"executionId":original.target.execution_id,"requestId":original.request_id})
+        );
+
         assert_eq!(
             serde_json::from_slice::<Value>(&bytes).unwrap(),
             serde_json::to_value(original.target).unwrap()

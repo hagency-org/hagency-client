@@ -65,3 +65,30 @@ all-targets no-deps严格Clippy、核心格式、46项caller/spec守卫及produc
 后续实现：当前macOS/Linux的冻结发送、主人审批、永久见证及动态投递工具已接通，
 见 [发送工具验收](agent-file-send-validation-2026-10-27.zh.md)。上方保留类型化协议
 阶段历史，不代表当前仍未实现工具；主人历史刷新和完整联合/平台资格仍待完成。
+
+## 原请求历史查询（后续协议基础）
+
+新增`agent-file-history-v1`、FileLookup/FileObservation和不携带lease的LookupFile
+设备操作。以原dispatch/execution/request定位，prepare响应丢失也无需重做prepare。
+安全响应精确核验原身份、声明及摘要；未知字段、私有媒体字段和布尔类型漂移被
+拒绝。delivery=null且preparationClosed=false仍未知；true仅表示原执行不再允许
+新准备，不把任何已有unknown投递当作取消，更不会返回字节写权。
+
+配套Server0a1ef55在同一Transport事务锁内核验身份及原执行终态，只有永久不可能
+回到running时给出preparationClosed。真实PG和Salvo的完整107项通过，CI40406382037
+仍在执行；其前提交f5ac86c的CI40404302743已经通过。
+
+Client当前Agent-local138通过/原3忽略，引擎260通过/原7忽略，含真实OAuth/设备/
+TCP的找回记录、暂时/最终缺失、不同身份/私有字段/布尔漂移拒绝及不重传断言。
+核心、App及miniapp含macos-sparkle的严格all-targets no-deps Clippy通过；首次运行
+漏设Sparkle SDK环境变量而在原build.rs拒绝，保留原日志；随后指向已存在的原
+固定SDK完成验证，没有改build断言或省略该feature。46项守卫、production caller、
+核心格式与拼写通过。日志`/tmp/hagency-file-lookup-client-{lib,engine,clippy,
+clippy-final,guards,callers,fmt,spelling,bindings}.log`。
+
+这一步仅提供历史观察协议。主人历史列表/界面、原执行结束后的刷新以及最终
+未准备证据的持久化/容量结清仍待接通，不能将类型测试算作这些功能已完成。
+现有模型工具仍按原运行执行查询；没有为查历史重启模型或恢复上传权限。
+
+当前源代码最终规格绑定仍为1155项，missing/deferred/platformDeferred均为空，
+保留原superseded记录；未放宽清单上限或测试断言。

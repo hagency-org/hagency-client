@@ -14382,3 +14382,20 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   request ID. Temporary absence is not cancellation and never grants a retry;
   preserve custody/audit witnesses and require authoritative terminal evidence
   before releasing a final-absence hold.
+
+## 2026-10-27: Original file lookup protocol
+
+- Pushed Client sender971578c0 and Server permanent-denial f5ac86c; Server CI
+  40404302743 passed. Sender CI40405525369/App40405530521/full40405535861 were
+  dispatched against971578c0; remote results are distinct from local proof.
+- Server0a1ef55 adds owner/device-only original-request lookup, serialized with
+  preparation and terminal transitions. Missing running rows remain uncertain;
+  closed preparation is evidence only and never cancels an existing delivery.
+  Fresh PG107/107 and strict checks pass; CI40406382037 is pending.
+- Client typed lookup binds original IDs/manifest, rejects private/changed output,
+  preserves missing/closed evidence without a retry grant. Agent138/3 ignored,
+  engine260/7 ignored pass. Strict core/App/miniapp Clippy including Sparkle passes
+  after setting the existing SDK path; the initial missing-SDK failure is kept.
+- Owner historical list/refresh UI and durable final-absence capacity settlement
+  are still next, followed by actual joint/Windows qualification and A4/A3. No
+  model restart or write-custody reconstruction was introduced; A2 stays open.

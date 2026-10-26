@@ -5426,3 +5426,10 @@ PR #8 审查及验证记录见 `dev-vibe/pr-8-board-ux-review-2026-10-25.zh.md`�
 - Codex CLI disable arguments override ordinary feature overrides, and environments:[] disables native execution despite enabled shell flags. Programming must enable the two shell flags and omit the empty environment override. Configured MCP is pinned to local and must use prompt, without ambient headers/env/tool exceptions. Existing prefix-rule directories are refused for programming.
 - Capability contexts include programming config, workspace/model/effort/search; their usage gaps must reset only exact matching scoped baselines. ModelProfile's new field is omitted for default profiles and stripped from v1 remote configuration results; remote ordinary Codex edits preserve execution-local programming settings.
 - Actual Codex 0.164.0-alpha.11.1/gpt-6.1-sol completed exact existing-file edit, native command file, configured MCP file and byte readback with 6/6 tools and whole-tree stop. This is adapter/fixture-owner evidence, not real Matrix/desktop manual acceptance. Validation and remaining boundaries: dev-vibe/codex-programming-validation-2026-10-26.zh.md.
+
+- Original file preparation can be looked up by dispatch/execution/request ID
+  without a lease or original file ID (agent-file-history-v1). Absence is final
+  only with a Server preparationClosed attestation taken under the same fence as
+  prepare/terminal transitions. A present delivery always keeps its own state;
+  closed does not mean sent/cancelled. Client owner history must retain this
+  proof separately rather than forge a delivery or reconstruct write custody.

@@ -4,6 +4,7 @@ use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 pub const CAPABILITY: &str = "agent-file-delivery-v1";
+pub const HISTORY_CAPABILITY: &str = "agent-file-history-v1";
 pub const MAX_BYTES: usize = 8 * 1024 * 1024;
 pub const CHUNK_BYTES: usize = 64 * 1024;
 fn key(value: &str) -> Result<()> {
@@ -64,6 +65,48 @@ impl Target {
     pub fn validate(&self) -> Result<()> {
         for id in [&self.dispatch_id, &self.execution_id, &self.file_id] {
             key(id)?;
+        }
+        Ok(())
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FileLookup {
+    pub dispatch_id: String,
+    pub execution_id: String,
+    pub request_id: String,
+}
+impl FileLookup {
+    pub fn validate(&self) -> Result<()> {
+        for id in [&self.dispatch_id, &self.execution_id, &self.request_id] {
+            key(id)?;
+        }
+        Ok(())
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FileObservation {
+    pub request: FileLookup,
+    pub delivery: Option<Delivery>,
+    pub preparation_closed: bool,
+}
+impl FileObservation {
+    /// A missing running preparation remains uncertain. Even a closed missing
+    /// preparation is evidence only, never a cancelled delivery or retry grant.
+    pub fn validate(&self, request: &FileLookup, manifest: &Manifest) -> Result<()> {
+        request.validate()?;
+        manifest.validate()?;
+        if self.request != *request {
+            return Err(Error::Invalid("file observation identity"));
+        }
+        if let Some(d) = &self.delivery {
+            d.validate(
+                &request.dispatch_id,
+                &request.execution_id,
+                &request.request_id,
+                manifest,
+            )?;
         }
         Ok(())
     }
@@ -200,5 +243,31 @@ mod tests {
         let mut private = base;
         private["mxcUrl"] = "mxc://private.test/hidden".into();
         assert!(serde_json::from_value::<Delivery>(private).is_err());
+    }
+    #[test]
+    fn original_lookup_preserves_temporary_absence_and_rejects_foreign_evidence() {
+        let query = FileLookup {
+            dispatch_id: "original".into(),
+            execution_id: "execution".into(),
+            request_id: "request".into(),
+        };
+        for closed in [false, true] {
+            let observation = FileObservation {
+                request: query.clone(),
+                delivery: None,
+                preparation_closed: closed,
+            };
+            observation.validate(&query, &original()).unwrap();
+            assert!(observation.delivery.is_none());
+            assert_eq!(observation.preparation_closed, closed);
+            let wrong = FileLookup {
+                request_id: "other".into(),
+                ..query.clone()
+            };
+            assert!(observation.validate(&wrong, &original()).is_err());
+            let mut private = serde_json::to_value(&observation).unwrap();
+            private["workerToken"] = "private".into();
+            assert!(serde_json::from_value::<FileObservation>(private).is_err());
+        }
     }
 }
