@@ -14217,3 +14217,16 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 - A6 remains in progress: stopped request/file inspection, owner disposition
   notes and explicit continuation are next. A2/A4/A3 and real-device gates remain
   open. No provisioned task-writer or project.spec; no substitute task state.
+
+
+## 2026-10-27: Original Windows caller-loss diagnostics
+
+- PR9 head732c99d5 passes the Windows build, Linux/macOS native and Intel App,
+  but the full Windows suite fails unchanged execution caller-loss at a closed
+  approval notice stream, before printing the injected fault or original report.
+  Its cause is unproven; the original failed run40349683033/log is retained.
+- Added failure-only test diagnostics from the same original operation: fault,
+  startup/runtime/cleanup/exit, approval custody and phase trace, bounded stderr.
+  Closed notice streams still fail; no retry or deadline/assertion relaxation.
+  Complete local execution42/42, strict all-targets no-deps Clippy and format pass.
+  Windows revalidation remains pending; this change does not claim a root fix.
