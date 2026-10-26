@@ -8,6 +8,7 @@ use crate::sliding_sync::spawn_async_task;
 use super::board::ProjectBoardWidgetExt;
 use crate::shared::{feedback::{InlineNoticeWidgetExt,InlineNoticeWidgetRefExt}, popup_list::PopupKind};
 mod ledger;
+mod usage;
 
 #[derive(Clone, Debug)]
 pub enum HagencyAction {
@@ -42,6 +43,7 @@ enum Page {
 }
 #[derive(Clone, Copy, Debug)]
 enum Target {
+    Usage,
     Ledger,
     Journal,
     Projects,
@@ -431,6 +433,8 @@ fn agent_empty_message(loaded: bool, loading: bool) -> &'static str {
 fn user_error(error: &str) -> &str {
     if let Some(message) = provider_error_message(error) { return message; }
     match error {
+        "invalid_usage_query" => "Select the scope and enter valid UTC dates (YYYY-MM-DD). Daily reports support up to 366 days; monthly reports support up to 10 years.",
+        "usage_report_unavailable" => "Usage could not be read from this device's ledger. Check local storage and retry.",
         "ledger_runtime_busy" => "Stop all Agent services on this device before restoring the owner ledger.",
         "ledger_restore_requires_empty_ledger" => "This device already has owner ledger records. Restore cannot overwrite usage or requests; use an empty ledger on a recovery device.",
         "ledger_backup_changed" => "The backup changed after inspection. Check the backup again before restoring.",
@@ -755,11 +759,41 @@ script_mod! {
                     bind_agent := Primary {text: #(crate::i18n::tr("Bind selected existing Agent to Room")) i18n_text: "Bind selected existing Agent to Room"}
                 }
                 agent_detail := View {visible: false width: Fill height: Fit flow: Down spacing: 10
-                    View {width: Fill height: 40 spacing: 8
+                    View {width: Fill height: Fit flow: Flow.Right{wrap: true} spacing: 8
                         setup_tab := Action {text: #(crate::i18n::tr("Agent")) i18n_text: "Agent"}
                         model_tab := Action {text: #(crate::i18n::tr("Model & resources")) i18n_text: "Model & resources"}
                         policy_tab := Action {text: #(crate::i18n::tr("Limits")) i18n_text: "Limits"}
                         runtime_tab := Action {text: #(crate::i18n::tr("Service")) i18n_text: "Service"}
+                        usage_tab := Action {text: #(crate::i18n::tr("Usage & alerts")) i18n_text: "Usage & alerts"}
+                    }
+                    usage_section := View {visible: false width: Fill height: Fit flow: Down spacing: 10
+                        Section {width: Fill height: Fit flow: Down spacing: 8
+                            Text {text: #(crate::i18n::tr("Usage recorded on this device")) i18n_text: "Usage recorded on this device" draw_text.text_style: theme.font_bold{font_size: mod.widgets.RINX_TITLE_SIZE}}
+                            Text {text: #(crate::i18n::tr("UTC dates use the call start time. Cached input is included in input; reasoning is included in output. Older calls without a recorded time are listed separately.")) i18n_text: "UTC dates use the call start time. Cached input is included in input; reasoning is included in output. Older calls without a recorded time are listed separately." draw_text.color: mod.widgets.RINX_MUTED}
+                            usage_scope := Select {labels: [#(crate::i18n::tr("Entire Agent")) #(crate::i18n::tr("Selected Room")) #(crate::i18n::tr("Selected requester in Room"))]}
+                            usage_room_holder := View {visible: false width: Fill height: Fit usage_room := Select {labels: [#(crate::i18n::tr("Select a Room binding"))]}}
+                            usage_requester_holder := View {visible: false width: Fill height: Fit usage_requester := Input {empty_text: "@user:server"}}
+                            usage_group := Select {labels: [#(crate::i18n::tr("Daily")) #(crate::i18n::tr("Monthly"))]}
+                            Text {text: #(crate::i18n::tr("From UTC date, inclusive")) i18n_text: "From UTC date, inclusive"}
+                            usage_from := Input {empty_text: "YYYY-MM-DD"}
+                            Text {text: #(crate::i18n::tr("Until UTC date, exclusive")) i18n_text: "Until UTC date, exclusive"}
+                            usage_until := Input {empty_text: "YYYY-MM-DD"}
+                            usage_refresh := Action {text: #(crate::i18n::tr("Load usage report")) i18n_text: "Load usage report"}
+                            usage_totals := Text {}
+                            usage_undated := Text {draw_text.color: mod.widgets.RINX_MUTED}
+                            usage_rows := Text {}
+                        }
+                        Section {width: Fill height: Fit flow: Down spacing: 8
+                            Text {text: #(crate::i18n::tr("Budget alerts")) i18n_text: "Budget alerts" draw_text.text_style: theme.font_bold{font_size: mod.widgets.RINX_TITLE_SIZE}}
+                            Text {text: #(crate::i18n::tr("Alerts record when spent plus reserved tokens reach 80% or 100% of a configured budget. Acknowledging keeps usage and the original alert. Alerts include all dates in the selected scope.")) i18n_text: "Alerts record when spent plus reserved tokens reach 80% or 100% of a configured budget. Acknowledging keeps usage and the original alert. Alerts include all dates in the selected scope." draw_text.color: mod.widgets.RINX_MUTED}
+                            usage_alerts := Select {labels: [#(crate::i18n::tr("Select a budget alert"))]}
+                            usage_alert_details := Text {}
+                            usage_ack := Action {text: #(crate::i18n::tr("Acknowledge alert")) i18n_text: "Acknowledge alert"}
+                            View {width: Fill height: Fit flow: Flow.Right{wrap: true} spacing: 8
+                                usage_latest := Action {text: #(crate::i18n::tr("Newest alerts")) i18n_text: "Newest alerts"}
+                                usage_older := Action {text: #(crate::i18n::tr("Older alerts")) i18n_text: "Older alerts"}
+                            }
+                        }
                     }
                     configuration_notice := Text {visible: false draw_text.color: mod.widgets.RINX_MUTED}
                     configuration_refresh := Action {visible: false text: #(crate::i18n::tr("Refresh execution device environment")) i18n_text: "Refresh execution device environment"}
@@ -1008,6 +1042,9 @@ pub struct HagencyPanel {
     #[rust] ledger_open: bool,
     #[rust] ledger_preview: Value,
     #[rust] ledger_file: Option<robius_file_picker::LocalFile>,
+    #[rust] usage_report: Value,
+    #[rust] usage_agent: String,
+    #[rust] usage_cursor: Option<String>,
     #[rust]
     identity: String,
     #[rust]
@@ -1580,6 +1617,7 @@ impl HagencyPanel {
             ids!(programming),
             ids!(mcp_servers),
             ids!(ledger_path), ids!(ledger_confirm), ids!(ledger_choose), ids!(ledger_toggle), ids!(ledger_export), ids!(ledger_inspect), ids!(ledger_restore),
+            ids!(usage_scope),ids!(usage_room),ids!(usage_requester),ids!(usage_group),ids!(usage_from),ids!(usage_until),ids!(usage_refresh),ids!(usage_alerts),ids!(usage_ack),ids!(usage_latest),ids!(usage_older),
         ] {
             self.view.widget(cx, id).set_disabled(cx, busy);
         }
@@ -2073,6 +2111,7 @@ impl HagencyPanel {
         self.view.button(cx, ids!(ledger_toggle)).set_visible(cx, !detail && self.page == Page::Agents);
         self.view.view(cx, ids!(ledger_panel)).set_visible(cx, !detail && self.page == Page::Agents && self.ledger_open);
         self.render_ledger(cx);
+        self.render_usage_controls(cx);
         if self.page == Page::Projects && self.view.view(cx, ids!(project_form)).visible() {
             let title = self.view.label(cx, ids!(creation_heading)).text();
             self.view.label(cx, ids!(heading)).set_text(cx, &title);
@@ -2185,6 +2224,7 @@ impl HagencyPanel {
             ids!(policy_section),
             ids!(model_section),
             ids!(runtime_section),
+            ids!(usage_section),
         ] {
             self.view.view(cx, id).set_visible(cx, id == selected);
         }
@@ -2193,6 +2233,7 @@ impl HagencyPanel {
             (ids!(policy_tab), ids!(policy_section)),
             (ids!(model_tab), ids!(model_section)),
             (ids!(runtime_tab), ids!(runtime_section)),
+            (ids!(usage_tab), ids!(usage_section)),
         ] {
             let mut button = self.view.button(cx, tab);
             if section == selected {
@@ -2535,6 +2576,7 @@ impl HagencyPanel {
     }
     fn apply(&mut self, cx: &mut Cx, target: Target, value: &Value) {
         match target {
+            Target::Usage => self.apply_usage(cx,value),
             Target::Ledger => self.apply_ledger(cx, value),
             Target::Members => {
                 if !members_match(&self.members_room, value) {
@@ -3538,6 +3580,7 @@ impl Widget for HagencyPanel {
             return;
         }
         if self.ledger_actions(cx,actions) {return;}
+        if self.usage_actions(cx,actions) {return;}
         if self.view.inline_notice(cx,ids!(status_holder)).action_clicked(cx,actions) {
             self.list_page(cx);self.run(cx,Target::AgentJournal,Command::AgentCommands);return;
         }
@@ -4610,6 +4653,7 @@ impl HagencyPanelRef {
         panel.display_blocked=false;
         let identity = service.identity();
         if panel.identity != identity {
+            panel.usage_report=Value::Null;panel.usage_agent.clear();panel.usage_cursor=None;
             panel.ledger_open=false;panel.ledger_preview=Value::Null;panel.ledger_file=None;
             panel.view.text_input(cx,ids!(ledger_path)).set_text(cx,"");
             panel.view.label(cx,ids!(ledger_summary)).set_text(cx,"");

@@ -3,6 +3,15 @@
 
 # Repository audit knowledge
 
+- **Usage reporting, 2026-10-27:** Provider call time is written with reserve in
+  call_observations; old receipts remain undated. Cache/reasoning are subsets of
+  input/output. no-provider-call-v1 rows are dedup witnesses, not provider calls.
+  Budget alerts bind scope/window/revision/threshold and retain observed balances
+  across acknowledgement; late usage uses the original accounting window.
+  Known pre-metadata owner snapshots migrate empty metadata tables on restore.
+  NativeOwner local commands must use the SDK source checks as well as device
+  proof checks; they do not enter the ordinary HTTP response path automatically.
+
 - **Owner ledger snapshots, 2026-10-26:** Current-schema snapshots live in
   hagency-agent-local::backup and are independent of retired hagency-store
   directory backups. Read-transaction SQLite backup/VACUUM captures WAL commits;

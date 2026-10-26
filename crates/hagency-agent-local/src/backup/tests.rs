@@ -273,3 +273,35 @@ fn concurrent_uncommitted_wal_write_is_not_part_of_the_snapshot() {
         (135, 200)
     );
 }
+
+#[test]
+fn original_v1_snapshot_restores_without_fabricating_usage_dates() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = populated(&tmp.path().join("original.sqlite"));
+    source
+        .db
+        .execute_batch("DROP TABLE call_observations; DROP TABLE usage_alerts")
+        .unwrap();
+    let old = source.snapshot(OWNER, &profile(), 123).unwrap();
+    let mut target = Ledger::open_scoped(":memory:", OWNER, &profile()).unwrap();
+    target.restore_snapshot(OWNER, &profile(), &old).unwrap();
+    let report = target
+        .usage_report(
+            OWNER,
+            &crate::usage::Query {
+                agent: "agent".into(),
+                binding: None,
+                requester: None,
+                from: 0,
+                until: 1000,
+                group: crate::usage::Group::Day,
+                alerts_before: None,
+            },
+            200,
+        )
+        .unwrap();
+    assert_eq!(report.totals.calls, 0);
+    assert_eq!(report.undated.calls, 2);
+    assert_eq!(report.undated.input, 25);
+    assert_eq!(report.undated.reserved, 200);
+}

@@ -1,5 +1,7 @@
 //! Authenticated NativeOwner commands, real disk ledgers and local OAuth HTTP.
-use hagency::native_owner::{Command, LedgerAction, NativeOwner};
+use hagency::native_owner::{
+    Command, LedgerAction, NativeOwner, UsageAction, UsageGroup, UsageQuery,
+};
 use hagency_agent_local::{
     Budget, Ledger, Limit, Period, Policy, RequestPolicy, Scope, ToolPolicy, Usage,
 };
@@ -39,7 +41,7 @@ pub(super) async fn roundtrip(native: &NativeOwner, root: &std::path::Path) {
             0,
             &Policy {
                 budget: Budget {
-                    limit: Limit::Tokens(5000),
+                    limit: Limit::Tokens(250),
                     period: Period::Lifetime,
                 },
                 requests: RequestPolicy::Allow,
@@ -111,6 +113,77 @@ pub(super) async fn roundtrip(native: &NativeOwner, root: &std::path::Path) {
         .await
         .unwrap_err();
     assert_eq!(blocked.code, "ledger_restore_requires_empty_ledger");
+    let query = UsageQuery {
+        agent: scope.agent.clone(),
+        binding: None,
+        requester: None,
+        from: 0,
+        until: 1000,
+        group: UsageGroup::Day,
+        alerts_before: None,
+    };
+    let report = native
+        .execute(Command::AgentUsage {
+            action: UsageAction::Report {
+                query: query.clone(),
+            },
+        })
+        .await
+        .unwrap();
+    assert_eq!(report["totals"]["input"], 20);
+    assert_eq!(report["totals"]["output"], 7);
+    assert_eq!(report["totals"]["cachedInput"], 3);
+    assert_eq!(report["totals"]["reasoningOutput"], 2);
+    assert_eq!(report["totals"]["pendingCalls"], 1);
+    assert_eq!(report["totals"]["reserved"], 200);
+    assert_eq!(report["alerts"].as_array().unwrap().len(), 1);
+    let id = report["alerts"][0]["id"].as_str().unwrap().to_owned();
+    let mut invalid = query.clone();
+    invalid.until = invalid.from;
+    assert_eq!(
+        native
+            .execute(Command::AgentUsage {
+                action: UsageAction::Acknowledge {
+                    query: invalid,
+                    id: id.clone()
+                }
+            })
+            .await
+            .unwrap_err()
+            .code,
+        "invalid_usage_query"
+    );
+    let unchanged = native
+        .execute(Command::AgentUsage {
+            action: UsageAction::Report {
+                query: query.clone(),
+            },
+        })
+        .await
+        .unwrap();
+    assert!(unchanged["alerts"][0]["acknowledgedAt"].is_null());
+    let acknowledged = native
+        .execute(Command::AgentUsage {
+            action: UsageAction::Acknowledge {
+                query: query.clone(),
+                id,
+            },
+        })
+        .await
+        .unwrap();
+    assert_eq!(acknowledged["totals"], report["totals"]);
+    assert!(
+        acknowledged["alerts"][0]["acknowledgedAt"]
+            .as_i64()
+            .is_some()
+    );
+    let reread = native
+        .execute(Command::AgentUsage {
+            action: UsageAction::Report { query },
+        })
+        .await
+        .unwrap();
+    assert_eq!(acknowledged["alerts"], reread["alerts"]);
     let after = root.join("after.hagency-ledger");
     native
         .execute(Command::Ledger {

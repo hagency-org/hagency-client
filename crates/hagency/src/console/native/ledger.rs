@@ -104,6 +104,7 @@ pub(super) async fn execute(
     fresh
         .bearer()
         .map_err(|_| failure(401, "owner_authorization_required"))?;
+    native.check_matrix_source().await?;
     let operation = match action {
         LedgerAction::Export { .. } => {
             write_new(&path, snapshot.bytes())?;
@@ -146,7 +147,7 @@ pub(super) async fn execute(
         json!({"operation":operation,"path":path.to_str(),"digest":snapshot.digest(),"snapshot":snapshot.summary()}),
     )
 }
-fn local_ledger(
+pub(super) fn local_ledger(
     native: &NativeOwner,
     identity: &Identity,
     profile: &str,

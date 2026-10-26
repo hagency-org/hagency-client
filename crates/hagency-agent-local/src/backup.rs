@@ -67,7 +67,7 @@ impl Snapshot {
         {
             return Err(Error::Invalid("ledger snapshot checksum"));
         }
-        let db = decode(payload)?;
+        let db = decode(payload, true)?;
         validate(&db, owner, profile)?;
         if describe(&db, owner, profile, summary.created_at, payload)? != summary {
             return Err(Error::Invalid("ledger snapshot summary"));
@@ -81,7 +81,12 @@ impl Snapshot {
     }
     fn database(&self) -> Result<Connection> {
         let header_len = u32::from_be_bytes(self.bytes[8..12].try_into().unwrap()) as usize;
-        decode(&self.bytes[12 + header_len..])
+        let db = decode(&self.bytes[12 + header_len..], false)?;
+        validate(&db, &self.summary.owner, &self.summary.profile)?;
+        // This additive metadata migration never invents historical dates or
+        // alerts. Older version-1 snapshots retain their original call rows.
+        db.execute_batch(crate::usage::SCHEMA)?;
+        Ok(db)
     }
 }
 
@@ -223,9 +228,9 @@ fn copy(source: &Connection, destination: &mut Connection) -> Result<()> {
         _ => Err(Error::Conflict),
     }
 }
-fn decode(payload: &[u8]) -> Result<Connection> {
+fn decode(payload: &[u8], read_only: bool) -> Result<Connection> {
     let mut db = Connection::open_in_memory()?;
-    db.deserialize_read_exact(MAIN_DB, payload, payload.len(), true)?;
+    db.deserialize_read_exact(MAIN_DB, payload, payload.len(), read_only)?;
     db.pragma_update(None, "trusted_schema", false)?;
     Ok(db)
 }
@@ -259,7 +264,26 @@ fn validate(db: &Connection, owner: &str, profile: &str) -> Result<()> {
         return Err(Error::ForeignDatabase);
     }
     let expected = Ledger::open_scoped(":memory:", owner, profile)?;
-    if objects(db)? != objects(&expected.db)? {
+    let stored = objects(db)?;
+    let current = objects(&expected.db)?;
+    let legacy: Vec<_> = current
+        .iter()
+        .filter(|(_, name, _)| {
+            !matches!(
+                name.as_str(),
+                "call_observations"
+                    | "call_observations_time"
+                    | "usage_alerts"
+                    | "usage_alerts_scope"
+                    | "permanent_call_time"
+                    | "retain_call_time"
+                    | "retain_usage_alert"
+                    | "immutable_usage_alert"
+            )
+        })
+        .cloned()
+        .collect();
+    if stored != current && stored != legacy {
         return Err(Error::ForeignDatabase);
     }
     let identities: Vec<String> = db
