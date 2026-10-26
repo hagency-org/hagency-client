@@ -64,3 +64,12 @@ Windows 的修正结果以新提交对应的远端 CI 为准。
 
 本轮再次执行 `git fetch origin main`，远端仍为 `42e59b9e`，也是分支的
 merge-base。未在 main 上直接修改。
+
+
+## 2026-10-27 Windows 原始失败诊断
+
+`732c99d5` 的 Windows 构建成功；Full matrix run40349683033 的 Windows native 作业在既有 `hagency-execution --lib` 中 40 通过/1 失败，唯一失败为 `native_owned_approval_caller_loss`。原日志是等待审批通知时流关闭后的 unwrap(None)，没有记录当轮注入故障和原始执行停止报告。该测试及其执行代码与 main 相同，但这不能证明失败无影响或仅属环境波动。
+
+本次仅补充测试失败证据：通知流提前关闭时，读取该原始操作唯一的停止报告，打印 fault、failure/startup、protocol/cleanup、runtime observation、退出身份、审批 custody、原 phase trace 和有界 stderr。超时也打印 fault 和 trace。原等待时长、生产权限/停止/费用行为和测试要求全部保留，关闭流仍然失败；没有自动重试或改成通过。原因待新的 Windows 原始观察后判定。
+
+本机完整 execution 库42/42通过；严格 execution all-targets no-deps Clippy 与格式通过。日志 `/tmp/hagency-caller-loss-{build,tests,clippy}.log`。这些结果不替代 Windows 复核；原失败全文 `/tmp/hagency-pr9-windows-732c99d5.log` 保留。

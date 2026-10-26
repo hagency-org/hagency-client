@@ -204,10 +204,33 @@ async fn native_owned_approval_caller_loss() {
         .unwrap();
         let mut notices = op.take_approval_requests().unwrap();
         if !matches!(fault, Fault::RequestAck | Fault::SpawnPanic) {
-            let notice = tokio::time::timeout(harness_wait() * 3, notices.recv())
-                .await
-                .unwrap()
-                .unwrap();
+            let notice = match tokio::time::timeout(harness_wait() * 3, notices.recv()).await {
+                Ok(Some(notice)) => notice,
+                Ok(None) => {
+                    // Preserve this attempt's original stop evidence. A closed
+                    // stream is not the requested injected acknowledgement loss.
+                    let report = op.wait().await.unwrap_or_else(|error| {
+                        panic!("{fault:?}: notice stream closed; original wait failed: {error:?}")
+                    });
+                    panic!(
+                        "{fault:?}: notice stream closed before owner verdict; failure={:?}, startup={:?}, protocol={:?}, cleanup={:?}, runtime={:?}, exit={:?}, custody={:?}, phases={}, stderr={:?}, guardian_stderr={:?}",
+                        report.failure,
+                        report.startup_error(),
+                        report.protocol,
+                        report.cleanup,
+                        report.runtime_observation(),
+                        report.exit_identity,
+                        report.approval_custody(),
+                        crate::approval::diagnostics::dispatch_trace("caller-loss"),
+                        report.stderr_tail,
+                        report.guardian_stderr_tail,
+                    );
+                }
+                Err(error) => panic!(
+                    "{fault:?}: original notice wait timed out: {error}; phases={}",
+                    crate::approval::diagnostics::dispatch_trace("caller-loss")
+                ),
+            };
             let card = domain
                 .private_approval(notice.request_id.clone())
                 .await
