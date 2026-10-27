@@ -4,9 +4,11 @@ Current A4 implementation checkpoint (2026-10-27): execution-device private
 publication, original live PendingApproval consumption and native desktop actions
 are wired. SDK1c48a831 uses detached own-device encryption; actual SDK local HTTP
 crypto and NativeOwner host-double proofs are separate from real Synapse/manual
-qualification. The remote owner inbox, exact review/decision and original verdict
-status UI are now wired with permanent journal custody and joined IO. Real
-Synapse/native/provider qualification, per-Agent encrypted identity/tasks/files
+qualification. Real remote approvals now pass Synapse/two SDKs/two NativeOwners/
+actual Codex with original verified decision, exact bytes/audit and settled usage.
+The remote owner inbox, exact review/decision and original verdict
+status UI are now wired with permanent journal custody and joined IO.
+manual desktop/production OAuth qualification, per-Agent encrypted identity/tasks/files
 and A3 remain next work, alongside earlier platform/OAuth gates. Full scope remains
 in the owner capability plan and remote-approval contract
 in dev-vibe. Work stays on codex/remote-owner-approvals; freshly fetched main42e59b9e

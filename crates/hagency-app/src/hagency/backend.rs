@@ -4,6 +4,11 @@ use super::model::{BindingAction, Command, LocalAction, ProviderAction};
 mod continuation;
 mod agent_files;
 mod remote_approvals;
+/// The same bounded SDK transport used by native owner hosts. Returned SDK
+/// evidence never grants execution; callers retain current account liveness
+/// and the original ledger/approval custody across publication and shutdown.
+pub use remote_approvals::{prepare as prepare_remote_approval, publish as publish_remote_approval, find as find_remote_approval};
+pub use remote_approvals::inbox::{inspect as inspect_remote_approval_request, list as list_remote_approval_requests, publish as publish_remote_approval_verdict};
 use ::hagency::native_owner::{MatrixAccessToken, MatrixTokenSource, NativeError, NativeOwner};
 use serde_json::Value;
 use std::{

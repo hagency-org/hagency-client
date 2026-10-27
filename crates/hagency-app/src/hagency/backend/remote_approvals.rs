@@ -106,7 +106,7 @@ async fn bounded_get_query(
     }
     serde_json::from_slice(&bytes).map_err(|_| refused())
 }
-pub(super) async fn prepare(
+pub async fn prepare(
     client: &Client,
     origin: &str,
     owner: &str,
@@ -189,7 +189,7 @@ pub(super) async fn prepare(
     .await
     .map_err(|_| refused())?
 }
-pub(super) async fn publish(
+pub async fn publish(
     client: &Client,
     origin: &str,
     permit: SendPermit,
@@ -481,7 +481,7 @@ pub(super) async fn observe(
     .await
     .map_err(|_| refused())?
 }
-pub(super) async fn find(
+pub async fn find(
     client: &Client,
     origin: &str,
     publication: &Publication,

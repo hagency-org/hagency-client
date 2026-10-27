@@ -14584,3 +14584,49 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   evidence and remaining real Synapse/native/provider, encrypted Agent identity/
   tasks/files, A3 and earlier manual/platform/OAuth gates stay in dev-vibe.
   The full objective remains active.
+
+## 2026-10-27: Actual Synapse, two native owners and real remote-approved Codex
+
+- Previous goal turn pusheda7d08a7c. Before current source work fetched main and
+  confirmed it is an ancestor; Server qualification checkout did the same. Current
+  a7 fast CI40440897177 and spelling passed. Priorff App40438410171 succeeded on
+  both actual macOS architectures; full40438413947 Linux/macOS pass, Windows is
+  separately still live. Priorff fast CI was cancelled by meaningful new-head
+  concurrency, never relabelled passed.
+- Added an explicit external qualification entry with the real guardian. Reuse
+  the exact production desktop SDK functions through public transport aliases;
+  two actual signed SDK devices, private encrypted room and independent public
+  NativeOwners carry the same original proposal and remote verdict. Original
+  PendingApproval consumption alone permits the actual terminal operation.
+- Freshjoint4 passed end-to-end: real encrypted Matrix request/decision IDs,
+  file absent after remote verdict publication but before original consumption,
+ 31 exact output bytes and completed verified_matrix_device audit. One settled
+  call10839input+73output=10912, cache5248 subset; pending/unreported/reserved0.
+  whole_tree stop and checked shutdown pass; Server retains one historical epoch
+  with zero currently live leases. Independent read-only HTTP verifies both
+  original events are Megolm encrypted and contain no plaintext command.
+- Server example's explicit OAuth bridge now checks actual whoami for each
+  owner token, supporting both devices; owner/remote accepted, Bob/invalid token/
+  wrong secret refused. Optional script flag retains only a fresh test owner's
+  password in the private fixture. Production authentication/router unchanged.
+- Preserve failed runs: joint1 well_known origin change was refused before native
+  init; joint2 bad Agent-level scope parameters, both calls/audits0. Joint3's model
+  replied unavailable for the internal audit name, no tools/file; original10967
+  tokens are settled and whole_tree observed. The driver timed out waiting for an
+  approval. Joint4 is a separate new task, not a replay or rewrite of that result.
+- CLI build/command guard, remote App15 and current App default all-target strict
+  --no-deps Clippy pass; Server example strict Clippy and script syntax pass.
+  Initial header borrow/reqwest feature/device argument compile errors retained.
+  shlex2.0.1 is only a dev-dependency edge for exact shell payload inspection.
+- All four owned Synapse containers, current Server and dedicated PG stopped;
+  actual SDK/Native owners closed and original data/logs preserved. Detailed
+  evidence is in owner-remote-approval-synapse-validation in dev-vibe. Plain task
+  execution is distinct from unfinished Agent encrypted identity/tasks/files.
+  Continue that work, then A3 and prior manual/platform/OAuth gates. Goal active.
+
+- Final remote observation: priorff496b83 full40438413947 completed with actual
+  Linux/macOS/Windows job success. This is separate from the new qualification
+  source and does not retroactively fix the older A2 Windows shutdown failure.
+- Current source final core format/spelling,46 guards, one production caller and
+ 1191 bindings pass with missing/deferred/platformDeferred empty; no paid tests
+  were rerun by these inventory checks. Server fixture support pushed5b4e0a3.

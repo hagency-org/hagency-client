@@ -3,6 +3,18 @@
 
 # Repository audit knowledge
 
+- **Actual remote approval joint proof, 2026-10-27:** Fresh Synapse/two actual SDK
+  devices/two NativeOwners/real Codex consume the original encrypted approval and
+  produce31 exact bytes with completed verified-device audit, settled10912tokens,
+  whole_tree stop and zero currently live leases (one historical epoch retained).
+  Native SDK qualification reuses production bounded transport functions. A normal
+  SDK password login follows well_known; explicit local bridge setup must restore
+  the actual login response at its pinned proxy origin, without weakening account
+  checks. Internal audit name codex.command is not a model tool name: ask the
+  available terminal to execute. Previous no-tool10967-token response stays settled
+  and failed qualification; never replay it. Production OAuth/manual UI and Agent
+  encrypted identity/tasks/files remain unqualified. See the remote Synapse report.
+
 - **Remote approval reviewer, 2026-10-27:** RemoteApprovals is a native-only
   owner-profile command and does not require a local Agent/provider assignment.
   Its SDK inbox reads signed original requests, never trusts JSON verification,

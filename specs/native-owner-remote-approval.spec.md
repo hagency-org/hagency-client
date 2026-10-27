@@ -6,7 +6,7 @@ tags: [active, rust, desktop]
 This covers the execution device's private approval publication and verified
 verdict consumption into its exact live PendingApproval, plus the remote owner's
 verified request inbox and irreversible encrypted verdict publication. Full A4
-still requires actual Synapse/native qualification, per-Agent crypto identity
+still requires manual desktop/production OAuth qualification, per-Agent crypto identity
 and encrypted Agent task/file execution.
 Manual/cross-platform gates and A3 remain. This contract preserves that scope.
 
@@ -47,8 +47,11 @@ publication, decryption and a different signed owner-device verdict over a local
 HTTP homeserver double, followed by the actual original journal decision. It also
 rejects a newly shared room and a real unsigned device's forged verified/device
 claims. Older envelope guards explicitly synthesize SDK metadata; those fixtures
-alone do not qualify authentication. Real Synapse, manual native UI and provider
-acceptance remain separate gates. No JSON field named verified establishes trust.
+alone do not qualify authentication. The separate explicit
+native_owner_remote_approvals_qualification example now passes actual Synapse,
+two SDKs/two NativeOwners and real provider acceptance; ordinary CI compiles it
+and runs only its offline command guard. Manual native UI/production OAuth remain
+separate gates. No JSON field named verified establishes trust.
 
 - Sample the actual host clock again after acquiring the writer lock. A stale
   pre-lock time cannot extend the original proposal or SDK proof deadline.

@@ -12,7 +12,7 @@ fn now() -> Result<i64, NativeError> {
         .try_into()
         .map_err(|_| refused())
 }
-pub(in crate::hagency::backend) async fn inspect(
+pub async fn inspect(
     client: &Client,
     origin: &str,
     owner: &str,
@@ -58,7 +58,7 @@ pub(in crate::hagency::backend) async fn inspect(
         Ok(Some(ObservedRequest {observed_at:proof_at,event_id:event_id.into(),sender_ed25519:key,reviewer_matrix_device:reviewer,request}))
     }).await.map_err(|_|refused())?
 }
-pub(in crate::hagency::backend) async fn list(
+pub async fn list(
     client: &Client,
     origin: &str,
     owner: &str,
@@ -127,7 +127,7 @@ pub(in crate::hagency::backend) async fn list(
     .await
     .map_err(|_| refused())?
 }
-pub(in crate::hagency::backend) async fn publish(
+pub async fn publish(
     client: &Client,
     origin: &str,
     permit: VerdictSendPermit,
