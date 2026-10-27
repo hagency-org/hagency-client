@@ -96,13 +96,41 @@ pub struct Publication {
     request: Request,
     digest: String,
     instance: std::sync::Arc<()>,
+    can_send: bool,
 }
 impl Publication {
+    /// Transfer the sole send permit into the original SDK operation. Keeping
+    /// publication custody for receipts and verdicts cannot authorize a resend.
+    /// Cancellation, failure and dropping the permit never rearm this operation.
+    pub fn begin_publication(&mut self) -> Result<SendPermit> {
+        if !std::mem::replace(&mut self.can_send, false) {
+            return Err(Error::Unknown);
+        }
+        Ok(SendPermit {
+            request: self.request.clone(),
+            digest: self.digest.clone(),
+        })
+    }
     pub fn request(&self) -> &Request {
         &self.request
     }
     pub fn request_digest(&self) -> &str {
         &self.digest
+    }
+    pub fn transaction_id(&self) -> String {
+        format!("hagency.remote-approval.{}", self.digest)
+    }
+}
+/// Owned, non-Clone, non-serializable permission for one SDK send attempt.
+/// Only the original committed Publication can mint this value, once. The SDK
+/// adapter must take it by value and retain the operation through cancellation.
+pub struct SendPermit {
+    request: Request,
+    digest: String,
+}
+impl SendPermit {
+    pub fn request(&self) -> &Request {
+        &self.request
     }
     pub fn transaction_id(&self) -> String {
         format!("hagency.remote-approval.{}", self.digest)
@@ -327,6 +355,7 @@ impl Ledger {
             request: request.clone(),
             digest,
             instance: self.remote_instance.clone(),
+            can_send: true,
         })
     }
     fn remote_custody(&self, owner: &str, publication: &Publication) -> Result<i64> {

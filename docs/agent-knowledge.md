@@ -3,6 +3,16 @@
 
 # Repository audit knowledge
 
+- **Required SDK encryption, 2026-10-27:** Client pins eight Matrix SDK patches
+  to33de0b705 on the existing0.19.1 history fork. Sensitive sends must use
+  require_encryption(), which rejects plaintext before message IO, including
+  builds without crypto. It does not establish trusted/private recipients.
+  Remote Publication retains receipt custody but mints an owned SendPermit only
+  once; failure/drop/cancellation cannot rearm it. Runtime publication and remote
+  PendingApproval consumption still need wiring and real two-device proof.
+  gh defaults to upstream hagency-rs in this checkout: always pass --repo for
+  Client and dependency PR/CI operations.
+
 - **Frozen Agent sender, 2026-10-27:** Capture real nofollow workspace/parent/file
   objects and bytes before exact approval; recheck the original objects at begin.
   First committed sent_files insertion alone mints non-Clone custody, before

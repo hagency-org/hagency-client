@@ -14473,3 +14473,39 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 
 - Final review samples the supplied actual host clock after the real SQLite writer wait; dedicated clock-jump/expiry regression passes without extending the original deadline. Receipt/proof timestamps cannot predate the original publication. Final155 core tests, current strict Clippy and1176 bindings/46 guards/one caller/format/spelling pass. App622 and engine263 completed; final targeted SDK2 also passed. The A4 source is not activated in runtime/UI, and synthetic SDK metadata is not a live verified-device pass.
 - A2 base0f7a5a7c App40421487611 completed successfully on both macOS architectures plus article job; fast CI40421483397 and Server5d21eb7 CI40421451268 succeeded. Base full40423919137 remains separately live; these runs do not qualify the new remote-approval branch.
+
+## 2026-10-27: Required encryption and single-use publication transport
+
+- Fetched origin/main again before work;42e59b9e remains an ancestor of the clean
+  codex/remote-owner-approvals branch. No main edits. The next published change
+  continues the existing A4 branch rather than moving A2/Server branch heads.
+- SDK send_raw can choose plaintext from cached room state, and ordinary
+  reactions bypass encryption. Added opt-in require_encryption() to the pinned
+  0.19.1 fork: no-crypto/plain-room paths reject before message IO; explicitly
+  required reactions encrypt too. Pushed SDK33de0b705 and attached draft SDK PR1.
+  Client pins all eight SDK patches to that exact revision and existing encrypted
+  continuation now uses it. Private recipient checks remain separate required work.
+- Publication keeps original receipt/verdict custody but transfers an owned
+  SendPermit only once. Failed/cancelled/dropped original attempts cannot mint a
+  second permit; reopen/restore still cannot reserve the same original request.
+- Frozen-source local regression: Agent-local156/3 original ignores, engine263/9
+  (7 original plus2 external gates), App622/2 original ignores all pass. Actual SDK
+  continuation passes; SDK HTTP integration3 with encryption,2 without,3 with the
+  application's bounded-history feature pass. Client/core/App all-targets strict
+  Clippy, core format/spelling,46 guards, one caller and1177 bindings pass; no
+  missing/deferred/platform gaps. Logs use required-encryption/send-permit prefixes.
+- Preserve failures: first SDK test macro rejected missing test_ prefixes; strict
+  SDK Clippy without bounded history hits the existing conditional cache branch's
+  question_mark lint. Current actual feature combination passes without allow.
+  Manifest pin assertion initially expected seven entries; actual eight were
+  checked and pinned. Cargo's unrelated Windows dependency reselection was removed
+  from the lock diff; locked builds/tests verify the retained dependency graph.
+- A2 base0f full40423919137 completed: Linux/macOS success, actual Windows failure
+  at native_matrix_shared_request_pacing teardown, fixture.store.shutdown() returns
+  OutcomeUnknown after HTTP assertions passed. Overall workflow success is not a
+  Windows qualification pass. Original log is retained in
+  /tmp/hagency-full0f-windows-failed.log; root cause is not yet established. PR11
+  now reports that failure. A4's older8c CI/App/full remain separate live runs.
+- Current private approval publication, PendingApproval consumption, native UI,
+  verified two-device and per-Agent encrypted execution are still open, alongside
+  A3 and earlier manual/platform/production OAuth gates. Objective stays active.

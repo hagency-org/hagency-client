@@ -9,7 +9,7 @@ PendingApproval、原生审批操作或Agent加密身份。没有启用远程授
 
 | 阶段 | 当前状态与交付 |
 | --- | --- |
-| 原提案与单次发布 | 已实现。绑定主人、部署profile、审批ID、原执行、绑定代次、分发epoch、执行设备、发布SDK设备、私密Room及完整提案摘要。首次提交才产生Publication。 |
+| 原提案与单次发布 | 已实现账本部分。绑定主人、部署profile、审批ID、原执行、绑定代次、分发epoch、执行设备、发布SDK设备、私密Room及完整提案摘要。首次提交产生Publication，只能取出一次SendPermit。 |
 | SDK读取与验证设备 | 代码和守卫夹具通过。通过实际SDK解密，核验当前主人身份、交叉签名设备、公钥、原事件回复关系及摘要；真实双设备加密验收尚待完成。 |
 | 私密发布与当前运行 | 待接入。由当前PendingApproval持有原账本和Publication，经过SDK当前账户与私密Room检查发送，未知不重发；结束时保留原IO收尾所有权。 |
 | 原生远程审批操作 | 待接入。主人配置私密审批室、另一台已验证设备查看完整提案并批准一次或拒绝；直接使用当前主人协议，不借用旧Fleet绑定或宽泛可重用授权。 |
@@ -29,6 +29,8 @@ verified、sender_device或签名字符串当成事实。
 首次BEGIN IMMEDIATE提交固定原请求，返回不可Clone/序列化的Publication。它还
 绑定原Ledger句柄的进程内身份；另一个句柄、重开同一文件、快照恢复或复制元数据
 都不能使用它写入裁决。已有见证不能重复预留，改Room、设备或参数也不能替换。
+Publication保留给原回执与裁决使用；实际SDK发送必须消费单独的SendPermit。
+同一Publication只能取出一次凭证，丢弃、取消或原尝试失败后均不能重新取得。
 保留最多4096条、实际UTF-8请求合计8MiB、单请求32KiB，超额不插入发布行，也不
 删除旧见证腾出重发权限。
 
@@ -61,6 +63,28 @@ App共用原SDK客户端及当前账户存活检查。最多4项读取，整体3
 
 这条读取路径已实际编译；目前新增SDK正向分支使用明确的DecryptedRoomEvent元数据
 夹具，未伪称真实交叉签名或双设备现场验收。也没有新增网络审批请求发布。
+
+## 发送必须加密的SDK边界
+
+现有SDK的send_raw根据房间缓存决定是否加密，默认还会明文发送reaction。
+因此，先检查缓存、再调用普通send_raw，不能作为私密审批的最终发送保证。
+当前固定的0.19.1 fork增加require_encryption()；不支持加密或房间未加密时，
+在消息HTTP写入前返回EncryptionRequired，显式要求加密的reaction也执行加密。
+这个选项不验证收件人身份或私密成员范围，后续审批发布仍需单独完成这些检查。
+
+Client的8项SDK补丁已固定到33de0b705ee23e8a5cb2fb8959d15b9d49e90dd7；
+只更新同一0.19.1 fork的发送边界，保留原bounded history补丁和其他依赖版本。
+已有加密续接消息也使用该入口。SDK修复见
+[SDK PR1](https://github.com/chrislearn/matrix-rust-sdk/pull/1)，基于Client原先固定的
+chris/bounded-chat-history；没有将Client升级到SDK较新的main。
+
+实际SDK本地HTTP测试验证拒绝时消息写入为零、消息和reaction输出Megolm密文，
+以及普通明文兼容：启用加密时3项通过，不启用加密时2项通过；Client使用的
+bounded history组合也通过3项及严格library Clippy。未启用该history特性的严格
+Clippy仍在原缓存代码报question_mark；原失败保留，没有通过allow压制。
+首轮新增测试因SDK要求test_函数名前缀而未编译，修正名称后的结果单独保留。
+SendPermit回归及Agent-local全量为156通过、3个原忽略。日志前缀为
+/tmp/hagency-required-encryption和/tmp/hagency-remote-send-permit。
 
 ## 回归与兼容
 

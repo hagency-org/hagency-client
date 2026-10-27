@@ -1,5 +1,15 @@
 # Native migration working plan
 
+Current A4 implementation checkpoint (2026-10-27): required SDK encryption and
+one-shot SendPermit are implemented and locally checked on the existing feature
+branch, which contains fetched main42e59b9e. Next connect private publication to
+the retained original live approval/runtime, then native remote actions and real
+verified owner devices; encrypted Agent identities/tasks and A3 remain. Base A2
+full40423919137 has a Windows store-shutdown OutcomeUnknown failure, despite the
+overall workflow success; Linux/macOS pass. Preserve it and diagnose actual
+teardown evidence before claiming Windows qualification. Detailed scope and proof
+remain in the owner capability plan and remote-approval contract in dev-vibe.
+
 This is coordination, not canonical runtime task state. There is no provisioned
 `task-writer` in this source checkout. User instruction: execute the Rust migration
 in a clean worktree. Branch `feat/rust-migration`; baseline `5dbef22`.

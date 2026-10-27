@@ -96,6 +96,45 @@ fn observed(publication: &Publication) -> ObservedVerdict {
     }
 }
 #[test]
+fn remote_publication_retained_receipt_custody_cannot_mint_a_second_send_permit() {
+    let (mut ledger, request) = setup(":memory:");
+    let mut publication = ledger
+        .reserve_remote_approval(OWNER, &request, || 30)
+        .unwrap();
+    let permit = publication.begin_publication().unwrap();
+    assert!(permit.request() == publication.request());
+    assert_eq!(permit.transaction_id(), publication.transaction_id());
+    assert!(matches!(
+        publication.begin_publication(),
+        Err(Error::Unknown)
+    ));
+    drop(permit); // A cancelled or failed original attempt cannot rearm it.
+    assert!(matches!(
+        publication.begin_publication(),
+        Err(Error::Unknown)
+    ));
+    ledger
+        .record_remote_approval_receipt(OWNER, &publication, "$request", 31)
+        .unwrap();
+    assert!(matches!(
+        publication.begin_publication(),
+        Err(Error::Unknown)
+    ));
+    assert!(matches!(
+        ledger.reserve_remote_approval(OWNER, &request, || 32),
+        Err(Error::Unknown)
+    ));
+    assert_eq!(
+        ledger
+            .remote_approval_record(OWNER, "agent", &request.approval_id)
+            .unwrap()
+            .unwrap()
+            .request_event_id
+            .as_deref(),
+        Some("$request")
+    );
+}
+#[test]
 fn remote_publication_commits_once_and_reopen_cannot_recreate_custody() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("ledger.sqlite");

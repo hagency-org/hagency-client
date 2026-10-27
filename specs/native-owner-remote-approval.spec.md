@@ -11,6 +11,9 @@ execution. This contract does not redefine A4 or enable those unfinished flows.
 - Commit original owner/profile/approval/execution/device/room/proposal scope
   before SDK publication; a retry or another ledger handle cannot regain custody.
   Test: remote_publication_commits_once_and_reopen_cannot_recreate_custody
+- Retaining publication custody for receipts and verdicts does not permit another
+  SDK send. Transfer an owned SendPermit once; cancellation/drop never rearm it.
+  Test: remote_publication_retained_receipt_custody_cannot_mint_a_second_send_permit
 - Record one exact original receipt and owner decision atomically with the audit;
   an intent is neither a reusable permission nor observed tool completion.
   Test: remote_decision_is_atomic_single_use_original_device_and_audit_evidence
