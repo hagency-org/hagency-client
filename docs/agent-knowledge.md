@@ -5668,3 +5668,10 @@ PR #8 审查及验证记录见 `dev-vibe/pr-8-board-ux-review-2026-10-25.zh.md`�
   exclusivity or add a reopen retry. New real-handle tests cover both shutdown
   paths and late old-copy close while the replacement stays locked. The exact
   historical child/errno remains unrecorded, not proved by the regression.
+
+- **Mixed-platform spec bindings:** when reusing an existing cfg-gated scenario
+  in a new spec, copy its Test-Platforms declaration immediately before Test.
+  A selector's scope in one spec does not scope another binding of that selector.
+  New ownership regressions are portable; only the existing factory restart
+  scenario is Linux/macOS. Correcting its declaration does not skip runnable
+  Windows tests; current hosted Windows must still execute both new regressions.

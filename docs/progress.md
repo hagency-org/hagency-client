@@ -15053,3 +15053,20 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 - The final merged#12 copy independently passes both original-lock regressions
   again (/tmp/hagency-ci3-ownership-tip.log); diff against8bb16bd6 is empty for
   all six store-fix files. No new documentation-only commit after final CI.
+
+
+## 2026-10-28: Correct the new restart scenario's supported-platform declaration
+
+- New#9 Windows job122474169790 failed only check-rust-spec-bindings: the new
+  store spec omitted Test-Platforms on the existing Unix-only factory restart.
+  Correct that one scenario to [linux,macos], matching its original contract/cfg;
+  both new actual ownership-lock regressions remain required on every platform.
+  No Rust implementation or runtime skip changed.
+- Same binder reproduces missing factory selector in a Windows inventory and,
+  after correction, requires the2 portable regressions with only the1 original
+  factory scenario deferred; Linux/macOS bind all3. Logs
+  /tmp/hagency-ci3-ownership-platform-{before,after}.log, guard46 and actualMac
+  all-feature inventory0missing in /tmp/hagency-ci3-platform-bindings.log pass.
+- Regularcommit c8bd20b7(#9), merges0498473e(#10),353036ec(#11), then#12.
+  All six production store-fix files still identical to8bb16bd6. Check current
+  SHAs again; preserve original non-blocking Windows failure as actual failure.

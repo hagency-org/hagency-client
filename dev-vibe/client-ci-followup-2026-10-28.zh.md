@@ -123,3 +123,14 @@ clippy、ownership-bindings等同前缀文件。
 共享生产修复从#9 8bb16bd6正常merge到#10 07df6724、#11 cd57377b和#12。
 #12保留其execution独立CI阶段与原始失败诊断。所有新头重新实际验证，最终
 证据记录在各PR的跟进评论，避免通过后再创建仅含记录的新SHA。
+
+## 重启scenario的平台声明修正
+
+8bb16bd6的Windows job122474169790在绑定gate失败：新store contract漏了
+原native_configured_fleet_reattaches_after_restart既有的Linux/macOS作用域。
+只给这个scenario补上Test-Platforms，与原factory spec和源码cfg一致；
+两项新ownership回归仍为跨平台必需项。没有改Rust或新增运行时skip。
+本地用同一绑定器复现Windows缺失，再验证Windows必须绑定2项、只defer原
+重启1项，Linux/macOS3项全部绑定；guard46和实际Mac全功能库存再验通过。
+该修正从#9 c8bd20b7正常merge到#10 0498473e、#11 353036ec及#12；
+最新SHA重新CI，旧Windows绑定失败保留，不当作实际锁测试失败或通过。
