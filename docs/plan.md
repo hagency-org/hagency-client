@@ -1,5 +1,19 @@
 # Native migration working plan
 
+Current ciphertext-intake checkpoint (2026-10-27): original verified AS ciphertext
+now persists in a separate inbox before routing compaction, with canonical source
+commitments and current-lease/member/generation scoped poll/read. Native receives
+by original ID, verifies actual owner SDK crypto, then rereads current authority.
+Fresh intake2 proves actual normal+thread messages, wrong Agent/epoch/released
+lease refusal and native restart; independent actual-HS/Python/PG proves two
+original retained digests, compacted AS bodies, plain events0, calls0/live leases0
+and one retained historical lease. This grants no task ACK/admission/start.
+Next: consume opaque evidence into durable local inbox/history, exact metadata
+ACK/admission without Server plaintext, then actual Codex/current-tool gates and
+original encrypted replies/files. Shared requester trust and A3 remain open.
+See current ciphertext-intake dev-vibe report. Full goal active.
+
+
 Current owner-receive checkpoint (2026-10-27): separate scoped broker and normal
 Agent SDK lifecycle now receive actual owner Olm/Megolm keys and decrypt original
 owner ciphertext through host-only opaque evidence. Fresh receive5 Synapse proves

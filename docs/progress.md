@@ -14743,3 +14743,34 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 - All four owned Synapse fixtures, their Servers and dedicated PG stopped; data retained.
 - Continue original ciphertext admission/ACK and current member/binding/lease gates,
   real encrypted Codex replies/files, then A3 and prior gates. Full goal active.
+
+
+## 2026-10-27 — original AS ciphertext intake and current-lease SDK read
+
+- Separate durable encrypted inbox verifies exact pending AS source in the same
+  transaction lock before retaining canonical ciphertext and allowing compaction.
+  Current scope/lease/generations/member checks guard typed poll/read; plaintext
+  execution still refuses encryption. Capacity, expiry tombstones and Agent-loop
+  exclusion have real PG coverage. No task ACK/admission/model start is exposed.
+- Native host reads original ID/current lease, obtains actual SDK owner crypto
+  proof and rereads current source/authority. Shared task retains original IO/
+  update guards. Removed owned-job calls locking/nested raw-decrypt entry so a
+  Stop holding calls can still join original work. DTOs do not grant execution.
+- Fresh intake2 actual Synapse/normal Native lifecycle proves normal+thread,
+  wrong Agent/epoch/released-lease refusal and native restart1→2 preserving keys.
+  Independent actual homeserver event reads, Python canonical SHA and PG prove
+  two retained originals after AS body compaction, plain events0, calls0/live
+  leases0 and one historical lease retained. intake1 pre-hardening success and
+  compiler/driver failures remain separate evidence; no paid inference.
+- Server122 fresh PG tests/no ignores + final targeted3, OpenAPI100owner+4AS/
+ 27guards, Native281/9original ignores, strict affected all-target lint,1201 Rust
+  spec bindings/no gaps,46guards/caller1 and cross-repo fixture bytes all pass.
+  Both owned Synapse/Servers and dedicated PG stopped with original data retained.
+- Continue local inbox/history binding and exact task ACK/admission without
+  Server plaintext, actual Codex/tool checks, encrypted original replies/files,
+  shared requester trust, A3 and prior manual/platform/production OAuth gates.
+  See dev-vibe/agent-ciphertext-intake-2026-10-27.zh.md. Full goal remains active.
+
+- Prior89a7 head fast/App/spelling CI succeed; full Linux/macOS jobs and actual
+  Windows tests/release succeed, while Windows cache finalization is still live.
+  New-source CI must remain separate from these predecessor results.

@@ -157,6 +157,166 @@ pub trait AgentCryptoTransport: Send + Sync {
         &self,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), NativeError>> + Send + '_>>;
 }
+/// Original AS delivery plus actual SDK decryption under the observed lease.
+/// Not Clone/Serde: the payload and cryptographic receipt are host-owned evidence.
+/// Admission/ACK/execution and subsequent current-scope checks remain separate.
+pub struct DecryptedAgentCiphertext {
+    source: crate::console::device_execution::Ciphertext,
+    lease: crate::console::device_execution::LeaseRef,
+    crypto: DecryptedAgentEvent,
+}
+impl DecryptedAgentCiphertext {
+    pub fn source(&self) -> &crate::console::device_execution::Ciphertext {
+        &self.source
+    }
+    pub fn lease(&self) -> &crate::console::device_execution::LeaseRef {
+        &self.lease
+    }
+    pub fn into_plaintext(self) -> Value {
+        self.crypto.into_plaintext()
+    }
+}
+impl NativeOwner {
+    async fn ciphertext_operation(
+        &self,
+        op: crate::console::device_execution::DeviceOperation,
+        pin: &DeviceIdentity,
+    ) -> Result<crate::console::device_execution::DeviceResponse, NativeError> {
+        // Stop may hold `calls` while joining this original receive task.
+        // SDK/source synchronization has its own lock; never take `calls` here.
+        {
+            self.sync_matrix().await?;
+            self.check_matrix_source().await?;
+        }
+        self.0
+            .host
+            .console
+            .execution_api_pinned(op, pin)
+            .await
+            .map_err(|e| failure(e.status, &e.code))
+    }
+    pub async fn poll_agent_ciphertexts(
+        &self,
+        lease: &crate::console::device_execution::LeaseRef,
+        binding: &str,
+        limit: usize,
+    ) -> Result<Vec<crate::console::device_execution::Ciphertext>, NativeError> {
+        let device = self.authorized_execution_device().await?;
+        match self
+            .ciphertext_operation(
+                crate::console::device_execution::DeviceOperation::PollCiphertexts {
+                    lease: lease.clone(),
+                    binding_id: binding.into(),
+                    limit,
+                },
+                &DeviceIdentity::from(&device),
+            )
+            .await?
+        {
+            crate::console::device_execution::DeviceResponse::Ciphertexts(events) => Ok(events),
+            _ => Err(failure(502, "invalid_ciphertext_response")),
+        }
+    }
+    pub async fn decrypt_agent_ciphertext(
+        &self,
+        lease: &crate::console::device_execution::LeaseRef,
+        inbox_id: &str,
+    ) -> Result<DecryptedAgentCiphertext, NativeError> {
+        use crate::console::device_execution::{DeviceOperation, DeviceResponse};
+        key(&lease.agent_id)?;
+        key(inbox_id)?;
+        let update = crate::update_guard::PROCESS
+            .enter_task()
+            .ok_or_else(|| failure(409, "update_in_progress"))?;
+        let device = self.authorized_execution_device().await?;
+        let pin = DeviceIdentity::from(&device);
+        let native = self.clone();
+        let id = inbox_id.to_owned();
+        let reference = lease.clone();
+        let receiver = {
+            let slots = self.0.crypto.slots.lock().map_err(|_| unavailable())?;
+            let slot = slots
+                .get(&lease.agent_id)
+                .filter(|s| s.phase == "ready" && s.pin == pin && !s.authority.is_retired())
+                .ok_or_else(|| failure(409, "agent_crypto_identity_changed"))?;
+            let session = slot.session.as_ref().ok_or_else(unavailable)?.clone();
+            let identity = session.identity();
+            let authority = slot.authority.clone();
+            self.0.crypto.start_receive(&lease.agent_id, async move {
+                let _update = update;
+                authority.device().await?;
+                let read = || DeviceOperation::ReadCiphertext {
+                    lease: reference.clone(),
+                    inbox_id: id.clone(),
+                };
+                let DeviceResponse::Ciphertext(source) =
+                    native.ciphertext_operation(read(), &pin).await?
+                else {
+                    return Err(failure(502, "invalid_ciphertext_response"));
+                };
+                if source.agent_id != identity.agent_id
+                    || source.agent_generation != identity.agent_generation
+                {
+                    return Err(failure(409, "agent_crypto_identity_changed"));
+                }
+                let owner = device.owner_mxid();
+                if source.sender_mxid != owner {
+                    return Err(failure(403, "agent_crypto_owner_sender_required"));
+                }
+                let plaintext = session
+                    .decrypt_owner_event(&source.room_id, &source.event)
+                    .await?;
+                authority.device().await?;
+                if plaintext["event_id"] != source.event_id
+                    || plaintext["sender"] != owner
+                    || plaintext
+                        .get("room_id")
+                        .is_some_and(|r| r != &source.room_id)
+                    || plaintext["type"] != "m.room.message"
+                    || plaintext["unsigned"].get("redacted_because").is_some()
+                {
+                    return Err(failure(409, "agent_crypto_invalid_event"));
+                }
+                use sha2::{Digest, Sha256};
+                let ciphertext_digest = format!(
+                    "{:x}",
+                    Sha256::digest(
+                        serde_json::to_vec(&source.event)
+                            .map_err(|_| failure(502, "invalid_ciphertext_response"))?
+                    )
+                );
+                let crypto = DecryptedAgentEvent {
+                    identity,
+                    room: source.room_id.clone(),
+                    event: source.event_id.clone(),
+                    sender: owner.into(),
+                    ciphertext_digest,
+                    plaintext,
+                };
+                // A real fresh read after crypto checks the original AS commitment
+                // and current membership/binding/generation/device/lease again.
+                let DeviceResponse::Ciphertext(current) =
+                    native.ciphertext_operation(read(), &pin).await?
+                else {
+                    return Err(failure(502, "invalid_ciphertext_response"));
+                };
+                if current != source {
+                    return Err(failure(409, "ciphertext_changed"));
+                }
+                authority.device().await?;
+                Ok(DecryptedAgentCiphertext {
+                    source,
+                    lease: reference,
+                    crypto,
+                })
+            })?
+        };
+        receiver
+            .await
+            .map_err(|_| failure(409, "agent_crypto_receive_unconfirmed"))?
+    }
+}
+
 impl NativeOwner {
     /// Decrypt an already received owner event with the original host SDK.
     /// This does not admit a task, ACK an event, obtain a lease or start a model.

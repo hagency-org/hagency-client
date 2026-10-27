@@ -175,3 +175,10 @@ filesystem credential protection is not an OS keychain or cross-host recovery.
 Actual owner ciphertext receipt is separately qualified by
 `agent_crypto_owner_receive_qualification` against isolated Synapse. CI unit
 fixtures do not prove real Olm/Megolm receipt or encrypted task execution.
+
+- Ciphertext response data requires exact headers and the canonical original source
+  commitment; serialized verification flags and plaintext fields cannot replace it.
+  Test: ciphertext_wire_requires_original_canonical_commitment_and_exact_headers
+- Ciphertext host transport has fixed poll/read operations with bounded batches
+  and opaque original inbox IDs, never arbitrary Room/history/media URLs.
+  Test: ciphertext_wire_data_cannot_choose_history_urls_filters_or_unbounded_batches

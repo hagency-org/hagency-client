@@ -1,5 +1,19 @@
 > Historical record: CLI and browser-console instructions below are retired.
 
+- **Original AS ciphertext intake, 2026-10-27:** Preserve a separate opaque
+  queue before AS body compaction, under the same original transaction lock.
+  Verify the pending durable AS source contains the exact raw event; keep binding/
+  Agent generations and canonical sorted source digests. Plain Poll cannot select
+  ciphertext rows; expired tombstones cannot rearm. External m.relates_to is opaque
+  metadata, not thread/mention authority. Native receives by original ID/current
+  lease and rereads after actual SDK decrypt. An owned receive task must not take
+  Native calls (Stop may hold it while joining), or nest the raw decrypt entry.
+  Fresh intake2 proves normal/thread, current-scope negatives/restart and independent
+  actual-HS/Python/PG source custody after compaction, calls0/live0/history-lease1.
+  Local durable admission/ACK/history binding, encrypted Codex replies/files and
+  shared requester trust remain open; crypto/read evidence alone cannot run models.
+
+
 - **Owner ciphertext receipt, 2026-10-27:** Matrix SDK sync adds
   use_state_after=true; accept that precise hint while forcing zero-wait empty-room
   sync. Keep the original identity namespace closed. Owner master signatures must

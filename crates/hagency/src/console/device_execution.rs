@@ -10,6 +10,9 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+pub mod ciphertexts;
+pub use ciphertexts::Ciphertext;
+
 const MAX_WIRE_BYTES: usize = 131_072;
 const MAX_TEXT_BYTES: usize = 65_536;
 // Up to 100 events with 64KiB text each, worst-case six-byte JSON escaping.
@@ -357,6 +360,15 @@ pub enum DeviceOperation {
     Release {
         lease: LeaseRef,
     },
+    PollCiphertexts {
+        lease: LeaseRef,
+        binding_id: String,
+        limit: usize,
+    },
+    ReadCiphertext {
+        lease: LeaseRef,
+        inbox_id: String,
+    },
     Poll {
         lease: LeaseRef,
         binding_id: String,
@@ -417,6 +429,8 @@ pub enum DeviceResponse {
     Lease(Lease),
     Released,
     Events(Vec<Dispatch>),
+    Ciphertexts(Vec<Ciphertext>),
+    Ciphertext(Ciphertext),
     Attachments(ExecutionAttachments),
     Acknowledged,
     Started(ExecutionStart),
@@ -437,6 +451,8 @@ impl DeviceOperation {
             | Self::QueueFile { lease, .. }
             | Self::Renew { lease, .. }
             | Self::Release { lease }
+            | Self::PollCiphertexts { lease, .. }
+            | Self::ReadCiphertext { lease, .. }
             | Self::Poll { lease, .. }
             | Self::PollFiles { lease, .. }
             | Self::Attachments { lease, .. }
@@ -454,6 +470,28 @@ impl DeviceOperation {
             lease.validate()?;
         }
         let (path, body) = match self {
+            Self::PollCiphertexts {
+                lease,
+                binding_id,
+                limit,
+            } => {
+                id(binding_id)?;
+                if *limit == 0 || *limit > 4 {
+                    return Err(error(400, "invalid_poll_limit"));
+                }
+                (
+                    "ciphertexts/poll",
+                    json!({"lease":lease,"bindingId":binding_id,"limit":limit}),
+                )
+            }
+            Self::ReadCiphertext { lease, inbox_id } => {
+                id(inbox_id)?;
+                (
+                    "ciphertexts/read",
+                    json!({"lease":lease,"inboxId":inbox_id}),
+                )
+            }
+
             Self::PrepareFile {
                 lease,
                 dispatch_id,
@@ -919,6 +957,32 @@ fn parse_response(
                 return Err(error(502, "execution_scope_mismatch"));
             }
             Ok(DeviceResponse::Lease(lease))
+        }
+        DeviceOperation::PollCiphertexts {
+            lease,
+            binding_id,
+            limit,
+        } => {
+            let events: Vec<Ciphertext> = decode(&value, "ciphertexts")?;
+            if events.len() > *limit {
+                return Err(invalid());
+            }
+            let mut ids = std::collections::BTreeSet::new();
+            for event in &events {
+                event.validate(lease)?;
+                if event.binding_id != *binding_id || !ids.insert(&event.id) {
+                    return Err(invalid());
+                }
+            }
+            Ok(DeviceResponse::Ciphertexts(events))
+        }
+        DeviceOperation::ReadCiphertext { lease, inbox_id } => {
+            let event: Ciphertext = decode(&value, "ciphertext")?;
+            event.validate(lease)?;
+            if event.id != *inbox_id {
+                return Err(invalid());
+            }
+            Ok(DeviceResponse::Ciphertext(event))
         }
         DeviceOperation::Poll {
             lease,

@@ -79,3 +79,11 @@ Megolm消息、错误Agent/代次/房间/发送者/密文拒绝，以及 Native�
 [主人加密事件接收](agent-crypto-owner-receive-2026-10-27.zh.md)。这仍是密码学证据，
 原始 AS密文接纳/ACK、当前成员与租约核验、Codex加密回复/文件、A3及先前验收门槛
 继续实施；不移除加密Room执行拒绝，A4和总目标未完成。
+
+2026年10月27日：阶段5将原始 AS密文接入独立持久队列，提供当前 lease/成员/
+双代次限定的 typed读取；Native经原ID读取、实际解密后再回读权限。全新 intake2
+验证真实普通+线程消息、错误 Agent/epoch/释放lease拒绝及原生重启，独立 HS/
+Python/PG核验 AS压缩后原件/摘要保留、calls0/live lease0、历史lease1。详见
+[原始密文入站验收](agent-ciphertext-intake-2026-10-27.zh.md)。接下来消费证明到
+本地 durable inbox/history，再接精确任务ACK/准入、真实 Codex和加密回复/文件。
+读取与解密不等于执行许可；共享请求者信任、A3及先前门槛继续保留，总目标未完成。
