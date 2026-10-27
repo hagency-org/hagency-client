@@ -11,3 +11,14 @@
 ## 验证边界
 
 协议测试须覆盖命令、文件和 MCP 的真实 fixture 副作用、拒绝、撤销及参数范围。安装程序探针使用独立临时目录；需要真实模型的编程验收只在该目录运行。回归检查保留聊天及受限文件行为，保留原未知请求的不可重放性。不得将协议 fixture 当作真实模型实测。
+
+
+## 2026-10-27 审核修复：最终授权等待后的本地策略检查
+
+原实现在本地批准消费后等待Server运行态校验，期间另一SQLite句柄可以
+提交Agent/Room/requester策略撤销；返回后仍把accept发给原Codex callback。
+新增确定性回归在旧代码观察到真实fake-peer effect=1（应为0），修复后
+对command/file/MCP、AskOwner/AllowWithRules及三层策略的18种组合均拒绝。
+最后一次Server await之后立即重新检查原proposal的策略版本和期限；
+不再消费批准，不创建新批准。Agent-local在此PR头85单元+3+8集成通过，
+3既有忽略；严格all-target no-deps Clippy通过。后续叠加PR需继承此修复。
