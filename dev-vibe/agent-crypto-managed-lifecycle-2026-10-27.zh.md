@@ -96,3 +96,9 @@ NativeOwner/SDK。OAuth 仍是实际 whoami 检查的显式 fixture bridge，不
 均已停止；NativeOwner checked shutdown 完成，全部原目录及失败记录保留。
 前一提交db6f的 fast/App/spelling，以及 Full40450763616 实际 Linux/macOS/Windows
 全部通过；该 CI 不是本轮新源的验证，新头将另行提交远端检查。
+
+
+后续已接入主人对精确 Agent 身份的实际交叉签名/回读，原记录中 ownerVerified=false
+保留为该轮真实结果。当前实现与 owner3 独立签名证明见
+[精确主人验证验收](agent-crypto-owner-verification-2026-10-27.zh.md)。该信任不开放
+加密任务/租约/消息权限；这些完整路径与 Agent 侧请求者信任继续实施。

@@ -13,6 +13,7 @@ pub enum AgentCryptoAction {
     Prepare { agent: String },
     Status { agent: String },
     Stop { agent: String },
+    Verify { identity: AgentCryptoIdentity },
 }
 /// Public presentation only; this is not verification or execution authority.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -24,6 +25,7 @@ pub struct AgentCryptoIdentity {
     pub matrix_device_id: String,
     pub ed25519: String,
     pub curve25519: String,
+    pub master_key: String,
 }
 /// Weak ownership prevents a managed SDK session keeping its NativeOwner alive.
 #[derive(Clone)]
@@ -239,9 +241,12 @@ struct Slot {
     session: Option<Arc<dyn AgentCryptoTransport>>,
     init: Option<crate::shutdown::Task>,
     closing: Option<crate::shutdown::Task>,
+    verification: Option<crate::shutdown::Task>,
+    owner_verified: bool,
+    trust_error: Option<String>,
 }
 fn view(slot: Option<&Slot>) -> Value {
-    slot.map_or_else(||json!({"phase":"not_initialized"}),|s|json!({"phase":s.phase,"agentGeneration":s.generation,"error":s.error,"identity":s.session.as_ref().map(|h|h.identity()),"ownerVerified":false}))
+    slot.map_or_else(||json!({"phase":"not_initialized"}),|s|json!({"phase":s.phase,"agentGeneration":s.generation,"error":s.error,"identity":s.session.as_ref().map(|h|h.identity()),"ownerVerified":s.phase=="ready" && s.owner_verified && !s.authority.is_retired(),"verificationPending":s.verification.as_ref().is_some_and(|t|t.result().is_none()),"verificationError":s.trust_error}))
 }
 impl Registry {
     pub(super) fn retire(&self) {
@@ -263,7 +268,11 @@ impl Registry {
             .lock()
             .map_err(|_| crate::shutdown::Error::Worker)?
             .values()
-            .flat_map(|s| [s.init.clone(), s.closing.clone()].into_iter().flatten())
+            .flat_map(|s| {
+                [s.init.clone(), s.verification.clone(), s.closing.clone()]
+                    .into_iter()
+                    .flatten()
+            })
             .collect::<Vec<_>>();
         let mut result = Ok(());
         for task in tasks {
@@ -317,6 +326,7 @@ async fn stop(native: &NativeOwner, agent: &str) -> Result<(), NativeError> {
         if slot.closing.is_none() {
             slot.phase = "stopping";
             let init = slot.init.clone();
+            let verification = slot.verification.clone();
             let session = slot.session.clone();
             let weak = Arc::downgrade(&native.0);
             let id = agent.to_owned();
@@ -330,6 +340,9 @@ async fn stop(native: &NativeOwner, agent: &str) -> Result<(), NativeError> {
                 } else {
                     Ok(())
                 };
+                if let Some(verification) = verification {
+                    result = result.and(verification.wait().await);
+                }
                 if let Some(session) = session
                     && session.close().await.is_err()
                 {
@@ -357,6 +370,112 @@ async fn stop(native: &NativeOwner, agent: &str) -> Result<(), NativeError> {
         .await
         .map_err(|_| failure(409, "agent_crypto_shutdown_failed"))
 }
+async fn refresh_trust(native: &NativeOwner, agent: &str) {
+    let prepared = native.0.crypto.slots.lock().ok().and_then(|slots| {
+        let slot = slots.get(agent)?;
+        (slot.phase == "ready"
+            && !slot.authority.is_retired()
+            && !slot
+                .verification
+                .as_ref()
+                .is_some_and(|t| t.result().is_none()))
+        .then(|| {
+            slot.session
+                .as_ref()
+                .map(|session| (session.identity(), slot.authority.clone()))
+        })
+        .flatten()
+    });
+    let Some((identity, authority)) = prepared else {
+        return;
+    };
+    let source = native.0.matrix_source.lock().ok().and_then(|s| s.clone());
+    let Some(source) = source else {
+        return;
+    };
+    let trust = source
+        .agent_crypto_owner_trust(identity.clone(), authority, false)
+        .await;
+    if let Ok(mut slots) = native.0.crypto.slots.lock()
+        && let Some(slot) = slots.get_mut(agent).filter(|s| {
+            !s.authority.is_retired()
+                && s.session.as_ref().is_some_and(|h| h.identity() == identity)
+        })
+    {
+        slot.owner_verified = matches!(trust, Ok(true));
+        if let Err(e) = trust {
+            slot.trust_error = Some(error_code(e));
+        } else {
+            slot.trust_error = None;
+        }
+    }
+}
+async fn verify(
+    native: &NativeOwner,
+    expected: &AgentCryptoIdentity,
+    pin: &DeviceIdentity,
+) -> Result<Value, NativeError> {
+    let source = native
+        .0
+        .matrix_source
+        .lock()
+        .map_err(|_| unavailable())?
+        .clone()
+        .ok_or_else(|| failure(503, "agent_crypto_owner_verification_unavailable"))?;
+    let mut slots = native.0.crypto.slots.lock().map_err(|_| unavailable())?;
+    let slot = slots
+        .get_mut(&expected.agent_id)
+        .filter(|s| {
+            s.phase == "ready"
+                && s.pin == *pin
+                && !s.authority.is_retired()
+                && s.session
+                    .as_ref()
+                    .is_some_and(|h| h.identity() == *expected)
+        })
+        .ok_or_else(|| failure(409, "agent_crypto_identity_changed"))?;
+    if slot
+        .verification
+        .as_ref()
+        .is_some_and(|t| t.result().is_none())
+    {
+        return Ok(json!({"agentId":expected.agent_id,"crypto":view(Some(slot))}));
+    }
+    let session = slot.session.as_ref().unwrap().clone();
+    let authority = slot.authority.clone();
+    let identity = expected.clone();
+    let weak = Arc::downgrade(&native.0);
+    let id = expected.agent_id.clone();
+    let update = crate::update_guard::PROCESS
+        .continue_task()
+        .ok_or_else(|| failure(409, "update_in_progress"))?;
+    slot.owner_verified = false;
+    slot.trust_error = None;
+    slot.verification = Some(crate::shutdown::Task::start(async move {
+        let _update = update;
+        let result = async {
+            if session.refresh().await? != identity {
+                return Err(failure(409, "agent_crypto_identity_changed"));
+            }
+            source
+                .agent_crypto_owner_trust(identity.clone(), authority, true)
+                .await
+        }
+        .await;
+        if let Some(owner) = weak.upgrade()
+            && let Ok(mut slots) = owner.crypto.slots.lock()
+            && let Some(slot) = slots
+                .get_mut(&id)
+                .filter(|s| s.session.as_ref().is_some_and(|h| h.identity() == identity))
+        {
+            slot.owner_verified = matches!(result, Ok(true)) && !slot.authority.is_retired();
+            slot.trust_error = result.err().map(error_code);
+        }
+        Ok(())
+    }));
+    Ok(json!({"agentId":expected.agent_id,"crypto":view(Some(slot))}))
+}
+
 pub(super) async fn execute(
     native: &NativeOwner,
     action: AgentCryptoAction,
@@ -365,11 +484,15 @@ pub(super) async fn execute(
         AgentCryptoAction::Prepare { agent }
         | AgentCryptoAction::Status { agent }
         | AgentCryptoAction::Stop { agent } => agent,
+        AgentCryptoAction::Verify { identity } => &identity.agent_id,
     };
     key(agent)?;
     let d = native.authorized_execution_device().await?;
     let pin = DeviceIdentity::from(&d);
     let registry = &native.0.crypto;
+    if let AgentCryptoAction::Verify { identity } = &action {
+        return verify(native, identity, &pin).await;
+    }
     if matches!(action, AgentCryptoAction::Status { .. }) {
         let session = {
             let mut slots = registry.slots.lock().map_err(|_| unavailable())?;
@@ -413,6 +536,7 @@ pub(super) async fn execute(
                 }
             }
         }
+        refresh_trust(native, agent).await;
         let slots = registry.slots.lock().map_err(|_| unavailable())?;
         return Ok(json!({"agentId":agent,"crypto":view(slots.get(agent))}));
     }
@@ -522,7 +646,8 @@ pub(super) async fn execute(
             && identity.agent_generation == generation
             && identity.matrix_user_id == expected_user
             && identity.ed25519.len() == 43
-            && identity.curve25519.len() == 43;
+            && identity.curve25519.len() == 43
+            && identity.master_key.len() == 43;
         let accepted = if let Some(owner) = weak.upgrade() {
             if let Ok(mut slots) = owner.crypto.slots.lock() {
                 if let Some(s) = slots.get_mut(&id).filter(|s| {
@@ -573,6 +698,9 @@ pub(super) async fn execute(
             session: None,
             init: Some(task),
             closing: None,
+            verification: None,
+            owner_verified: false,
+            trust_error: None,
         },
     );
     Ok(json!({"agentId":agent,"crypto":view(slots.get(agent))}))
@@ -749,6 +877,7 @@ mod tests {
                 matrix_device_id: "public".into(),
                 ed25519: "public".into(),
                 curve25519: "public".into(),
+                master_key: "public".into(),
             }
         }
         fn retire(&self) {
@@ -801,6 +930,9 @@ mod tests {
                 session: Some(transport.clone()),
                 init: None,
                 closing: None,
+                verification: None,
+                owner_verified: false,
+                trust_error: None,
             },
         );
         assert!(
@@ -859,6 +991,9 @@ mod tests {
                 session: None,
                 init: Some(init.clone()),
                 closing: None,
+                verification: None,
+                owner_verified: false,
+                trust_error: None,
             },
         );
         assert!(
@@ -881,5 +1016,147 @@ mod tests {
         owner.0.crypto.shutdown().await.unwrap();
         assert_eq!(init.result(), Some(Ok(())));
         owner.shutdown_checked().await.unwrap();
+    }
+    struct HeldTrust {
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+        writes: std::sync::atomic::AtomicUsize,
+    }
+    impl MatrixTokenSource for HeldTrust {
+        fn access_token(
+            &self,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<MatrixAccessToken, NativeError>>
+                    + Send
+                    + '_,
+            >,
+        > {
+            Box::pin(async { Err(failure(401, "fixture_unused")) })
+        }
+        fn agent_crypto_owner_trust(
+            &self,
+            _identity: AgentCryptoIdentity,
+            _authority: AgentCryptoAuthority,
+            verify: bool,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<bool, NativeError>> + Send + '_>,
+        > {
+            Box::pin(async move {
+                if verify {
+                    self.writes.fetch_add(1, Ordering::AcqRel);
+                    self.entered.notify_one();
+                    self.release.notified().await;
+                }
+                // Deliberately return a late positive host-double observation;
+                // it must not restore the retired native session's state.
+                Ok(true)
+            })
+        }
+    }
+    #[tokio::test]
+    async fn agent_crypto_exact_verification_rejects_changed_keys_and_joins_original_on_stop() {
+        let root = tempfile::tempdir().unwrap();
+        let native = owner(&root.path().join("state")).await;
+        let d = device();
+        let source = Arc::new(HeldTrust {
+            entered: Default::default(),
+            release: Default::default(),
+            writes: std::sync::atomic::AtomicUsize::new(0),
+        });
+        *native.0.matrix_source.lock().unwrap() = Some(source.clone());
+        let session = Arc::new(HeldTransport {
+            entered: Default::default(),
+            release: Default::default(),
+            retired: AtomicBool::new(false),
+            closed: AtomicBool::new(false),
+        });
+        // This test holds the original signing callback, not actual crypto/HTTP.
+        session.release.notify_one();
+        let expected = session.identity();
+        native.0.crypto.slots.lock().unwrap().insert(
+            "agent-a".into(),
+            Slot {
+                authority: authority(&native, &d),
+                pin: DeviceIdentity::from(&d),
+                generation: 1,
+                phase: "ready",
+                error: None,
+                session: Some(session),
+                init: None,
+                closing: None,
+                verification: None,
+                owner_verified: false,
+                trust_error: None,
+            },
+        );
+        {
+            let mut slots = native.0.crypto.slots.lock().unwrap();
+            let slot = slots.get_mut("agent-a").unwrap();
+            slot.owner_verified = true;
+            slot.phase = "unavailable";
+            assert_eq!(view(Some(slot))["ownerVerified"], false);
+            slot.phase = "ready";
+            slot.owner_verified = false;
+        }
+        for field in [
+            "agentId",
+            "agentGeneration",
+            "matrixUserId",
+            "matrixDeviceId",
+            "ed25519",
+            "curve25519",
+            "masterKey",
+        ] {
+            let mut changed = serde_json::to_value(&expected).unwrap();
+            changed[field] = if field == "agentGeneration" {
+                json!(2)
+            } else {
+                json!("changed")
+            };
+            let changed = serde_json::from_value(changed).unwrap();
+            assert_eq!(
+                verify(&native, &changed, &DeviceIdentity::from(&d))
+                    .await
+                    .err()
+                    .unwrap()
+                    .code,
+                "agent_crypto_identity_changed"
+            );
+        }
+        assert_eq!(source.writes.load(Ordering::Acquire), 0);
+        let mut forged = serde_json::to_value(&expected).unwrap();
+        forged["ownerVerified"] = json!(true);
+        assert!(serde_json::from_value::<AgentCryptoIdentity>(forged).is_err());
+        let first = verify(&native, &expected, &DeviceIdentity::from(&d))
+            .await
+            .unwrap();
+        assert_eq!(first["crypto"]["verificationPending"], true);
+        source.entered.notified().await;
+        assert_eq!(
+            verify(&native, &expected, &DeviceIdentity::from(&d))
+                .await
+                .unwrap()["crypto"]["verificationPending"],
+            true
+        );
+        assert_eq!(source.writes.load(Ordering::Acquire), 1);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), stop(&native, "agent-a"))
+                .await
+                .is_err()
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), native.0.crypto.shutdown())
+                .await
+                .is_err()
+        );
+        source.release.notify_one();
+        native.0.crypto.shutdown().await.unwrap();
+        {
+            let slots = native.0.crypto.slots.lock().unwrap();
+            assert_eq!(view(slots.get("agent-a"))["ownerVerified"], false);
+            assert_eq!(view(slots.get("agent-a"))["phase"], "stopped");
+        }
+        native.shutdown_checked().await.unwrap();
     }
 }

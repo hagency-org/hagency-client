@@ -157,3 +157,10 @@ Agent-generation UI fences. The explicit agent_crypto_managed_qualification entr
 uses actual native CreateAgent/AgentCrypto commands and the production SDK facade;
 ordinary CI compiles the driver without accessing its external fixture. Private
 filesystem credential protection is not an OS keychain or cross-host recovery.
+
+
+- Explicit owner verification binds every original identity field before SDK IO;
+  changed fingerprints or serialized trust flags cannot reach the signer. Repeated
+  observers share the original verification task; stop and shutdown join it and a
+  late positive observation cannot restore a retired native session.
+  Test: agent_crypto_exact_verification_rejects_changed_keys_and_joins_original_on_stop

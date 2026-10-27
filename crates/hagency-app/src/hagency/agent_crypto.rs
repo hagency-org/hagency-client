@@ -441,6 +441,18 @@ impl AgentCryptoSession {
                 .ed25519_key()
                 .ok_or_else(|| error("agent_crypto_keys_unavailable"))?
                 .to_base64(),
+            master_key: client
+                .encryption()
+                .get_user_identity(
+                    client
+                        .user_id()
+                        .ok_or_else(|| error("agent_crypto_identity_mismatch"))?,
+                )
+                .await
+                .map_err(|_| error("agent_crypto_keys_unavailable"))?
+                .and_then(|i| i.master_key().get_first_key())
+                .ok_or_else(|| error("agent_crypto_keys_unavailable"))?
+                .to_base64(),
             curve25519: device
                 .curve25519_key()
                 .ok_or_else(|| error("agent_crypto_keys_unavailable"))?
@@ -461,6 +473,9 @@ impl AgentCryptoSession {
             &uploaded["device_keys"][&identity.matrix_user_id][&identity.matrix_device_id]["keys"];
         if keys[format!("ed25519:{}", identity.matrix_device_id)] != identity.ed25519
             || keys[format!("curve25519:{}", identity.matrix_device_id)] != identity.curve25519
+            || uploaded["master_keys"][&identity.matrix_user_id]["keys"]
+                [format!("ed25519:{}", identity.master_key)]
+                != identity.master_key
         {
             return Err(error("agent_crypto_identity_mismatch"));
         }
@@ -651,3 +666,6 @@ mod tests {
         );
     }
 }
+
+mod owner_verification;
+pub use owner_verification::owner_trust;

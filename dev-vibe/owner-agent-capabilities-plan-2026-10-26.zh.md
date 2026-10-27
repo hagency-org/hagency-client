@@ -64,3 +64,10 @@ Service 状态操作，私有文件凭据与原任务关闭等待现已实现（
 真实 managed3 验证35秒续期、撤销/同安装重启保持原钥、取消等待后的原始收尾；
 独立读取 calls0/leases0。见 [正常身份生命周期验收](agent-crypto-managed-lifecycle-2026-10-27.zh.md)。
 主人验证/恢复和完整加密任务/回复/文件仍未完成，拒绝条件保留；A3与既有门槛继续进行。
+
+
+2026年10月27日：阶段5接通主人对精确 Agent 身份的实际 Matrix 交叉签名与回读，
+不是勾选 verified 标志。真实 owner3 包含已交叉签名但无私有 signer 的主人设备
+拒绝、原生授权1→2重启保持钥匙/信任，以及原始验证任务关闭等待；独立 OpenSSL
+核验真实签名通过，calls0/leases0。见 [精确主人验证验收](agent-crypto-owner-verification-2026-10-27.zh.md)。
+Agent 对主人/请求者的信任、加密 intake/ACK/原始回复/文件、A3和既有门槛仍继续。

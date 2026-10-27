@@ -1,5 +1,16 @@
 # Native migration working plan
 
+Current owner-verification checkpoint (2026-10-27): exact native Agent identity
+review now signs via the current verified owner SDK and reobserves actual
+cross-signatures. Fresh scoped queries reject partial/missing/invalid responses
+instead of using verified cache; private user-signing keys are required for new
+trust. Actual owner3 Synapse proof includes a cross-signed owner device without
+private signer being refused, native restart1→2, original held callback joined
+retirement, independent OpenSSL signature proof and calls/leases0. This is owner
+trust in Agent keys, not Agent trust in requesters or encrypted execution grants.
+Next: encrypted event intake/ACK and original encrypted Codex replies/files, then
+A3 and remaining gates. See the owner-verification dev-vibe report. Goal active.
+
 Current managed identity checkpoint (2026-10-27): normal native create/start/
 assignment and desktop Service identity controls now manage independent SDK
 sessions. Private filesystem credentials (not OS keychain) and original task/

@@ -14,6 +14,11 @@ impl HagencyPanel {
         {
             return;
         }
+        if self.agent_crypto["identity"] != crypto["identity"] {
+            self.view
+                .check_box(cx, ids!(crypto_confirm))
+                .set_active(cx, false, Animate::No);
+        }
         self.agent_crypto = crypto.clone();
         self.render_crypto(cx);
         self.sync_crypto(cx);
@@ -21,6 +26,27 @@ impl HagencyPanel {
     pub(super) fn render_crypto(&self, cx: &mut Cx) {
         let status = match string(&self.agent_crypto, "phase") {
             "initializing" => "Initializing Agent identity. Refresh to check progress.",
+            "ready" if self.agent_crypto["verificationPending"] == true => {
+                "Verifying the exact identity. Refresh to observe the original result."
+            }
+            "ready"
+                if self.agent_crypto["verificationError"]
+                    == "agent_crypto_owner_keys_unverified" =>
+            {
+                "Verify your Matrix account and current device before verifying an Agent."
+            }
+            "ready"
+                if self.agent_crypto["verificationError"]
+                    == "agent_crypto_owner_signing_keys_unavailable" =>
+            {
+                "Restore your Matrix cross-signing keys before verifying an Agent."
+            }
+            "ready" if self.agent_crypto["verificationError"].is_string() => {
+                "Agent verification is unconfirmed. Refresh the original identity status."
+            }
+            "ready" if self.agent_crypto["ownerVerified"] == true => {
+                "Agent identity verified by your Matrix account."
+            }
             "ready" => "Identity keys are available. Owner verification is pending.",
             "stopping" => "Stopping identity session. Waiting for original requests.",
             "stopped" => "Identity session stopped. Original keys are retained.",
@@ -39,11 +65,12 @@ impl HagencyPanel {
         let identity = &self.agent_crypto["identity"];
         let public = if identity.is_object() {
             format!(
-                "{}\n{}\nEd25519: {}\nCurve25519: {}",
+                "{}\n{}\nEd25519: {}\nCurve25519: {}\nMaster: {}",
                 string(identity, "matrixUserId"),
                 string(identity, "matrixDeviceId"),
                 string(identity, "ed25519"),
-                string(identity, "curve25519")
+                string(identity, "curve25519"),
+                string(identity, "masterKey")
             )
         } else {
             String::new()
@@ -55,8 +82,28 @@ impl HagencyPanel {
     pub(super) fn sync_crypto(&self, cx: &mut Cx) {
         let local = self.local_agent(cx) && !self.busy;
         let phase = string(&self.agent_crypto, "phase");
+        let can_verify = local
+            && phase == "ready"
+            && self.agent_crypto["ownerVerified"] != true
+            && self.agent_crypto["verificationPending"] != true
+            && self.agent_crypto["identity"]["masterKey"]
+                .as_str()
+                .is_some_and(|k| k.len() == 43);
+        self.view
+            .widget(cx, ids!(crypto_confirm))
+            .set_disabled(cx, !can_verify);
+        if !self.agent_crypto["identity"].is_object() {
+            self.view
+                .check_box(cx, ids!(crypto_confirm))
+                .set_active(cx, false, Animate::No);
+        }
+
         for (id, enabled) in [
             (ids!(crypto_refresh), local),
+            (
+                ids!(crypto_verify),
+                can_verify && self.view.check_box(cx, ids!(crypto_confirm)).active(cx),
+            ),
             (
                 ids!(crypto_prepare),
                 local
@@ -79,14 +126,43 @@ impl HagencyPanel {
         }
     }
     pub(super) fn handle_crypto(&mut self, cx: &mut Cx, actions: &Actions) -> bool {
+        if self
+            .view
+            .check_box(cx, ids!(crypto_confirm))
+            .changed(actions)
+            .is_some()
+        {
+            self.sync_crypto(cx);
+            return true;
+        }
+        let verify = self.view.button(cx, ids!(crypto_verify)).clicked(actions);
         let refresh = self.view.button(cx, ids!(crypto_refresh)).clicked(actions);
         let prepare = self.view.button(cx, ids!(crypto_prepare)).clicked(actions);
         let stop = self.view.button(cx, ids!(crypto_stop)).clicked(actions);
         let copy = self.view.button(cx, ids!(crypto_copy)).clicked(actions);
-        if !(refresh || prepare || stop || copy) {
+        if !(refresh || prepare || stop || copy || verify) {
             return false;
         }
         if !self.local_agent(cx) || self.busy {
+            return true;
+        }
+        if verify {
+            if self.agent_crypto["verificationPending"] == true
+                || self.agent_crypto["ownerVerified"] == true
+                || self.agent_crypto["phase"] != "ready"
+                || !self.view.check_box(cx, ids!(crypto_confirm)).active(cx)
+            {
+                return true;
+            }
+            if let Ok(identity) = serde_json::from_value(self.agent_crypto["identity"].clone()) {
+                self.run(
+                    cx,
+                    Target::Crypto,
+                    Command::AgentCrypto {
+                        action: AgentCryptoAction::Verify { identity },
+                    },
+                );
+            }
             return true;
         }
         if copy {
@@ -144,7 +220,7 @@ mod tests {
             .view
             .drop_down(&cx, ids!(agents))
             .set_selected_item(&mut cx, 1);
-        let identity = json!({"agentId":"a","agentGeneration":1,"matrixUserId":"@_hagency_a:test","matrixDeviceId":"HAGENCY_public","ed25519":"E".repeat(43),"curve25519":"C".repeat(43)});
+        let identity = json!({"agentId":"a","agentGeneration":1,"matrixUserId":"@_hagency_a:test","matrixDeviceId":"HAGENCY_public","ed25519":"E".repeat(43),"curve25519":"C".repeat(43),"masterKey":"M".repeat(43)});
         panel.apply_crypto(&mut cx,&json!({"agentId":"other","crypto":{"phase":"ready","agentGeneration":1,"identity":identity}}));
         assert!(panel.agent_crypto.is_null());
         panel.apply_crypto(&mut cx,&json!({"agentId":"a","crypto":{"phase":"ready","agentGeneration":2,"identity":identity}}));
@@ -177,6 +253,52 @@ mod tests {
                 .unwrap()
                 .enabled()
         );
+        assert!(
+            !panel
+                .view
+                .button(&cx, ids!(crypto_verify))
+                .borrow()
+                .unwrap()
+                .enabled()
+        );
+        panel
+            .view
+            .check_box(&cx, ids!(crypto_confirm))
+            .set_active(&mut cx, true, Animate::No);
+        panel.sync_crypto(&mut cx);
+        assert!(
+            panel
+                .view
+                .button(&cx, ids!(crypto_verify))
+                .borrow()
+                .unwrap()
+                .enabled()
+        );
+        let mut changed = identity.clone();
+        changed["masterKey"] = json!("N".repeat(43));
+        panel.apply_crypto(&mut cx,&json!({"agentId":"a","crypto":{"phase":"ready","agentGeneration":1,"identity":changed,"ownerVerified":false}}));
+        assert!(!panel.view.check_box(&cx, ids!(crypto_confirm)).active(&cx));
+        assert!(
+            !panel
+                .view
+                .button(&cx, ids!(crypto_verify))
+                .borrow()
+                .unwrap()
+                .enabled()
+        );
+        panel.apply_crypto(&mut cx,&json!({"agentId":"a","crypto":{"phase":"ready","agentGeneration":1,"identity":identity,"ownerVerified":true}}));
+        assert_eq!(
+            panel.view.label(&cx, ids!(crypto_status)).text(),
+            crate::i18n::tr("Agent identity verified by your Matrix account.")
+        );
+        assert!(
+            !panel
+                .view
+                .button(&cx, ids!(crypto_verify))
+                .borrow()
+                .unwrap()
+                .enabled()
+        );
         panel.execution_agent_record["executionDeviceId"] = json!("other");
         panel.sync_crypto(&mut cx);
         for id in [
@@ -184,6 +306,7 @@ mod tests {
             ids!(crypto_prepare),
             ids!(crypto_stop),
             ids!(crypto_copy),
+            ids!(crypto_verify),
         ] {
             assert!(!panel.view.button(&cx, id).borrow().unwrap().enabled());
         }

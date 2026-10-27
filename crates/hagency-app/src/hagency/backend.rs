@@ -152,6 +152,17 @@ fn source_error(code: &str) -> NativeError {
     }
 }
 impl MatrixTokenSource for SdkTokens {
+    fn agent_crypto_owner_trust(&self, identity: ::hagency::native_owner::AgentCryptoIdentity, authority: ::hagency::native_owner::AgentCryptoAuthority, verify: bool) -> std::pin::Pin<Box<dyn std::future::Future<Output=Result<bool,NativeError>>+Send+'_>> {
+        Box::pin(async move {
+            self.access_token().await?;
+            let weak=self.0.clone();
+            let service=Service(weak.upgrade().ok_or_else(||source_error("matrix_account_changed"))?);
+            service.check().map_err(|e|source_error(&e))?;
+            let client=crate::sliding_sync::get_client().ok_or_else(||source_error("matrix_sign_in_required"))?;
+            let live=Arc::new(move ||weak.upgrade().is_some_and(|s|Service(s).check().is_ok()));
+            super::agent_crypto::owner_trust(&client,identity,authority,verify,live).await
+        })
+    }
     fn supports_agent_crypto(&self)->bool {true}
     fn prepare_agent_crypto(&self, context: ::hagency::native_owner::AgentCryptoContext) -> ::hagency::native_owner::AgentCryptoPreparation<'_> {
         Box::pin(async move {self.access_token().await?;super::agent_crypto::prepare_managed(context).await})

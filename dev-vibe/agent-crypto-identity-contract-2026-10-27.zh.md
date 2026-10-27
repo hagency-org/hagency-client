@@ -34,3 +34,9 @@
 后续正常 NativeOwner/Service 生命周期已实现并通过真实 managed3；本文件保留
 身份基础链当时的边界与失败记录。当前私有文件凭据、关闭等待、SDK HTTP fence
 及仍未完成的加密任务范围见 [正常生命周期验收](agent-crypto-managed-lifecycle-2026-10-27.zh.md)。
+
+
+后续已接入主人对精确 Agent 身份的实际交叉签名/回读，原记录中 ownerVerified=false
+保留为该轮真实结果。当前实现与 owner3 独立签名证明见
+[精确主人验证验收](agent-crypto-owner-verification-2026-10-27.zh.md)。该信任不开放
+加密任务/租约/消息权限；这些完整路径与 Agent 侧请求者信任继续实施。

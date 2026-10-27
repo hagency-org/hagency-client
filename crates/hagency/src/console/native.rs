@@ -73,6 +73,23 @@ pub struct ContinuationMessage {
 pub use hagency_agent_local::attachments::Attachment as AgentAttachment;
 pub const MAX_AGENT_FILE_BYTES: usize = hagency_agent_local::received_files::MAX_BYTES;
 pub trait MatrixTokenSource: Send + Sync {
+    /// Observe or explicitly sign the exact prepared Agent identity using the
+    /// current owner's actual Matrix SDK. The boolean is presentation only.
+    fn agent_crypto_owner_trust(
+        &self,
+        _identity: AgentCryptoIdentity,
+        _authority: AgentCryptoAuthority,
+        verify: bool,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool, NativeError>> + Send + '_>>
+    {
+        Box::pin(async move {
+            if verify {
+                Err(failure(503, "agent_crypto_owner_verification_unavailable"))
+            } else {
+                Ok(false)
+            }
+        })
+    }
     fn supports_agent_crypto(&self) -> bool {
         false
     }

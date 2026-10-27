@@ -1,4 +1,12 @@
 {
+  "Restore your Matrix cross-signing keys before verifying an Agent.": "Restore your Matrix cross-signing keys before verifying an Agent.",
+  "Encrypted Agent tasks and files are not available yet.": "Encrypted Agent tasks and files are not available yet.",
+  "I checked the complete master key and device fingerprints for this Agent.": "I checked the complete master key and device fingerprints for this Agent.",
+  "Verify exact Agent identity": "Verify exact Agent identity",
+  "Verifying the exact identity. Refresh to observe the original result.": "Verifying the exact identity. Refresh to observe the original result.",
+  "Verify your Matrix account and current device before verifying an Agent.": "Verify your Matrix account and current device before verifying an Agent.",
+  "Agent verification is unconfirmed. Refresh the original identity status.": "Agent verification is unconfirmed. Refresh the original identity status.",
+  "Agent identity verified by your Matrix account.": "Agent identity verified by your Matrix account.",
   "Agent encryption identity": "Agent encryption identity",
   "This identity has not been verified by you. Encrypted Agent tasks and files are not available yet.": "This identity has not been verified by you. Encrypted Agent tasks and files are not available yet.",
   "Refresh identity": "Refresh identity",

@@ -1,4 +1,12 @@
 {
+  "Restore your Matrix cross-signing keys before verifying an Agent.": "验证 Agent 前，请先恢复你的 Matrix 交叉签名密钥。",
+  "Encrypted Agent tasks and files are not available yet.": "Agent 加密任务和文件功能暂未开放。",
+  "I checked the complete master key and device fingerprints for this Agent.": "我已核对此 Agent 的完整主密钥和设备指纹。",
+  "Verify exact Agent identity": "验证此精确 Agent 身份",
+  "Verifying the exact identity. Refresh to observe the original result.": "正在验证精确身份，请刷新查看原始结果。",
+  "Verify your Matrix account and current device before verifying an Agent.": "验证 Agent 前，请先验证你的 Matrix 账户和当前设备。",
+  "Agent verification is unconfirmed. Refresh the original identity status.": "Agent 身份验证尚未确认，请刷新原始身份状态。",
+  "Agent identity verified by your Matrix account.": "你的 Matrix 账户已验证此 Agent 身份。",
   "Agent encryption identity": "Agent 加密身份",
   "This identity has not been verified by you. Encrypted Agent tasks and files are not available yet.": "此身份尚未经你验证。Agent 加密任务和文件功能暂未开放。",
   "Refresh identity": "刷新身份",

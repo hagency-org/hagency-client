@@ -14686,3 +14686,37 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   dev-vibe/agent-crypto-managed-lifecycle-2026-10-27.zh.md. Encrypted tasks/replies/
   files, owner verification/recovery, A3 and previous manual/platform/production
   OAuth gates remain; no paid inference/deployment/merge. Full goal remains active.
+
+
+## 2026-10-27: Exact owner-to-Agent Matrix verification
+
+- Previous turn was progress: pushed normal lifecycle956f8980 and actual managed3.
+  This turn fetched current main before edits and confirmed ancestry again before
+  commit. Work remains codex/remote-owner-approvals; SDK stays on0.19.1 history fork.
+- Added native exact fingerprint verification and shared original task custody,
+  current owner SDK cross-signing/reobservation, master fingerprint presentation
+  and explicit review controls. Signed current owner devices without the private
+  user signer receive restore-key guidance. Unavailable transports hide cached
+  positive status; this metadata never becomes an execution/tool grant.
+- SDK6cc4c711 then c1962ee2 add per-request/global fence composition, no implicit
+  credential refresh and strict fresh identity/device response checks. Actual
+  verified-cache negative cases reject partial/missing/invalid keys/signatures;
+ 1unit+9HTTP integration and affected strict library Clippy pass, required3/own2
+  regressions retained. No upgrade to unrelated SDK main.
+- Actual owner3 fresh Synapse/native proof passes exact signing, an actually
+  cross-signed no-private-signer owner device refusal, native authorization1→2
+  restart with original keys/trust, and a late actual verified callback joined by
+  stop/shutdown. Independent HTTP/OpenSSL verifies both real master signatures;
+  PG public pins2, native calls0, Server leases0. No paid inference.
+- Preserve owner1's pre-hardening success and owner2's missing-device preparation
+  failure. Corrected the driver to perform real SDK sync before cross-signing a
+  new owner device. Preserve initial compile/API/lint failures; no weakened gates.
+- Core277/9original ignores and App628/2original ignores, final focused6+3,
+  affected all-target strict Clippy, format, i18n2542/1916/0, static46, caller1 and
+ 1197bindings pass without deferred gaps. Prior956 fast/App/spelling and actual
+  Linux/macOS jobs pass; Windows actual tests/release pass, cache cleanup live.
+- All three owned Synapse containers, Servers and dedicated PG stopped. Detailed
+  evidence: dev-vibe/agent-crypto-owner-verification-2026-10-27.zh.md. Continue
+  encrypted intake/ACK, Agent requester trust, current Room/member/lease gates and
+  original encrypted Codex replies/files, then A3 and prior qualification gates.
+  Full A4/objective remains active; no deployment/merge.

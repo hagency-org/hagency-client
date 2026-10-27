@@ -3,6 +3,18 @@
 
 # Repository audit knowledge
 
+- **Exact owner-to-Agent verification, 2026-10-27:** A local verified cache latch
+  is not a fresh keys/query result. Require a successful complete response, its
+  exact device, and matching SDK-validated master/subkeys/signatures; missing
+  current master returns None. Per-request fences add to global fences and
+  disable hidden credential refresh. Verify only the prepared exact Agent DTO
+  under original shared task custody; serialized trust flags never grant access.
+  A cross-signed owner device can still lack the private user signer; surface
+  restore-key guidance. New SDK logins must actually sync/upload device keys
+  before another device can sign them. Owner3 proves actual trust/restart and
+  independent OpenSSL signatures; native/SDK host doubles are separate evidence.
+  Agent-side requester trust and encrypted execution authorization remain open.
+
 - **Managed Agent crypto lifecycle, 2026-10-27:** Reuse Native AgentDetails route
   generation rather than a hand-written local path. Keep normal create/start
   result separate from identity diagnostics. Original shared init/close receipts
