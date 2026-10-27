@@ -1081,12 +1081,10 @@ script_mod! {
                             Text {text: #(crate::i18n::tr("This identity has not been verified by you. Encrypted Agent tasks and files are not available yet.")) i18n_text: "This identity has not been verified by you. Encrypted Agent tasks and files are not available yet." draw_text.color: mod.widgets.RINX_MUTED}
                             crypto_status := Text {}
                             crypto_identity := Text {}
-                            View {width: Fill height: 40 spacing: 8
+                            View {width: Fill height: Fit flow: Flow.Right{wrap: true} spacing: 8
                                 crypto_refresh := Action {text: #(crate::i18n::tr("Refresh identity")) i18n_text: "Refresh identity"}
                                 crypto_prepare := Action {text: #(crate::i18n::tr("Initialize identity")) i18n_text: "Initialize identity"}
                                 crypto_stop := Action {text: #(crate::i18n::tr("Stop identity session")) i18n_text: "Stop identity session"}
-                            }
-                            View {width: Fill height: 40 spacing: 8
                                 crypto_copy := Action {text: #(crate::i18n::tr("Copy public identity")) i18n_text: "Copy public identity"}
                             }
                         }
