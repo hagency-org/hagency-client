@@ -1699,7 +1699,12 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Session<R, W> {
             }
             _ => false,
         };
-        let allow = allow && self.authorized_execution(dispatch).await;
+        // The Server proof may await network IO after the local approval was
+        // consumed. Recheck the exact proposal's local policy revisions and
+        // expiry after that wait, immediately before publishing acceptance.
+        let allow = allow
+            && self.authorized_execution(dispatch).await
+            && ledger.tool_disposition(&proposal, now()).is_ok();
         let result = if method == "mcpServer/elicitation/request" {
             value!({"action":if allow{"accept"}else{"decline"},"content":null,"_meta":null})
         } else {
@@ -3307,6 +3312,149 @@ mod tests {
                 );
                 drop(session);
                 task.await.unwrap();
+            }
+        }
+    }
+    struct RevokeDuringFinalGate {
+        ledger_path: PathBuf,
+        calls: AtomicUsize,
+        layer: Layer,
+        index: usize,
+    }
+    impl ExecutionGate for RevokeDuringFinalGate {
+        fn authorize<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a str,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'a>> {
+            Box::pin(async move {
+                // Initial turn gate, pre-proposal gate, then the final Server
+                // check after local authorization. Commit a real concurrent
+                // owner policy change while that last awaited check completes.
+                if self.calls.fetch_add(1, Ordering::SeqCst) == 2 {
+                    tokio::task::yield_now().await;
+                    let mut ledger = Ledger::open(&self.ledger_path, "@alice:test").unwrap();
+                    let revision = ledger.policy_snapshot(&scope()).unwrap()[self.index].revision;
+                    ledger
+                        .set_policy(
+                            "@alice:test",
+                            &scope(),
+                            self.layer.clone(),
+                            revision,
+                            &Policy {
+                                budget: Budget {
+                                    limit: Limit::Tokens(1000),
+                                    period: Period::Lifetime,
+                                },
+                                requests: RequestPolicy::Allow,
+                                high_risk: ToolPolicy::Deny,
+                            },
+                        )
+                        .unwrap();
+                }
+                true // Server execution is still current; only local policy changed.
+            })
+        }
+    }
+    #[tokio::test]
+    async fn programming_policy_revoked_during_final_server_check_never_accepts_native_tools() {
+        for kind in ["command", "file", "mcp"] {
+            for ask_owner in [true, false] {
+                for (index, layer) in [Layer::Agent, Layer::Room, Layer::Requester]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let (_temp, mut ledger, mut profile) = setup(false);
+                    profile.programming.enabled = true;
+                    if kind == "mcp" {
+                        profile.programming.mcp_servers.insert(
+                            "fixture".into(),
+                            McpServer::Http {
+                                url: "https://example.test/mcp".into(),
+                            },
+                        );
+                    }
+                    if !ask_owner {
+                        for layer in [Layer::Agent, Layer::Room, Layer::Requester] {
+                            ledger
+                                .set_policy(
+                                    "@alice:test",
+                                    &scope(),
+                                    layer,
+                                    1,
+                                    &Policy {
+                                        budget: Budget {
+                                            limit: Limit::Tokens(1000),
+                                            period: Period::Lifetime,
+                                        },
+                                        requests: RequestPolicy::Allow,
+                                        high_risk: ToolPolicy::AllowWithRules {
+                                            tools: vec![
+                                                "codex.command".into(),
+                                                "codex.file_change".into(),
+                                                "mcp.fixture.write".into(),
+                                            ],
+                                            directories: vec![profile.cwd.to_str().unwrap().into()],
+                                        },
+                                    },
+                                )
+                                .unwrap();
+                        }
+                    }
+                    let (mut session, effects, task) = fake_programming(
+                        profile.cwd.to_str().unwrap().into(),
+                        true,
+                        true,
+                        10,
+                        kind,
+                        profile.programming.clone(),
+                    );
+                    let gate = Arc::new(RevokeDuringFinalGate {
+                        ledger_path: profile.cwd.join("ledger"),
+                        calls: AtomicUsize::new(0),
+                        layer,
+                        index,
+                    });
+                    session
+                        .enable_programming(gate.clone(), "execution-race".into())
+                        .unwrap();
+                    session.initialize().await.unwrap();
+                    session
+                        .open_context(&mut ledger, &scope(), &profile)
+                        .await
+                        .unwrap();
+                    let (queue, mut ui) = approval_queue(1).unwrap();
+                    let owner = async {
+                        if ask_owner {
+                            ui.recv().await.unwrap().decide(true);
+                        }
+                    };
+                    let scoped = scope();
+                    let work = session.run(
+                        &mut ledger,
+                        "@alice:test",
+                        &scoped,
+                        "race-call",
+                        "race-dispatch",
+                        "scoped work",
+                        BudgetMode::Estimated { reservation: 30 },
+                        &queue,
+                    );
+                    let (result, ()) = tokio::join!(work, owner);
+                    result.unwrap();
+                    assert_eq!(
+                        gate.calls.load(Ordering::SeqCst),
+                        3,
+                        "exercise the final gate"
+                    );
+                    assert_eq!(
+                        effects.load(Ordering::SeqCst),
+                        0,
+                        "{kind} owner={ask_owner} layer={index}"
+                    );
+                    drop(session);
+                    task.await.unwrap();
+                }
             }
         }
     }
