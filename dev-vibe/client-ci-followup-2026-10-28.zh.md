@@ -90,3 +90,36 @@ CI准确过滤重验；两项资格门禁未运行，不声称获得真实sandbo
 准确CI命令重验结果：execution普通测试108/108通过，2项原qualification
 过滤、0 ignored；严格all-target no-deps Clippy、fmt、actionlint及解析
 YAML后的包集合/正好一次/原过滤/失败致job失败规则核对全部通过。
+
+## 生产store成功ACK的锁释放缺陷
+
+ccda4501快速CI40578195066/job122450182413在factory重启失败：原domain
+shutdown已返回成功，紧接着DomainRepository::open却返回Locked。旧错误
+映射丢弃了原生锁错误，因此历史errno或持有描述符的具体child没有被记录。
+
+实际受控回归在两种store都保留原ownership File的try_clone，再调用普通
+shutdown：旧实现稳定返回成功而立即重开Locked；修复后普通/observed两条
+路径都立即重开成功，并验证旧副本稍后关闭不会解锁仍独占的新writer。
+这是实际内核文件锁和原writer/数据库的回归，没有伪造writer结果。
+[Rust File锁契约](https://doc.rust-lang.org/std/fs/struct.File.html#method.unlock)
+说明副本/继承描述符仍活着时，仅关闭原句柄不足以释放锁。客户端Unix
+pre-exec只在exec时关闭CLOEXEC描述符；并发spawn有这样的保留窗口。这解释
+一个可真实复现的缺陷机制，不证明历史CI中是哪一个child或原生错误。
+
+两个worker现都在SQLite连接已关闭后，显式unlock原ownership并关闭原句柄，
+然后才允许成功ACK。解锁错误记录后关闭reply，仍为Unavailable/ReplyClosed
+或原超时，不制造成功；receiver-before-ACK、2s界限、NO_CKPT_ON_CLOSE、
+WAL/FULL、隐私文件策略及schema均不变。try_lock只有真正WouldBlock归类
+Locked，其余保留原生IO错误。原factory重开代码没有增加重试或等待。
+
+本地store库105/105、WAL重开1/1、inline_factory21/21（含原失败重启）、
+execution普通用例108/108（原qualification过滤2）、严格store/engine/
+execution all-target no-deps Clippy、fmt、guard46/46、生产调用边界和Rust
+全功能绑定1167项/0 missing全部通过。两个回归在旧代码失败日志保留于
+/tmp/hagency-ci3-inherited-lock-before.log，修复日志为inherited-lock-after、
+store-release-final、ownership-inline、ownership-execution、ownership-final-
+clippy、ownership-bindings等同前缀文件。
+
+共享生产修复从#9 8bb16bd6正常merge到#10 07df6724、#11 cd57377b和#12。
+#12保留其execution独立CI阶段与原始失败诊断。所有新头重新实际验证，最终
+证据记录在各PR的跟进评论，避免通过后再创建仅含记录的新SHA。

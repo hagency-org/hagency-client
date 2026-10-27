@@ -15017,3 +15017,39 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   no-deps Clippy, fmt, actionlint and parsed-YAML package multiset/exactly-once/
   unchanged filters/fatal independent-stage checks all pass. No further local
   broad tests are needed before following the new remote head.
+
+
+## 2026-10-28: Real store ownership release before successful shutdown ACK
+
+- Original #12 ccda4501 fast CI40578195066 job122450182413 failed only
+  native_configured_fleet_reattaches_after_restart at inline_factory/mod.rs:488:
+  shutdown returned success, immediate domain reopen reported Locked. The old
+  lock mapping discarded native error detail; historic errno/holder are unknown.
+- Actual retained File::try_clone regression reproduces acknowledged-but-Locked
+  deterministically for domain and custody. Old2/2 fail with Locked; fixed2/2
+  pass for both ordinary/observed shutdown and retain replacement exclusivity
+  after the old clone closes. This proves the release defect; not a particular
+  historic child. Rust File docs confirm shared descriptor lifetime; Unix
+  spawning marks inherited fds CLOEXEC, leaving a pre-exec retention window.
+- Both original writers now close SQLite, explicitly unlock/close ownership,
+  then drop the receiver before success ACK. Unlock failure logs and closes
+  reply without ACK, preserving Unavailable/ReplyClosed or the original timeout.
+  Existing2s waits/phases, WAL/FULL, checkpoint policy, privacy/schema unchanged.
+  Only real WouldBlock maps Locked; native lock IO errors remain Io. No reopen
+  retry, fallback, timeout widening or test skip. ADR120's SQLite policy is not
+  changed or claimed to solve an unobserved OS close stall.
+- Actual edited base#9: store105/105, close_path1/1, inline_factory21/21,
+  execution108 ordinary/2 original qualification filters/0 ignored; strict
+  store+engine+execution all-target no-deps Clippy, fmt, guard46/46, production
+  caller guard and all-feature Rust inventory1167/0 missing pass. Before/after
+  and suite evidence: /tmp/hagency-ci3-inherited-lock-{before,after}.log,
+  store-release-final.log, ownership-{inline,execution,final-clippy,bindings,
+  guards,callers}.log, all with the same /tmp/hagency-ci3- prefix.
+- Common production fix8bb16bd6(#9), normal merges07df6724(#10),cd57377b(#11),
+  then#12. All six store-fix source files identical across branches; no force push. Follow
+  latest new SHAs through actual remote job success before completion; final CI
+  evidence belongs in PR comments, without another docs-only source commit.
+
+- The final merged#12 copy independently passes both original-lock regressions
+  again (/tmp/hagency-ci3-ownership-tip.log); diff against8bb16bd6 is empty for
+  all six store-fix files. No new documentation-only commit after final CI.

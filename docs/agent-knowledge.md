@@ -5656,3 +5656,15 @@ PR #8 审查及验证记录见 `dev-vibe/pr-8-board-ux-review-2026-10-25.zh.md`�
   exclusions; all-target without them correctly fails placeholder evidence.
   Keep other workspace coverage after a failed separate stage, but never make
   its failure nonfatal. Read-only stop diagnostics are not execution authority.
+
+- **Acknowledged store shutdown and inherited ownership, 2026-10-28:** #12
+  job122450182413 reported Locked immediately after a successful domain shutdown.
+  The old mapping erased native lock error detail. A real retained File clone
+  deterministically reproduces false release in both writers: close-only keeps
+  the shared lock; safe File::unlock after SQLite close releases it before ACK.
+  Original2s waits/phase meanings and receiver-before-ACK remain. On unlock
+  error close the reply without success and log the native error; preserve lock
+  IO errors as Io, reserve Locked for WouldBlock. Never weaken live-writer
+  exclusivity or add a reopen retry. New real-handle tests cover both shutdown
+  paths and late old-copy close while the replacement stays locked. The exact
+  historical child/errno remains unrecorded, not proved by the regression.

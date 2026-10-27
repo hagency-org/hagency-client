@@ -81,12 +81,16 @@ impl Store {
                         Job::Shutdown { reply, probe } => {
                             mark(&probe, Phase::WorkerPickedUp);
                             mark(&probe, Phase::DropStarted);
-                            drop(repository);
+                            let result = repository.close();
                             mark(&probe, Phase::DropFinished);
                             // The receiver drops before the reply resolves
                             // the caller: writer_open()'s closed word is
                             // observable the moment shutdown() returns.
                             drop(rx);
+                            if let Err(error) = result {
+                                tracing::error!(%error, "custody ownership release failed; shutdown not acknowledged");
+                                return;
+                            }
                             mark(&probe, Phase::AcknowledgementStarted);
                             if reply.send(()).is_ok() {
                                 mark(&probe, Phase::AcknowledgementSent);
