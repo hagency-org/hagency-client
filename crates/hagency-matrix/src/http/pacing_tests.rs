@@ -89,7 +89,7 @@ async fn native_matrix_shared_request_pacing() {
     assert_eq!(put.unwrap().success().unwrap(), json!({"ok":true}));
     assert_eq!(fake.requests(), 4);
     fake.no_request().await;
-    fixture.store.shutdown().await.unwrap();
+    common::shutdown_domain(&fixture.store, "native_matrix_shared_request_pacing").await;
     fake.close().await;
 }
 

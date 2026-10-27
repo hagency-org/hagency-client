@@ -60,3 +60,16 @@ A1另行远端检查：`1724b7d9` 的 run40363073237 中 Linux 和 Windows nativ
    私密审批的完整路径。当前明文元数据路由不能替代 A4。
 
 本批没有真实文件下载/发送、生产消息、部署或 A2 完成声明。总体 A2-A7 目标仍在进行。
+
+
+## 2026-10-27 直接审核后续
+
+继承PR9最终Server授权等待后的本地策略fence；PR10合并保留原审计拒绝
+记录。此PR本地Agent143单元+3+8集成通过，3既有忽略。
+
+原Windows full40423919137失败点位于native_matrix_shared_request_pacing
+最后的DomainStore.shutdown，所有4次HTTP节奏/字节/拒绝断言已通过。原测试
+未输出关闭阶段，不能据此推断SQLite或调度是根因。现在只将该次shutdown
+接到现有shutdown_domain观察器，保留原2秒入队/2秒回复期限、结果及panic；
+失败才输出原始有界阶段快照。不增加重试、不吞错误、不宣称修复Windows
+生产关闭。macOS同selector1/1通过；Windows需独立原始观察，先前失败保留。
