@@ -447,7 +447,7 @@ fn replaced_workspace_and_local_policy_revocation_refuse_custody() {
 fn pre_sender_snapshot_adds_empty_history_without_inventing_custody() {
     let t = tempfile::tempdir().unwrap();
     let (l, scope, _) = ledger(&t.path().join("ledger"));
-    l.db.execute_batch("DROP TABLE remote_approval_decisions; DROP TABLE remote_approval_receipts; DROP TABLE remote_approval_publications; DROP TRIGGER reject_absent_file_update; DROP TABLE sent_file_absence; DROP TABLE sent_files").unwrap();
+    l.db.execute_batch("DROP TABLE remote_verdict_receipts; DROP TABLE remote_verdict_publications; DROP TABLE remote_approval_decisions; DROP TABLE remote_approval_receipts; DROP TABLE remote_approval_publications; DROP TRIGGER reject_absent_file_update; DROP TABLE sent_file_absence; DROP TABLE sent_files").unwrap();
     let profile = "a".repeat(64);
     let snapshot = l.snapshot(OWNER, &profile, 30).unwrap();
     let mut target = Ledger::open_scoped(":memory:", OWNER, &profile).unwrap();
@@ -685,7 +685,7 @@ fn pre_history_snapshot_preserves_existing_sender_witness_and_adds_no_absence() 
         .unwrap()
         .record()
         .clone();
-    l.db.execute_batch("DROP TABLE remote_approval_decisions; DROP TABLE remote_approval_receipts; DROP TABLE remote_approval_publications; DROP TRIGGER reject_absent_file_update; DROP TABLE sent_file_absence")
+    l.db.execute_batch("DROP TABLE remote_verdict_receipts; DROP TABLE remote_verdict_publications; DROP TABLE remote_approval_decisions; DROP TABLE remote_approval_receipts; DROP TABLE remote_approval_publications; DROP TRIGGER reject_absent_file_update; DROP TABLE sent_file_absence")
         .unwrap();
     let snapshot = l.snapshot(OWNER, &"a".repeat(64), 30).unwrap();
     let mut restored = Ledger::open_scoped(":memory:", OWNER, &"a".repeat(64)).unwrap();

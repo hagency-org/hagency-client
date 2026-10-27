@@ -30,6 +30,7 @@ pub(super) fn management_read(command: &Command) -> bool {
         | Command::Binding {action: BindingAction::Status, ..}
         | Command::Provider {action: ProviderAction::Status | ProviderAction::Models}
         | Command::RuntimeProvider {action: ProviderAction::Status | ProviderAction::Models, ..}
+        | Command::RemoteApprovals {action: ::hagency::native_owner::RemoteApprovalAction::List {..} | ::hagency::native_owner::RemoteApprovalAction::Status {..}}
         | Command::Local {action: LocalAction::AgentModel | LocalAction::AgentPolicy
             | LocalAction::Policy | LocalAction::Model | LocalAction::Runtime
             | LocalAction::AgentServiceStatus | LocalAction::Approvals, input: None, ..}
@@ -146,6 +147,33 @@ fn source_error(code: &str) -> NativeError {
     }
 }
 impl MatrixTokenSource for SdkTokens {
+    fn list_remote_requests<'a>(&'a self, room:&'a str,cursor:Option<&'a str>)->std::pin::Pin<Box<dyn std::future::Future<Output=Result<::hagency::native_owner::remote_approval::review::RequestPage,NativeError>> + Send + 'a>> {
+        Box::pin(async move {
+            self.access_token().await?;
+            let service=Service(self.0.upgrade().ok_or_else(||source_error("matrix_account_changed"))?);
+            let client=crate::sliding_sync::get_client().ok_or_else(||source_error("matrix_sign_in_required"))?;
+            remote_approvals::inbox::list(&client,&service.0.origin,&service.0.owner,room,cursor,||service.check().map_err(|e|source_error(&e))).await
+        })
+    }
+    fn inspect_remote_request<'a>(&'a self,room:&'a str,event:&'a str)->std::pin::Pin<Box<dyn std::future::Future<Output=Result<::hagency::native_owner::remote_approval::review::ObservedRequest,NativeError>> + Send + 'a>> {
+        Box::pin(async move {
+            self.access_token().await?;
+            let service=Service(self.0.upgrade().ok_or_else(||source_error("matrix_account_changed"))?);
+            let client=crate::sliding_sync::get_client().ok_or_else(||source_error("matrix_sign_in_required"))?;
+            remote_approvals::inbox::inspect(&client,&service.0.origin,&service.0.owner,room,event,||service.check().map_err(|e|source_error(&e))).await?.ok_or_else(||source_error("remote_approval_unavailable"))
+        })
+    }
+    fn publish_remote_verdict(&self,permit: ::hagency::native_owner::remote_approval::review::VerdictSendPermit,live:Arc<dyn Fn()->bool + Send + Sync>)->std::pin::Pin<Box<dyn std::future::Future<Output=Result<String,NativeError>> + Send + '_>> {
+        Box::pin(async move {
+            self.access_token().await?;
+            let service=Service(self.0.upgrade().ok_or_else(||source_error("matrix_account_changed"))?);
+            let client=crate::sliding_sync::get_client().ok_or_else(||source_error("matrix_sign_in_required"))?;
+            remote_approvals::inbox::publish(&client,&service.0.origin,permit,|| {
+                service.check().map_err(|e|source_error(&e))?;
+                if !live() {return Err(source_error("remote_approval_retired"));} Ok(())
+            }).await
+        })
+    }
     fn supports_remote_approvals(&self) -> bool { true }
     fn prepare_remote_approval<'a>(&'a self, room: &'a str) -> std::pin::Pin<Box<dyn std::future::Future<Output=Result<String,NativeError>> + Send + 'a>> {
         Box::pin(async move {
@@ -679,6 +707,8 @@ mod tests {
     #[test]
     fn waiting_deadline_accepts_reads_but_never_detaches_actions_or_recovery() {
         for command in [Command::AgentDetails {agent_id:"a".into()}, Command::Agents, Command::Projects, Command::AgentCommands,
+            Command::RemoteApprovals {action: ::hagency::native_owner::RemoteApprovalAction::List {agent:"a".into(),room:"!private:test".into(),cursor:None}},
+            Command::RemoteApprovals {action: ::hagency::native_owner::RemoteApprovalAction::Status {approval_id:"a".repeat(64)}},
             Command::Creations, Command::Creation {id: "original".into()},
             Command::Provider {action: ProviderAction::Models},
             Command::Binding {agent_id:"a".into(),binding_id:"b".into(),action:BindingAction::Status},
@@ -686,6 +716,7 @@ mod tests {
             assert!(management_read(&command), "{command:?}");
         }
         for command in [Command::AssignAgentToCurrentDevice {agent_id:"a".into(),expected_generation:4}, Command::CreateAgent {input:serde_json::json!({})},
+            Command::RemoteApprovals {action: ::hagency::native_owner::RemoteApprovalAction::Decide {agent:"a".into(),room:"!private:test".into(),event_id:"$request".into(),request_digest:"a".repeat(64),approved:true}},
             Command::BindAgent {agent_id:"a".into(),input:serde_json::json!({})},
             Command::CreateMatrix {input:serde_json::json!({})},
             Command::ResumeCreation {id:"original".into(),room_id:None},

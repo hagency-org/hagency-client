@@ -3,10 +3,11 @@ name: "Current native owner remote approval publication and decisions"
 tags: [active, rust, desktop]
 ---
 
-This covers the original execution device's private approval publication and
-verified verdict consumption into its exact live PendingApproval. Full A4 still
-requires the remote approver inbox/outgoing-verdict UI, actual Synapse/native
-qualification, per-Agent crypto identity and encrypted Agent task/file execution.
+This covers the execution device's private approval publication and verified
+verdict consumption into its exact live PendingApproval, plus the remote owner's
+verified request inbox and irreversible encrypted verdict publication. Full A4
+still requires actual Synapse/native qualification, per-Agent crypto identity
+and encrypted Agent task/file execution.
 Manual/cross-platform gates and A3 remain. This contract preserves that scope.
 
 - Commit original owner/profile/approval/execution/device/room/proposal scope
@@ -46,7 +47,7 @@ publication, decryption and a different signed owner-device verdict over a local
 HTTP homeserver double, followed by the actual original journal decision. It also
 rejects a newly shared room and a real unsigned device's forged verified/device
 claims. Older envelope guards explicitly synthesize SDK metadata; those fixtures
-alone do not qualify authentication. Real Synapse, native approver UI and provider
+alone do not qualify authentication. Real Synapse, manual native UI and provider
 acceptance remain separate gates. No JSON field named verified establishes trust.
 
 - Sample the actual host clock again after acquiring the writer lock. A stale
@@ -90,4 +91,35 @@ The destination selector shows room names from cached candidates; fresh SDK fact
 authorize actual publication. Verdict discovery reads a complete bounded set of
 encrypted m.reference relations to the original event, rejects incomplete or
 ambiguous input and rechecks actual SDK verification. No event ID entry is needed.
-The remote approver inbox and outgoing-verdict UI remain separate work.
+The remote owner's English/Chinese inbox reads bounded encrypted history pages,
+shows the complete exact proposal and can copy it. It needs no local provider or
+Agent execution assignment. Deciding re-observes the original signed event and
+commits possible IO to the same owner-profile ledger before returning a single
+send permit; unknown, conflicting choice, reopen and snapshot restore never rearm
+it. Original verdict IO remains joined at shutdown, retaining late acceptance.
+
+- The remote reviewer cannot resend a changed choice, reconstruct original
+  custody from another handle or mint any tool grant.
+  Test: remote_reviewer_original_publication_cannot_rearm_after_drop_reopen_or_conflicting_choice
+- Require exact reviewed digest and fresh signed owner/profile/device scope
+  before reserving any outgoing verdict.
+  Test: remote_reviewer_fresh_verified_scope_and_exact_reviewed_digest_precede_any_reservation
+- Preserve unknown outgoing decisions across snapshots, and migrate only the
+  exact previous schema with empty new metadata.
+  Test: remote_reviewer_snapshot_retains_unknown_decision_and_previous_schema_migrates_empty
+- Bound actual UTF-8 metadata and retained rows without pruning for retries.
+  Test: remote_reviewer_capacity_counts_actual_utf8_and_never_prunes_for_a_retry
+- Re-sample current host time after the actual SQLite writer wait.
+  Test: remote_reviewer_clock_after_actual_writer_wait_cannot_extend_request_or_sdk_proof
+- Native outgoing decisions require original verified request/digest; recording
+  publication does not signal a local pending execution.
+  Test-Platforms: [linux, macos]
+  Test: native_remote_reviewer_exact_request_and_durable_verdict_do_not_signal_local_pending
+- Unknown cannot resend; shutdown joins original possible IO and retains only
+  its actual late receipt, including a denial.
+  Test-Platforms: [linux, macos]
+  Test: native_remote_reviewer_unknown_is_not_republished_and_late_receipt_is_joined_on_shutdown
+
+Desktop tests cover another-device UI complete-command rendering and disabled
+unknown decisions. The actual SDK crypto test now also exercises verified request
+inspection, bounded inbox pagination and the real irreversible verdict publisher.

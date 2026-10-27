@@ -10,6 +10,7 @@ use crate::{Error, Ledger, Result, ToolProposal, audit::Phase, hash, json};
 use rusqlite::{OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json as value};
+pub mod review;
 pub(crate) const SCHEMA: &str = include_str!("remote_approval/schema.sql");
 pub(crate) const OBJECTS: &[&str] = &[
     "remote_approval_publications",

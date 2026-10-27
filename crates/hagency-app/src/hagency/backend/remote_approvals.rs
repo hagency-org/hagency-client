@@ -17,6 +17,7 @@ use std::time::Duration;
 static PUBLISHES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
 static SEARCHES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
 static READS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+pub(super) mod inbox;
 fn refused() -> NativeError {
     source_error("remote_approval_unverified")
 }

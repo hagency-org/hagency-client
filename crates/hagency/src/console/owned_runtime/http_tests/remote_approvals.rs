@@ -9,6 +9,10 @@ use hagency_agent_local::{
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 #[derive(Default)]
 struct RemoteSource {
+    request: std::sync::Mutex<Option<remote::Request>>,
+    verdict_calls: AtomicUsize,
+    verdict_hold: AtomicBool,
+    verdict_unknown: AtomicBool,
     calls: AtomicUsize,
     hold: AtomicBool,
     unknown: AtomicBool,
@@ -17,6 +21,59 @@ struct RemoteSource {
     release: tokio::sync::Notify,
 }
 impl MatrixTokenSource for RemoteSource {
+    fn list_remote_requests<'a>(
+        &'a self,
+        _room: &'a str,
+        _cursor: Option<&'a str>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<remote::review::RequestPage, NativeError>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            Ok(remote::review::RequestPage {
+                requests: vec![self.reviewed()],
+                next_batch: None,
+            })
+        })
+    }
+    fn inspect_remote_request<'a>(
+        &'a self,
+        _room: &'a str,
+        _event: &'a str,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<remote::review::ObservedRequest, NativeError>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move { Ok(self.reviewed()) })
+    }
+    fn publish_remote_verdict(
+        &self,
+        permit: remote::review::VerdictSendPermit,
+        live: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, NativeError>> + Send + '_>>
+    {
+        Box::pin(async move {
+            assert!(live());
+            assert_eq!(permit.record().reviewer_matrix_device, "SDK_REMOTE");
+            self.verdict_calls.fetch_add(1, Ordering::AcqRel);
+            if self.verdict_hold.load(Ordering::Acquire) {
+                self.release.notified().await;
+            }
+            if self.verdict_unknown.load(Ordering::Acquire) {
+                return Err(NativeError {
+                    status: 503,
+                    code: "fixture_unknown".into(),
+                });
+            }
+            Ok("$remote-verdict".into())
+        })
+    }
     fn access_token(
         &self,
     ) -> std::pin::Pin<
@@ -43,6 +100,7 @@ impl MatrixTokenSource for RemoteSource {
         Box::pin(async move {
             assert!(live());
             assert_eq!(permit.request().owner, OWNER);
+            *self.request.lock().unwrap() = Some(permit.request().clone());
             assert!(
                 permit
                     .transaction_id()
@@ -116,6 +174,17 @@ impl MatrixTokenSource for RemoteSource {
                 },
             })
         })
+    }
+}
+impl RemoteSource {
+    fn reviewed(&self) -> remote::review::ObservedRequest {
+        remote::review::ObservedRequest {
+            observed_at: now(),
+            event_id: "$original-approval:test".into(),
+            sender_ed25519: "A".repeat(43),
+            reviewer_matrix_device: "SDK_REMOTE".into(),
+            request: self.request.lock().unwrap().clone().unwrap(),
+        }
     }
 }
 struct Gate(Arc<AtomicBool>);
@@ -553,4 +622,142 @@ async fn native_remote_approval_closed_receiver_retires_inflight_publication_bef
     assert!(f.publish("!private:test").await.is_err());
     assert_eq!(f.source.calls.load(Ordering::Acquire), 1);
     f.close().await;
+}
+
+#[tokio::test]
+async fn native_remote_reviewer_exact_request_and_durable_verdict_do_not_signal_local_pending() {
+    use crate::console::native::RemoteApprovalAction as Action;
+    let mut f = Fixture::new().await;
+    f.publish("!private:test").await.unwrap();
+    f.settled("sent").await;
+    let page = f
+        .native
+        .execute(Command::RemoteApprovals {
+            action: Action::List {
+                agent: "agent-a".into(),
+                room: "!private:test".into(),
+                cursor: None,
+            },
+        })
+        .await
+        .unwrap();
+    let row = &page["requests"][0];
+    assert_eq!(row["request"]["approvalId"], f.view.proposal_id);
+    let command = |approved, digest: String| Command::RemoteApprovals {
+        action: Action::Decide {
+            agent: "agent-a".into(),
+            room: "!private:test".into(),
+            event_id: "$original-approval:test".into(),
+            request_digest: digest,
+            approved,
+        },
+    };
+    assert!(
+        f.native
+            .execute(command(true, "0".repeat(64)))
+            .await
+            .is_err()
+    );
+    assert_eq!(f.source.verdict_calls.load(Ordering::Acquire), 0);
+    let digest = row["requestDigest"].as_str().unwrap().to_owned();
+    f.native
+        .execute(command(true, digest.clone()))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let status = f
+                .native
+                .execute(Command::RemoteApprovals {
+                    action: Action::Status {
+                        approval_id: f.view.proposal_id.clone(),
+                    },
+                })
+                .await
+                .unwrap();
+            if status["publication"]["phase"] == "sent" {
+                assert_eq!(status["publication"]["eventId"], "$remote-verdict");
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(f.native.execute(command(false, digest)).await.is_err());
+    assert_eq!(f.source.verdict_calls.load(Ordering::Acquire), 1);
+    assert!(matches!(
+        f.decision.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+    ));
+    f.close().await;
+}
+
+#[tokio::test]
+async fn native_remote_reviewer_unknown_is_not_republished_and_late_receipt_is_joined_on_shutdown()
+{
+    use crate::console::native::RemoteApprovalAction as Action;
+    for lost in [false, true] {
+        let f = Fixture::new().await;
+        f.publish("!private:test").await.unwrap();
+        f.settled("sent").await;
+        f.source.verdict_hold.store(true, Ordering::Release);
+        f.source.verdict_unknown.store(lost, Ordering::Release);
+        let digest = f.source.reviewed().request.digest().unwrap();
+        f.native
+            .execute(Command::RemoteApprovals {
+                action: Action::Decide {
+                    agent: "agent-a".into(),
+                    room: "!private:test".into(),
+                    event_id: "$original-approval:test".into(),
+                    request_digest: digest.clone(),
+                    approved: false,
+                },
+            })
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while f.source.verdict_calls.load(Ordering::Acquire) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            f.native
+                .execute(Command::RemoteApprovals {
+                    action: Action::Decide {
+                        agent: "agent-a".into(),
+                        room: "!private:test".into(),
+                        event_id: "$original-approval:test".into(),
+                        request_digest: digest,
+                        approved: true
+                    }
+                })
+                .await
+                .is_err()
+        );
+        let native = f.native.clone();
+        let stopping = tokio::spawn(async move { native.shutdown_checked().await });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while f.native.test_console().authorized_device().await.is_ok() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!stopping.is_finished());
+        f.source.release.notify_one();
+        stopping.await.unwrap().unwrap();
+        let r = f
+            .ledger
+            .remote_verdict_record(OWNER, &f.view.proposal_id)
+            .unwrap()
+            .unwrap();
+        assert!(!r.approved);
+        assert_eq!(r.event_id.is_none(), lost);
+        assert_eq!(f.source.verdict_calls.load(Ordering::Acquire), 1);
+        f.server.abort();
+        let _ = f.server.await;
+    }
 }

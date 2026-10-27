@@ -3,6 +3,19 @@
 
 # Repository audit knowledge
 
+- **Remote approval reviewer, 2026-10-27:** RemoteApprovals is a native-only
+  owner-profile command and does not require a local Agent/provider assignment.
+  Its SDK inbox reads signed original requests, never trusts JSON verification,
+  and re-observes the exact reviewed digest before decision. Outgoing verdicts
+  commit permanent possible-IO witnesses before single-use send custody; another
+  choice/event/device, reopen or snapshot restore cannot rearm them. Keep the
+  original same Ledger handle for late actual receipts. NativeOwner joins these
+  jobs after retirement; each job retains an update continuation guard. Incoming
+  request proof and outgoing publication are not an execution or tool grant.
+  The full current ledger snapshot includes these rows; exact older schemas
+  migrate empty metadata. Real Synapse/native/provider qualification and encrypted
+  Agent identity/task/file execution still remain, alongside A3 and prior gates.
+
 - **Private owner approval runtime, 2026-10-27:** SDK1c48a831 on the pinned0.19.1
   fork seals a detached one-event Megolm session for current cross-signed own
   devices only; never reuse or cache it as a room outbound session. Owned SDK

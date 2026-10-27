@@ -1,7 +1,7 @@
 use super::*;
 use crate::{Budget, Layer, Limit, Period, Policy, RequestPolicy, ToolPolicy, inbox};
-const OWNER: &str = "@alice:test";
-fn setup(path: impl AsRef<std::path::Path>) -> (Ledger, Request) {
+pub(super) const OWNER: &str = "@alice:test";
+pub(super) fn setup(path: impl AsRef<std::path::Path>) -> (Ledger, Request) {
     let mut l = Ledger::open_scoped(path, OWNER, &"a".repeat(64)).unwrap();
     let mut event = inbox::Dispatch {
         id: "dispatch".into(),
@@ -343,7 +343,7 @@ fn remote_request_cannot_change_original_proposal_or_replace_publication_destina
 fn pre_remote_snapshot_preserves_original_audit_and_adds_no_remote_witness() {
     let (l, r) = setup(":memory:");
     let original = l.approval_record(OWNER, "agent", &r.approval_id).unwrap();
-    l.db.execute_batch("DROP TABLE remote_approval_decisions; DROP TABLE remote_approval_receipts; DROP TABLE remote_approval_publications").unwrap();
+    l.db.execute_batch("DROP TABLE remote_verdict_receipts; DROP TABLE remote_verdict_publications; DROP TABLE remote_approval_decisions; DROP TABLE remote_approval_receipts; DROP TABLE remote_approval_publications").unwrap();
     let snap = l.snapshot(OWNER, &r.profile, 40).unwrap();
     let inspected =
         crate::backup::Snapshot::inspect(snap.bytes().to_vec(), OWNER, &r.profile).unwrap();

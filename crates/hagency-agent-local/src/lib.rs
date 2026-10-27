@@ -304,6 +304,7 @@ impl Ledger {
         db.execute_batch(sent_files::SCHEMA)?;
         db.execute_batch(sent_files::HISTORY_SCHEMA)?;
         db.execute_batch(remote_approval::SCHEMA)?;
+        db.execute_batch(remote_approval::review::SCHEMA)?;
         db.execute_batch("COMMIT")?;
         db.pragma_update(None, "foreign_keys", true)?;
         Ok(Self {

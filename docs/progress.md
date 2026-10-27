@@ -14545,3 +14545,42 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   shutdown OutcomeUnknown failure. Remote approver inbox/outgoing-verdict UI,
   real Synapse/native qualification, per-Agent encrypted identity/tasks/files,
   A3 and earlier manual/platform/OAuth gates remain. Objective stays active.
+
+## 2026-10-27: Remote owner inbox and irreversible verdict publication
+
+- Previous goal turn pushedff496b83. Fetched origin/main before this work;
+  main42e59b9e remains an ancestor of codex/remote-owner-approvals. Its live CI
+  40438406366/App40438410171/full40438413947 were specifically re-observed; do
+  not replace those original runs merely because an observation period elapsed.
+- Added native-only RemoteApprovals commands for the other owner's device,
+  actual SDK signed-request history/inspection and detached encrypted verdicts.
+  SDK proof/current private state, exact reviewed digest and owner/profile/Room/
+  Agent scope precede reservation. Re-sample time after the actual SQLite writer
+  wait; received request metadata never establishes trust or execution authority.
+- Permanent outgoing publication/receipt tables live in the same owner ledger;
+  first committed possible IO alone yields non-Clone single-use send custody.
+  Unknown, another choice/event/device, reopen or snapshot restore cannot rearm.
+  Exact older schemas migrate empty metadata; current snapshots retain all rows.
+  SDK re-observes the original request before sealing/sending, disables retries
+  and checks current account/device/expiry before every write. NativeOwner joins
+  original IO after retirement; a retained update guard fences installation.
+- English/Chinese remote approval tab works without a local provider or execution
+  assignment: named private-room candidates, bounded paged requests, complete
+  exact action/copy, approve once/deny and original verdict delivery status.
+  Unknown disables new decisions. Actual Makepad component test proves a complete
+  >20000-character command and scope reset; manual desktop qualification remains.
+- Actual SDK crypto HTTP fixture now invokes real inbox/request inspection,
+  remote journal reservation and verdict publisher, then original device decrypt/
+  verify/journal consumption. It remains local HTTP, not Synapse/native/provider
+  joint qualification. Two new NativeOwner tests use an explicit Matrix double.
+- Agent-local162/3 original ignores, engine271/9 (7 original plus2 external gates),
+  App625/2 original ignores pass. Final Native reviewer2 pass after retaining the
+  update guard. Current core/App default-feature all-targets strict Clippy with
+  App CI --no-deps, core format/spelling,46 guards, one caller and1191 bindings
+  pass with no missing/deferred/platform gaps. i18n2520/1906/missing0.
+- Initial test-helper visibility, SDK child-module visibility, Native test method/
+  private-field errors and an independent-if formatting lint remain failed in
+  their original logs. Corrections did not weaken production checks. Detailed
+  evidence and remaining real Synapse/native/provider, encrypted Agent identity/
+  tasks/files, A3 and earlier manual/platform/OAuth gates stay in dev-vibe.
+  The full objective remains active.

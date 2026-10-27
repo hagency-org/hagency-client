@@ -1,7 +1,9 @@
 //! Token-free native commands routed through the existing authenticated service.
 mod configuration;
 mod ledger;
+mod remote_reviews;
 pub use ledger::LedgerAction;
+pub use remote_reviews::RemoteApprovalAction;
 mod history;
 mod speech;
 mod usage;
@@ -66,6 +68,48 @@ pub struct ContinuationMessage {
 pub use hagency_agent_local::attachments::Attachment as AgentAttachment;
 pub const MAX_AGENT_FILE_BYTES: usize = hagency_agent_local::received_files::MAX_BYTES;
 pub trait MatrixTokenSource: Send + Sync {
+    fn list_remote_requests<'a>(
+        &'a self,
+        _room: &'a str,
+        _cursor: Option<&'a str>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        hagency_agent_local::remote_approval::review::RequestPage,
+                        NativeError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async { Err(failure(503, "remote_approval_transport_unavailable")) })
+    }
+    fn inspect_remote_request<'a>(
+        &'a self,
+        _room: &'a str,
+        _event: &'a str,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        hagency_agent_local::remote_approval::review::ObservedRequest,
+                        NativeError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async { Err(failure(503, "remote_approval_transport_unavailable")) })
+    }
+    fn publish_remote_verdict(
+        &self,
+        _permit: hagency_agent_local::remote_approval::review::VerdictSendPermit,
+        _live: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, NativeError>> + Send + '_>>
+    {
+        Box::pin(async { Err(failure(503, "remote_approval_transport_unavailable")) })
+    }
     fn supports_remote_approvals(&self) -> bool {
         false
     }
@@ -249,6 +293,9 @@ impl<'de> Deserialize<'de> for RoomCreationPolicy {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Command {
+    RemoteApprovals {
+        action: RemoteApprovalAction,
+    },
     AgentHistory {
         action: HistoryAction,
     },
@@ -405,6 +452,7 @@ impl Command {
         matches!(
             self,
             Self::Projects
+                | Self::RemoteApprovals { .. }
                 | Self::ProjectRooms { .. }
                 | Self::Agents
                 | Self::Bindings { .. }
@@ -488,6 +536,7 @@ fn request(command: Command) -> Result<(&'static str, String, Option<Value>), Na
         | Command::ExecutionEnvironment { .. }
         | Command::AgentConfiguration { .. }
         | Command::Ledger { .. }
+        | Command::RemoteApprovals { .. }
         | Command::AgentUsage { .. }
         | Command::AgentHistory { .. } => {
             return Err(failure(400, "configuration_operation_unsupported"));
@@ -856,6 +905,7 @@ struct Inner {
     matrix_sync: Mutex<()>,
     configuration_stopped: std::sync::atomic::AtomicBool,
     configuration_tasks: StdMutex<Vec<tokio::task::JoinHandle<()>>>,
+    review_tasks: StdMutex<Vec<tokio::task::JoinHandle<()>>>,
     callback_task: StdMutex<Option<tokio::task::JoinHandle<()>>>,
     matrix_source: StdMutex<Option<Arc<dyn MatrixTokenSource>>>,
     shutdown: std::sync::OnceLock<crate::shutdown::Task>,
@@ -863,6 +913,11 @@ struct Inner {
 impl Drop for Inner {
     fn drop(&mut self) {
         self.host.console.retire();
+        if let Ok(tasks) = self.review_tasks.get_mut() {
+            for task in tasks.drain(..) {
+                task.abort();
+            }
+        }
         if let Ok(tasks) = self.configuration_tasks.get_mut() {
             for task in tasks.drain(..) {
                 task.abort();
@@ -949,6 +1004,7 @@ impl NativeOwner {
             matrix_sync: Mutex::new(()),
             configuration_stopped: std::sync::atomic::AtomicBool::new(false),
             configuration_tasks: StdMutex::new(Vec::new()),
+            review_tasks: StdMutex::new(Vec::new()),
             callback_task: StdMutex::new(None),
             matrix_source: StdMutex::new(None),
             shutdown: std::sync::OnceLock::new(),
@@ -1111,6 +1167,15 @@ impl NativeOwner {
         // Fence capabilities synchronously before any awaited cleanup, including
         // a late OAuth exchange or an in-flight runtime/provider launch.
         self.retire();
+        let (reviews, mut review_result) = match self.0.review_tasks.lock() {
+            Ok(mut tasks) => (std::mem::take(&mut *tasks), Ok(())),
+            Err(_) => (Vec::new(), Err(crate::shutdown::Error::Worker)),
+        };
+        for task in reviews {
+            if task.await.is_err() {
+                review_result = Err(crate::shutdown::Error::Worker);
+            }
+        }
         let (tasks, mut result) = match self.0.configuration_tasks.lock() {
             Ok(mut tasks) => (std::mem::take(&mut *tasks), Ok(())),
             Err(_) => (Vec::new(), Err(crate::shutdown::Error::Worker)),
@@ -1138,6 +1203,7 @@ impl NativeOwner {
             }
         }
         result
+            .and(review_result)
             .and(stopped)
             .and(login.persist_revocations_for_update().await)
     }
@@ -1283,6 +1349,12 @@ impl NativeOwner {
         if let Command::Ledger { action } = command {
             self.check_matrix_source().await?;
             let result = ledger::execute(self, action).await;
+            self.check_matrix_source().await?;
+            return result;
+        }
+        if let Command::RemoteApprovals { action } = command {
+            self.check_matrix_source().await?;
+            let result = remote_reviews::execute(self, action).await;
             self.check_matrix_source().await?;
             return result;
         }

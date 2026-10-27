@@ -88,6 +88,8 @@ enum Target {
     ApprovalDecision,
     RemoteApproval,
     RemoteApprovalDecision,
+    RemoteInbox,
+    RemoteVerdict,
     Members,
     Changed,
     ProjectAdopted,
@@ -446,6 +448,9 @@ fn user_error(error: &str) -> &str {
         "remote_approval_waiting" => "Waiting for a verified decision.",
         "remote_approval_incomplete" => "Decision history is incomplete. No approval was applied.",
         "remote_approval_transport_unavailable" => "Remote approvals require the current Matrix client.",
+        "remote_approval_unavailable" | "remote_approval_unverified" => "This remote request could not be verified. Refresh its original request before deciding.",
+        "remote_approval_busy" => "Private approvals are busy. Wait for the original operations to finish.",
+        "remote_approval_expired" => "This approval request has expired.",
         "recovery_stop_unconfirmed" => "No observed provider stop is recorded. Continuation is unavailable.",
         "recovery_runtime_busy" => "Stop this Agent's services before inspecting or deciding a stopped request.",
         "recovery_review_changed" => "The recovery review expired or the files changed. Inspect the original request and files again.",
@@ -792,6 +797,25 @@ script_mod! {
                         recovery_tab := Action {text: #(crate::i18n::tr("Recovery")) i18n_text: "Recovery"}
                         files_tab := Action {text: #(crate::i18n::tr("File delivery")) i18n_text: "File delivery"}
                         history_tab := Action {text: #(crate::i18n::tr("Approval history")) i18n_text: "Approval history"}
+                        remote_review_tab := Action {text: #(crate::i18n::tr("Remote approvals")) i18n_text: "Remote approvals"}
+                    }
+                    remote_review_section := Section {visible: false width: Fill height: Fit flow: Down spacing: 8
+                        Text {text: #(crate::i18n::tr("Requests from your other devices")) i18n_text: "Requests from your other devices"}
+                        Text {text: #(crate::i18n::tr("Choose your private approval Room and review the complete original action. Your decision applies once; the execution device still checks the live task and policies.")) i18n_text: "Choose your private approval Room and review the complete original action. Your decision applies once; the execution device still checks the live task and policies." draw_text.color: mod.widgets.RINX_MUTED}
+                        remote_review_room := Select {labels: [#(crate::i18n::tr("Select a private approval Room"))]}
+                        View {width: Fill height: Fit flow: Flow.Right{wrap: true} spacing: 8
+                            remote_review_refresh := Action {text: #(crate::i18n::tr("Refresh requests")) i18n_text: "Refresh requests"}
+                            remote_review_older := Action {text: #(crate::i18n::tr("Older requests")) i18n_text: "Older requests"}
+                        }
+                        remote_review_requests := Select {labels: [#(crate::i18n::tr("Select a remote approval request"))]}
+                        remote_review_details := Text {}
+                        remote_review_copy := Action {text: #(crate::i18n::tr("Copy complete proposal")) i18n_text: "Copy complete proposal"}
+                        remote_review_status := Text {draw_text.color: mod.widgets.RINX_MUTED}
+                        View {width: Fill height: Fit flow: Flow.Right{wrap: true} spacing: 8
+                            remote_review_allow := Action {text: #(crate::i18n::tr("Approve exact request once")) i18n_text: "Approve exact request once"}
+                            remote_review_deny := Danger {text: #(crate::i18n::tr("Reject request")) i18n_text: "Reject request"}
+                            remote_review_receipt := Action {text: #(crate::i18n::tr("Refresh decision delivery")) i18n_text: "Refresh decision delivery"}
+                        }
                     }
                     recovery_section := Section {visible: false width: Fill height: Fit flow: Down spacing: 8
                         Text {text: #(crate::i18n::tr("Inspect a stopped request")) i18n_text: "Inspect a stopped request"}
@@ -1269,6 +1293,10 @@ pub struct HagencyPanel {
     #[rust] approval_notices: Notices,
     #[rust] remote_approval: Value,
     #[rust] remote_approval_rooms: Vec<Value>,
+    #[rust] remote_review_rooms: Vec<Value>,
+    #[rust] remote_review_requests: Vec<Value>,
+    #[rust] remote_review_next: Option<String>,
+    #[rust] remote_review_cursors: HashSet<String>,
     #[rust] approval_checked: bool,
     #[rust] approval_blocked: HashSet<String>,
     #[rust] read_timer: Timer,
@@ -1294,6 +1322,36 @@ impl HagencyPanel {
     fn approval_view_open(&self,cx:&mut Cx)->bool {
         self.active && self.page==Page::Agents && self.view.view(cx,ids!(agent_detail)).visible()
             && self.view.view(cx,ids!(runtime_section)).visible()
+    }
+    fn clear_remote_reviews(&mut self,cx:&mut Cx) {
+        self.remote_review_requests.clear();self.remote_review_rooms.clear();self.remote_review_next=None;self.remote_review_cursors.clear();
+        self.labels(cx,ids!(remote_review_room),"Select a private approval Room",&[],"name");
+        self.render_remote_reviews(cx);
+    }
+    fn render_remote_reviews(&self,cx:&mut Cx) {
+        let selected=self.selected(cx,ids!(remote_review_requests),&self.remote_review_requests).map(|v|string(&v,"requestEventId").to_owned());
+        self.view.drop_down(cx,ids!(remote_review_requests)).set_labels(cx,std::iter::once(crate::i18n::tr("Select a remote approval request").to_owned()).chain(self.remote_review_requests.iter().map(|r|format!("{} · {}",string(&r["request"]["proposal"],"tool"),string(&r["request"]["proposal"]["scope"],"requester")))).collect());
+        let index=selected.and_then(|id|self.remote_review_requests.iter().position(|r|string(r,"requestEventId")==id)).map_or(0,|i|i+1);
+        self.view.drop_down(cx,ids!(remote_review_requests)).set_selected_item(cx,index);
+        let row=self.selected(cx,ids!(remote_review_requests),&self.remote_review_requests);
+        let details=row.as_ref().map(|r|super::approvals::details(&json!({"proposalId":r["request"]["approvalId"],"argsDigest":r["request"]["proposalDigest"],"proposal":r["request"]["proposal"]}),super::approvals::now())).unwrap_or_else(||crate::i18n::tr("Select a remote approval request").into());
+        self.view.label(cx,ids!(remote_review_details)).set_text(cx,&details);
+        let status=row.as_ref().map(|r|match r["publication"]["phase"].as_str() {Some("sent")=>"Decision delivered. Execution is not yet confirmed.",Some(_)=>"Decision delivery is unconfirmed. Refresh its original status; do not send again.",None if r["request"]["proposal"]["expires"].as_i64().is_none_or(|t|t<=super::approvals::now())=>"This approval request has expired.",None=>"Review the exact action before deciding."}).unwrap_or("");
+        self.view.label(cx,ids!(remote_review_status)).set_text(cx,crate::i18n::tr(status));
+    }
+    fn refresh_remote_review_rooms(&mut self,cx:&mut Cx) {
+        if !Service::for_current().is_ok_and(|s|s.identity()==self.identity) {return;}
+        let selected=self.selected(cx,ids!(remote_review_room),&self.remote_review_rooms).map(|r|string(&r,"id").to_owned());
+        self.remote_review_rooms=crate::sliding_sync::get_client().map(|client|client.joined_rooms().into_iter().filter(|r|!r.is_space() && r.encryption_state().is_encrypted() && r.joined_members_count()==1 && r.invited_members_count()==0).take(128).map(|r|json!({"id":r.room_id().as_str(),"name":r.cached_display_name().map(|n|n.to_string()).or_else(||r.name()).unwrap_or_else(||r.room_id().to_string())})).collect()).unwrap_or_default();
+        self.labels(cx,ids!(remote_review_room),"Select a private approval Room",&self.remote_review_rooms,"name");
+        let index=selected.and_then(|id|self.remote_review_rooms.iter().position(|r|string(r,"id")==id)).map(|i|i+1).unwrap_or_else(||usize::from(self.remote_review_rooms.len()==1));
+        self.view.drop_down(cx,ids!(remote_review_room)).set_selected_item(cx,index);
+    }
+    fn load_remote_reviews(&mut self,cx:&mut Cx,older:bool) {
+        let Some(agent)=self.agent(cx) else {return;};
+        let Some(room)=self.selected(cx,ids!(remote_review_room),&self.remote_review_rooms) else {return;};
+        let cursor=if older {let Some(c)=self.remote_review_next.clone() else {return;};if !self.remote_review_cursors.insert(c.clone()) {return;}Some(c)} else {self.remote_review_requests.clear();self.remote_review_cursors.clear();None};
+        self.run(cx,Target::RemoteInbox,Command::RemoteApprovals {action:RemoteApprovalAction::List {agent,room:string(&room,"id").into(),cursor}});
     }
     fn remote_room(&self,cx:&mut Cx)->Option<String> {
         self.selected(cx,ids!(remote_approval_room),&self.remote_approval_rooms).map(|r|string(&r,"id").to_owned())
@@ -1899,6 +1957,7 @@ impl HagencyPanel {
 
         if self.direct_agent != string(&a,"id") {self.cancel_direct_retry(cx);}
         self.render_owner_direct(cx);
+        self.clear_remote_reviews(cx);
         self.view.view(cx, ids!(execution_badge)).label(cx, ids!(device_label)).set_text(cx, crate::i18n::tr("Checking execution device…"));
         self.view.check_box(cx, ids!(assignment_confirm)).set_active(cx, false, Animate::No);
         self.clear_approval_state(cx);
@@ -2081,6 +2140,10 @@ impl HagencyPanel {
             self.view.button(cx,id).set_enabled(cx,enabled);self.view.widget(cx,id).set_disabled(cx,!enabled);
         }
         self.view.widget(cx,ids!(remote_approval_room)).set_disabled(cx,self.busy || published);
+        let reviewed=self.selected(cx,ids!(remote_review_requests),&self.remote_review_requests);
+        let actionable=reviewed.as_ref().is_some_and(|r|r["publication"].is_null() && self.agent(cx).as_deref()==r["request"]["proposal"]["scope"]["agent"].as_str() && self.selected(cx,ids!(remote_review_room),&self.remote_review_rooms).is_some_and(|room|room["id"]==r["request"]["approvalRoom"]) && r["request"]["proposal"]["expires"].as_i64().is_some_and(|t|t>super::approvals::now()));
+        for (id,enabled) in [(ids!(remote_review_allow),actionable),(ids!(remote_review_deny),actionable),(ids!(remote_review_copy),reviewed.is_some()),(ids!(remote_review_receipt),reviewed.as_ref().is_some_and(|r|r["publication"].is_object())),(ids!(remote_review_refresh),!self.remote_review_rooms.is_empty()),(ids!(remote_review_older),self.remote_review_next.is_some() && self.remote_review_requests.len()<128)] {self.view.button(cx,id).set_enabled(cx,!self.busy && enabled);self.view.widget(cx,id).set_disabled(cx,self.busy || !enabled);}
+        self.view.widget(cx,ids!(remote_review_room)).set_disabled(cx,self.busy);
         let badge = self.view.widget(cx, ids!(execution_badge));
         render_device_badge(cx, &badge, agent_device_state(&self.execution_agent_record, &self.current_device_id, &self.execution_devices, self.devices_loaded), &self.device_badge(&self.execution_agent_record));
         let device_id=string(&self.execution_agent_record,"executionDeviceId");
@@ -2369,6 +2432,7 @@ impl HagencyPanel {
             ids!(runtime_section),
             ids!(usage_section),
             ids!(history_section),
+            ids!(remote_review_section),
             ids!(files_section),
             ids!(recovery_section),
         ] {
@@ -2381,6 +2445,7 @@ impl HagencyPanel {
             (ids!(runtime_tab), ids!(runtime_section)),
             (ids!(usage_tab), ids!(usage_section)),
             (ids!(history_tab), ids!(history_section)),
+            (ids!(remote_review_tab), ids!(remote_review_section)),
             (ids!(files_tab), ids!(files_section)),
             (ids!(recovery_tab), ids!(recovery_section)),
         ] {
@@ -3276,6 +3341,18 @@ impl HagencyPanel {
                 }
                 self.sync_navigation(cx);
             }
+            Target::RemoteInbox => {
+                if self.agent(cx).as_deref()!=value["agentId"].as_str() || !self.selected(cx,ids!(remote_review_room),&self.remote_review_rooms).is_some_and(|r|r["id"]==value["roomId"]) {return;}
+                for row in array(value,"requests") {
+                    if self.remote_review_requests.len()>=128 {break;}
+                    if let Some(existing)=self.remote_review_requests.iter_mut().find(|r|r["requestEventId"]==row["requestEventId"]) {*existing=row;}else{self.remote_review_requests.push(row);}
+                }
+                self.remote_review_next=value["nextBatch"].as_str().map(str::to_owned);self.render_remote_reviews(cx);self.sync_navigation(cx);
+            }
+            Target::RemoteVerdict => {
+                for row in &mut self.remote_review_requests {if row["request"]["approvalId"]==value["approvalId"] {row["publication"]=value["publication"].clone();}}
+                self.render_remote_reviews(cx);self.sync_navigation(cx);
+            }
             Target::RemoteApprovalDecision => {
                 if value["decided"]==true {if let Some(id)=value["approvalId"].as_str() {self.approval_blocked.insert(id.into());}}
                 self.apply(cx,Target::ApprovalDecision,value);
@@ -3983,6 +4060,9 @@ impl Widget for HagencyPanel {
         if self.open_card(cx, actions) {
             return;
         }
+        if self.view.button(cx,ids!(remote_review_tab)).clicked(actions) {
+            self.section(cx,ids!(remote_review_section));self.refresh_remote_review_rooms(cx);self.sync_navigation(cx);return;
+        }
         for (id, section) in [
             (ids!(setup_tab), ids!(setup_section)),
             (ids!(policy_tab), ids!(policy_section)),
@@ -4614,6 +4694,31 @@ impl Widget for HagencyPanel {
             self.refresh_approvals(cx);
             return;
         }
+        if self.view.drop_down(cx,ids!(remote_review_room)).selected(actions).is_some() {
+            self.remote_review_requests.clear();self.remote_review_next=None;self.remote_review_cursors.clear();self.render_remote_reviews(cx);self.sync_navigation(cx);return;
+        }
+        if self.view.drop_down(cx,ids!(remote_review_requests)).selected(actions).is_some() {self.render_remote_reviews(cx);self.sync_navigation(cx);return;}
+        if self.view.button(cx,ids!(remote_review_refresh)).clicked(actions) || self.view.button(cx,ids!(remote_review_older)).clicked(actions) {
+            self.load_remote_reviews(cx,self.view.button(cx,ids!(remote_review_older)).clicked(actions));return;
+        }
+        if self.view.button(cx,ids!(remote_review_copy)).clicked(actions) {
+            if let Some(row)=self.selected(cx,ids!(remote_review_requests),&self.remote_review_requests) {cx.copy_to_clipboard(&serde_json::to_string_pretty(&row["request"]).unwrap_or_default());}return;
+        }
+        if self.view.button(cx,ids!(remote_review_allow)).clicked(actions) || self.view.button(cx,ids!(remote_review_deny)).clicked(actions) || self.view.button(cx,ids!(remote_review_receipt)).clicked(actions) {
+            if self.busy {return;}
+            let Some(row)=self.selected(cx,ids!(remote_review_requests),&self.remote_review_requests) else {return;};
+            let Some(agent)=self.agent(cx) else {return;};
+            if row["request"]["proposal"]["scope"]["agent"]!=agent {return;}
+            let id=string(&row["request"],"approvalId").to_owned();
+            let action=if self.view.button(cx,ids!(remote_review_receipt)).clicked(actions) {RemoteApprovalAction::Status {approval_id:id}} else {
+                if !row["publication"].is_null() || row["request"]["proposal"]["expires"].as_i64().is_none_or(|t|t<=super::approvals::now()) || !self.selected(cx,ids!(remote_review_room),&self.remote_review_rooms).is_some_and(|r|r["id"]==row["request"]["approvalRoom"]) {return;}
+                let approved=self.view.button(cx,ids!(remote_review_allow)).clicked(actions);
+                for r in &mut self.remote_review_requests {if r["request"]["approvalId"]==id {r["publication"]=json!({"phase":"unknown","approved":approved});}}
+                self.render_remote_reviews(cx);
+                RemoteApprovalAction::Decide {agent,room:string(&row["request"],"approvalRoom").into(),event_id:string(&row,"requestEventId").into(),request_digest:string(&row,"requestDigest").into(),approved}
+            };
+            self.run(cx,Target::RemoteVerdict,Command::RemoteApprovals {action});return;
+        }
         if self
             .view
             .drop_down(cx, ids!(approvals))
@@ -4867,7 +4972,7 @@ impl HagencyPanelRef {
             panel.agents_loaded = false;
             panel.agents_loading = false;
             panel.bindings.clear();
-            panel.clear_approval_state(cx);panel.approval_blocked.clear();
+            panel.clear_approval_state(cx);panel.clear_remote_reviews(cx);panel.approval_blocked.clear();
             panel.approvals.clear();
             panel.clear_configuration(cx);panel.configuration_keys.clear();
             panel.policy = Value::Null;
@@ -5204,6 +5309,29 @@ mod tests {
         assert!(!panel.view.button(&cx,ids!(remote_approval_refresh)).borrow().unwrap().enabled());
         panel.clear_approval_state(&mut cx);assert!(panel.remote_approval.is_null());
         assert_eq!(panel.view.drop_down(&cx,ids!(remote_approval_room)).selected_item(),0);
+    }
+
+    #[test]
+    fn remote_reviewer_ui_shows_complete_action_on_other_device_and_never_rearms_unknown() {
+        let mut cx=Cx::new(Box::new(|_,_|{}));
+        let mut panel=cx.with_vm(|vm|{makepad_widgets::script_mod(vm);crate::app::register_widgets(vm);vm.bx.captured_errors=Some(Vec::new());let v=script_eval!(vm,{mod.widgets.HagencyPanel {}});let p=HagencyPanel::script_from_value(vm,v);assert!(vm.take_errors().is_empty());p});
+        panel.agents=vec![json!({"id":"a","executionDeviceId":"other-device","state":"active","generation":1})];
+        local_device_fixture(&mut panel,"a");panel.execution_agent_record["executionDeviceId"]=json!("other-device");
+        panel.labels(&mut cx,ids!(agents),"Select my Agent",&panel.agents,"id");panel.view.drop_down(&cx,ids!(agents)).set_selected_item(&mut cx,1);
+        panel.remote_review_rooms=vec![json!({"id":"!private:test","name":"Private approvals"})];
+        panel.labels(&mut cx,ids!(remote_review_room),"Select a private approval Room",&panel.remote_review_rooms,"name");panel.view.drop_down(&cx,ids!(remote_review_room)).set_selected_item(&mut cx,1);
+        let command=format!("{} exact final bytes","x".repeat(20000));
+        let row=json!({"requestEventId":"$original","requestDigest":"a".repeat(64),"request":{"approvalId":"a".repeat(64),"approvalRoom":"!private:test","proposalDigest":"b".repeat(64),"proposal":{"scope":{"agent":"a","binding":"b","room":"!task:test","requester":"@owner:test"},"tool":"codex.command","arguments":{"command":command},"expires":super::super::approvals::now()+300}},"publication":null});
+        panel.apply(&mut cx,Target::RemoteInbox,&json!({"agentId":"foreign","roomId":"!private:test","requests":[row.clone()]}));assert!(panel.remote_review_requests.is_empty());
+        panel.apply(&mut cx,Target::RemoteInbox,&json!({"agentId":"a","roomId":"!private:test","requests":[row],"nextBatch":"older"}));
+        panel.view.drop_down(&cx,ids!(remote_review_requests)).set_selected_item(&mut cx,1);panel.render_remote_reviews(&mut cx);panel.sync_navigation(&mut cx);
+        assert!(panel.view.button(&cx,ids!(remote_review_allow)).borrow().unwrap().enabled());
+        assert!(panel.view.button(&cx,ids!(remote_review_deny)).borrow().unwrap().enabled());
+        assert!(panel.view.label(&cx,ids!(remote_review_details)).text().contains(&command));
+        panel.apply(&mut cx,Target::RemoteVerdict,&json!({"approvalId":"a".repeat(64),"publication":{"phase":"unknown","approved":true}}));
+        assert!(!panel.view.button(&cx,ids!(remote_review_allow)).borrow().unwrap().enabled());assert!(!panel.view.button(&cx,ids!(remote_review_deny)).borrow().unwrap().enabled());
+        assert!(panel.view.button(&cx,ids!(remote_review_receipt)).borrow().unwrap().enabled());assert!(panel.view.button(&cx,ids!(remote_review_copy)).borrow().unwrap().enabled());
+        panel.clear_remote_reviews(&mut cx);panel.sync_navigation(&mut cx);assert!(panel.remote_review_requests.is_empty());assert!(!panel.view.button(&cx,ids!(remote_review_allow)).borrow().unwrap().enabled());
     }
 
     #[test]

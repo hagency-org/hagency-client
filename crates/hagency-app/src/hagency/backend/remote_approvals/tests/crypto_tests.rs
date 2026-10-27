@@ -9,7 +9,7 @@ use hagency_agent_local::{
 };
 use matrix_sdk::{
     test_utils::mocks::MatrixMockServer,
-    ruma::{device_id, event_id, room_id, user_id, TransactionId},
+    ruma::{device_id, event_id, room_id, user_id},
 };
 use serde_json::json;
 use std::sync::{Arc, Mutex};
@@ -333,22 +333,91 @@ async fn actual_sdk_private_publication_and_cross_signed_remote_verdict_reach_or
     let _capture_remote = server
         .capture_put_to_device_traffic(owner, queue.clone())
         .await;
-    let verdict = Verdict {
-        approval_id: request.approval_id.clone(),
-        request_digest: publication.request_digest().into(),
-        approved: true,
-    };
+    *event_response.lock().unwrap() = serde_json::from_str(encrypted_request.json().get()).unwrap();
+    let history = json!({"chunk":[serde_json::from_str::<Value>(encrypted_request.json().get()).unwrap()],"end":"older"});
+    Mock::given(method("GET"))
+        .and(path_regex(r"/rooms/[^/]+/messages$"))
+        .and(wiremock::matchers::query_param("dir", "b"))
+        .and(wiremock::matchers::query_param("limit", "10"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(history))
+        .mount(server.server())
+        .await;
+    let page = super::super::inbox::list(
+        &remote,
+        &origin,
+        owner.as_str(),
+        room_id.as_str(),
+        None,
+        || Ok(()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(page.requests.len(), 1);
+    assert_eq!(page.next_batch.as_deref(), Some("older"));
+    assert!(
+        super::super::inbox::list(
+            &remote,
+            &origin,
+            owner.as_str(),
+            room_id.as_str(),
+            Some("older"),
+            || Ok(())
+        )
+        .await
+        .is_err()
+    );
+    let inspected = super::super::inbox::inspect(
+        &remote,
+        &origin,
+        owner.as_str(),
+        room_id.as_str(),
+        &event,
+        || Ok(()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(inspected.request == request);
+    inspected
+        .validate(owner.as_str(), &request.profile, now())
+        .unwrap();
+    let mut reviewer = Ledger::open_scoped(":memory:", owner.as_str(), &request.profile).unwrap();
+    let mut outgoing = reviewer
+        .reserve_remote_verdict(
+            owner.as_str(),
+            &inspected,
+            publication.request_digest(),
+            true,
+            now,
+        )
+        .unwrap();
     let (verdict_rx, verdict_mock) = server
         .mock_room_send()
         .ok_with_capture(event_id!("$verdict"), owner);
     verdict_mock.mock_once().mount().await;
-    remote_room
-        .seal_for_own_devices("m.room.message", verdict.message_content(&event).unwrap())
-        .await
-        .unwrap()
-        .send(&TransactionId::new(), || true)
-        .await
+    let actual = super::super::inbox::publish(
+        &remote,
+        &origin,
+        outgoing.begin_publication().unwrap(),
+        || Ok(()),
+    )
+    .await
+    .unwrap();
+    reviewer
+        .record_remote_verdict_receipt(owner.as_str(), &outgoing, &actual, now())
         .unwrap();
+    assert_eq!(actual, "$verdict");
+    assert!(
+        reviewer
+            .reserve_remote_verdict(
+                owner.as_str(),
+                &inspected,
+                publication.request_digest(),
+                false,
+                now
+            )
+            .is_err()
+    );
     let encrypted_verdict = verdict_rx.await.unwrap();
     server
         .sync_back_pending_to_device_messages(queue, &host)
