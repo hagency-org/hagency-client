@@ -132,11 +132,62 @@ pub struct DomainRepository {
     approval_owner: std::sync::Arc<()>,
     warm_scopes: std::collections::BTreeMap<String, OwnedProvisionScope>,
 }
+
+#[cfg(test)]
+mod ownership_release_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn native_domain_shutdown_releases_inherited_ownership() {
+        for observed in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let state = root.path().join("state");
+            let repository = DomainRepository::open(&state).unwrap();
+            // dup and fork retain the same open file description. Keep that
+            // description alive across shutdown without another writer.
+            let inherited = repository._ownership.try_clone().unwrap();
+            let store = crate::DomainStore::start(repository, 1).unwrap();
+            assert!(matches!(DomainRepository::open(&state), Err(Error::Locked)));
+            if observed {
+                let (result, snapshot) = store.shutdown_observed().await;
+                result.unwrap();
+                assert_eq!(snapshot.outcome, crate::ShutdownOutcome::Complete);
+            } else {
+                store.shutdown().await.unwrap();
+            }
+            assert!(!store.writer_open());
+            let replacement = DomainRepository::open(&state)
+                .expect("acknowledged shutdown retained the original ownership lock");
+            drop(inherited);
+            assert!(
+                matches!(DomainRepository::open(&state), Err(Error::Locked)),
+                "closing the old inherited descriptor unlocked the replacement writer"
+            );
+            drop(replacement);
+            DomainRepository::open(&state).unwrap();
+        }
+    }
+}
 /// Current domain schema version (the last sequential migration).
 pub const DOMAIN_SCHEMA_VERSION: i32 = 60;
 
 impl DomainRepository {
-    pub(super) fn drop_observed(self, probe: &std::sync::Arc<crate::shutdown::Probe>) {
+    pub(super) fn close(self) -> Result<(), Error> {
+        let Self {
+            db,
+            accounts,
+            _ownership,
+            ..
+        } = self;
+        drop(db);
+        drop(accounts);
+        database::release_ownership(_ownership)
+    }
+
+    pub(super) fn drop_observed(
+        self,
+        probe: &std::sync::Arc<crate::shutdown::Probe>,
+    ) -> Result<(), Error> {
         use crate::shutdown::{Phase, SqliteCloseScope};
         // Match the declared field drop order. Ownership is still a local
         // guard, so unwinding from connection destruction also releases it.
@@ -154,8 +205,9 @@ impl DomainRepository {
         probe.mark(Phase::ConnectionDropFinished);
         drop(close_scope);
         probe.mark(Phase::OwnershipDropStarted);
-        drop(_ownership);
+        let result = database::release_ownership(_ownership);
         probe.mark(Phase::OwnershipDropFinished);
+        result
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
