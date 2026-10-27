@@ -15070,3 +15070,8 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 - Regularcommit c8bd20b7(#9), merges0498473e(#10),353036ec(#11), then#12.
   All six production store-fix files still identical to8bb16bd6. Check current
   SHAs again; preserve original non-blocking Windows failure as actual failure.
+
+
+## 2026-10-28 — App CI 整体 job 预算
+
+#12 当前头42484608的App Intel job122486397191全部测试、Clippy、构建和静态检查均成功，最后在59m20s开始缓存上传，60分钟整体job上限将其取消；GitHub annotation明确 exceeded maximum execution time 1h0m0s。原attempt1保留，单job诊断补跑已触发。为避免依赖冷构建速度碰运气，#12 app-main的整体job预算从60改为有限90分钟，包含缓存和cleanup；原用例、断言、生产2s/25s/45s边界及执行次数完全不变。此为编译和收尾总预算，未放宽任何测试操作deadline。新头需重新通过实际CI。

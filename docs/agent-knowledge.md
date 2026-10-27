@@ -5675,3 +5675,8 @@ PR #8 审查及验证记录见 `dev-vibe/pr-8-board-ux-review-2026-10-25.zh.md`�
   New ownership regressions are portable; only the existing factory restart
   scenario is Linux/macOS. Correcting its declaration does not skip runnable
   Windows tests; current hosted Windows must still execute both new regressions.
+
+
+## 2026-10-28 — App CI 整体 job 预算
+
+#12 当前头42484608的App Intel job122486397191全部测试、Clippy、构建和静态检查均成功，最后在59m20s开始缓存上传，60分钟整体job上限将其取消；GitHub annotation明确 exceeded maximum execution time 1h0m0s。原attempt1保留，单job诊断补跑已触发。为避免依赖冷构建速度碰运气，#12 app-main的整体job预算从60改为有限90分钟，包含缓存和cleanup；原用例、断言、生产2s/25s/45s边界及执行次数完全不变。此为编译和收尾总预算，未放宽任何测试操作deadline。新头需重新通过实际CI。
