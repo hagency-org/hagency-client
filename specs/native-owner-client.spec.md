@@ -89,3 +89,10 @@ validation report for exact commands, original failures and remaining gates.
 Real Synapse qualification lives in agent_encrypted_inbox_qualification. It uses
 normal Agent creation, actual owner SDK ciphertext and current Server AS custody.
 Its successful ACK is not a model/tool start, encrypted reply or file qualification.
+
+- Encrypted file history reads only the original ciphertext publication after
+  execution ends, without a lease acquisition, plaintext file lookup or resend.
+  Missing publication is not final absence; changed identities and SDK loss
+  cannot commit a late receipt. Historical unknown audit evidence is retained.
+  Test-Platforms: [linux, macos]
+  Test: native_owner_encrypted_file_history_reads_late_receipt_without_lease_or_plaintext_lookup

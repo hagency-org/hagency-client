@@ -1205,6 +1205,39 @@ struct PinnedConsole {
     console: Console,
     pin: DevicePin,
 }
+/// Historical encrypted publication lookup uses the original epoch as metadata;
+/// the Server's status action authenticates the owner without acquiring a lease.
+pub(super) async fn encrypted_file_status(
+    console: &Console,
+    device: &AuthorizedDevice,
+    dispatch: &inbox::Dispatch,
+    execution: &str,
+    record: &hagency_agent_local::sent_files::Record,
+) -> Result<Option<hagency_agent_local::file_delivery::Delivery>, RuntimeError> {
+    let host = PinnedConsole {
+        console: console.clone(),
+        pin: DevicePin::from(device),
+    };
+    let lease = LeaseRef {
+        agent_id: dispatch.agent_id.clone(),
+        epoch: dispatch.dispatch_epoch.ok_or(RuntimeError::Profile)?,
+    };
+    let result = encrypted::call(
+        &host,
+        &lease,
+        &dispatch.id,
+        execution,
+        "status",
+        serde_json::json!({"kind":"file","requestId":record.request_id}),
+    )
+    .await?;
+    let publication = result.get("publication").ok_or(RuntimeError::Transport)?;
+    if publication.is_null() {
+        // Missing encrypted publication is not proof of final preparation absence.
+        return Ok(None);
+    }
+    encrypted::file_receipt(record, publication).map(Some)
+}
 impl Transport for PinnedConsole {
     fn approval_host(&self) -> Option<PinnedConsole> {
         Some(self.clone())

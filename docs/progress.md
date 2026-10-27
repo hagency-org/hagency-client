@@ -14842,3 +14842,33 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 - This owner private DM chain is complete. A3, shared Project trust, cross-host key
   recovery and prior manual/production OAuth/other-platform gates remain open in
   the saved absorption task list. Broader migration is not declared complete.
+
+
+## 2026-10-27: Open Client PR review (#9–#12)
+
+- Reviewed stacked current heads 1724b7d9/c5f42926/0f7a5a7c/2daae62d.
+  #9–#11 were marked ready and @codex review was posted after inspection.
+  GitHub plugin writes returned integration403; authenticated local gh succeeded.
+- Fixed #12 encrypted-file history: current NativeOwner now reads the exact
+  original encrypted publication, using retained epoch metadata without lease
+  acquisition or a plain file lookup. Missing/possible status stays uncertain;
+  invalid identities/receipts and SDK authority loss cannot mutate history.
+  Runtime and history share receipt validation. No new upload/send path.
+- The new actual NativeOwner/HTTP regression fails against the original history
+  implementation (file_history_upgrade_required) and passes with the fix.
+  Full original local Agent suites181 passed/3 existing ignored; original engine
+  library284 passed/9 existing ignored. Final checks are recorded in the review
+  report. No paid inference, deployment, merge or original-checkout edits.
+- Preserve original CI verdicts: #10 macOS Claude capacity test observed Timeout
+  instead of Capacity, and App arm64 was cancelled; failed-job reruns requested.
+  #11 Windows pacing fixture shutdown remained OutcomeUnknown, regardless of
+  workflow-level success. No earlier failure is relabelled as passing.
+- task-writer and specs/project.spec.md are absent in this source checkout; no
+  substitute canonical task state was invented. Code/test changes are in this
+  chat's isolated managed review worktree.
+- Final fix verification: engine library285 passed/0failed/9existing ignored;
+  strict hagency lib/tests no-deps Clippy, package format,46 static guards,
+  production caller and diff checks pass. Logs: /tmp/hagency-pr-review-engine-final2.log,
+  /tmp/hagency-pr-review-clippy-final2.log, /tmp/hagency-pr-review-guards.log.
+  The expanded regression explicitly reopens the retired owner and proves the
+  original late encrypted receipt survives that boundary without a new lease.

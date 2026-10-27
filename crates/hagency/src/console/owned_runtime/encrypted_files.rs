@@ -47,26 +47,8 @@ impl Host {
         Ok(r)
     }
     fn receipt(&self, record: &Record, p: &Value) -> Result<Delivery, ()> {
-        let mut d = self.original(record)?.clone();
-        if p["dispatchId"] != d.dispatch_id
-            || p["executionId"] != d.execution_id
-            || p["requestId"] != d.request_id
-            || p["kind"] != "file"
-        {
-            return Err(());
-        }
-        d.received_bytes = d.manifest.bytes;
-        d.upload_accepted = true;
-        d.state = if p["state"] == "sent" {
-            "sent"
-        } else {
-            "unknown"
-        }
-        .into();
-        d.matrix_event_id = p["matrixEventId"].as_str().map(str::to_owned);
-        d.validate(&d.dispatch_id, &d.execution_id, &d.request_id, &d.manifest)
-            .map_err(|_| ())?;
-        Ok(d)
+        self.original(record)?;
+        super::encrypted::file_receipt(record, p).map_err(|_| ())
     }
 }
 impl codex::ExecutionGate for Host {

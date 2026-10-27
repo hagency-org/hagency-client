@@ -38,6 +38,7 @@ struct WireState {
     file_delivery_response: Option<Value>,
     file_delivery_input: Option<Value>,
     file_history: bool,
+    encrypted_publication_response: Option<Value>,
     file_lookup_deny: Option<Arc<std::sync::atomic::AtomicBool>>,
     send_mode: u8,
     sent_remote: Option<Value>,
@@ -195,6 +196,18 @@ impl WireState {
                 (
                     200,
                     json!({"delivery":self.file_delivery_response.clone().expect("explicit original file response")}),
+                )
+            }
+            "/hagency/api/v1/execution/encrypted/action" => {
+                assert_eq!(input["action"], "status", "history must be read only");
+                assert!(input.get("payload").is_none());
+                self.file_delivery_input = Some(input.clone());
+                if let Some(deny) = &self.file_lookup_deny {
+                    deny.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+                (
+                    200,
+                    json!({"publication":self.encrypted_publication_response}),
                 )
             }
             "/hagency/api/v1/execution/files/lookup" => {

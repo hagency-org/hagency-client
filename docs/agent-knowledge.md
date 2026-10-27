@@ -5597,3 +5597,11 @@ PR #8 审查及验证记录见 `dev-vibe/pr-8-board-ux-review-2026-10-25.zh.md`�
 
 
 - **Remote approval foundation, 2026-10-27:** Current protocol is im.hagency.owner.approval, separate from legacy Fleet cards. Durable first publication binds full original audit/execution/profile/device/room and a nonserializable original Ledger-instance capsule. Restore/reopen cannot mint or reuse that capsule. Remote decision records atomically append the audit but do not grant tools; current live PendingApproval/server/device/lease gates are still required. Recheck policy/execution/age after the actual SQLite writer wait. SDK verification must come from actual decrypt + Verified provenance and fresh current cross-signing/key checks, never wire verified/device fields; timestamp the earliest proof, not the end of network waits. Publication/runtime/UI and actual two-device qualification remain to connect.
+
+- **Encrypted Agent file history, 2026-10-27 review:** encrypted sends live in
+  Server encrypted_publications, not ordinary file_outbox. Refresh the original
+  encrypted status using its retained execution/request/epoch metadata; status
+  authenticates current owner scope without acquiring a lease. Missing status
+  never proves final preparation absence or grants replacement IO. Retain the
+  original local efile ID/manifest and unknown approval audit when a late receipt
+  arrives. Ordinary /files/lookup cannot reconcile these publications.

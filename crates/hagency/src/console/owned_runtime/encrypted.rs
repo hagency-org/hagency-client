@@ -4,6 +4,39 @@ use crate::console::device_execution::{Dispatch, ExecutionAttachments, Execution
 use crate::console::native::{AgentCryptoTransport, NativeOwner};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+pub(super) fn file_receipt(
+    record: &hagency_agent_local::sent_files::Record,
+    publication: &Value,
+) -> Result<hagency_agent_local::file_delivery::Delivery, RuntimeError> {
+    let mut receipt = record.remote.clone().ok_or(RuntimeError::Transport)?;
+    if !receipt.id.starts_with("efile_")
+        || publication["dispatchId"] != receipt.dispatch_id
+        || publication["executionId"] != receipt.execution_id
+        || publication["requestId"] != record.request_id
+        || publication["kind"] != "file"
+        || !matches!(publication["state"].as_str(), Some("possible" | "sent"))
+    {
+        return Err(RuntimeError::Transport);
+    }
+    receipt.received_bytes = record.manifest.bytes;
+    receipt.upload_accepted = true;
+    receipt.state = if publication["state"] == "sent" {
+        "sent"
+    } else {
+        "unknown"
+    }
+    .into();
+    receipt.matrix_event_id = publication["matrixEventId"].as_str().map(str::to_owned);
+    receipt
+        .validate(
+            &receipt.dispatch_id,
+            &receipt.execution_id,
+            &record.request_id,
+            &record.manifest,
+        )
+        .map_err(|_| RuntimeError::Transport)?;
+    Ok(receipt)
+}
 pub(super) fn native(host: &PinnedConsole) -> Option<NativeOwner> {
     host.console
         .0
