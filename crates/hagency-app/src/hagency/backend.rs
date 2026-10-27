@@ -3,6 +3,7 @@
 use super::model::{BindingAction, Command, LocalAction, ProviderAction};
 mod continuation;
 mod agent_files;
+mod remote_approvals;
 use ::hagency::native_owner::{MatrixAccessToken, MatrixTokenSource, NativeError, NativeOwner};
 use serde_json::Value;
 use std::{
@@ -118,6 +119,23 @@ pub async fn fetch_agent_attachment_bytes(
     live: impl Fn() -> Result<(), NativeError>,
 ) -> Result<Vec<u8>, NativeError> {
     agent_files::fetch(client, origin, owner, attachment, live).await
+}
+
+/// Observe a remote approval only through current SDK decryption and verified
+/// owner-device provenance. This does not consume a PendingApproval or grant a
+/// tool permission; the original publication owner must record/recheck it.
+pub async fn observe_remote_approval_verdict(
+    client: &matrix_sdk::Client,
+    origin: &str,
+    publication: &::hagency::native_owner::remote_approval::Publication,
+    request_event: &str,
+    verdict_event: &str,
+    live: impl Fn() -> Result<(), NativeError>,
+) -> Result<::hagency::native_owner::remote_approval::ObservedVerdict, NativeError> {
+    remote_approvals::observe(
+        client, origin, publication, request_event, verdict_event, live,
+    )
+    .await
 }
 
 struct SdkTokens(Weak<Inner>);

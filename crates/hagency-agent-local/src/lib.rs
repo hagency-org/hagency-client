@@ -11,6 +11,7 @@ pub mod inbox;
 pub mod process_cleanup;
 pub mod received_files;
 pub mod recovery;
+pub mod remote_approval;
 #[cfg(unix)]
 pub mod room_files;
 pub mod runtime;
@@ -243,6 +244,7 @@ pub enum Layer {
 pub struct Ledger {
     db: Connection,
     owner: String,
+    remote_instance: std::sync::Arc<()>,
 }
 impl Ledger {
     /// Open only the new schema. Identity must come from the local authenticated session.
@@ -301,11 +303,13 @@ impl Ledger {
         db.execute_batch(received_files::SCHEMA)?;
         db.execute_batch(sent_files::SCHEMA)?;
         db.execute_batch(sent_files::HISTORY_SCHEMA)?;
+        db.execute_batch(remote_approval::SCHEMA)?;
         db.execute_batch("COMMIT")?;
         db.pragma_update(None, "foreign_keys", true)?;
         Ok(Self {
             db,
             owner: owner.into(),
+            remote_instance: std::sync::Arc::new(()),
         })
     }
     /// Bind fresh local data permanently to the authenticated server/issuer/sub/MXID

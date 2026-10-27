@@ -305,7 +305,7 @@ fn legacy_pre_receive_snapshot_migrates_empty_without_inventing_custody() {
     let f = fixture();
     f.ledger
         .db
-        .execute_batch("DROP TRIGGER reject_absent_file_update; DROP TABLE sent_file_absence; DROP TABLE sent_files; DROP TABLE received_files")
+        .execute_batch("DROP TABLE remote_approval_decisions; DROP TABLE remote_approval_receipts; DROP TABLE remote_approval_publications; DROP TRIGGER reject_absent_file_update; DROP TABLE sent_file_absence; DROP TABLE sent_files; DROP TABLE received_files")
         .unwrap();
     let snapshot = f.ledger.snapshot(OWNER, PROFILE, 33).unwrap();
     let mut target = Ledger::open_scoped(":memory:", OWNER, PROFILE).unwrap();

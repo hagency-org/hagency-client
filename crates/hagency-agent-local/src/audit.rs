@@ -328,7 +328,7 @@ impl Ledger {
         })
     }
 }
-fn phase(db: &Connection, id: &str) -> Result<Phase> {
+pub(crate) fn phase(db: &Connection, id: &str) -> Result<Phase> {
     Phase::parse(&db.query_row("SELECT phase FROM approval_audit_events WHERE approval_id=? ORDER BY sequence DESC LIMIT 1",[id],|r|r.get::<_,String>(0))?)
 }
 pub(crate) fn finalize_inbox(
@@ -374,7 +374,13 @@ pub(crate) fn finalize_inbox(
     }
     Ok(())
 }
-fn append(db: &Connection, id: &str, next: Phase, now: i64, detail: &Value) -> Result<()> {
+pub(crate) fn append(
+    db: &Connection,
+    id: &str,
+    next: Phase,
+    now: i64,
+    detail: &Value,
+) -> Result<()> {
     let detail = json(detail)?;
     if now < 0 || detail.len() > 16384 {
         return Err(Error::Invalid("approval audit event"));

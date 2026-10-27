@@ -91,6 +91,7 @@ impl Snapshot {
         db.execute_batch(crate::received_files::SCHEMA)?;
         db.execute_batch(crate::sent_files::SCHEMA)?;
         db.execute_batch(crate::sent_files::HISTORY_SCHEMA)?;
+        db.execute_batch(crate::remote_approval::SCHEMA)?;
         Ok(db)
     }
 }
@@ -275,7 +276,12 @@ fn validate(db: &Connection, owner: &str, profile: &str) -> Result<()> {
     let expected = Ledger::open_scoped(":memory:", owner, profile)?;
     let stored = objects(db)?;
     let current = objects(&expected.db)?;
-    let before_file_history: Vec<_> = current
+    let before_remote: Vec<_> = current
+        .iter()
+        .filter(|(_, name, _)| !crate::remote_approval::OBJECTS.contains(&name.as_str()))
+        .cloned()
+        .collect();
+    let before_file_history: Vec<_> = before_remote
         .iter()
         .filter(|(_, name, _)| !crate::sent_files::HISTORY_OBJECTS.contains(&name.as_str()))
         .cloned()
@@ -318,6 +324,7 @@ fn validate(db: &Connection, owner: &str, profile: &str) -> Result<()> {
         .cloned()
         .collect();
     if stored != current
+        && stored != before_remote
         && stored != before_file_history
         && stored != before_sent
         && stored != before_received
