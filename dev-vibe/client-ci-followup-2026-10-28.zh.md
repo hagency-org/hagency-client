@@ -35,3 +35,10 @@ no-deps Clippy、format、actionlint、bash语法和三平台工作流路由检�
 继续保留macos-15-intel及双架构测试/构建。产品最低部署目标12.0不变。
 7ea40644从#9正常merge同步到整个堆叠链；actionlint通过。此前没有获得
 runner的job不能算通过，新镜像必须以新SHA实际执行验证。
+
+## 全堆叠同步
+
+Palpo/execution生产源和owned harness在四个分支一致，因此同样的fixture
+修复也通过d53d31e6下沉到#9，再正常merge到#10 ffabbc21、#11 57058917
+和#12 3a3c2f7f。基础分支Palpo16/16、owned52/52、严格all-target Clippy
+再次通过。没有force push；后续只检查这些新头及包含本记录的#12最终头。

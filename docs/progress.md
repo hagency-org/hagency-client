@@ -14948,3 +14948,9 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 - Final exact-head remote validation remains required after this migration.
   Previous queued/cancelled old-head attempts are retained as history, never
   counted as a successful build on their replacement image.
+- Confirmed Palpo/execution production sources and owned harness are identical
+  across this PR stack. Applied the same tested fixture/routing patch to PR9 as
+  d53d31e6, then normal merges ffabbc21(#10),57058917(#11),3a3c2f7f(#12).
+  Base-head local Palpo16/16,owned52/52 and strict all-target Clippy pass again,
+  proving the patch does not depend on later feature APIs. PR12 content merge
+  is identical to its already-tested fixture fixes, preserving ancestry.
