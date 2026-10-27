@@ -1,14 +1,16 @@
 # Native migration working plan
 
-Current A4 implementation checkpoint (2026-10-27): required SDK encryption and
-one-shot SendPermit are implemented and locally checked on the existing feature
-branch, which contains fetched main42e59b9e. Next connect private publication to
-the retained original live approval/runtime, then native remote actions and real
-verified owner devices; encrypted Agent identities/tasks and A3 remain. Base A2
-full40423919137 has a Windows store-shutdown OutcomeUnknown failure, despite the
-overall workflow success; Linux/macOS pass. Preserve it and diagnose actual
-teardown evidence before claiming Windows qualification. Detailed scope and proof
-remain in the owner capability plan and remote-approval contract in dev-vibe.
+Current A4 implementation checkpoint (2026-10-27): execution-device private
+publication, original live PendingApproval consumption and native desktop actions
+are wired. SDK1c48a831 uses detached own-device encryption; actual SDK local HTTP
+crypto and NativeOwner host-double proofs are separate from real Synapse/manual
+qualification. Remote approver inbox/outgoing-verdict UI, per-Agent encrypted
+identity/tasks/files and A3 remain next work, alongside earlier platform/OAuth
+gates. Full scope remains in the owner capability plan and remote-approval contract
+in dev-vibe. Work stays on codex/remote-owner-approvals; freshly fetched main42e59b9e
+is an ancestor. Old8c full40426784089 has actual Linux/macOS/Windows job success;
+this cannot replace current-source qualification or explain the older A2 Windows
+store-shutdown OutcomeUnknown failure in40423919137.
 
 This is coordination, not canonical runtime task state. There is no provisioned
 `task-writer` in this source checkout. User instruction: execute the Rust migration

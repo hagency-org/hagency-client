@@ -1,6 +1,7 @@
 //! Explicit owner-started, chat-only Codex host. No legacy execution fallback.
 #[cfg(unix)]
 mod received_files;
+mod remote_approvals;
 #[cfg(unix)]
 mod sent_files;
 mod service;
@@ -357,6 +358,9 @@ struct ApprovalSlot {
     view: ApprovalView,
     pending: codex::PendingApproval,
     device: DevicePin,
+    gate: Option<Arc<dyn codex::ExecutionGate>>,
+    turn_cancel: watch::Receiver<bool>,
+    remote: Option<remote_approvals::RemoteSlot>,
 }
 struct BindingHandle {
     cancel: watch::Sender<bool>,
@@ -400,15 +404,15 @@ impl Entry {
             .get(binding)
             .is_some_and(|b| !*b.cancel.borrow() && b.status.borrow().phase != "stopped")
     }
-    fn take_approval(
-        &mut self,
+    fn check_approval(
+        &self,
         pin: &DevicePin,
         agent: &str,
         id: &str,
         digest: &str,
         bindings: &[Binding],
         at: i64,
-    ) -> Result<codex::PendingApproval, RuntimeError> {
+    ) -> Result<&ApprovalSlot, RuntimeError> {
         if *self.cancel.borrow() || self.task.is_finished() || &self.device != pin {
             return Err(RuntimeError::Authorization);
         }
@@ -418,6 +422,7 @@ impl Entry {
             || &slot.device != pin
             || proposal.expires <= at
             || slot.pending.is_closed()
+            || *slot.turn_cancel.borrow()
             || proposal.scope.agent != agent
             || !self.binding_active(&proposal.scope.binding)
             || !bindings.iter().any(|b| {
@@ -429,6 +434,18 @@ impl Entry {
         {
             return Err(RuntimeError::Approval);
         }
+        Ok(slot)
+    }
+    fn take_approval(
+        &mut self,
+        pin: &DevicePin,
+        agent: &str,
+        id: &str,
+        digest: &str,
+        bindings: &[Binding],
+        at: i64,
+    ) -> Result<codex::PendingApproval, RuntimeError> {
+        self.check_approval(pin, agent, id, digest, bindings, at)?;
         Ok(self
             .approvals
             .remove(id)
@@ -809,6 +826,8 @@ impl OwnedRuntime {
         console: &Console,
         expected: &DevicePin,
         mut pending: codex::PendingApproval,
+        gate: Arc<dyn codex::ExecutionGate>,
+        turn_cancel: watch::Receiver<bool>,
     ) -> Result<(), RuntimeError> {
         use sha2::{Digest, Sha256};
         let device = console.authorized_device().await.map_err(device_error)?;
@@ -861,6 +880,9 @@ impl OwnedRuntime {
                 view,
                 pending,
                 device: DevicePin::from(&device),
+                gate: Some(gate),
+                turn_cancel,
+                remote: None,
             },
         );
         Ok(())
@@ -2585,13 +2607,18 @@ async fn run_turn<T: Transport>(
     }
     let has_approval_host = host.is_some();
     let bridge = host.map(|console| {
+        let approval_gate: Arc<dyn codex::ExecutionGate> = Arc::new(LiveToolGate {
+            console: console.clone(), lease: lease.clone(), expected: prepared.dispatch.clone(),
+            execution: prepared.execution_id.clone(), cancel: cancel.clone(),
+        });
+        let approval_cancel=cancel.clone();
         tokio::spawn(async move {
             while let Some(pending) = receiver.recv().await {
                 if console
                     .console
                     .0
                     .owned_runtime
-                    .offer_approval(&console.console, &console.pin, pending)
+                    .offer_approval(&console.console, &console.pin, pending, approval_gate.clone(), approval_cancel.clone())
                     .await
                     .is_err()
                 {
@@ -4859,6 +4886,9 @@ for raw in sys.stdin:
                     },
                     pending,
                     device: pin.clone(),
+                    gate: None,
+                    turn_cancel: watch::channel(false).1,
+                    remote: None,
                 },
             )]),
         };

@@ -209,3 +209,5 @@ fn remote_approval_sdk_metadata_not_wire_device_claims_is_required_for_verdict()
         .is_err()
     );
 }
+
+mod crypto_tests;

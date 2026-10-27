@@ -81,6 +81,23 @@ pub(super) fn details(row: &Value, at: i64) -> String {
     lines.push(crate::i18n::tr("Approval applies only to this exact request. It does not confirm successful execution.").into());
     lines.join("\n")
 }
+pub(super) fn remote_details(value: &Value) -> String {
+    match value["phase"].as_str() {
+        Some("publishing") => crate::i18n::tr("Publishing private approval...").into(),
+        Some("sent") => {
+            crate::i18n::tr("Private approval published. Waiting for a verified decision.").into()
+        }
+        Some("unknown") => crate::i18n::tr(
+            "Publication unconfirmed. Refresh original status; do not publish again.",
+        )
+        .into(),
+        Some("approved") => {
+            crate::i18n::tr("Remote approval accepted. Execution is not yet confirmed.").into()
+        }
+        Some("denied") => crate::i18n::tr("Remote approval denied.").into(),
+        _ => crate::i18n::tr("No private approval publication is recorded.").into(),
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,8 +1,8 @@
-//! Read-only SDK evidence for native owner approvals. Wire JSON is never a
-//! device-verification proof. No publication, runtime start or grant happens here.
+//! Current SDK publication and verified verdict evidence for owner approvals.
+//! Wire JSON never establishes device trust; this adapter never grants a tool.
 use super::{NativeError, source_error};
 use ::hagency::native_owner::remote_approval::{
-    ObservedVerdict, Publication, Request, VERDICT_TYPE, Verdict,
+    ObservedVerdict, Publication, Request, SendPermit, VERDICT_TYPE, Verdict,
 };
 use matrix_sdk::{
     Client, RoomState,
@@ -14,6 +14,8 @@ use matrix_sdk::{
 };
 use serde_json::Value;
 use std::time::Duration;
+static PUBLISHES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+static SEARCHES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
 static READS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
 fn refused() -> NativeError {
     source_error("remote_approval_unverified")
@@ -65,11 +67,22 @@ async fn bounded_get(
     origin: &str,
     segments: &[&str],
 ) -> Result<Value, NativeError> {
+    bounded_get_query(client, origin, segments, &[]).await
+}
+async fn bounded_get_query(
+    client: &Client,
+    origin: &str,
+    segments: &[&str],
+    query: &[(&str, &str)],
+) -> Result<Value, NativeError> {
     let mut url = url::Url::parse(origin).map_err(|_| refused())?;
     url.path_segments_mut()
         .map_err(|_| refused())?
         .clear()
         .extend(segments);
+    if !query.is_empty() {
+        url.query_pairs_mut().extend_pairs(query);
+    }
     let mut response = client
         .http_client()
         .get(url.clone())
@@ -91,6 +104,169 @@ async fn bounded_get(
         bytes.extend_from_slice(&chunk);
     }
     serde_json::from_slice(&bytes).map_err(|_| refused())
+}
+pub(super) async fn prepare(
+    client: &Client,
+    origin: &str,
+    owner: &str,
+    room: &str,
+    live: impl Fn() -> Result<(), NativeError>,
+) -> Result<String, NativeError> {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let _slot = READS.acquire().await.map_err(|_| refused())?;
+        live()?;
+        if client.homeserver().as_str() != origin
+            || client.user_id().is_none_or(|u| u.as_str() != owner)
+        {
+            return Err(source_error("matrix_account_changed"));
+        }
+        let publisher = client.device_id().ok_or_else(refused)?.to_string();
+        let check = || {
+            live()?;
+            if client.device_id().is_none_or(|d| d.as_str() != publisher)
+                || client.user_id().is_none_or(|u| u.as_str() != owner)
+                || client.homeserver().as_str() != origin
+            {
+                return Err(source_error("matrix_account_changed"));
+            }
+            Ok(())
+        };
+        let room_id = RoomId::parse(room).map_err(|_| refused())?;
+        let owner_id = UserId::parse(owner).map_err(|_| refused())?;
+        let joined = client
+            .get_room(&room_id)
+            .filter(|r| r.state() == RoomState::Joined)
+            .ok_or_else(refused)?;
+        private_state(
+            &bounded_get(
+                client,
+                origin,
+                &["_matrix", "client", "v3", "rooms", room, "state"],
+            )
+            .await?,
+            owner,
+        )?;
+        check()?;
+        let identity = client
+            .encryption()
+            .request_user_identity(&owner_id)
+            .await
+            .map_err(|_| refused())?
+            .ok_or_else(refused)?;
+        check()?;
+        let own = client
+            .encryption()
+            .get_own_device()
+            .await
+            .map_err(|_| refused())?
+            .ok_or_else(refused)?;
+        check()?;
+        let devices = client
+            .encryption()
+            .get_user_devices(&owner_id)
+            .await
+            .map_err(|_| refused())?;
+        check()?;
+        let peers = devices
+            .devices()
+            .filter(|d| {
+                d.device_id().as_str() != publisher
+                    && !d.is_deleted()
+                    && d.is_verified_with_cross_signing()
+            })
+            .count();
+        if !identity.is_verified()
+            || !own.is_verified_with_cross_signing()
+            || own.is_deleted()
+            || !(1..=64).contains(&peers)
+            || joined.state() != RoomState::Joined
+        {
+            return Err(refused());
+        }
+        Ok(publisher)
+    })
+    .await
+    .map_err(|_| refused())?
+}
+pub(super) async fn publish(
+    client: &Client,
+    origin: &str,
+    permit: SendPermit,
+    live: impl Fn() -> Result<(), NativeError>,
+) -> Result<String, NativeError> {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        let _slot = PUBLISHES.acquire().await.map_err(|_| refused())?;
+        let request = permit.request();
+        request.validate().map_err(|_| refused())?;
+        let check = || {
+            live()?;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|_| refused())?
+                .as_secs();
+            if request.proposal.expires <= 0
+                || now >= request.proposal.expires as u64
+                || client.homeserver().as_str() != origin
+                || client.user_id().is_none_or(|u| u.as_str() != request.owner)
+                || client
+                    .device_id()
+                    .is_none_or(|d| d.as_str() != request.publisher_matrix_device)
+            {
+                return Err(refused());
+            }
+            Ok(())
+        };
+        check()?;
+        let publisher = prepare(
+            client,
+            origin,
+            &request.owner,
+            &request.approval_room,
+            &check,
+        )
+        .await?;
+        if publisher != request.publisher_matrix_device {
+            return Err(refused());
+        }
+        check()?;
+        let room = client
+            .get_room(&RoomId::parse(&request.approval_room).map_err(|_| refused())?)
+            .ok_or_else(refused)?;
+        let content = request.message_content().map_err(|_| refused())?;
+        let sealed = room
+            .seal_for_own_devices("m.room.message", content)
+            .await
+            .map_err(|_| refused())?;
+        check()?;
+        // Detached ciphertext cannot use an old broadly shared room session.
+        // Recheck actual private room state after sealing and before any keys
+        // or sensitive event are sent. Each SDK write also checks live authority.
+        private_state(
+            &bounded_get(
+                client,
+                origin,
+                &[
+                    "_matrix",
+                    "client",
+                    "v3",
+                    "rooms",
+                    &request.approval_room,
+                    "state",
+                ],
+            )
+            .await?,
+            &request.owner,
+        )?;
+        check()?;
+        let txn: matrix_sdk::ruma::OwnedTransactionId = permit.transaction_id().into();
+        let result = sealed
+            .send(&txn, || check().is_ok())
+            .await
+            .map_err(|_| source_error("remote_approval_delivery_unknown"))?;
+        Ok(result.response.event_id.to_string())
+    })
+    .await
+    .map_err(|_| source_error("remote_approval_delivery_unknown"))?
 }
 fn envelope(
     event: &TimelineEvent,
@@ -130,7 +306,8 @@ fn envelope(
             .is_some_and(|r| r != &request.approval_room)
         || raw["unsigned"].get("redacted_because").is_some()
         || raw["content"]["msgtype"] != VERDICT_TYPE
-        || raw["content"]["m.relates_to"]["rel_type"] == "m.replace"
+        || raw["content"]["m.relates_to"]["rel_type"] != "m.reference"
+        || raw["content"]["m.relates_to"]["event_id"] != request_event
         || raw["content"]["m.relates_to"]["m.in_reply_to"]["event_id"] != request_event
     {
         return Err(refused());
@@ -299,6 +476,96 @@ pub(super) async fn observe(
             &key,
             proof_at,
         )
+    })
+    .await
+    .map_err(|_| refused())?
+}
+pub(super) async fn find(
+    client: &Client,
+    origin: &str,
+    publication: &Publication,
+    request_event: &str,
+    live: impl Fn() -> Result<(), NativeError>,
+) -> Result<ObservedVerdict, NativeError> {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let _slot = SEARCHES.acquire().await.map_err(|_| refused())?;
+        live()?;
+        let request = publication.request();
+        request.validate().map_err(|_| refused())?;
+        if client.homeserver().as_str() != origin
+            || client.user_id().is_none_or(|u| u.as_str() != request.owner)
+            || client
+                .device_id()
+                .is_none_or(|d| d.as_str() != request.publisher_matrix_device)
+        {
+            return Err(refused());
+        }
+        let response = bounded_get_query(
+            client,
+            origin,
+            &[
+                "_matrix",
+                "client",
+                "v1",
+                "rooms",
+                &request.approval_room,
+                "relations",
+                request_event,
+                "m.reference",
+                "m.room.encrypted",
+            ],
+            &[("limit", "20")],
+        )
+        .await?;
+        live()?;
+        if response.get("next_batch").is_some_and(|v| !v.is_null()) {
+            return Err(source_error("remote_approval_incomplete"));
+        }
+        let events = response["chunk"].as_array().ok_or_else(refused)?;
+        if events.len() > 20 {
+            return Err(refused());
+        }
+        if events.is_empty() {
+            return Err(source_error("remote_approval_waiting"));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        let mut first: Option<ObservedVerdict> = None;
+        for event in events {
+            let id = event["event_id"].as_str().ok_or_else(refused)?;
+            if !seen.insert(id)
+                || event["type"] != "m.room.encrypted"
+                || event["sender"] != request.owner
+                || event["content"]["m.relates_to"]["rel_type"] != "m.reference"
+                || event["content"]["m.relates_to"]["event_id"] != request_event
+            {
+                return Err(refused());
+            }
+            // Before granting, every candidate must pass actual SDK proof.
+            // Failures never become permission by selecting a different
+            // success. A proved denial below only removes authority.
+            let observed = observe(client, origin, publication, request_event, id, &live).await?;
+            // A proved owner denial can only remove authority. It wins before
+            // any grant, including when another verified device also approved.
+            if !observed.verdict.approved {
+                return Ok(observed);
+            }
+            if first.is_none() {
+                first = Some(observed);
+            }
+        }
+        let first = first.ok_or_else(refused)?;
+        // Re-observe the selected actual event after validating the complete
+        // bounded set. This is new SDK evidence, not a retimestamped old proof;
+        // the original approval deadline and current host gates still apply.
+        observe(
+            client,
+            origin,
+            publication,
+            request_event,
+            &first.event_id,
+            &live,
+        )
+        .await
     })
     .await
     .map_err(|_| refused())?

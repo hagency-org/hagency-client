@@ -1,12 +1,13 @@
 spec: task
-name: "Original native owner remote approval evidence"
+name: "Current native owner remote approval publication and decisions"
 tags: [active, rust, desktop]
 ---
 
-This is the durable evidence stage of A4 in the owner capability plan. Full A4
-still requires encrypted publication, current native runtime/UI consumption,
-private owner rooms, verified remote device decisions and encrypted Agent task
-execution. This contract does not redefine A4 or enable those unfinished flows.
+This covers the original execution device's private approval publication and
+verified verdict consumption into its exact live PendingApproval. Full A4 still
+requires the remote approver inbox/outgoing-verdict UI, actual Synapse/native
+qualification, per-Agent crypto identity and encrypted Agent task/file execution.
+Manual/cross-platform gates and A3 remain. This contract preserves that scope.
 
 - Commit original owner/profile/approval/execution/device/room/proposal scope
   before SDK publication; a retry or another ledger handle cannot regain custody.
@@ -39,14 +40,54 @@ execution. This contract does not redefine A4 or enable those unfinished flows.
   failed reservations never appear as publications and witnesses cannot be pruned.
   Test: remote_actual_serialized_capacity_is_permanent_and_failed_reservation_is_not_a_publication
 
-Desktop SDK guard tests in backend/remote_approvals/tests.rs run in the App suite,
-separately from the retained core inventory. They explicitly synthesize SDK
-metadata; they do not qualify real cross-signing, publication or runtime wiring.
-The adapter fetches bounded current private encrypted room state, decrypts via
-the actual SDK, rejects plain/unverified/edited/self-origin/forwarded events,
-refreshes current owner identity/device keys and compares the original reply and
-digest. No JSON field named verified can establish those facts.
+Desktop SDK/UI tests run separately from this retained core inventory. The
+crypto_tests module uses actual SDK cross-signatures, Olm/Megolm, private request
+publication, decryption and a different signed owner-device verdict over a local
+HTTP homeserver double, followed by the actual original journal decision. It also
+rejects a newly shared room and a real unsigned device's forged verified/device
+claims. Older envelope guards explicitly synthesize SDK metadata; those fixtures
+alone do not qualify authentication. Real Synapse, native approver UI and provider
+acceptance remain separate gates. No JSON field named verified establishes trust.
 
 - Sample the actual host clock again after acquiring the writer lock. A stale
   pre-lock time cannot extend the original proposal or SDK proof deadline.
   Test: remote_clock_sample_after_actual_writer_wait_rejects_expiry_without_moving_deadline
+
+- Native owner publication retains the original ledger/capsule in an owned task;
+  exact current gates precede reservation, SDK IO and decision application. A
+  remote decision signals only the original pending receiver, once, and does not
+  itself mint a reusable tool approval.
+  Test-Platforms: [linux, macos]
+  Test: native_remote_approval_records_original_verdict_and_signals_only_the_live_pending_once
+- Local denial/stop retires future publication authority while original possible
+  IO remains joined and a late original acceptance is recorded historically.
+  Test-Platforms: [linux, macos]
+  Test: native_remote_approval_late_receipt_survives_local_denial_and_joined_shutdown
+- Unknown publication status reads cannot republish or change the original room.
+  Test-Platforms: [linux, macos]
+  Test: native_remote_approval_unknown_never_republishes_or_changes_destination
+- Current gate or policy changes leave the offered original pending undecided.
+  Test-Platforms: [linux, macos]
+  Test: native_remote_approval_current_gate_or_policy_change_cannot_decide_the_pending_request
+- Remote denial closes only the original pending; failed pre-reservation gate
+  leaves no publication and cannot start SDK IO.
+  Test-Platforms: [linux, macos]
+  Test: native_remote_approval_denial_closes_only_original_pending_and_gate_precedes_reservation
+- A dropped provider receiver retires future writes even while the original SDK
+  publication task remains owned. Status reads cannot recreate its sender.
+  Test-Platforms: [linux, macos]
+  Test: native_remote_approval_closed_receiver_retires_inflight_publication_before_next_write
+- Weak liveness inspection cannot retain or recreate an original decision sender.
+  Test: native_pending_approval_liveness_cannot_keep_or_recreate_decision_sender
+
+Private SDK sends use detached one-event Megolm sessions shared only with the
+current account's cross-signed remote devices (1..64). No reusable outbound room
+session is inserted or reused. Runtime publication consumes SendPermit, checks
+current private-room/account/device scope, disables SDK write retries and keeps
+actual acceptance even after authority retires. Native API and English/Chinese
+execution-device UI expose publish, original status and verified-verdict read.
+The destination selector shows room names from cached candidates; fresh SDK facts
+authorize actual publication. Verdict discovery reads a complete bounded set of
+encrypted m.reference relations to the original event, rejects incomplete or
+ambiguous input and rechecks actual SDK verification. No event ID entry is needed.
+The remote approver inbox and outgoing-verdict UI remain separate work.

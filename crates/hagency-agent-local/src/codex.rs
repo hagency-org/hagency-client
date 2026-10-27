@@ -757,17 +757,36 @@ pub fn capabilities_for(profile: &Profile) -> Capabilities {
 pub struct ApprovalQueue {
     sender: mpsc::Sender<PendingApproval>,
 }
+type PendingDecision = std::sync::Mutex<Option<oneshot::Sender<bool>>>;
+/// Read-only weak liveness. It cannot retain the decision sender, decide a
+/// proposal, or reconstruct a dropped original approval.
+#[derive(Clone)]
+pub struct ApprovalLiveness(std::sync::Weak<PendingDecision>);
+impl ApprovalLiveness {
+    pub fn is_open(&self) -> bool {
+        self.0.upgrade().is_some_and(|decision| {
+            decision
+                .lock()
+                .ok()
+                .is_some_and(|held| held.as_ref().is_some_and(|sender| !sender.is_closed()))
+        })
+    }
+}
 pub struct PendingApproval {
     pub proposal: ToolProposal,
     pub audit_id: Option<String>,
-    decision: oneshot::Sender<bool>,
+    decision: std::sync::Arc<PendingDecision>,
 }
 impl PendingApproval {
+    pub fn liveness(&self) -> ApprovalLiveness {
+        ApprovalLiveness(std::sync::Arc::downgrade(&self.decision))
+    }
     pub fn is_closed(&self) -> bool {
-        self.decision.is_closed()
+        !self.liveness().is_open()
     }
     pub fn decide(self, allow: bool) -> bool {
-        self.decision.send(allow).is_ok()
+        let sender = self.decision.lock().ok().and_then(|mut held| held.take());
+        sender.is_some_and(|sender| sender.send(allow).is_ok())
     }
 }
 /// Trusted host model-request approvals share the UI channel, but must use
@@ -778,7 +797,7 @@ pub fn pending_approval(proposal: ToolProposal) -> (PendingApproval, oneshot::Re
         PendingApproval {
             proposal,
             audit_id: None,
-            decision,
+            decision: std::sync::Arc::new(std::sync::Mutex::new(Some(decision))),
         },
         receiver,
     )
@@ -1835,7 +1854,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Session<R, W> {
                     .try_send(PendingApproval {
                         proposal: proposal.clone(),
                         audit_id: Some(audit_id.clone()),
-                        decision: send,
+                        decision: std::sync::Arc::new(std::sync::Mutex::new(Some(send))),
                     })
                     .is_err()
                 {
@@ -2057,6 +2076,32 @@ fn now() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn native_pending_approval_liveness_cannot_keep_or_recreate_decision_sender() {
+        let proposal:super::ToolProposal=serde_json::from_value(serde_json::json!({"scope":{"agent":"a","binding":"b","room":"!r:test","requester":"@u:test","thread":"$t"},"dispatch":"d","tool":"codex.command","arguments":{},"canonical_directory":"/workspace","risk":"high","policy_revision":[1,1,1],"expires":100})).unwrap();
+        let (pending, mut receiver) = super::pending_approval(proposal.clone());
+        let status = pending.liveness();
+        let copied = status.clone();
+        assert!(status.is_open());
+        drop(pending);
+        assert!(!status.is_open());
+        assert!(!copied.is_open());
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+        ));
+        let (pending, receiver) = super::pending_approval(proposal.clone());
+        let status = pending.liveness();
+        assert!(pending.decide(true));
+        assert!(!status.is_open());
+        assert!(receiver.await.unwrap());
+        let (pending, receiver) = super::pending_approval(proposal);
+        let status = pending.liveness();
+        drop(receiver);
+        assert!(!status.is_open());
+        assert!(!pending.decide(true));
+    }
+
     #[cfg(windows)]
     #[test]
     fn isolated_provider_inherits_only_windows_system_environment() {

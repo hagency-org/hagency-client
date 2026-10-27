@@ -14509,3 +14509,39 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 - Current private approval publication, PendingApproval consumption, native UI,
   verified two-device and per-Agent encrypted execution are still open, alongside
   A3 and earlier manual/platform/production OAuth gates. Objective stays active.
+
+## 2026-10-27: Private approval publication and original pending consumption
+
+- Fetched origin/main before continuing and confirmed42e59b9e is an ancestor of
+  codex/remote-owner-approvals; no direct main edits. SDK1c48a831 is already pushed
+  on codex/mandatory-encrypted-send and SDK PR1 describes its final scope.
+- Detached SDK one-event Megolm encryption shares only with current cross-signed
+  own devices; the old broadly shared room session cannot leak approval content.
+  The non-Clone capsule checks original liveness before every write, disables
+  retries and retains actual late acceptance. All eight Client pins use1c48a831.
+- NativeOwner holds the same original Ledger/Publication and live PendingApproval;
+  current Server bindings/execution/device/policy/expiry gates precede publication
+  and decision. Runtime joins retain possible IO. Weak pending liveness cannot
+  keep/recreate the sender; original turn cancellation/receiver closure retires
+  future writes. Unknown status never republishes or changes destination.
+- English/Chinese execution-device UI selects private-room candidates by name,
+  publishes, reads original status and finds actual SDK-verified decisions from
+  bounded complete original relations. Cached names are not authority; fresh SDK
+  private state and cross-signed identities are required. No event-ID input.
+- Agent-local157/3 original ignores; engine269/9 (7 original plus2 external gates);
+  App624/2 original ignores pass. Six NativeOwner/TCP/SQLite/live-pending tests use
+  an explicit Matrix host double. App actual SDK public cross-signatures and real
+  Olm/Megolm over local HTTP prove private publication, unsigned-device rejection,
+  relation lookup and original journal decision; this is not real Synapse/manual
+  qualification. SDK detached2/required3 and strict SDK/crypto library checks pass.
+- Current core/App default all-targets strict Clippy with the App CI --no-deps
+  boundary, core format/spelling,46 guards, one caller and1184 bindings pass with
+  no missing/deferred/platform gaps; i18n missing0. Broad dependency Clippy first
+  failed27 existing article-makepad lints; a new helper's position after tests was
+  then fixed. Original constructor compile/SDK/UI/wiremock fixture failures remain
+  separately documented; no cache edits, retry relaxation or failure relabeling.
+- Old8c full40426784089 finished with actual Linux/macOS/Windows jobs success.
+  It is separate from this source and does not explain the older A2 Windows
+  shutdown OutcomeUnknown failure. Remote approver inbox/outgoing-verdict UI,
+  real Synapse/native qualification, per-Agent encrypted identity/tasks/files,
+  A3 and earlier manual/platform/OAuth gates remain. Objective stays active.

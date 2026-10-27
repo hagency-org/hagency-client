@@ -1528,6 +1528,7 @@ async fn heartbeat_retries_transport_failure_but_never_extends_unconfirmed_lease
 mod file_history;
 mod joint_files;
 mod recovery;
+mod remote_approvals;
 
 #[tokio::test]
 async fn typed_http_attachment_response_is_private_and_pinned_to_original_execution() {

@@ -66,6 +66,61 @@ pub struct ContinuationMessage {
 pub use hagency_agent_local::attachments::Attachment as AgentAttachment;
 pub const MAX_AGENT_FILE_BYTES: usize = hagency_agent_local::received_files::MAX_BYTES;
 pub trait MatrixTokenSource: Send + Sync {
+    fn supports_remote_approvals(&self) -> bool {
+        false
+    }
+    fn prepare_remote_approval<'a>(
+        &'a self,
+        _room: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, NativeError>> + Send + 'a>>
+    {
+        Box::pin(async { Err(failure(503, "remote_approval_transport_unavailable")) })
+    }
+    fn publish_remote_approval(
+        &self,
+        _permit: hagency_agent_local::remote_approval::SendPermit,
+        _live: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, NativeError>> + Send + '_>>
+    {
+        Box::pin(async { Err(failure(503, "remote_approval_transport_unavailable")) })
+    }
+    fn observe_remote_approval<'a>(
+        &'a self,
+        _publication: &'a hagency_agent_local::remote_approval::Publication,
+        _request_event: &'a str,
+        _verdict_event: &'a str,
+        _live: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        hagency_agent_local::remote_approval::ObservedVerdict,
+                        NativeError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async { Err(failure(503, "remote_approval_transport_unavailable")) })
+    }
+    fn find_remote_approval<'a>(
+        &'a self,
+        _publication: &'a hagency_agent_local::remote_approval::Publication,
+        _request_event: &'a str,
+        _live: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        hagency_agent_local::remote_approval::ObservedVerdict,
+                        NativeError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async { Err(failure(503, "remote_approval_transport_unavailable")) })
+    }
     fn supports_agent_file_receive(&self) -> bool {
         false
     }
@@ -148,6 +203,9 @@ pub enum LocalAction {
     AgentServiceStatus,
     Approvals,
     Decision { approval_id: String },
+    PublishRemoteApproval { approval_id: String },
+    ObserveRemoteApproval { approval_id: String },
+    RemoteApprovalStatus { approval_id: String },
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -360,12 +418,14 @@ impl Command {
                         | LocalAction::AgentModel
                         | LocalAction::AgentPolicy
                         | LocalAction::Policy
-                        | LocalAction::Model,
+                        | LocalAction::Model
+                        | LocalAction::RemoteApprovalStatus { .. },
                     input: None,
                     ..
                 }
                 | Self::Local {
-                    action: LocalAction::Decision { .. },
+                    action: LocalAction::Decision { .. }
+                        | LocalAction::ObserveRemoteApproval { .. },
                     ..
                 }
         )
@@ -747,6 +807,21 @@ fn request(command: Command) -> Result<(&'static str, String, Option<Value>), Na
                 LocalAction::StopAgentService => ("POST", "runtime/service/stop".into()),
                 LocalAction::AgentServiceStatus => ("GET", "runtime/service".into()),
                 LocalAction::Approvals => ("GET", "runtime/approvals".into()),
+                LocalAction::PublishRemoteApproval { approval_id } => {
+                    key(&approval_id)?;
+                    ("POST", format!("runtime/approvals/{approval_id}/remote"))
+                }
+                LocalAction::ObserveRemoteApproval { approval_id } => {
+                    key(&approval_id)?;
+                    (
+                        "POST",
+                        format!("runtime/approvals/{approval_id}/remote-verdict"),
+                    )
+                }
+                LocalAction::RemoteApprovalStatus { approval_id } => {
+                    key(&approval_id)?;
+                    ("GET", format!("runtime/approvals/{approval_id}/remote"))
+                }
                 LocalAction::Decision { approval_id } => {
                     key(&approval_id)?;
                     ("POST", format!("runtime/approvals/{approval_id}/decision"))

@@ -149,7 +149,7 @@ impl Verdict {
             return Err(Error::Invalid("remote approval verdict"));
         }
         Ok(
-            value!({"msgtype":VERDICT_TYPE,"body":if self.approved{"Approve once"}else{"Deny"},"im.hagency.owner.approval":self,"m.relates_to":{"m.in_reply_to":{"event_id":request_event}}}),
+            value!({"msgtype":VERDICT_TYPE,"body":if self.approved{"Approve once"}else{"Deny"},"im.hagency.owner.approval":self,"m.relates_to":{"rel_type":"m.reference","event_id":request_event,"m.in_reply_to":{"event_id":request_event}}}),
         )
     }
 }

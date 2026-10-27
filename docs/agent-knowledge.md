@@ -3,6 +3,21 @@
 
 # Repository audit knowledge
 
+- **Private owner approval runtime, 2026-10-27:** SDK1c48a831 on the pinned0.19.1
+  fork seals a detached one-event Megolm session for current cross-signed own
+  devices only; never reuse or cache it as a room outbound session. Owned SDK
+  ciphertext and journal SendPermit are single-use; each write checks original
+  live authority and disables SDK retries. The Native original approval slot
+  retains the same Ledger/Publication; joined IO can record late acceptance but
+  cannot restart. Weak PendingApproval liveness cannot retain its sender; include
+  original turn cancellation and receiver closure in every write check. Actual
+  SDK crypto HTTP proof and NativeOwner host-double tests are separate evidence,
+  not real Synapse/manual qualification. Relations lookup must fail closed on
+  incomplete/duplicate/invalid history and re-observe the selected signed event.
+  Remote approver UI and per-Agent encrypted task/file execution remain open.
+  wiremock0.6.5 scoped mocks can deactivate a wrong slot after priority sorting;
+  use fixed dynamic responders for changing state, not priority overrides.
+
 - **Required SDK encryption, 2026-10-27:** Client pins eight Matrix SDK patches
   to33de0b705 on the existing0.19.1 history fork. Sensitive sends must use
   require_encryption(), which rejects plaintext before message IO, including

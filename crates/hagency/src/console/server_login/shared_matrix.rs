@@ -27,6 +27,14 @@ impl ServerLogin {
         &self,
         expected: &super::super::device_execution::DeviceIdentity,
     ) -> Option<Arc<dyn MatrixTokenSource>> {
+        self.matrix_source(expected)
+            .await
+            .filter(|source| source.supports_agent_file_receive())
+    }
+    pub(in crate::console) async fn matrix_source(
+        &self,
+        expected: &super::super::device_execution::DeviceIdentity,
+    ) -> Option<Arc<dyn MatrixTokenSource>> {
         if self.stopped.load(Ordering::Acquire) {
             return None;
         }
@@ -42,7 +50,6 @@ impl ServerLogin {
                     })
             })
             .and_then(|s| s.matrix_source.clone())
-            .filter(|source| source.supports_agent_file_receive())
     }
 
     pub(in crate::console) async fn authorize_matrix(
