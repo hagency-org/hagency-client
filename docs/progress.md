@@ -14939,3 +14939,12 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 - Remote follow-up is checked per exact SHA and per actual job, including
   Windows continue-on-error. Final run evidence is recorded on the PRs after
   completion; no merge/deploy/paid model call or installed Codex is involved.
+- Additional infrastructure root found in the official runner-images13518
+  announcement: macOS14 is retiring2026-11-02, with constrained capacity and
+  scheduled brownouts. Switched app-main/app-builds arm64 and optional mobile
+  host labels to macos-15, retaining Intel and all build/test steps. Base PR9
+  commit7ea40644 is merged through PR10/PR11 into PR12; no force push. Both
+  workflow files pass actionlint. Source: https://github.com/actions/runner-images/issues/13518
+- Final exact-head remote validation remains required after this migration.
+  Previous queued/cancelled old-head attempts are retained as history, never
+  counted as a successful build on their replacement image.

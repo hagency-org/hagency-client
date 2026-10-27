@@ -26,3 +26,12 @@
 no-deps Clippy、format、actionlint、bash语法和三平台工作流路由检查通过。
 受控旧配置失败与修复日志见docs/progress.md。新提交CI必须另外验证，
 原失败不重分类；最终远端实际job结果以对应PR的跟进评论记录。
+
+## arm64基础设施修复
+
+官方[runner-images公告13518](https://github.com/actions/runner-images/issues/13518)
+明确macOS14正在退役，2026-11-02停止支持，期间有容量限制及brownout。
+将app-main和app-builds的arm64及可选移动端host统一迁到固定macos-15，
+继续保留macos-15-intel及双架构测试/构建。产品最低部署目标12.0不变。
+7ea40644从#9正常merge同步到整个堆叠链；actionlint通过。此前没有获得
+runner的job不能算通过，新镜像必须以新SHA实际执行验证。

@@ -5629,3 +5629,10 @@ PR #8 审查及验证记录见 `dev-vibe/pr-8-board-ux-review-2026-10-25.zh.md`�
   with observed whole-tree stop; original logs cannot attribute disk vs schedule.
   Run this31s positive fixture once in isolation before Windows concurrent CI,
   retaining45s/2s budgets, fatal result and all ordinary in-test concurrency.
+
+- **macOS hosted-runner retirement, 2026-10-28:** official runner-images
+  issue13518 schedules macOS14 retirement for2026-11-02 and explicitly warns
+  about constrained queues/brownouts. Repeated no-runner-acquired arm64 jobs
+  used this retiring image. Migrate App CI plus desktop/optional mobile build
+  host labels to pinned macos-15, retaining macos-15-intel and both architectures.
+  Runtime deployment target remains12.0. Source: https://github.com/actions/runner-images/issues/13518
