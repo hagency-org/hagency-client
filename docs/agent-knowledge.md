@@ -5618,3 +5618,14 @@ PR #8 审查及验证记录见 `dev-vibe/pr-8-board-ux-review-2026-10-25.zh.md`�
   build/test failure. #11's original Windows pacing failure was at final store
   shutdown; only failure-only original phase observation was added. A passing
   repeat or continue-on-error workflow cannot erase the original unknown result.
+
+- **CI publication/long-owned fixture audit, 2026-10-28:** the Palpo rotation
+  test intentionally holds old HTTP headers while two durable replacement
+  operations run. Its shared300ms header fixture can win with Timeout before
+  the expected Generation fence. Controlled400ms withholding reproduces it.
+  This positive lifecycle test now uses existing production default finite
+  network budgets; independent tight deadline cases and production source stay
+  unchanged. Windows long-owned failure was a2s domain renewal reply timeout,
+  with observed whole-tree stop; original logs cannot attribute disk vs schedule.
+  Run this31s positive fixture once in isolation before Windows concurrent CI,
+  retaining45s/2s budgets, fatal result and all ordinary in-test concurrency.

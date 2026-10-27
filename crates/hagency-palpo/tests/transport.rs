@@ -607,9 +607,25 @@ async fn native_outbound_http_custody_slow_ack_and_uncertain_attempt() {
 
 #[tokio::test]
 async fn native_outbound_http_publication_frozen_restart_and_rotation() {
+    // This scenario holds an HTTP response while committing a replacement
+    // generation and its publication. Use the existing production network
+    // budgets; the tight 300ms fixture is for the separate timeout tests.
+    let publication_config = |endpoint: &str, token: &str, generation| {
+        HostConfig::new(
+            registration(),
+            endpoint,
+            token,
+            generation,
+            hagency_palpo::Limits {
+                poll_wait: Duration::ZERO,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    };
     let mut fake = Fake::start(false).await;
     let (dir, store) = store();
-    let adapter = Adapter::attach(config(&fake.endpoint, 31), store.clone())
+    let adapter = Adapter::attach(publication_config(&fake.endpoint, TOKEN, 31), store.clone())
         .await
         .unwrap();
     let cancel = CancellationToken::new();
@@ -640,7 +656,7 @@ async fn native_outbound_http_publication_frozen_restart_and_rotation() {
     drop(adapter);
     drop(store);
     let store = open(&dir);
-    let adapter = Adapter::attach(config(&fake.endpoint, 31), store.clone())
+    let adapter = Adapter::attach(publication_config(&fake.endpoint, TOKEN, 31), store.clone())
         .await
         .unwrap();
     let (result, _) = tokio::join!(adapter.publish_once(&cancel), async {
@@ -664,14 +680,10 @@ async fn native_outbound_http_publication_frozen_restart_and_rotation() {
     let (result, _) = tokio::join!(adapter.publish_once(&cancel), async {
         let old = fake.next().await;
         assert_eq!(old.value()["sequence"], 2);
-        let next_config = HostConfig::new(
-            registration(),
-            &fake.endpoint,
-            "synthetic-ROTATED-machine-token",
-            32,
-            limits(),
-        )
-        .unwrap();
+        // Withhold the old response while rotation performs durable work;
+        // exercise completion beyond the unrelated tight header-test budget.
+        tokio::time::sleep(limits().headers + Duration::from_millis(100)).await;
+        let next_config = publication_config(&fake.endpoint, "synthetic-ROTATED-machine-token", 32);
         let rotated = Adapter::attach(next_config, store.clone()).await.unwrap();
         rotated
             .freeze_update(json!({"heartbeat":true}))

@@ -14909,3 +14909,33 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   Linux/macOS/Windows jobs each success, with fast CI40509323755 success. This
   is evidence only for6103cbba, not the later authorization-fix merge. No claim
   that the historical Windows failure was repaired by the diagnostic helper.
+
+
+## 2026-10-28: Continue latest PR CI to actual pass
+
+- Current heads at intake: #9=106743e1, #10=6f5551ac, #11=0eb40cf8,
+  #12=321f0d06. Exact-head fast CI all passed; #9 Full matrix/App passed,
+  arm64 package run40517440408 failed solely because runner was never acquired.
+  #12 run40518749173 App Intel passed/arm64 was not acquired; reran only failed
+  jobs for both infra failures. Original annotations and failed attempts retained.
+- #12 full40518755948: Ubuntu passed; macOS Palpo rotation expected Generation
+  but got Timeout; Windows quiet long turn ended17.92s with LostAuthority at
+  LeaseRenew/TimedOut, no provider RPC pending and observed whole-tree cleanup.
+  This means the domain writer's2s reply bound expired; exact OS cause unknown.
+- Palpo controlled400ms old-response hold reproduces identical Timeout vs
+  Generation failure on original300ms header configuration. The lifecycle case
+  now uses existing default finite5s headers/10s request, keeps the controlled
+  hold and all byte/Generation/restart assertions. Tight timing-negative tests
+  remain on their unchanged300/800ms budgets. No production transport changed.
+- Windows CI executes the original31s/45s positive case once as a required exact
+  isolated selector before the concurrent native suite, omitting it only from
+  that subsequent invocation. Original2s writer wait/5s lease renewals and all
+  failures remain unchanged. Added read-only last-unknown/dequeued diagnostic.
+  Workflow routing tested for Windows/macOS/Linux; a failed isolated command
+  stops the step, verified with a recording stub. actionlint/bash syntax pass.
+- Local Palpo transport16/16 (including unchanged negative deadlines) and full
+  owned52/52 pass. Strict both-package all-target no-deps Clippy/format and diff
+  pass. Logs /tmp/hagency-ci3-{palpo-before,palpo-after,owned,clippy}.log.
+- Remote follow-up is checked per exact SHA and per actual job, including
+  Windows continue-on-error. Final run evidence is recorded on the PRs after
+  completion; no merge/deploy/paid model call or installed Codex is involved.
