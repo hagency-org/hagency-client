@@ -14,9 +14,13 @@ bound, retry, scope check, cleanup assertion or allowed outcome changes.
   assertions. The independent tight-header/body deadline tests remain unchanged.
   Test: native_outbound_http_publication_frozen_restart_and_rotation
 - The original 45s owned fixture must observe a real quiet child for at least31s
-  and complete without lost authority. On Windows it runs once as a required
-  exact selector before the concurrent suite, excluded only from that later
-  invocation. Any failure is fatal; it is never retried or relabelled as passed.
+  and complete without lost authority. Initially isolated by exact selector on
+  Windows; the subsequent Linux failures extend the independent stage to the
+  complete execution package on every OS, with one test thread. Other packages
+  retain ordinary parallel tests. Every ordinary execution case runs once,
+  retaining its internal concurrency and all deadlines/assertions. Only the
+  pre-existing ADR140/144 operator qualification exclusions remain. Failure is
+  fatal; it is never retried or relabelled as passed.
   Test: native_owned_turn_long_lifetime
 
 The historical Windows reply timeout proves only a failed2s domain reply, not

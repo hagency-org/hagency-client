@@ -63,3 +63,30 @@ no-deps Clippy、format及静态guard46/46通过。修复从#9 fe449853经正常
 merge631a342f(#10)、29b20c1d(#11)传到#12。新头CI须另外实际完成。
 此前9db9212f的Windows完整job已实际通过（含31s owned与媒体验证），
 d53d31e6的双架构App CI和全部桌面打包也通过；这些不是新头CI的替代。
+
+## #12 Linux执行器fixture资源隔离
+
+8e0e50fd的Full matrix40572803517/Linux job122431362644失败于四个
+execution用例。untransmitted的owner-verdict返回OutcomeUnknown；长生命周期
+控制在12.54s因LeaseRenew/TimedOut退出，last_unknown_dequeued=Some(true)，
+原进程树已完整停止。usage-control只记录到通知流提前关闭；midwrite在
+2.5s harness等待后报告marker已出现在诊断列表中。这能证明两个数据库
+回复时限失败及两个fixture等待失败，不能证明未记录的OS阶段，也不能把
+另外两项症状直接归因为相同原因。HTTP库测试均通过。
+
+本地库42项在16线程和1线程下均通过，未复现云端全部症状。#12将execution
+所有目标放入独立的单测试线程CI阶段，其他包仍按原并发执行；单个测试内
+的并发、fault gates、实际child/SQLite、2s数据库回复、25/45s操作预算和
+全部原断言不变。后续workspace仅移除execution包选择，保持每个普通用例
+正好执行一次；原ADR140/144过滤不变，独立阶段失败仍致job失败。先前只
+隔离Windows长用例的策略由这里的全平台execution阶段取代。另补充两个
+失败路径的原始operation停止/cleanup和unknown/dequeued文本，无重试。
+
+第一次本地全目标命令漏带已有qualification过滤，正确触发两个真实Codex
+资格证据placeholder失败（108项普通用例通过），该原始失败不改判。按
+CI准确过滤重验；两项资格门禁未运行，不声称获得真实sandbox资格。
+本轮仅更新#12，其他PR最新头继续原CI；最终新头结果另以PR评论记录。
+
+准确CI命令重验结果：execution普通测试108/108通过，2项原qualification
+过滤、0 ignored；严格all-target no-deps Clippy、fmt、actionlint及解析
+YAML后的包集合/正好一次/原过滤/失败致job失败规则核对全部通过。

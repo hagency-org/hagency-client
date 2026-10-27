@@ -41,4 +41,8 @@ jobs:
       - run: node tools/native/check-production-callers.mjs --spec native-owner-client.spec.md
       # The same two by-name skips as rust.yml: both selectors need a real
       # qualified host (ADR-140, ADR-144) and stay listed for the binding gate.
-      - run: cargo test -p hagency -p hagency-agent-local -p hagency-core -p hagency-crypto-proof -p hagency-execution -p hagency-files -p hagency-matrix -p hagency-matrix-format -p hagency-media -p hagency-media-store -p hagency-metering -p hagency-palpo -p hagency-permissions -p hagency-platform -p hagency-progress -p hagency-progress-runtime -p hagency-runtime -p hagency-store --all-targets --locked --no-fail-fast -- --skip native_codex_real_app_server --skip native_two_agent_qualification_records_its_evidence
+      - name: Run execution fixtures with independent host resources
+        # Preserve all real process/database deadlines and in-case concurrency.
+        run: cargo test --locked -p hagency-execution --all-targets --no-fail-fast -- --skip native_codex_real_app_server --skip native_two_agent_qualification_records_its_evidence --test-threads=1
+      - if: ${{ !cancelled() }}
+        run: cargo test -p hagency -p hagency-agent-local -p hagency-core -p hagency-crypto-proof -p hagency-files -p hagency-matrix -p hagency-matrix-format -p hagency-media -p hagency-media-store -p hagency-metering -p hagency-palpo -p hagency-permissions -p hagency-platform -p hagency-progress -p hagency-progress-runtime -p hagency-runtime -p hagency-store --all-targets --locked --no-fail-fast -- --skip native_codex_real_app_server --skip native_two_agent_qualification_records_its_evidence

@@ -5645,3 +5645,14 @@ PR #8 审查及验证记录见 `dev-vibe/pr-8-board-ux-review-2026-10-25.zh.md`�
   original TLS root/auth/endpoint/limits/pacing owner, avoiding an unrelated
   repository and worker. This changes test dependencies, not production shutdown
   or its2s deadlines; real store/service lifecycle failures remain fatal.
+
+- **Execution fixture resource routing, 2026-10-28 (#12):** Linux job122431362644
+  at8e0e50fd failed two domain2s replies plus a closed usage notice and late probe
+  marker; do not claim a shared historic OS cause. Local42-case runs at16/1
+  threads both pass. Independent execution fixtures own real processes/writers
+  under strict clocks: run that package's all-target ordinary CI tests once in
+  a separate one-thread stage, retaining within-case concurrency and all timing
+  and verdict contracts. Keep the original ADR140/144 operator qualification
+  exclusions; all-target without them correctly fails placeholder evidence.
+  Keep other workspace coverage after a failed separate stage, but never make
+  its failure nonfatal. Read-only stop diagnostics are not execution authority.

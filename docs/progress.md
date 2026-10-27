@@ -14981,3 +14981,39 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   These historical results cannot substitute for the final new-head runs.
   Final remote evidence will be posted in PR follow-up comments without creating
   a new docs-only head. task-writer remains absent; no control-plane state faked.
+
+
+## 2026-10-28: #12 Linux execution fixture resources and failure evidence
+
+- Head8e0e50fd Full matrix40572803517 Linux job122431362644 has four
+  original execution failures; log /tmp/hagency-ci3-new-linux12.log. Owner
+  verdict OutcomeUnknown and a dequeued long-control LeaseRenew/TimedOut are
+  known2s domain reply failures. The other two are a closed usage notice stream
+  and an overdue midwrite marker. Past OS phase/cause for these is unobserved.
+  Never infer that all four share a proved disk or scheduler cause.
+- Library42/42 passes locally at16 threads and1 thread (comparison JSON/logs
+  /tmp/hagency-ci3-execution-*), so the historical cloud symptom is not locally
+  reproduced. The CI repair removes independent cases' concurrent host workload
+  as a variable: execution --all-targets in one-thread stage on every OS, other
+  workspace packages stay parallel. Per-case concurrency/fault barriers and all
+  production/fixture deadlines/assertions remain. Package multiset unchanged,
+  exactly once; only the original ADR140/144 qualification filters remain.
+  Later workspace coverage runs even after an execution-stage failure, without
+  changing its fatal verdict. actionlint and parsed YAML coverage check pass.
+- First all-target local probe omitted the original qualification filters:
+  108 ordinary tests passed and2 operator evidence placeholder tests correctly
+  failed. Preserve /tmp/hagency-ci3-execution-all-serial.log as failed; corrected
+  exact CI command has the original filters, not new exclusions or fake evidence.
+  Reverify current diagnostic code in /tmp/hagency-ci3-execution-ci-serial.log
+  and strict all-target no-deps Clippy in execution-ci-clippy.log.
+- Failure-only choose/usage-control notice text now retains original domain
+  unknown/dequeued and operation failure/startup/cleanup/runtime fields. No retry
+  or new success outcome. Prior Windows-only long-case routing is superseded by
+  the independent whole execution stage. Only#12 changes; #9 current Linux full
+  and all four current fast CI runs pass. Keep remaining jobs and follow new#12.
+
+- Exact CI command recheck on current edited sources passes108 ordinary tests,
+  2 original qualification filters,0 ignored. Strict execution all-target
+  no-deps Clippy, fmt, actionlint and parsed-YAML package multiset/exactly-once/
+  unchanged filters/fatal independent-stage checks all pass. No further local
+  broad tests are needed before following the new remote head.
