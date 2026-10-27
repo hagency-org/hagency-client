@@ -1,5 +1,13 @@
 # Native migration working plan
 
+Current A4 identity checkpoint (2026-10-27): independent Agent SDK identity-only
+broker/facade passes actual Synapse, two Agents, original store and same-host
+NativeOwner reopen with authorization1→3 and unchanged crypto keys. Real API
+revocation refuses old SDK and direct-HS bearer; calls/leases0. Normal runtime
+lifecycle/secret-store and owner verification/recovery are not yet wired; encrypted
+tasks/replies/files remain refused until their complete path is implemented.
+See dev-vibe/agent-crypto-identity-validation-2026-10-27.zh.md. Full goal active.
+
 Current A4 implementation checkpoint (2026-10-27): execution-device private
 publication, original live PendingApproval consumption and native desktop actions
 are wired. SDK1c48a831 uses detached own-device encryption; actual SDK local HTTP

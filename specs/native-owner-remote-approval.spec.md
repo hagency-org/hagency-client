@@ -126,3 +126,14 @@ it. Original verdict IO remains joined at shutdown, retaining late acceptance.
 Desktop tests cover another-device UI complete-command rendering and disabled
 unknown decisions. The actual SDK crypto test now also exercises verified request
 inspection, bounded inbox pagination and the real irreversible verdict publisher.
+
+Independent Agent identity is implemented separately from approval trust. The
+identity-only Server broker and desktop SDK facade pin public account/device keys
+without distributing AS or homeserver login credentials. Current Agent/device
+authorization epochs fence old requests; same-host authorization rotation retains
+original SDK keys. Account cross-signing pins survive host reassignment. Desktop
+store scope/exclusivity/missing-key/symlink tests and explicit real Synapse/native
+qualification are recorded in dev-vibe/agent-crypto-identity-contract-2026-10-27.zh.md
+and its validation report. Ordinary CI compiles the external qualification example
+but does not run it. This does not verify Agent trust for encrypted task execution,
+transfer/reset private keys, or open the existing encrypted-Room refusal gates.

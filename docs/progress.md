@@ -14630,3 +14630,31 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 - Current source final core format/spelling,46 guards, one production caller and
  1191 bindings pass with missing/deferred/platformDeferred empty; no paid tests
   were rerun by these inventory checks. Server fixture support pushed5b4e0a3.
+
+## 2026-10-27: Independent Agent SDK identity and actual native restart
+
+- Prior turn classification: verified wait, polling the live5ea fast/App/full CI
+  handles and confirming fetched main ancestry. Those lanes now pass, including
+  actual Linux/macOS/Windows full jobs. Current source still needs its own CI.
+- Current turn is progress: identity-only Server broker and native host capability
+  feed independent encrypted SDK stores, without owner keys/AS/login credentials.
+  Stable Agent/device key identity is separate from authorization generations;
+  account cross-signing pins survive host reassignment. Public pins commit before
+  bounded IO; post-lock clocks, actual rows, private store locks and missing-key
+  refusal preserve original identity. Dedicated crypto DB/4slots isolate waits.
+- Actual Synapse/native identity6 passes two independent Agents, original SDK
+  store reopen, real owner API revocation and direct-HS bearer refusal. Checked
+  close/drop/reopen on the same installation rotates authorization1→3 while
+  original keys stay; actual HS retains one Matrix device per Agent. Independent
+  ledger calls0, Server leases0. No model inference or encrypted task claim.
+- Preserve all failed qualification1..5, initial compiler failures, reused-DB
+ 112/2 notice fixture failure and the erroneous foreign-owner404 assertion.
+  Their corrections and final independent success are detailed in dev-vibe.
+- Current fresh Server full114/0/0, additional security4/0/0, engine271/9original
+  ignores, App627/2original ignores; strict affected Clippy, format, OpenAPI90+4/
+ 22guards,46static checks,1caller and1191bindings pass. Local typos unavailable;
+  spelling will use remote CI. No new remote/platform qualification claimed yet.
+- All owned qualification services stopped; original data retained. Normal runtime
+  lifecycle/secret-store integration, owner verification/recovery, encrypted Agent
+  tasks/replies/files, A3 and earlier manual/platform/production OAuth gates stay
+  open. The full objective remains active.

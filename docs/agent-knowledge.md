@@ -3,6 +3,18 @@
 
 # Repository audit knowledge
 
+- **Independent Agent SDK identity, 2026-10-27:** Keep authorization generations
+  separate from permanent Agent/host Matrix keys. Server pins account cross-signing
+  keys across hosts, device keys across credential epochs, before possible HTTP;
+  AS registration must inhibit login and global versions must not masquerade as
+  an unregistered user. Actual device-bearing whoami proves device support; pass
+  actual advertised versions to SDK. Private SDK stores require original binding/
+  file lock/keys and a host secret-store passphrase. Checked NativeOwner shutdown
+  retires work; drop the original host before reopening its exclusive state dir.
+  Synapse identity6 proves two independent Agents and native credential1→3 key
+  continuity with real revocation; ledger calls/leases0. It does not qualify normal
+  Agent runtime/owner trust/encrypted tasks/files or production OAuth. See dev-vibe.
+
 - **Actual remote approval joint proof, 2026-10-27:** Fresh Synapse/two actual SDK
   devices/two NativeOwners/real Codex consume the original encrypted approval and
   produce31 exact bytes with completed verified-device audit, settled10912tokens,

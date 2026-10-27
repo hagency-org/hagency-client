@@ -1135,6 +1135,27 @@ impl NativeOwner {
             owner: d.owner_mxid().into(),
         })
     }
+    /// In-process execution-host capability; never a native command response.
+    /// Retained snapshots share retirement and expiry checks with this owner.
+    pub async fn authorized_execution_device(
+        &self,
+    ) -> Result<super::AuthorizedDevice, NativeError> {
+        let device = self
+            .0
+            .host
+            .console
+            .authorized_device()
+            .await
+            .map_err(|_| failure(401, "owner_authorization_required"))?;
+        if device.origin() != self.0.expected_origin || device.owner_mxid() != self.0.expected_owner
+        {
+            return Err(failure(401, "matrix_account_mismatch"));
+        }
+        device
+            .bearer()
+            .map_err(|_| failure(401, "owner_authorization_required"))?;
+        Ok(device)
+    }
     pub fn retire(&self) {
         self.0.host.console.retire();
         self.0
