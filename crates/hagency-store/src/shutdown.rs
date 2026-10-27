@@ -284,7 +284,7 @@ mod tests {
         let second = {
             let probe = second_probe.clone();
             std::thread::spawn(move || {
-                other.drop_observed(&probe);
+                other.drop_observed(&probe).unwrap();
                 SQLITE_CLOSE_PROBE.with(|slot| assert!(slot.borrow().is_none()));
                 let snapshot = probe.snapshot(ShutdownOutcome::Complete);
                 assert!(snapshot.sqlite_close_entered_us.is_some());
@@ -292,7 +292,7 @@ mod tests {
                 drop(normal);
                 assert_eq!(probe.snapshot(ShutdownOutcome::Complete), snapshot);
                 let next = Arc::new(Probe::new());
-                subsequent.drop_observed(&next);
+                subsequent.drop_observed(&next).unwrap();
                 assert!(
                     next.snapshot(ShutdownOutcome::Complete)
                         .sqlite_close_entered_us
@@ -311,7 +311,7 @@ mod tests {
         // The distinct closes completed without releasing the held original.
         assert_eq!(original.snapshot(ShutdownOutcome::ReplyTimedOut), before);
         resume.send(()).unwrap();
-        first.join().unwrap();
+        first.join().unwrap().unwrap();
         crate::DomainRepository::open(&root.path().join("held")).unwrap();
 
         // These are real SQLite callbacks, including deliberately unavailable

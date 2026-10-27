@@ -18,6 +18,12 @@ pub struct Repository {
 }
 
 impl Repository {
+    pub(super) fn close(self) -> Result<(), Error> {
+        let Self { db, _ownership, .. } = self;
+        drop(db);
+        crate::database::release_ownership(_ownership)
+    }
+
     pub fn open(directory: &Path) -> Result<Self, Error> {
         let database = crate::database::open(
             directory,
@@ -135,6 +141,34 @@ mod tests {
     use super::*;
     use hagency_core::custody::{Kind, Lane};
     use serde_json::json;
+    #[tokio::test]
+    async fn native_custody_shutdown_releases_inherited_ownership() {
+        for observed in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let state = root.path().join("state");
+            let repository = Repository::open(&state).unwrap();
+            let inherited = repository._ownership.try_clone().unwrap();
+            let store = crate::Store::start(repository, 1).unwrap();
+            assert!(matches!(Repository::open(&state), Err(Error::Locked)));
+            if observed {
+                let (result, snapshot) = store.shutdown_observed().await;
+                result.unwrap();
+                assert_eq!(snapshot.outcome, crate::ShutdownOutcome::Complete);
+            } else {
+                store.shutdown().await.unwrap();
+            }
+            assert!(!store.writer_open());
+            let replacement = Repository::open(&state)
+                .expect("acknowledged shutdown retained the original ownership lock");
+            drop(inherited);
+            assert!(
+                matches!(Repository::open(&state), Err(Error::Locked)),
+                "closing the old inherited descriptor unlocked the replacement writer"
+            );
+            drop(replacement);
+            Repository::open(&state).unwrap();
+        }
+    }
     pub(super) fn delivery() -> Delivery {
         Delivery {
             binding: "fixture_registration".into(),
