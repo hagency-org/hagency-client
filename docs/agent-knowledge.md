@@ -1,4 +1,17 @@
 > Historical record: CLI and browser-console instructions below are retired.
+
+- **Owner ciphertext receipt, 2026-10-27:** Matrix SDK sync adds
+  use_state_after=true; accept that precise hint while forcing zero-wait empty-room
+  sync. Keep the original identity namespace closed. Owner master signatures must
+  match the Agent's pinned user signer, stripping other signers before forwarding.
+  Normal fixture lifecycle needs the actual cleanup worker to finish creating
+  Agents. New owner stores cannot reuse an old Matrix device (OTK collision).
+  Receive admission and stop snapshot share the slot lock; stop and shutdown join
+  original tasks, including canceled observers. Roomless crypto evidence does not
+  establish AS event origin or execution grants. Fresh receive5 plus independent
+  OpenSSL/ledger/PG prove original owner ciphertext, restart1→2 and calls/leases0;
+  complete encrypted task/reply/file authorization and A3 remain open.
+
 > The current client is the native desktop application; see the repository README.
 
 # Repository audit knowledge

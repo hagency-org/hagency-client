@@ -5,7 +5,7 @@ mod ledger;
 mod remote_reviews;
 pub use agent_crypto::{
     AgentCryptoAction, AgentCryptoAuthority, AgentCryptoContext, AgentCryptoIdentity,
-    AgentCryptoPreparation, AgentCryptoTransport,
+    AgentCryptoPreparation, AgentCryptoTransport, DecryptedAgentEvent,
 };
 pub use ledger::LedgerAction;
 pub use remote_reviews::RemoteApprovalAction;

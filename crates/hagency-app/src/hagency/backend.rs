@@ -165,7 +165,13 @@ impl MatrixTokenSource for SdkTokens {
     }
     fn supports_agent_crypto(&self)->bool {true}
     fn prepare_agent_crypto(&self, context: ::hagency::native_owner::AgentCryptoContext) -> ::hagency::native_owner::AgentCryptoPreparation<'_> {
-        Box::pin(async move {self.access_token().await?;super::agent_crypto::prepare_managed(context).await})
+        Box::pin(async move {
+            self.access_token().await?;
+            let weak=self.0.clone();
+            let client=crate::sliding_sync::get_client().ok_or_else(||source_error("matrix_sign_in_required"))?;
+            let live=Arc::new(move||weak.upgrade().is_some_and(|s|Service(s).check().is_ok()));
+            super::agent_crypto::prepare_managed_receiver(context,client,live).await
+        })
     }
 
     fn list_remote_requests<'a>(&'a self, room:&'a str,cursor:Option<&'a str>)->std::pin::Pin<Box<dyn std::future::Future<Output=Result<::hagency::native_owner::remote_approval::review::RequestPage,NativeError>> + Send + 'a>> {

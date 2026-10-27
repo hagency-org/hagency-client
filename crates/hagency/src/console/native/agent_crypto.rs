@@ -103,7 +103,49 @@ pub type AgentCryptoPreparation<'a> = std::pin::Pin<
             + 'a,
     >,
 >;
+/// Local crypto evidence only. Not a transport origin, membership or execution
+/// grant. The original admitted queue event/lease must still be bound by runtime.
+/// Deliberately not Clone, Debug, Serialize or Deserialize.
+pub struct DecryptedAgentEvent {
+    identity: AgentCryptoIdentity,
+    room: String,
+    event: String,
+    sender: String,
+    ciphertext_digest: String,
+    plaintext: Value,
+}
+impl DecryptedAgentEvent {
+    pub fn identity(&self) -> &AgentCryptoIdentity {
+        &self.identity
+    }
+    pub fn room(&self) -> &str {
+        &self.room
+    }
+    pub fn event(&self) -> &str {
+        &self.event
+    }
+    pub fn sender(&self) -> &str {
+        &self.sender
+    }
+    pub fn ciphertext_digest(&self) -> &str {
+        &self.ciphertext_digest
+    }
+    pub fn into_plaintext(self) -> Value {
+        self.plaintext
+    }
+}
 pub trait AgentCryptoTransport: Send + Sync {
+    fn receive_status(&self) -> Value {
+        json!({"phase":"unsupported"})
+    }
+    fn decrypt_owner_event<'a>(
+        &'a self,
+        _room: &'a str,
+        _event: &'a Value,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, NativeError>> + Send + 'a>>
+    {
+        Box::pin(async { Err(failure(503, "agent_crypto_receive_unavailable")) })
+    }
     fn identity(&self) -> AgentCryptoIdentity;
     fn retire(&self);
     fn refresh(
@@ -115,6 +157,101 @@ pub trait AgentCryptoTransport: Send + Sync {
         &self,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), NativeError>> + Send + '_>>;
 }
+impl NativeOwner {
+    /// Decrypt an already received owner event with the original host SDK.
+    /// This does not admit a task, ACK an event, obtain a lease or start a model.
+    /// Dropping a caller cannot discard original crypto IO or its shutdown join.
+    pub async fn decrypt_agent_owner_event(
+        &self,
+        agent: &str,
+        generation: i64,
+        room: &str,
+        event: Value,
+    ) -> Result<DecryptedAgentEvent, NativeError> {
+        key(agent)?;
+        if generation <= 0
+            || !crate::console::matrix_identifiers::room_id(room)
+            || event["type"] != "m.room.encrypted"
+            || event["room_id"] != room
+            || event["event_id"].as_str().is_none_or(|id| {
+                !id.starts_with('$') || id.len() > 1024 || id.chars().any(char::is_control)
+            })
+        {
+            return Err(failure(400, "agent_crypto_invalid_event"));
+        }
+        let bytes =
+            serde_json::to_vec(&event).map_err(|_| failure(400, "agent_crypto_invalid_event"))?;
+        if bytes.len() > 131072 {
+            return Err(failure(400, "agent_crypto_invalid_event"));
+        }
+        let update = crate::update_guard::PROCESS
+            .enter_task()
+            .ok_or_else(|| failure(409, "update_in_progress"))?;
+        {
+            let _call = self.0.calls.lock().await;
+            self.sync_matrix().await?;
+            self.check_matrix_source().await?;
+        }
+        let device = self.authorized_execution_device().await?;
+        if event["sender"] != device.owner_mxid() {
+            return Err(failure(403, "agent_crypto_owner_sender_required"));
+        }
+        let (session, authority) = {
+            let slots = self.0.crypto.slots.lock().map_err(|_| unavailable())?;
+            let slot = slots
+                .get(agent)
+                .filter(|s| {
+                    s.phase == "ready"
+                        && s.generation == generation
+                        && s.pin == DeviceIdentity::from(&device)
+                        && !s.authority.is_retired()
+                })
+                .ok_or_else(|| failure(409, "agent_crypto_identity_changed"))?;
+            (
+                slot.session.clone().ok_or_else(unavailable)?,
+                slot.authority.clone(),
+            )
+        };
+        let room = room.to_owned();
+        let event_id = event["event_id"].as_str().unwrap().to_owned();
+        let sender = device.owner_mxid().to_owned();
+        let identity = session.identity();
+        use sha2::{Digest, Sha256};
+        let ciphertext_digest = format!("{:x}", Sha256::digest(&bytes));
+        let receive = {
+            // Serialize admission with stop's retirement and task snapshot.
+            let _slots = self.0.crypto.slots.lock().map_err(|_| unavailable())?;
+            if authority.is_retired() {
+                return Err(failure(410, "native_owner_stopped"));
+            }
+            self.0.crypto.start_receive(agent, async move {
+                let _update = update;
+                let plaintext = session.decrypt_owner_event(&room, &event).await?;
+                authority.device().await?;
+                if plaintext["event_id"] != event_id
+                    || plaintext["sender"] != sender
+                    || plaintext.get("room_id").is_some_and(|r| r != &room)
+                    || plaintext["type"] != "m.room.message"
+                    || plaintext["unsigned"].get("redacted_because").is_some()
+                {
+                    return Err(failure(409, "agent_crypto_invalid_event"));
+                }
+                Ok(DecryptedAgentEvent {
+                    identity,
+                    room,
+                    event: event_id,
+                    sender,
+                    ciphertext_digest,
+                    plaintext,
+                })
+            })
+        }?;
+        receive
+            .await
+            .map_err(|_| failure(409, "agent_crypto_receive_unconfirmed"))?
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Credential {
@@ -231,6 +368,7 @@ static STARTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
 pub(super) struct Registry {
     closed: AtomicBool,
     slots: StdMutex<BTreeMap<String, Slot>>,
+    receives: StdMutex<Vec<(String, crate::shutdown::Task)>>,
 }
 struct Slot {
     authority: AgentCryptoAuthority,
@@ -246,9 +384,30 @@ struct Slot {
     trust_error: Option<String>,
 }
 fn view(slot: Option<&Slot>) -> Value {
-    slot.map_or_else(||json!({"phase":"not_initialized"}),|s|json!({"phase":s.phase,"agentGeneration":s.generation,"error":s.error,"identity":s.session.as_ref().map(|h|h.identity()),"ownerVerified":s.phase=="ready" && s.owner_verified && !s.authority.is_retired(),"verificationPending":s.verification.as_ref().is_some_and(|t|t.result().is_none()),"verificationError":s.trust_error}))
+    slot.map_or_else(||json!({"phase":"not_initialized"}),|s|json!({"phase":s.phase,"agentGeneration":s.generation,"error":s.error,"identity":s.session.as_ref().map(|h|h.identity()),"ownerVerified":s.phase=="ready" && s.owner_verified && !s.authority.is_retired(),"verificationPending":s.verification.as_ref().is_some_and(|t|t.result().is_none()),"verificationError":s.trust_error,"receive":s.session.as_ref().map(|h|h.receive_status())}))
 }
 impl Registry {
+    fn start_receive<T: Send + 'static>(
+        &self,
+        agent: &str,
+        job: impl std::future::Future<Output = Result<T, NativeError>> + Send + 'static,
+    ) -> Result<tokio::sync::oneshot::Receiver<Result<T, NativeError>>, NativeError> {
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let mut tasks = self.receives.lock().map_err(|_| unavailable())?;
+        tasks.retain(|(_, task)| task.result() != Some(Ok(())));
+        if self.closed.load(Ordering::Acquire) || tasks.len() >= 32 {
+            return Err(failure(409, "agent_crypto_receive_unavailable"));
+        }
+        tasks.push((
+            agent.into(),
+            crate::shutdown::Task::start(async move {
+                let result = job.await;
+                let _ = send.send(result);
+                Ok(())
+            }),
+        ));
+        Ok(receive)
+    }
     pub(super) fn retire(&self) {
         self.closed.store(true, Ordering::Release);
         if let Ok(mut slots) = self.slots.lock() {
@@ -274,7 +433,15 @@ impl Registry {
                     .flatten()
             })
             .collect::<Vec<_>>();
+        let receives = self
+            .receives
+            .lock()
+            .map_err(|_| crate::shutdown::Error::Worker)?
+            .clone();
         let mut result = Ok(());
+        for (_, task) in receives {
+            result = result.and(task.wait().await);
+        }
         for task in tasks {
             result = result.and(task.wait().await);
         }
@@ -327,6 +494,16 @@ async fn stop(native: &NativeOwner, agent: &str) -> Result<(), NativeError> {
             slot.phase = "stopping";
             let init = slot.init.clone();
             let verification = slot.verification.clone();
+            let receives = native
+                .0
+                .crypto
+                .receives
+                .lock()
+                .map_err(|_| unavailable())?
+                .iter()
+                .filter(|(id, _)| id == agent)
+                .map(|(_, task)| task.clone())
+                .collect::<Vec<_>>();
             let session = slot.session.clone();
             let weak = Arc::downgrade(&native.0);
             let id = agent.to_owned();
@@ -342,6 +519,9 @@ async fn stop(native: &NativeOwner, agent: &str) -> Result<(), NativeError> {
                 };
                 if let Some(verification) = verification {
                     result = result.and(verification.wait().await);
+                }
+                for receive in receives {
+                    result = result.and(receive.wait().await);
                 }
                 if let Some(session) = session
                     && session.close().await.is_err()
@@ -1157,6 +1337,99 @@ mod tests {
             assert_eq!(view(slots.get("agent-a"))["ownerVerified"], false);
             assert_eq!(view(slots.get("agent-a"))["phase"], "stopped");
         }
+        native.shutdown_checked().await.unwrap();
+    }
+    #[tokio::test]
+    async fn agent_crypto_canceled_receive_observer_cannot_discard_original_shutdown_join() {
+        let root = tempfile::tempdir().unwrap();
+        let native = owner(&root.path().join("state")).await;
+        let d = device();
+        let session = Arc::new(HeldTransport {
+            entered: Default::default(),
+            release: Default::default(),
+            retired: AtomicBool::new(false),
+            closed: AtomicBool::new(true),
+        });
+        native.0.crypto.slots.lock().unwrap().insert(
+            "agent-a".into(),
+            Slot {
+                authority: authority(&native, &d),
+                pin: DeviceIdentity::from(&d),
+                generation: 1,
+                phase: "ready",
+                error: None,
+                session: Some(session),
+                init: None,
+                closing: None,
+                verification: None,
+                owner_verified: false,
+                trust_error: None,
+            },
+        );
+        let registry = &native.0.crypto;
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let completed = Arc::new(AtomicBool::new(false));
+        let done = completed.clone();
+        let wait = release.clone();
+        let signal = entered.clone();
+        let receiver = registry
+            .start_receive("agent-a", async move {
+                signal.notify_one();
+                wait.notified().await;
+                done.store(true, Ordering::Release);
+                Ok(())
+            })
+            .unwrap();
+        entered.notified().await;
+        drop(receiver);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), stop(&native, "agent-a"))
+                .await
+                .is_err()
+        );
+        assert_eq!(registry.slots.lock().unwrap()["agent-a"].phase, "stopping");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), registry.shutdown())
+                .await
+                .is_err()
+        );
+        assert!(!completed.load(Ordering::Acquire));
+        assert!(registry.start_receive("agent-a", async { Ok(()) }).is_err());
+        release.notify_one();
+        registry.shutdown().await.unwrap();
+        assert!(completed.load(Ordering::Acquire));
+        assert_eq!(registry.receives.lock().unwrap().len(), 1);
+        assert_eq!(
+            registry.receives.lock().unwrap()[0].1.result(),
+            Some(Ok(()))
+        );
+        assert_eq!(registry.slots.lock().unwrap()["agent-a"].phase, "stopped");
+        native.shutdown_checked().await.unwrap();
+    }
+    #[tokio::test]
+    async fn agent_crypto_receive_rejects_malformed_headers_before_authority_or_crypto_io() {
+        let root = tempfile::tempdir().unwrap();
+        let native = owner(&root.path().join("state")).await;
+        let event = json!({"type":"m.room.encrypted","room_id":"!room:example.test","sender":"@owner:example.test","event_id":"$event","content":{}});
+        for (field, value) in [
+            ("type", json!("m.room.message")),
+            ("room_id", json!("!other:example.test")),
+            ("event_id", json!("invalid")),
+        ] {
+            let mut wrong = event.clone();
+            wrong[field] = value;
+            assert_eq!(
+                native
+                    .decrypt_agent_owner_event("agent-a", 1, "!room:example.test", wrong)
+                    .await
+                    .err()
+                    .unwrap()
+                    .code,
+                "agent_crypto_invalid_event"
+            );
+        }
+        assert!(native.0.crypto.receives.lock().unwrap().is_empty());
         native.shutdown_checked().await.unwrap();
     }
 }

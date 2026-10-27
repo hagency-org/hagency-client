@@ -71,3 +71,11 @@ Service 状态操作，私有文件凭据与原任务关闭等待现已实现（
 拒绝、原生授权1→2重启保持钥匙/信任，以及原始验证任务关闭等待；独立 OpenSSL
 核验真实签名通过，calls0/leases0。见 [精确主人验证验收](agent-crypto-owner-verification-2026-10-27.zh.md)。
 Agent 对主人/请求者的信任、加密 intake/ACK/原始回复/文件、A3和既有门槛仍继续。
+
+2026年10月27日：阶段5接通 Agent 主人密钥接收与 host-only 原密文解密，独立
+接收命名空间保留原身份能力限制。全新 receive5 Synapse 验证正常创建/私聊、主人实际
+Megolm消息、错误Agent/代次/房间/发送者/密文拒绝，以及 Native重启1→2保留原密钥。
+独立 OpenSSL验证 Agent→主人签名，账本calls0/Server leases0。详见
+[主人加密事件接收](agent-crypto-owner-receive-2026-10-27.zh.md)。这仍是密码学证据，
+原始 AS密文接纳/ACK、当前成员与租约核验、Codex加密回复/文件、A3及先前验收门槛
+继续实施；不移除加密Room执行拒绝，A4和总目标未完成。

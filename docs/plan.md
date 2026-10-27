@@ -1,5 +1,17 @@
 # Native migration working plan
 
+Current owner-receive checkpoint (2026-10-27): separate scoped broker and normal
+Agent SDK lifecycle now receive actual owner Olm/Megolm keys and decrypt original
+owner ciphertext through host-only opaque evidence. Fresh receive5 Synapse proves
+wrong Agent/generation/room/sender/ciphertext refusal and native restart1→2 retaining
+original keys; independent OpenSSL Agent→owner signature and calls/leases0 pass.
+Stop/shutdown join original receiving tasks even after canceled observers. Crypto
+evidence alone grants no event origin/member/admission/ACK/lease/execution authority.
+Next: original AS ciphertext admission/ACK, current Room/member/lease binding and
+original encrypted Codex replies/files; then A3 and existing gates. See dev-vibe
+owner-receive report. Full goal active.
+
+
 Current owner-verification checkpoint (2026-10-27): exact native Agent identity
 review now signs via the current verified owner SDK and reobserves actual
 cross-signatures. Fresh scoped queries reject partial/missing/invalid responses

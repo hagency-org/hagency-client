@@ -68,6 +68,7 @@ pub struct AgentCryptoSession {
     resources: tokio::sync::Mutex<Option<Resources>>,
     binding: Binding,
     retirement: Retirement,
+    owner_receive: bool,
 }
 async fn bounded(mut response: matrix_sdk::reqwest::Response) -> Result<Value, NativeError> {
     let status = response.status();
@@ -97,8 +98,13 @@ fn check_manifest(
     d: &AuthorizedDevice,
     agent: &str,
     generation: i64,
+    receive: bool,
 ) -> Result<(), NativeError> {
-    let expected = format!("{}hagency/agent-crypto/{agent}/{generation}", d.origin());
+    let expected = format!(
+        "{}hagency/agent-crypto/{agent}/{generation}{}",
+        d.origin(),
+        if receive { "/receive" } else { "" }
+    );
     let user =
         UserId::parse(&m.matrix_user_id).map_err(|_| error("agent_crypto_identity_mismatch"))?;
     let owner =
@@ -249,6 +255,24 @@ impl AgentCryptoSession {
             generation,
             root,
             passphrase,
+            false,
+        )
+        .await
+    }
+    pub async fn open_receiver(
+        owner: &NativeOwner,
+        agent: &str,
+        generation: i64,
+        root: &Path,
+        passphrase: &str,
+    ) -> Result<Self, NativeError> {
+        Self::open_authority(
+            owner.agent_crypto_authority().await?,
+            agent,
+            generation,
+            root,
+            passphrase,
+            true,
         )
         .await
     }
@@ -258,6 +282,7 @@ impl AgentCryptoSession {
         generation: i64,
         root: &Path,
         passphrase: &str,
+        receive: bool,
     ) -> Result<Self, NativeError> {
         if generation < 1
             || agent.is_empty()
@@ -296,8 +321,9 @@ impl AgentCryptoSession {
                 .map_err(|_| error("agent_crypto_retired"))?;
             let response = http
                 .post(format!(
-                    "{}hagency/agent-crypto/{agent}/{generation}/provision",
-                    device.origin()
+                    "{}hagency/agent-crypto/{agent}/{generation}/{}",
+                    device.origin(),
+                    if receive { "receive" } else { "provision" }
                 ))
                 .bearer_auth(
                     device
@@ -310,7 +336,7 @@ impl AgentCryptoSession {
             serde_json::from_value::<Manifest>(bounded(response).await?)
                 .map_err(|_| error("invalid_agent_crypto_response"))?
         };
-        check_manifest(&manifest, &device, agent, generation)?;
+        check_manifest(&manifest, &device, agent, generation, receive)?;
         authority.device().await?;
         let binding = Binding {
             origin: device.origin().into(),
@@ -381,6 +407,7 @@ impl AgentCryptoSession {
             })),
             binding,
             retirement,
+            owner_receive: receive,
         };
         session.whoami().await?;
         Ok(session)
@@ -528,8 +555,32 @@ impl AgentCryptoSession {
 struct Managed {
     session: AgentCryptoSession,
     identity: AgentCryptoIdentity,
+    receiver: Option<owner_receive::OwnerContext>,
 }
 impl AgentCryptoTransport for Managed {
+    fn receive_status(&self) -> Value {
+        self.receiver
+            .as_ref()
+            .map_or_else(|| json!({"phase":"unsupported"}), |r| r.status())
+    }
+    fn decrypt_owner_event<'a>(
+        &'a self,
+        room: &'a str,
+        event: &'a Value,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, NativeError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            self.session
+                .decrypt_owner_event(
+                    self.receiver
+                        .as_ref()
+                        .ok_or_else(|| error("agent_crypto_receive_unavailable"))?,
+                    room,
+                    event,
+                )
+                .await
+        })
+    }
     fn identity(&self) -> AgentCryptoIdentity {
         self.identity.clone()
     }
@@ -565,6 +616,7 @@ pub async fn prepare_managed(
         context.generation(),
         context.root(),
         context.passphrase(),
+        false,
     )
     .await?;
     let identity = match session.bootstrap().await {
@@ -574,7 +626,11 @@ pub async fn prepare_managed(
             return Err(e);
         }
     };
-    Ok(std::sync::Arc::new(Managed { session, identity }))
+    Ok(std::sync::Arc::new(Managed {
+        session,
+        identity,
+        receiver: None,
+    }))
 }
 
 #[cfg(test)]
@@ -629,7 +685,8 @@ mod tests {
         binding.manifest.server_versions.push("v1.17".into());
         binding.manifest.agent_generation = 2;
         binding.manifest.device_generation = 3;
-        binding.manifest.homeserver = "https://example.test/hagency/agent-crypto/agt_test/2".into();
+        binding.manifest.homeserver =
+            "https://example.test/hagency/agent-crypto/agt_test/2/receive".into();
         let (same, lock) = store(root.path(), &binding).unwrap();
         assert_eq!(same, path);
         drop(lock);
@@ -669,3 +726,6 @@ mod tests {
 
 mod owner_verification;
 pub use owner_verification::owner_trust;
+
+mod owner_receive;
+pub use owner_receive::prepare_managed_receiver;

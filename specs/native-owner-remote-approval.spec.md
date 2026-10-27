@@ -164,3 +164,14 @@ filesystem credential protection is not an OS keychain or cross-host recovery.
   observers share the original verification task; stop and shutdown join it and a
   late positive observation cannot restore a retired native session.
   Test: agent_crypto_exact_verification_rejects_changed_keys_and_joins_original_on_stop
+
+- Agent owner-event decryption yields host-only crypto evidence, never a task,
+  admission, ACK or lease grant. Malformed transport headers refuse before IO.
+  Test: agent_crypto_receive_rejects_malformed_headers_before_authority_or_crypto_io
+- Dropping a receiving observer retains the original crypto task and its update
+  guard. Checked shutdown joins it; a retired registry cannot start a new one.
+  Test: agent_crypto_canceled_receive_observer_cannot_discard_original_shutdown_join
+
+Actual owner ciphertext receipt is separately qualified by
+`agent_crypto_owner_receive_qualification` against isolated Synapse. CI unit
+fixtures do not prove real Olm/Megolm receipt or encrypted task execution.

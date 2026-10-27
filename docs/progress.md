@@ -14720,3 +14720,26 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   encrypted intake/ACK, Agent requester trust, current Room/member/lease gates and
   original encrypted Codex replies/files, then A3 and prior qualification gates.
   Full A4/objective remains active; no deployment/merge.
+
+
+## 2026-10-27 — actual Agent owner ciphertext receive
+
+- Separate receiver8/identity7 routes, owner-only public queries/pinned user-signer
+  signatures, fixed empty-room zero-wait sync and bounded response guards wired.
+  Normal desktop lifecycle uses receiver mode with original private SDK store.
+- SDKfc640 adds local roomless decryption; Native host-only opaque evidence and
+  shared original receiving task custody do not grant admission/ACK/lease/execution.
+  Stop snapshot and receive admission serialize; canceled waiters cannot bypass joins.
+- Preserve receive1/2/3/4 failures (SDK query compatibility, original device OTK
+  collision, missing actual fixture identity worker). Fresh receive5 passes actual
+  two-Agent trust, original owner ciphertext, negative scopes/tamper, native
+  restart1→2 and retired-host refusal. Independent actual public-key HTTP/OpenSSL
+  verifies Agent→owner signature; native ledger calls0, Server lease rows0/pins2.
+- Server119 fresh PG tests/no ignores, OpenAPI98+4/24guards, Native279/9original
+  ignores/App628/2original ignores, focused crypto8, strict no-deps Client lint,
+  Server strict lint, Rust1199bindings/no gaps and46guards/caller1 pass. Original
+  dependency-lint failure retained. Prior490 full actualLinux/macOS/Windows CI
+  success; new-head checks remain separate. See owner-receive dev-vibe evidence.
+- All four owned Synapse fixtures, their Servers and dedicated PG stopped; data retained.
+- Continue original ciphertext admission/ACK and current member/binding/lease gates,
+  real encrypted Codex replies/files, then A3 and prior gates. Full goal active.
