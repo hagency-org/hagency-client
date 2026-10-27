@@ -7,6 +7,7 @@ pub mod audit;
 pub mod backup;
 pub mod codex;
 pub mod encrypted_inputs;
+pub mod encrypted_outputs;
 pub mod file_delivery;
 pub mod inbox;
 pub mod process_cleanup;
@@ -307,6 +308,7 @@ impl Ledger {
         db.execute_batch(remote_approval::SCHEMA)?;
         db.execute_batch(remote_approval::review::SCHEMA)?;
         db.execute_batch(encrypted_inputs::SCHEMA)?;
+        db.execute_batch(encrypted_outputs::SCHEMA)?;
         db.execute_batch("COMMIT")?;
         db.pragma_update(None, "foreign_keys", true)?;
         Ok(Self {

@@ -14802,3 +14802,43 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 - Continue separate encrypted model/tool Start and original encrypted replies/files,
   shared requester trust, A3 and previous manual/platform/production OAuth gates.
   Full goal stays unfinished. See encrypted inbox ACK dev-vibe report.
+
+
+## 2026-10-27 — Complete owner encrypted Codex execution and files
+
+- Completed the CURRENT Native/Codex execution path: original actual SDK input
+  persistence and metadata ACK, one original Server start permit, existing tool
+  policies/audit/usage/process stop, actual encrypted reply and bidirectional files.
+  New owner DMs default to Megolm. Shared Project requester execution remains closed.
+- Durable original output custody prevents resealing/reupload/republication after
+  unknown results. Server possible commits before IO, owner-only key shares and
+  actual Matrix receipts control sent/completed. SDK fenced media HTTP includes
+  queued admission; Server has no plaintext file rows in the verified chain.
+- Actual macOS Synapse/PG/AS/SDK/NativeOwner/Codex success:131073-byte encrypted input,
+  actual command,131097-byte owner-decrypted output compared byte for byte; genuine
+  Agent file/reply receipts, completed tools and whole_tree stop. Successful task
+  calls1/input44629/output467/total45096; all pending/reserved/unreported0.
+  Two service reopens retain calls1 and identical cost/decryption. Normal new DM
+  creation also verified encrypted. Independent actual HS/PG/SQLite proof verifies
+  source/transport/ciphertext/receipt/execution/file/usage: publications2, live
+  leases0, plaintext file rows0; history retained. See full dev-vibe validation.
+- Preserve original paid failures32725 and117460 tokens without replay; total195281
+  across three calls. Absolute workspace path capture and actual SDK msgid validation
+  root causes fixed; failed/unknown work, AS409 collision and earlier diagnostics
+  remain recorded. Fixture OAuth bridge is not production OAuth qualification.
+- Final local Agent-local170/Core284/App628 pass, existing ignores3/9/2 unchanged.
+  Server fresh PG125/0 ignored using explicit include-ignored; SDK4 actual crypto/HTTP
+  integrations pass. Strict Client affected all-target no-deps Clippy also passes
+  with real remote git SDK pins, Server all-target and SDK library Clippy pass.
+  A registry index fetch stalled; final pinned/locked check used already-fetched
+  remote source offline, with no dependency upgrade. Core/local and selected App
+  format pass. OpenAPI105+4/34 negative guards, Rust1212 bindings/no gaps,46static
+  guards and production caller audit pass.
+- Fresh remote main remains an ancestor for Client and Server; work is on feature
+  branches. SDK919a38b3ae6d0db1f310cb1fcad6b274380f6811 and Server
+  f24b95db9cefd9e4bf426dd74848bb58c6400243 pushed; Client uses that exact remote
+  SDK0.19.1 revision, with only ten SDK lock-source changes. Owned fixture Server,
+  Synapse and PG stopped after final independent proof; data retained.
+- This owner private DM chain is complete. A3, shared Project trust, cross-host key
+  recovery and prior manual/production OAuth/other-platform gates remain open in
+  the saved absorption task list. Broader migration is not declared complete.

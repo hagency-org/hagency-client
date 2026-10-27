@@ -114,7 +114,7 @@ impl MatrixOperation {
                     Method::POST,
                     "/_matrix/client/v3/createRoom".into(),
                     Some(
-                        json!({"name":name,"visibility":"private","preset":"private_chat","is_direct":true,"room_alias_name":format!("hagency-agent-{agent}"),"invite":[puppet],"initial_state":[{"type":"m.room.history_visibility","state_key":"","content":{"history_visibility":"joined"}},{"type":"m.room.guest_access","state_key":"","content":{"guest_access":"forbidden"}},{"type":"m.room.join_rules","state_key":"","content":{"join_rule":"invite"}},{"type":"im.hagency.agent.owner_direct","state_key":"","content":{"version":1,"agentId":agent,"ownerMxid":owner}}]}),
+                        json!({"name":name,"visibility":"private","preset":"private_chat","is_direct":true,"room_alias_name":format!("hagency-agent-{agent}"),"invite":[puppet],"initial_state":[{"type":"m.room.encryption","state_key":"","content":{"algorithm":"m.megolm.v1.aes-sha2"}},{"type":"m.room.history_visibility","state_key":"","content":{"history_visibility":"joined"}},{"type":"m.room.guest_access","state_key":"","content":{"guest_access":"forbidden"}},{"type":"m.room.join_rules","state_key":"","content":{"join_rule":"invite"}},{"type":"im.hagency.agent.owner_direct","state_key":"","content":{"version":1,"agentId":agent,"ownerMxid":owner}}]}),
                     ),
                 )
             }

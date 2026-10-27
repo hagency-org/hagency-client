@@ -927,7 +927,7 @@ fn request(command: Command) -> Result<(&'static str, String, Option<Value>), Na
     };
     Ok((method, path, body))
 }
-struct Inner {
+pub(super) struct Inner {
     host: OwnerHost,
     service: salvo::Service,
     address: SocketAddr,
@@ -969,7 +969,7 @@ impl Drop for Inner {
 /// A native owner service. Neither credentials nor its private local grants are
 /// returned in command responses. Only the OAuth callback listens on loopback.
 #[derive(Clone)]
-pub struct NativeOwner(Arc<Inner>);
+pub struct NativeOwner(pub(super) Arc<Inner>);
 impl NativeOwner {
     pub async fn open(state: &Path, origin: &str, owner: &str) -> Result<Self, NativeError> {
         Self::open_inner(state, origin, owner, true).await
@@ -1054,6 +1054,13 @@ impl NativeOwner {
         });
         *native.0.callback_task.lock().unwrap() = Some(task);
         // Consume any bootstrap response without exposing a grant to the caller.
+        let _ = native
+            .0
+            .host
+            .console
+            .0
+            .native_owner
+            .set(Arc::downgrade(&native.0));
         let _ = grant.take_json::<Value>().await;
         if start_worker {
             configuration::start(&native);

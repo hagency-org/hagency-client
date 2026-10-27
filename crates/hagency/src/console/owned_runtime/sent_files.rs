@@ -14,6 +14,25 @@ pub(super) async fn attach(
     workspace: &std::path::Path,
     cancel: &watch::Receiver<bool>,
 ) -> Result<(), RuntimeError> {
+    let (ledger, owner) = super::encrypted::ledger(host).await?;
+    if local(ledger.encrypted_input(&owner, &prepared.dispatch.id))?.is_some() {
+        let bridge = super::encrypted_files::Host::new(LiveToolGate {
+            console: host.clone(),
+            lease: lease.clone(),
+            expected: prepared.dispatch.clone(),
+            execution: prepared.execution_id.clone(),
+            cancel: cancel.clone(),
+        });
+        return session
+            .enable_sent_files(
+                hagency_agent_local::sent_files::Sender::open(workspace)
+                    .map_err(|_| RuntimeError::Profile)?,
+                Arc::new(bridge),
+                prepared.dispatch.id.clone(),
+                prepared.execution_id.clone(),
+            )
+            .map_err(|_| RuntimeError::Profile);
+    }
     let metadata = crate::server_admission::discover(&host.pin.origin)
         .await
         .map_err(|_| RuntimeError::Transport)?;

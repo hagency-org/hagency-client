@@ -146,6 +146,22 @@ pub trait AgentCryptoTransport: Send + Sync {
     {
         Box::pin(async { Err(failure(503, "agent_crypto_receive_unavailable")) })
     }
+    fn seal_reply<'a>(
+        &'a self,
+        _room: &'a str,
+        _content: Value,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, NativeError>> + Send + 'a>>
+    {
+        Box::pin(async { Err(failure(503, "agent_crypto_send_unavailable")) })
+    }
+    fn upload_encrypted_file<'a>(
+        &'a self,
+        _bytes: Vec<u8>,
+        _live: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, NativeError>> + Send + 'a>>
+    {
+        Box::pin(async { Err(failure(503, "agent_crypto_send_unavailable")) })
+    }
     fn identity(&self) -> AgentCryptoIdentity;
     fn retire(&self);
     fn refresh(
@@ -212,6 +228,19 @@ impl NativeOwner {
             .execution_api_pinned_live(op, pin, Arc::new(move || !scope.is_retired()))
             .await
             .map_err(|e| failure(e.status, &e.code))
+    }
+    pub(in crate::console) async fn runtime_agent_crypto(
+        &self,
+        agent: &str,
+    ) -> Result<Arc<dyn AgentCryptoTransport>, NativeError> {
+        let device = self.authorized_execution_device().await?;
+        let pin = DeviceIdentity::from(&device);
+        let slots = self.0.crypto.slots.lock().map_err(|_| unavailable())?;
+        let slot = slots
+            .get(agent)
+            .filter(|s| s.phase == "ready" && s.pin == pin && !s.authority.is_retired())
+            .ok_or_else(|| failure(409, "agent_crypto_identity_changed"))?;
+        slot.session.clone().ok_or_else(unavailable)
     }
     pub async fn poll_agent_ciphertexts(
         &self,

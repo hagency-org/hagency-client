@@ -172,6 +172,64 @@ impl AgentCryptoSession {
         *context.state.lock().map_err(|_| refused())? = (Some(pin), None);
         Ok(())
     }
+    pub(super) async fn seal_reply(
+        &self,
+        context: &OwnerContext,
+        room: &str,
+        content: Value,
+    ) -> Result<Value, NativeError> {
+        let pin = owner_pin(&self.authority, context).await?;
+        let resources = self.resources.lock().await;
+        let client = &resources.as_ref().ok_or_else(refused)?.client;
+        self.owner_peer(client, &pin, context, false).await?;
+        self.current(client).await?;
+        let room = RoomId::parse(room).map_err(|_| refused())?;
+        let owner = UserId::parse(&pin.user).map_err(|_| refused())?;
+        let result = client
+            .encryption()
+            .seal_received_conversation_reply(&room, &owner, content)
+            .await
+            .map_err(|_| error("agent_crypto_reply_sealing_failed"))?;
+        self.current(client).await?;
+        if !(context.live)() {
+            return Err(refused());
+        }
+        Ok(result)
+    }
+    pub(super) async fn upload_encrypted_file(
+        &self,
+        context: &OwnerContext,
+        bytes: Vec<u8>,
+        live: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> Result<Value, NativeError> {
+        if bytes.len() > 8 * 1024 * 1024 {
+            return Err(refused());
+        }
+        let _pin = owner_pin(&self.authority, context).await?;
+        if !(context.live)() {
+            return Err(refused());
+        }
+        let device = self.authority.device().await?;
+        let authority = self.authority.clone();
+        let owner_live = context.live.clone();
+        let fence = Arc::new(HttpRequestFence::new(move || {
+            !authority.is_retired() && device.bearer().is_ok() && owner_live() && live()
+        }));
+        let _retire = Retirement(fence.clone());
+        let file = context
+            .client
+            .upload_encrypted_file(&mut std::io::Cursor::new(bytes))
+            .with_request_config(matrix_sdk::config::RequestConfig::new().disable_retry())
+            .with_request_fence(fence.clone())
+            .await
+            .map_err(|_| error("agent_crypto_file_upload_unknown"))?;
+        self.authority.device().await?;
+        if !(context.live)() {
+            return Err(refused());
+        }
+        fence.retire_and_drain().await.map_err(|_| refused())?;
+        serde_json::to_value(file).map_err(|_| refused())
+    }
     pub(super) async fn decrypt_owner_event(
         &self,
         context: &OwnerContext,

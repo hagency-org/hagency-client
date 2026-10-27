@@ -216,17 +216,24 @@ pub(crate) fn history_digest(tx: &Transaction<'_>, id: &str, local: &str) -> Res
         None => Ok(local.into()),
     }
 }
-pub(crate) fn require_plain(tx: &Transaction<'_>, id: &str) -> Result<()> {
-    if tx.query_row(
+pub(crate) fn require_mode(tx: &Transaction<'_>, id: &str, encrypted: bool) -> Result<()> {
+    let present: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM encrypted_inputs WHERE dispatch_id=?)",
         [id],
-        |r| r.get::<_, bool>(0),
-    )? {
+        |r| r.get(0),
+    )?;
+    if present != encrypted {
         return Err(Error::Invalid(
             "encrypted input requires encrypted execution transport",
         ));
     }
     Ok(())
+}
+impl Ledger {
+    pub fn encrypted_input(&self, owner: &str, id: &str) -> Result<Option<Input>> {
+        self.owner(owner)?;
+        self.db.query_row("SELECT inbox_id,source_digest,agent_generation,owner_direct,ciphertext,message FROM encrypted_inputs WHERE dispatch_id=? AND ciphertext IS NOT NULL",[id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,bool>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?))).optional()?.map(|(inbox_id,source_digest,agent_generation,owner_direct,c,m)|Ok(Input{inbox_id,source_digest,agent_generation,owner_direct,ciphertext:serde_json::from_str(&c)?,message:serde_json::from_str(&m)?})).transpose()
+    }
 }
 pub(crate) fn compact(tx: &rusqlite::Connection) -> Result<()> {
     tx.execute("UPDATE encrypted_inputs SET ciphertext=NULL,message=NULL WHERE ciphertext IS NOT NULL AND EXISTS(SELECT 1 FROM local_inbox i WHERE i.id=encrypted_inputs.dispatch_id AND i.state IN ('replied','failed','rejected') AND json_extract(i.envelope,'$.body')='')",[])?;

@@ -457,11 +457,22 @@ impl Ledger {
     /// Persist stable execution identity BEFORE posting server start. Never prepares
     /// running, uncertain or completed work for a second provider invocation.
     pub fn prepare_execution(&mut self, owner: &str, id: &str) -> Result<Prepared> {
+        self.prepare_execution_kind(owner, id, false)
+    }
+    pub fn prepare_encrypted_execution(&mut self, owner: &str, id: &str) -> Result<Prepared> {
+        self.prepare_execution_kind(owner, id, true)
+    }
+    fn prepare_execution_kind(
+        &mut self,
+        owner: &str,
+        id: &str,
+        encrypted: bool,
+    ) -> Result<Prepared> {
         self.owner(owner)?;
         let tx = self
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        crate::encrypted_inputs::require_plain(&tx, id)?;
+        crate::encrypted_inputs::require_mode(&tx, id, encrypted)?;
         let (encoded, state, execution_id): (String, String, Option<String>) = tx.query_row(
             "SELECT envelope,state,execution_id FROM local_inbox WHERE id=?",
             [id],
@@ -502,12 +513,27 @@ impl Ledger {
         owner: &str,
         response: &ServerStart,
     ) -> Result<Option<RunPermit>> {
+        self.confirm_execution_start_kind(owner, response, false)
+    }
+    pub fn confirm_encrypted_execution_start(
+        &mut self,
+        owner: &str,
+        response: &ServerStart,
+    ) -> Result<Option<RunPermit>> {
+        self.confirm_execution_start_kind(owner, response, true)
+    }
+    fn confirm_execution_start_kind(
+        &mut self,
+        owner: &str,
+        response: &ServerStart,
+        encrypted: bool,
+    ) -> Result<Option<RunPermit>> {
         self.owner(owner)?;
         response.dispatch.validate()?;
         let tx = self
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        crate::encrypted_inputs::require_plain(&tx, &response.dispatch.id)?;
+        crate::encrypted_inputs::require_mode(&tx, &response.dispatch.id, encrypted)?;
         let (encoded, digest, state, execution_id): (String, String, String, Option<String>) = tx
             .query_row(
             "SELECT envelope,immutable_digest,state,execution_id FROM local_inbox WHERE id=?",

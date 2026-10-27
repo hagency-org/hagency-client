@@ -182,7 +182,8 @@ fn encrypted_input_legacy_snapshot_adds_no_crypto_claim_and_partial_schema_refus
     let (mut l, d, _) = fixture();
     l.receive_dispatch(OWNER, &d, Limits::default(), 10)
         .unwrap();
-    l.db.execute_batch("DROP TABLE encrypted_inputs").unwrap();
+    l.db.execute_batch("DROP TABLE encrypted_outputs;DROP TABLE encrypted_inputs")
+        .unwrap();
     let profile = "a".repeat(64);
     let snapshot = l.snapshot(OWNER, &profile, 20).unwrap();
     let mut restored = Ledger::open_scoped(":memory:", OWNER, &profile).unwrap();
@@ -241,5 +242,68 @@ fn encrypted_input_same_sealed_message_under_a_new_event_id_never_becomes_new_wo
             .get::<_, i64>(0))
             .unwrap(),
         1
+    );
+}
+
+#[test]
+fn encrypted_execution_requires_original_durable_input_and_new_server_start_once() {
+    let (mut l, d, input) = fixture();
+    assert!(l.prepare_encrypted_execution(OWNER, &d.id).is_err());
+    l.receive_encrypted_dispatch(OWNER, &d, &input, Limits::default(), 10)
+        .unwrap();
+    l.acknowledge_dispatch(OWNER, &d.id).unwrap();
+    let prepared = l.prepare_encrypted_execution(OWNER, &d.id).unwrap();
+    let mut running = d.clone();
+    running.state = "running".into();
+    running.execution_id = Some(prepared.execution_id);
+    let response = crate::inbox::ServerStart {
+        dispatch: running,
+        newly_started: true,
+    };
+    assert!(l.confirm_execution_start(OWNER, &response).is_err());
+    assert!(
+        l.confirm_encrypted_execution_start(OWNER, &response)
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        l.confirm_encrypted_execution_start(OWNER, &response)
+            .unwrap()
+            .is_none()
+    );
+    assert!(l.prepare_encrypted_execution(OWNER, &d.id).is_err());
+}
+
+#[test]
+fn encrypted_original_output_survives_snapshot_without_resealing_or_substitution() {
+    let (mut l, d, input) = fixture();
+    l.receive_encrypted_dispatch(OWNER, &d, &input, Limits::default(), 10)
+        .unwrap();
+    let payload = json!({"content":{"ciphertext":"original"},"shares":[]});
+    l.retain_encrypted_output(OWNER, &d.id, "reply", "reply", &payload)
+        .unwrap();
+    l.retain_encrypted_output(OWNER, &d.id, "reply", "reply", &payload)
+        .unwrap();
+    assert!(
+        l.retain_encrypted_output(OWNER, &d.id, "reply", "reply", &json!({"changed":true}))
+            .is_err()
+    );
+    let profile = "a".repeat(64);
+    let snapshot = l.snapshot(OWNER, &profile, 20).unwrap();
+    let mut restored = Ledger::open_scoped(":memory:", OWNER, &profile).unwrap();
+    restored
+        .restore_snapshot(OWNER, &profile, &snapshot)
+        .unwrap();
+    assert_eq!(
+        restored
+            .encrypted_output(OWNER, &d.id, "reply", "reply")
+            .unwrap(),
+        Some(payload)
+    );
+    assert!(
+        restored
+            .db
+            .execute("DELETE FROM encrypted_outputs", [])
+            .is_err()
     );
 }

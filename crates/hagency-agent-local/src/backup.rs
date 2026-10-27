@@ -94,6 +94,7 @@ impl Snapshot {
         db.execute_batch(crate::remote_approval::SCHEMA)?;
         db.execute_batch(crate::remote_approval::review::SCHEMA)?;
         db.execute_batch(crate::encrypted_inputs::SCHEMA)?;
+        db.execute_batch(crate::encrypted_outputs::SCHEMA)?;
         Ok(db)
     }
 }
@@ -278,7 +279,12 @@ fn validate(db: &Connection, owner: &str, profile: &str) -> Result<()> {
     let expected = Ledger::open_scoped(":memory:", owner, profile)?;
     let stored = objects(db)?;
     let current = objects(&expected.db)?;
-    let before_encrypted: Vec<_> = current
+    let before_outputs: Vec<_> = current
+        .iter()
+        .filter(|(_, name, _)| !crate::encrypted_outputs::OBJECTS.contains(&name.as_str()))
+        .cloned()
+        .collect();
+    let before_encrypted: Vec<_> = before_outputs
         .iter()
         .filter(|(_, name, _)| !crate::encrypted_inputs::OBJECTS.contains(&name.as_str()))
         .cloned()
@@ -336,6 +342,7 @@ fn validate(db: &Connection, owner: &str, profile: &str) -> Result<()> {
         .cloned()
         .collect();
     if stored != current
+        && stored != before_outputs
         && stored != before_encrypted
         && stored != before_review
         && stored != before_remote

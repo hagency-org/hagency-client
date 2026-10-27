@@ -94,7 +94,10 @@ fn validate(state: &Value, owner: &str, agent: &str, puppet: &str) -> Result<(),
         )
         || guests["content"]["guest_access"] != "forbidden"
         || joins["content"]["join_rule"] != "invite"
-        || events.iter().any(|e| e["type"] == "m.room.encryption")
+        || events.iter().any(|e| {
+            e["type"] == "m.room.encryption"
+                && (e["state_key"] != "" || e["content"]["algorithm"] != "m.megolm.v1.aes-sha2")
+        })
     {
         return Err(error(409, "owner_direct_room_identity_mismatch"));
     }
@@ -478,6 +481,10 @@ mod tests {
             .unwrap()
             .push(json!({"type":"m.room.encryption","content":{}}));
         assert!(validate(&encrypted, "@owner:test", "a", "@puppet:test").is_err());
+        let last = encrypted.as_array().unwrap().len() - 1;
+        encrypted[last]["state_key"] = json!("");
+        encrypted[last]["content"] = json!({"algorithm":"m.megolm.v1.aes-sha2"});
+        assert!(validate(&encrypted, "@owner:test", "a", "@puppet:test").is_ok());
         for visibility in ["world_readable", "unexpected"] {
             let mut public = state();
             public[2]["content"]["history_visibility"] = visibility.into();

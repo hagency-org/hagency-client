@@ -1,5 +1,18 @@
 # Native migration working plan
 
+Current encrypted owner-chain delivery (2026-10-27): original encrypted attachment
+now runs through the CURRENT Native/Codex/policy/ledger service and returns actual
+encrypted file and reply. Real Synapse/SDK/Codex success proves131097 exact bytes,
+original file/reply receipts, completed tools, whole_tree stop and one45096-token
+call. Two Native/service reopens retain one call/cost and original decryption;
+normal newly created owner DM is encrypted by default. Source/transport/receipt
+proof independently checked against HS/PG/SQLite. Preserve the two earlier paid
+failures and195281 total tokens; no original work/reply/file was replayed. Owner
+private chain is delivered; shared Project requester trust, cross-host recovery,
+A3 and prior manual/production OAuth/platform gates remain in the main plan.
+See agent-encrypted-codex-validation dev-vibe report.
+
+
 Current encrypted-inbox ACK checkpoint (2026-10-27): actual Synapse/NativeOwner
 now persists original SDK plaintext and source/history bindings atomically before
 metadata-only Server ACK. encrypted_* states keep ordinary execution closed;

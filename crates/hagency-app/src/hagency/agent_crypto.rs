@@ -581,6 +581,42 @@ impl AgentCryptoTransport for Managed {
                 .await
         })
     }
+    fn seal_reply<'a>(
+        &'a self,
+        room: &'a str,
+        content: Value,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, NativeError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            self.session
+                .seal_reply(
+                    self.receiver
+                        .as_ref()
+                        .ok_or_else(|| error("agent_crypto_receive_unavailable"))?,
+                    room,
+                    content,
+                )
+                .await
+        })
+    }
+    fn upload_encrypted_file<'a>(
+        &'a self,
+        bytes: Vec<u8>,
+        live: std::sync::Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, NativeError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            self.session
+                .upload_encrypted_file(
+                    self.receiver
+                        .as_ref()
+                        .ok_or_else(|| error("agent_crypto_receive_unavailable"))?,
+                    bytes,
+                    live,
+                )
+                .await
+        })
+    }
     fn identity(&self) -> AgentCryptoIdentity {
         self.identity.clone()
     }

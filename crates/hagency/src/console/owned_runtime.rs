@@ -1,4 +1,7 @@
-//! Explicit owner-started, chat-only Codex host. No legacy execution fallback.
+//! Owner-started Codex host with scoped plaintext and encrypted owner transport.
+mod encrypted;
+#[cfg(unix)]
+mod encrypted_files;
 #[cfg(unix)]
 mod received_files;
 mod remote_approvals;
@@ -1207,6 +1210,9 @@ impl Transport for PinnedConsole {
         Some(self.clone())
     }
     async fn execute(&self, op: Op) -> Result<Response, RuntimeError> {
+        if let Some(response) = encrypted::execute(self, &op).await? {
+            return Ok(response);
+        }
         let acquiring = matches!(&op, Op::Acquire { .. });
         let request = matches!(
             &op,
@@ -2007,7 +2013,9 @@ async fn execution_loop_admitted<T: Transport>(
             let scope = event.scope();
             // Poll transport has verified current owner/device/Agent and lease.
             local(ledger.register_binding(owner, &scope))?;
-            local(ledger.receive_dispatch(owner, &event, inbox::Limits::default(), now()))?;
+            if local(ledger.encrypted_input_transport_digest(owner, &event.id))?.is_none() {
+                local(ledger.receive_dispatch(owner, &event, inbox::Limits::default(), now()))?;
+            }
             let record = local(ledger.inbox_record(owner, &event.id))?;
             // A redelivery is not permission to repeat provider work. Close the
             // unstarted server offer even after a restart changed the lease epoch.
@@ -2123,7 +2131,14 @@ async fn execution_loop_admitted<T: Transport>(
             if local(ledger.inbox_available_bytes(owner))? < 65_536 {
                 return Err(RuntimeError::Profile);
             }
-            let prepared = local(ledger.prepare_execution(owner, &record.dispatch.id))?;
+            let is_encrypted =
+                local(ledger.encrypted_input_transport_digest(owner, &record.dispatch.id))?
+                    .is_some();
+            let prepared = local(if is_encrypted {
+                ledger.prepare_encrypted_execution(owner, &record.dispatch.id)
+            } else {
+                ledger.prepare_execution(owner, &record.dispatch.id)
+            })?;
             let start = operation(
                 console,
                 cancel,
@@ -2140,7 +2155,11 @@ async fn execution_loop_admitted<T: Transport>(
                         dispatch: convert(start.dispatch)?,
                         newly_started: start.newly_started,
                     };
-                    let Some(permit) = local(ledger.confirm_execution_start(owner, &response))?
+                    let Some(permit) = local(if is_encrypted {
+                        ledger.confirm_encrypted_execution_start(owner, &response)
+                    } else {
+                        ledger.confirm_execution_start(owner, &response)
+                    })?
                     else {
                         continue;
                     };
@@ -2856,6 +2875,13 @@ async fn send_reply<T: Transport>(
     record: &inbox::Record,
 ) -> Result<(), RuntimeError> {
     let execution = record.execution_id.clone().ok_or(RuntimeError::Profile)?;
+    if local(ledger.encrypted_input_transport_digest(owner, &record.dispatch.id))?.is_some() {
+        let host = console.approval_host().ok_or(RuntimeError::Authorization)?;
+        if encrypted::reply(&host, lease, record).await?.is_some() {
+            local(ledger.confirm_matrix_delivery(owner, &record.dispatch.id, &execution))?;
+        }
+        return Ok(());
+    }
     let body = record.reply.clone().ok_or(RuntimeError::Profile)?;
     let receipt = match operation(
         console,

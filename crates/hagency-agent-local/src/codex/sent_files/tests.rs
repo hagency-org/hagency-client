@@ -274,3 +274,25 @@ async fn original_frozen_send_approval_denial_source_change_and_lost_ack_never_r
         }
     }
 }
+
+#[test]
+fn sender_workspace_selection_accepts_only_exact_absolute_subpaths_without_escape() {
+    let root = std::path::Path::new("/private/task");
+    assert_eq!(
+        workspace_selection("result.bin", root),
+        Some("result.bin".into())
+    );
+    assert_eq!(
+        workspace_selection("/private/task/result.bin", root),
+        Some("result.bin".into())
+    );
+    for path in [
+        "/private/task-other/result.bin",
+        "/private/task/../outside",
+        "../outside",
+        "/private/task",
+        "",
+    ] {
+        assert!(workspace_selection(path, root).is_none());
+    }
+}

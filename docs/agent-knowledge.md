@@ -1,3 +1,17 @@
+- **Encrypted owner chain, 2026-10-27:** Deliver through the current runtime,
+  not a second execution engine. Distinct encrypted run permits require original
+  local input and fresh newly-started Server receipts; compare ciphertext history
+  commitments before translating wire bodies. Seal on host and retain original
+  payload before Server publication. Owner-only SDK shares include optional
+  org.matrix.msgid; validate its bounded metadata, do not reject real SDK output.
+  File staging is local, ciphertext upload is owner SDK, final publication is
+  Agent/AS with durable possible-before-IO and exact receipts. Never label local
+  staging a Server observation. Accept absolute file selections only after exact
+  lexical workspace stripping; retain nofollow physical capture. Final actual
+  Synapse/Codex success is131097 bytes/one45096-token call, two service reopens
+  without new usage; default encrypted owner DM also proved. Preserve failed
+  charges32725/117460 and original unknowns. Shared requester trust remains open.
+
 - **Encrypted input ACK, 2026-10-27:** Commit local plaintext plus original AS
   ciphertext/source/seal/transport/plaintext commitments atomically before ACK.
   Server retains ciphertext body and encrypted_* modes; old plain execution must

@@ -74,6 +74,7 @@ struct Inner {
     server_login: server_login::ServerLogin,
     owned_runtime: owned_runtime::OwnedRuntime,
     owner_provider: owner_provider::OwnerProvider,
+    native_owner: std::sync::OnceLock<std::sync::Weak<native::Inner>>,
 }
 /// Clones share the same finite in-process authority and engine state.
 #[derive(Clone)]
@@ -85,6 +86,7 @@ impl Console {
             server_login: server_login::ServerLogin::new(state_dir)?,
             owned_runtime: owned_runtime::OwnedRuntime::default(),
             owner_provider: owner_provider::OwnerProvider::default(),
+            native_owner: std::sync::OnceLock::new(),
             authority: match state_dir {
                 Some(dir) => Authority::persistent(dir),
                 None => Authority::new(),
@@ -108,6 +110,7 @@ impl Console {
             server_login: server_login::ServerLogin::new(Some(state))?,
             owned_runtime: owned_runtime::OwnedRuntime::default(),
             owner_provider: owner_provider::OwnerProvider::default(),
+            native_owner: std::sync::OnceLock::new(),
         }));
         if tokio::runtime::Handle::try_current().is_ok() {
             server_login::ServerLogin::start_worker(&console);
