@@ -12,6 +12,7 @@ mod usage;
 mod history;
 mod file_history;
 mod recovery;
+mod crypto;
 
 #[derive(Clone, Debug)]
 pub enum HagencyAction {
@@ -90,6 +91,7 @@ enum Target {
     RemoteApprovalDecision,
     RemoteInbox,
     RemoteVerdict,
+    Crypto,
     Members,
     Changed,
     ProjectAdopted,
@@ -1075,6 +1077,20 @@ script_mod! {
                         }
                         }
                         Section {width: Fill height: Fit flow: Down spacing: 8
+                            Text {text: #(crate::i18n::tr("Agent encryption identity")) i18n_text: "Agent encryption identity" draw_text.text_style: theme.font_bold{font_size: mod.widgets.RINX_TITLE_SIZE}}
+                            Text {text: #(crate::i18n::tr("This identity has not been verified by you. Encrypted Agent tasks and files are not available yet.")) i18n_text: "This identity has not been verified by you. Encrypted Agent tasks and files are not available yet." draw_text.color: mod.widgets.RINX_MUTED}
+                            crypto_status := Text {}
+                            crypto_identity := Text {}
+                            View {width: Fill height: 40 spacing: 8
+                                crypto_refresh := Action {text: #(crate::i18n::tr("Refresh identity")) i18n_text: "Refresh identity"}
+                                crypto_prepare := Action {text: #(crate::i18n::tr("Initialize identity")) i18n_text: "Initialize identity"}
+                                crypto_stop := Action {text: #(crate::i18n::tr("Stop identity session")) i18n_text: "Stop identity session"}
+                            }
+                            View {width: Fill height: 40 spacing: 8
+                                crypto_copy := Action {text: #(crate::i18n::tr("Copy public identity")) i18n_text: "Copy public identity"}
+                            }
+                        }
+                        Section {width: Fill height: Fit flow: Down spacing: 8
                             Text {text: #(crate::i18n::tr("Connected Rooms")) i18n_text: "Connected Rooms" draw_text.text_style: theme.font_bold{font_size: mod.widgets.RINX_TITLE_SIZE}}
                             Text {text: #(crate::i18n::tr("Pause only where needed. Requests in a paused Room receive a notice.")) i18n_text: "Pause only where needed. Requests in a paused Room receive a notice." draw_text.color: mod.widgets.RINX_MUTED}
                             service_rooms := PortalList {width: Fill height: 260
@@ -1292,6 +1308,7 @@ pub struct HagencyPanel {
     #[rust] approval_started: Option<Instant>,
     #[rust] approval_notices: Notices,
     #[rust] remote_approval: Value,
+    #[rust] agent_crypto: Value,
     #[rust] remote_approval_rooms: Vec<Value>,
     #[rust] remote_review_rooms: Vec<Value>,
     #[rust] remote_review_requests: Vec<Value>,
@@ -1954,6 +1971,8 @@ impl HagencyPanel {
         self.runtime_resources_loading = false;
         self.clear_configuration(cx);
         self.execution_agent_record = Value::Null;
+        self.agent_crypto = Value::Null;
+        self.render_crypto(cx);
 
         if self.direct_agent != string(&a,"id") {self.cancel_direct_retry(cx);}
         self.render_owner_direct(cx);
@@ -2155,6 +2174,7 @@ impl HagencyPanel {
         self.view.label(cx, ids!(local_device_message)).set_text(cx, if self.devices_loaded && !self.execution_agent_record.is_null() {
             crate::i18n::tr("Model and Agent limits configure the assigned execution device. Service controls remain on that device.")
         } else {crate::i18n::tr("Checking execution device…")});
+        self.sync_crypto(cx);
         let assignable = self.devices_loaded && self.execution_agent_record["id"].as_str() == self.agent(cx).as_deref() && self.execution_agent_record["generation"].as_i64().is_some_and(|generation| generation > 0) && matches!(string(&self.execution_agent_record, "state"), "creating" | "active" | "suspended") && !self.current_device_id.is_empty() && self.execution_devices.iter().any(|d|string(d,"id") == self.current_device_id && d["revoked"] == false);
         self.view.button(cx, ids!(assign_current_device)).set_enabled(cx, assignable && !assigned_here && !self.busy && self.view.check_box(cx, ids!(assignment_confirm)).active(cx));
         self.view.check_box(cx, ids!(assignment_confirm)).set_visible(cx, assignable && !assigned_here);
@@ -2599,7 +2619,7 @@ impl HagencyPanel {
             } else {uuid::Uuid::new_v4().to_string()};
             Command::AgentConfiguration {agent_id,expected_generation,idempotency_key,command:Box::new(command)}
         } else {command};
-        if matches!(&command,Command::AgentConfigurationStatus {..}|Command::ExecutionEnvironment {..}) {
+        if matches!(&command,Command::AgentConfigurationStatus {..}|Command::ExecutionEnvironment {..}|Command::AgentCrypto {..}) {
             configuration_fence=Some((string(&self.execution_agent_record,"id").into(),self.execution_agent_record["generation"].as_i64().unwrap_or(0),string(&self.execution_agent_record,"executionDeviceId").into()));
         }
         if self.busy || !self.active {
@@ -2960,10 +2980,12 @@ impl HagencyPanel {
                 self.view.view(cx, ids!(detail_audience_badge)).label(cx, ids!(device_label)).set_text(cx, crate::i18n::tr(audience_label(record)));
                 self.status(cx, "Service audience saved.");
             }
+            Target::Crypto => self.apply_crypto(cx,value),
             Target::AgentAssigned | Target::AgentDetails => {
                 let Some(agent) = self.agent(cx) else {return;};
                 let record = &value["agent"];
                 if string(record, "id") != agent || record["generation"].as_i64().is_none() {return;}
+                if self.execution_agent_record != *record {self.agent_crypto=Value::Null;self.render_crypto(cx);}
                 self.execution_agent_record = record.clone();
                 self.view.drop_down(cx, ids!(agent_visibility)).set_selected_item(cx, usize::from(record["visibility"] == "public"));
                 self.view.view(cx, ids!(detail_audience_badge)).label(cx, ids!(device_label)).set_text(cx, crate::i18n::tr(audience_label(record)));
@@ -4686,6 +4708,7 @@ impl Widget for HagencyPanel {
             self.local(cx, Target::Runtime, LocalAction::StartAgentService, Some(input));
             return;
         }
+        if self.handle_crypto(cx,actions) {return;}
         if self.view.button(cx, ids!(runtime_check)).clicked(actions) {
             self.load_runtime_resources(cx);
             return;
@@ -4968,7 +4991,7 @@ impl HagencyPanelRef {
             panel.agent_rooms.clear();
             panel.spaces.clear();
             panel.agents.clear(); panel.runtime_list.clear();panel.runtime_list_errors.clear();panel.runtime_list_loading=false;panel.runtime_list_request=nonce();
-            panel.devices_loaded = false; panel.current_device_id.clear(); panel.execution_devices.clear(); panel.execution_agent_record = Value::Null;
+            panel.devices_loaded = false; panel.current_device_id.clear(); panel.execution_devices.clear(); panel.execution_agent_record = Value::Null; panel.agent_crypto = Value::Null;panel.render_crypto(cx);
             panel.agents_loaded = false;
             panel.agents_loading = false;
             panel.bindings.clear();

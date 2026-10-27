@@ -1,7 +1,10 @@
 //! Independent Agent SDK identity. No owner keys, AS credential, Room send or tool authority.
 use ::hagency::{
     console::AuthorizedDevice,
-    native_owner::{NativeOwner, NativeError},
+    native_owner::{
+        NativeOwner, NativeError, AgentCryptoAuthority, AgentCryptoContext, AgentCryptoTransport,
+        AgentCryptoIdentity,
+    },
 };
 use matrix_sdk::{
     Client, SessionMeta,
@@ -47,24 +50,24 @@ struct Binding {
     owner: String,
     manifest: Manifest,
 }
-/// Public identity only; verification by another owner device is a separate step.
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PublicIdentity {
-    pub agent_id: String,
-    pub agent_generation: i64,
-    pub matrix_user_id: String,
-    pub matrix_device_id: String,
-    pub ed25519: String,
-    pub curve25519: String,
+pub use ::hagency::native_owner::AgentCryptoIdentity as PublicIdentity;
+struct Retirement(std::sync::Arc<matrix_sdk::HttpRequestFence>);
+impl Drop for Retirement {
+    fn drop(&mut self) {
+        self.0.retire();
+    }
 }
-/// Non-Clone host custody. The SDK and its bearer cannot escape this facade.
-pub struct AgentCryptoSession {
-    owner: NativeOwner,
-    device: AuthorizedDevice,
+struct Resources {
     client: Client,
+    _store_lock: std::sync::Arc<std::sync::OnceLock<File>>,
+}
+/// A host-owned SDK session. Neither SDK Client nor bearer can escape.
+pub struct AgentCryptoSession {
+    authority: AgentCryptoAuthority,
+    proof: std::sync::Arc<std::sync::Mutex<AuthorizedDevice>>,
+    resources: tokio::sync::Mutex<Option<Resources>>,
     binding: Binding,
-    _store_lock: File,
+    retirement: Retirement,
 }
 async fn bounded(mut response: matrix_sdk::reqwest::Response) -> Result<Value, NativeError> {
     let status = response.status();
@@ -227,11 +230,30 @@ fn store(root: &Path, binding: &Binding) -> Result<(PathBuf, File), NativeError>
     }
     Ok((path, lock))
 }
+impl Drop for AgentCryptoSession {
+    fn drop(&mut self) {
+        self.retire();
+    }
+}
 impl AgentCryptoSession {
-    /// The passphrase comes from this execution host's secret store; it is never
-    /// sent to Server. A missing original store requires explicit recovery.
     pub async fn open(
         owner: &NativeOwner,
+        agent: &str,
+        generation: i64,
+        root: &Path,
+        passphrase: &str,
+    ) -> Result<Self, NativeError> {
+        Self::open_authority(
+            owner.agent_crypto_authority().await?,
+            agent,
+            generation,
+            root,
+            passphrase,
+        )
+        .await
+    }
+    async fn open_authority(
+        authority: AgentCryptoAuthority,
         agent: &str,
         generation: i64,
         root: &Path,
@@ -247,32 +269,49 @@ impl AgentCryptoSession {
         {
             return Err(error("invalid_agent_crypto_scope"));
         }
-        let device = owner.authorized_execution_device().await?;
+        let device = authority.device().await?;
+        let proof = std::sync::Arc::new(std::sync::Mutex::new(device.clone()));
+        let live = proof.clone();
+        let store_custody = std::sync::Arc::new(std::sync::OnceLock::new());
+        let retained_store = store_custody.clone();
+        let auth = authority.clone();
+        let retirement = Retirement(std::sync::Arc::new(matrix_sdk::HttpRequestFence::new(
+            move || {
+                // SDK HTTP permits retain their fence through the actual body.
+                // Keep the store lease with that fence even if a host is dropped.
+                let _original_store = retained_store.clone();
+                !auth.is_retired() && live.lock().is_ok_and(|d| d.bearer().is_ok())
+            },
+        )));
         let http = matrix_sdk::reqwest::Client::builder()
             .no_proxy()
             .redirect(matrix_sdk::reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(15))
             .build()
             .map_err(|_| error("agent_crypto_transport_unavailable"))?;
-        let response = http
-            .post(format!(
-                "{}hagency/agent-crypto/{agent}/{generation}/provision",
-                device.origin()
-            ))
-            .bearer_auth(
-                device
-                    .bearer()
-                    .map_err(|_| error("owner_authorization_required"))?,
-            )
-            .send()
-            .await
-            .map_err(|_| error("agent_crypto_outcome_unknown"))?;
-        let manifest: Manifest = serde_json::from_value(bounded(response).await?)
-            .map_err(|_| error("invalid_agent_crypto_response"))?;
+        let manifest = {
+            let _permit = retirement
+                .0
+                .begin_request()
+                .map_err(|_| error("agent_crypto_retired"))?;
+            let response = http
+                .post(format!(
+                    "{}hagency/agent-crypto/{agent}/{generation}/provision",
+                    device.origin()
+                ))
+                .bearer_auth(
+                    device
+                        .bearer()
+                        .map_err(|_| error("owner_authorization_required"))?,
+                )
+                .send()
+                .await
+                .map_err(|_| error("agent_crypto_outcome_unknown"))?;
+            serde_json::from_value::<Manifest>(bounded(response).await?)
+                .map_err(|_| error("invalid_agent_crypto_response"))?
+        };
         check_manifest(&manifest, &device, agent, generation)?;
-        device
-            .bearer()
-            .map_err(|_| error("owner_authorization_required"))?;
+        authority.device().await?;
         let binding = Binding {
             origin: device.origin().into(),
             issuer: device.issuer().into(),
@@ -281,16 +320,23 @@ impl AgentCryptoSession {
             manifest,
         };
         let (path, store_lock) = store(root, &binding)?;
+        store_custody
+            .set(store_lock)
+            .map_err(|_| error("agent_crypto_store_in_use"))?;
+        let versions = binding
+            .manifest
+            .server_versions
+            .iter()
+            .filter_map(|s| s.parse::<MatrixVersion>().ok())
+            .collect::<Vec<_>>();
+        if versions.is_empty() {
+            return Err(error("invalid_agent_crypto_response"));
+        }
         let client = Client::builder()
             .homeserver_url(&binding.manifest.homeserver)
             .http_client(http)
-            .server_versions(
-                binding
-                    .manifest
-                    .server_versions
-                    .iter()
-                    .filter_map(|s| s.parse::<MatrixVersion>().ok()),
-            )
+            .server_versions(versions)
+            .request_fence(retirement.0.clone())
             .request_config(
                 RequestConfig::new()
                     .disable_retry()
@@ -322,60 +368,65 @@ impl AgentCryptoSession {
             )
             .await
             .map_err(|_| error("agent_crypto_sdk_restore_failed"))?;
+        client
+            .encryption()
+            .wait_for_e2ee_initialization_tasks()
+            .await;
         let session = Self {
-            owner: owner.clone(),
-            device,
-            client,
+            authority,
+            proof,
+            resources: tokio::sync::Mutex::new(Some(Resources {
+                client,
+                _store_lock: store_custody,
+            })),
             binding,
-            _store_lock: store_lock,
+            retirement,
         };
         session.whoami().await?;
         Ok(session)
     }
-    async fn current(&self) -> Result<(), NativeError> {
-        self.device
-            .bearer()
-            .map_err(|_| error("owner_authorization_required"))?;
-        let current = self.owner.authorized_execution_device().await?;
-        if current.device_id() != self.device.device_id()
-            || current.generation() != self.device.generation()
-            || current.origin() != self.binding.origin
-            || current.owner_mxid() != self.binding.owner
-            || current.issuer() != self.binding.issuer
-            || current.subject() != self.binding.subject
+    async fn current(&self, client: &Client) -> Result<AuthorizedDevice, NativeError> {
+        let current = self.authority.device().await?;
+        if client.access_token().as_deref()
+            != Some(
+                current
+                    .bearer()
+                    .map_err(|_| error("owner_authorization_required"))?,
+            )
         {
             return Err(error("agent_crypto_execution_device_changed"));
         }
-        Ok(())
+        *self
+            .proof
+            .lock()
+            .map_err(|_| error("agent_crypto_retired"))? = current.clone();
+        Ok(current)
     }
-    pub async fn whoami(&self) -> Result<(), NativeError> {
-        self.current().await?;
-        let who = self
-            .client
+    async fn who(&self, client: &Client) -> Result<(), NativeError> {
+        self.current(client).await?;
+        let who = client
             .whoami()
             .await
             .map_err(|_| error("agent_crypto_identity_unavailable"))?;
-        self.current().await?;
+        self.current(client).await?;
         if who.user_id.as_str() != self.binding.manifest.matrix_user_id
-            || who.device_id.as_deref() != self.client.device_id()
+            || who.device_id.as_deref() != client.device_id()
             || who.is_guest
         {
             return Err(error("agent_crypto_identity_mismatch"));
         }
         Ok(())
     }
-    /// Reuses original private SDK keys after interruption; Server pins public
-    /// identities before each write and rejects rotation within this generation.
-    pub async fn bootstrap(&self) -> Result<PublicIdentity, NativeError> {
-        self.whoami().await?;
-        self.client
-            .encryption()
-            .bootstrap_cross_signing(None)
-            .await
-            .map_err(|_| error("agent_crypto_bootstrap_failed"))?;
-        self.current().await?;
-        let device = self
-            .client
+    pub async fn whoami(&self) -> Result<(), NativeError> {
+        let resources = self.resources.lock().await;
+        let resources = resources
+            .as_ref()
+            .ok_or_else(|| error("agent_crypto_retired"))?;
+        self.who(&resources.client).await
+    }
+    async fn identity(&self, client: &Client) -> Result<PublicIdentity, NativeError> {
+        self.current(client).await?;
+        let device = client
             .encryption()
             .get_own_device()
             .await
@@ -395,30 +446,17 @@ impl AgentCryptoSession {
                 .ok_or_else(|| error("agent_crypto_keys_unavailable"))?
                 .to_base64(),
         };
-        let response = self
-            .client
-            .http_client()
-            .post(format!(
-                "{}/_matrix/client/v3/keys/query",
-                self.binding.manifest.homeserver
-            ))
-            .bearer_auth(
-                self.device
-                    .bearer()
-                    .map_err(|_| error("owner_authorization_required"))?,
-            )
-            .header("content-type", "application/json")
-            .body(
-                serde_json::to_vec(
-                    &json!({"device_keys":{&identity.matrix_user_id:[&identity.matrix_device_id]}}),
-                )
-                .map_err(|_| error("invalid_agent_crypto_scope"))?,
-            )
-            .send()
-            .await
-            .map_err(|_| error("agent_crypto_outcome_unknown"))?;
-        let uploaded = bounded(response).await?;
-        self.current().await?;
+        let device = self.current(client).await?;
+        let uploaded = {
+            let _permit = self
+                .retirement
+                .0
+                .begin_request()
+                .map_err(|_| error("agent_crypto_retired"))?;
+            let response=client.http_client().post(format!("{}/_matrix/client/v3/keys/query",self.binding.manifest.homeserver)).bearer_auth(device.bearer().map_err(|_|error("owner_authorization_required"))?).header("content-type","application/json").body(serde_json::to_vec(&json!({"device_keys":{&identity.matrix_user_id:[&identity.matrix_device_id]}})).map_err(|_|error("invalid_agent_crypto_scope"))?).send().await.map_err(|_|error("agent_crypto_outcome_unknown"))?;
+            bounded(response).await?
+        };
+        self.current(client).await?;
         let keys =
             &uploaded["device_keys"][&identity.matrix_user_id][&identity.matrix_device_id]["keys"];
         if keys[format!("ed25519:{}", identity.matrix_device_id)] != identity.ed25519
@@ -428,6 +466,100 @@ impl AgentCryptoSession {
         }
         Ok(identity)
     }
+    pub async fn bootstrap(&self) -> Result<PublicIdentity, NativeError> {
+        let resources = self.resources.lock().await;
+        let resources = resources
+            .as_ref()
+            .ok_or_else(|| error("agent_crypto_retired"))?;
+        let client = &resources.client;
+        self.who(client).await?;
+        client
+            .encryption()
+            .bootstrap_cross_signing(None)
+            .await
+            .map_err(|_| error("agent_crypto_bootstrap_failed"))?;
+        self.identity(client).await
+    }
+    async fn refresh(&self) -> Result<PublicIdentity, NativeError> {
+        let resources = self.resources.lock().await;
+        let resources = resources
+            .as_ref()
+            .ok_or_else(|| error("agent_crypto_retired"))?;
+        self.who(&resources.client).await?;
+        self.identity(&resources.client).await
+    }
+    fn retire(&self) {
+        self.retirement.0.retire();
+    }
+    pub async fn close(&self) -> Result<(), NativeError> {
+        self.retire();
+        let resources = self.resources.lock().await.take();
+        if let Some(resources) = resources {
+            resources
+                .client
+                .encryption()
+                .wait_for_e2ee_initialization_tasks()
+                .await;
+            self.retirement
+                .0
+                .retire_and_drain()
+                .await
+                .map_err(|_| error("agent_crypto_shutdown_failed"))?;
+            drop(resources);
+        }
+        Ok(())
+    }
+}
+struct Managed {
+    session: AgentCryptoSession,
+    identity: AgentCryptoIdentity,
+}
+impl AgentCryptoTransport for Managed {
+    fn identity(&self) -> AgentCryptoIdentity {
+        self.identity.clone()
+    }
+    fn retire(&self) {
+        self.session.retire();
+    }
+    fn refresh(
+        &self,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<AgentCryptoIdentity, NativeError>> + Send + '_>,
+    > {
+        Box::pin(async move {
+            let actual = self.session.refresh().await?;
+            if actual != self.identity {
+                return Err(error("agent_crypto_identity_mismatch"));
+            }
+            Ok(actual)
+        })
+    }
+    fn close(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), NativeError>> + Send + '_>>
+    {
+        Box::pin(self.session.close())
+    }
+}
+pub async fn prepare_managed(
+    context: AgentCryptoContext,
+) -> Result<std::sync::Arc<dyn AgentCryptoTransport>, NativeError> {
+    let session = AgentCryptoSession::open_authority(
+        context.authority(),
+        context.agent(),
+        context.generation(),
+        context.root(),
+        context.passphrase(),
+    )
+    .await?;
+    let identity = match session.bootstrap().await {
+        Ok(identity) => identity,
+        Err(e) => {
+            session.close().await?;
+            return Err(e);
+        }
+    };
+    Ok(std::sync::Arc::new(Managed { session, identity }))
 }
 
 #[cfg(test)]

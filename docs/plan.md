@@ -1,5 +1,15 @@
 # Native migration working plan
 
+Current managed identity checkpoint (2026-10-27): normal native create/start/
+assignment and desktop Service identity controls now manage independent SDK
+sessions. Private filesystem credentials (not OS keychain) and original task/
+HTTP/store-lock custody survive canceled waiters; actual managed3 Synapse proof
+passes two Agents, 35-second authority renewal, real revocation, same-installation
+restart with unchanged keys and held callback joined shutdown. Ledger calls and
+Server leases0. Owner verification/recovery, encrypted tasks/replies/files and A3
+remain open; all existing refusal gates stay. See the managed lifecycle dev-vibe
+report. Full goal active.
+
 Current A4 identity checkpoint (2026-10-27): independent Agent SDK identity-only
 broker/facade passes actual Synapse, two Agents, original store and same-host
 NativeOwner reopen with authorization1→3 and unchanged crypto keys. Real API

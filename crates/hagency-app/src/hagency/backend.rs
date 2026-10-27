@@ -27,7 +27,7 @@ pub(crate) fn can_add_to_shared_room(agent: &Value) -> bool {
 pub(super) fn management_read(command: &Command) -> bool {
     if let Command::ProjectBoard {action,..}=command {return action.is_read();}
     matches!(command,
-        Command::Projects | Command::ProjectRooms {..} | Command::SpaceCandidates {..}
+        Command::AgentCrypto {action: ::hagency::native_owner::AgentCryptoAction::Status {..}} | Command::Projects | Command::ProjectRooms {..} | Command::SpaceCandidates {..}
         | Command::RoomRoster {..} | Command::Agents | Command::DiscoverAgents | Command::Bindings {..}
         | Command::Devices | Command::AgentDetails {..} | Command::AgentConfigurationStatus {..}
         | Command::AgentOwnerDirectStatus {..} | Command::ScopeServiceState {..}
@@ -152,6 +152,11 @@ fn source_error(code: &str) -> NativeError {
     }
 }
 impl MatrixTokenSource for SdkTokens {
+    fn supports_agent_crypto(&self)->bool {true}
+    fn prepare_agent_crypto(&self, context: ::hagency::native_owner::AgentCryptoContext) -> ::hagency::native_owner::AgentCryptoPreparation<'_> {
+        Box::pin(async move {self.access_token().await?;super::agent_crypto::prepare_managed(context).await})
+    }
+
     fn list_remote_requests<'a>(&'a self, room:&'a str,cursor:Option<&'a str>)->std::pin::Pin<Box<dyn std::future::Future<Output=Result<::hagency::native_owner::remote_approval::review::RequestPage,NativeError>> + Send + 'a>> {
         Box::pin(async move {
             self.access_token().await?;

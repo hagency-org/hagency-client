@@ -57,3 +57,10 @@
 2026年10月27日：阶段5的远程审批通过真实Synapse、两个独立SDK/NativeOwner和实际Codex联合链。加密请求与决定均有原真实事件回执，原待批请求消费前文件不存在，消费后31字节输出和completed审计匹配；一调用10912 Token结算，whole_tree停止、当前live lease为0。三个早先资格失败与各自用量原样保留，未重发原请求。见 [真实远程审批联合验收](owner-remote-approval-synapse-validation-2026-10-27.zh.md)。任务本身仍在普通Room；下一步实现Agent独立加密身份及加密任务/回复/文件，再接A3。人工桌面、生产OAuth及早先平台门槛继续保留，A4和总目标未完成。
 
 2026年10月27日：阶段5新增 Agent 独立身份基础链：身份专用 AS broker、永久公钥固定与本机独立加密 SDK store。真实 Synapse/两个 Agent/NativeOwner 验证公钥独立、原 store 重开、实际设备撤销、同主机完整重开和凭据代次1→3仍保留原密钥；原生账本调用为0。六次独立驱动的先前失败与最终 identity6 结果分开保留，见 [身份基础链验收](agent-crypto-identity-validation-2026-10-27.zh.md)。正常运行/界面尚未自动管理会话；主人验证/恢复、加密任务/回复/文件与 A3 继续保留。A4及总目标仍进行中，未移除加密 Room 拒绝条件。
+
+
+2026年10月27日：阶段5已把独立身份接入正常 NativeOwner 创建/启动/指派和桌面
+Service 状态操作，私有文件凭据与原任务关闭等待现已实现（不等于 OS keychain）。
+真实 managed3 验证35秒续期、撤销/同安装重启保持原钥、取消等待后的原始收尾；
+独立读取 calls0/leases0。见 [正常身份生命周期验收](agent-crypto-managed-lifecycle-2026-10-27.zh.md)。
+主人验证/恢复和完整加密任务/回复/文件仍未完成，拒绝条件保留；A3与既有门槛继续进行。

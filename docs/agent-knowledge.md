@@ -3,6 +3,18 @@
 
 # Repository audit knowledge
 
+- **Managed Agent crypto lifecycle, 2026-10-27:** Reuse Native AgentDetails route
+  generation rather than a hand-written local path. Keep normal create/start
+  result separate from identity diagnostics. Original shared init/close receipts
+  survive canceled observers; SDK HTTP fences recheck after actual queue waits/
+  each retry and hold permits through the body. Retain the store lease with the
+  SDK fence as well as the host. Private filesystem credentials are not an OS
+  keychain or cross-host recovery. Actual managed3 proves 35-second renewal,
+  unchanged keys through native restart/revocation and a held prepared SDK
+  callback joined by checked shutdown; callback hold is not HTTP body hold.
+  SDK actual HTTP tests supply the separate body-drain evidence. OwnerVerified
+  stays false and encrypted task/file execution remains refused. See dev-vibe.
+
 - **Independent Agent SDK identity, 2026-10-27:** Keep authorization generations
   separate from permanent Agent/host Matrix keys. Server pins account cross-signing
   keys across hosts, device keys across credential epochs, before possible HTTP;

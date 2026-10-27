@@ -137,3 +137,23 @@ qualification are recorded in dev-vibe/agent-crypto-identity-contract-2026-10-27
 and its validation report. Ordinary CI compiles the external qualification example
 but does not run it. This does not verify Agent trust for encrypted task execution,
 transfer/reset private keys, or open the existing encrypted-Room refusal gates.
+
+
+- Native managed identities retain private filesystem credentials per owner/Agent/
+  stable execution device; authorization and Agent epochs do not replace keys.
+  Test: agent_crypto_private_material_is_scoped_and_retains_original_keys_across_epochs
+- Missing or mismatched original credentials refuse replacement and preserve the
+  original SDK store. A symlink cannot redirect secret reads or writes.
+  Test: agent_crypto_missing_or_misbound_original_secret_cannot_generate_replacement
+  Test-Platforms: [linux, macos]
+  Test: agent_crypto_symlink_secret_cannot_redirect_original_credentials
+- Canceled stop/shutdown observers retain shared original initialization and close
+  receipts. Checked shutdown cannot report success while their work remains held.
+  Test: agent_crypto_canceled_stop_waiter_keeps_original_cleanup_joined_by_shutdown
+  Test: agent_crypto_shutdown_retains_initialization_receipt_after_waiter_cancellation
+
+Desktop checks separately exercise public identity rendering and execution-device/
+Agent-generation UI fences. The explicit agent_crypto_managed_qualification entry
+uses actual native CreateAgent/AgentCrypto commands and the production SDK facade;
+ordinary CI compiles the driver without accessing its external fixture. Private
+filesystem credential protection is not an OS keychain or cross-host recovery.

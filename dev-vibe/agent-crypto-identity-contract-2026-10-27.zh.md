@@ -29,3 +29,8 @@
 - 当前加密 Room 的有界 SDK sync/decrypt，原事件签名/发送者验证及 Server 当前成员/绑定/租约联合授权，原事件接收/ACK 不重复。
 - 本机 Codex 精确输入、主人策略/预算/工具审批，原加密回复与文件的发送所有权、撤权/未知/重启不重放。
 - 真实 Synapse + SDK + NativeOwner + Codex 加密任务/回复/文件、两端重开、人工桌面、生产 OAuth 和跨平台资格；旧失败及其用量保留。
+
+
+后续正常 NativeOwner/Service 生命周期已实现并通过真实 managed3；本文件保留
+身份基础链当时的边界与失败记录。当前私有文件凭据、关闭等待、SDK HTTP fence
+及仍未完成的加密任务范围见 [正常生命周期验收](agent-crypto-managed-lifecycle-2026-10-27.zh.md)。

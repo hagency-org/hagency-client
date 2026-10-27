@@ -14658,3 +14658,31 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   lifecycle/secret-store integration, owner verification/recovery, encrypted Agent
   tasks/replies/files, A3 and earlier manual/platform/production OAuth gates stay
   open. The full objective remains active.
+
+
+## 2026-10-27: Normal Agent crypto lifecycle and native identity controls
+
+- Confirmed current work is on codex/remote-owner-approvals, fetched latest
+  origin/main42e59b9e again and verified full ancestry before continuing edits.
+  Prior db6f Full40450763616 completed with actual Linux/macOS/Windows success.
+- Added managed private filesystem credentials, weak current authority, retained
+  shared init/close receipts, normal create/start/assignment/stop hooks and desktop
+  public identity controls. No OS keychain/owner verification claim. SDK368152a8
+  per-HTTP admission/retirement/drain retains the original store lease through IO.
+- Actual final managed3 passes normal two-Agent creation, independent public keys,
+  same sessions after35-second renewal, actual Server revocation, native same-host
+  restart retaining keys, and a third real SDK held in the qualification callback
+  until canceled stop/shutdown observers rejoin original cleanup. Independent
+  homeserver/PG/native ledger reads confirm one device per primary Agent, key
+  pins1→3, calls0/leases0. Callback hold and actual SDK HTTP body tests are separate.
+- Preserve failed managed1 wrong local route; use existing AgentDetails builder
+  instead of duplicate path constants. Preserve initial UI visibility, driver
+  canonicalize comparison and strict-lint failures. Managed2 and final managed3
+  are separate new runs; old creation/task records were not replayed/deleted.
+- Core276/9 existing ignores, App628/2 existing ignores pass; final focused5+3,
+  strict affected all-target Clippy, core format, i18n2534/1913/missing0, static46,
+  production caller1 and bindings1196 all pass without missing/deferred gaps.
+- Owned Server/Synapse/PG stopped and original data retained. See
+  dev-vibe/agent-crypto-managed-lifecycle-2026-10-27.zh.md. Encrypted tasks/replies/
+  files, owner verification/recovery, A3 and previous manual/platform/production
+  OAuth gates remain; no paid inference/deployment/merge. Full goal remains active.

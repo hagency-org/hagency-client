@@ -46,3 +46,8 @@
 ## 尚未完成
 
 接入 NativeOwner 正常 Agent 配置/运行及 secret store/关闭等待；主人验证、显式换主机/密钥恢复；加密 Room 的原始事件接收/解密/ACK、当前 Server 成员/绑定/租约授权、Codex 输入和原始加密回复/文件发送；真实加密 Codex 联合链、人工桌面、生产 OAuth 与跨平台。身份或公钥回执不等于信任、消息权限或工具 grant，现有拒绝条件继续生效。
+
+
+后续正常 NativeOwner/Service 生命周期已实现并通过真实 managed3；本文件保留
+身份基础链当时的边界与失败记录。当前私有文件凭据、关闭等待、SDK HTTP fence
+及仍未完成的加密任务范围见 [正常生命周期验收](agent-crypto-managed-lifecycle-2026-10-27.zh.md)。
