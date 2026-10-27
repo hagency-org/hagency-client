@@ -195,6 +195,24 @@ impl NativeOwner {
             .await
             .map_err(|e| failure(e.status, &e.code))
     }
+    async fn ciphertext_mutation(
+        &self,
+        op: crate::console::device_execution::DeviceOperation,
+        pin: &DeviceIdentity,
+        authority: &AgentCryptoAuthority,
+    ) -> Result<crate::console::device_execution::DeviceResponse, NativeError> {
+        authority.device().await?;
+        self.sync_matrix().await?;
+        self.check_matrix_source().await?;
+        authority.device().await?;
+        let scope = authority.clone();
+        self.0
+            .host
+            .console
+            .execution_api_pinned_live(op, pin, Arc::new(move || !scope.is_retired()))
+            .await
+            .map_err(|e| failure(e.status, &e.code))
+    }
     pub async fn poll_agent_ciphertexts(
         &self,
         lease: &crate::console::device_execution::LeaseRef,
@@ -216,6 +234,65 @@ impl NativeOwner {
             crate::console::device_execution::DeviceResponse::Ciphertexts(events) => Ok(events),
             _ => Err(failure(502, "invalid_ciphertext_response")),
         }
+    }
+    /// Verify original AS/SDK input, persist its plaintext/source binding, then
+    /// ACK only that original encrypted offer. No model/start permit is minted.
+    pub async fn receive_agent_ciphertext(
+        &self,
+        lease: &crate::console::device_execution::LeaseRef,
+        inbox_id: &str,
+    ) -> Result<Value, NativeError> {
+        use crate::console::device_execution::{
+            DeviceOperation, DeviceResponse, encrypted::Projection,
+        };
+        key(&lease.agent_id)?;
+        key(inbox_id)?;
+        let update = crate::update_guard::PROCESS
+            .enter_task()
+            .ok_or_else(|| failure(409, "update_in_progress"))?;
+        let device = self.authorized_execution_device().await?;
+        let pin = DeviceIdentity::from(&device);
+        let native = self.clone();
+        let reference = lease.clone();
+        let id = inbox_id.to_owned();
+        let receiver = {
+            let slots = self.0.crypto.slots.lock().map_err(|_| unavailable())?;
+            let slot = slots
+                .get(&lease.agent_id)
+                .filter(|s| s.phase == "ready" && s.pin == pin && !s.authority.is_retired())
+                .ok_or_else(|| failure(409, "agent_crypto_identity_changed"))?;
+            let authority = slot.authority.clone();
+            self.0.crypto.start_receive(&lease.agent_id,async move{
+                let _update=update;
+                authority.device().await?;
+                let proof=native.decrypt_agent_ciphertext(&reference,&id).await?;
+                let source=proof.source;let message=proof.crypto.into_plaintext();
+                let projection=Projection::from_message(&message).map_err(|e|failure(e.status,&e.code))?;
+                let DeviceResponse::EncryptedAdmission(prepared)=native.ciphertext_mutation(DeviceOperation::PrepareCiphertext{lease:reference.clone(),expected:source.clone(),projection},&pin,&authority).await? else{return Err(failure(502,"invalid_encrypted_admission"));};
+                authority.device().await?;
+                let local=prepared.local_dispatch(&message).map_err(|e|failure(e.status,&e.code))?;
+                let root=native.0.host.console.0.server_login.state_directory().ok_or_else(||failure(503,"local_state_unavailable"))?;
+                let path=owned_agents::ledger_path(&root,device.origin(),device.issuer(),device.subject(),device.owner_mxid()).map_err(|_|failure(503,"local_state_unavailable"))?;
+                let profile=owned_agents::profile_identity(device.origin(),device.issuer(),device.subject(),device.owner_mxid()).map_err(|_|failure(401,"owner_authorization_required"))?;
+                let mut ledger=hagency_agent_local::Ledger::open_scoped(&path,device.owner_mxid(),&profile).map_err(|_|failure(503,"local_state_unavailable"))?;
+                ledger.register_binding(device.owner_mxid(),&local.scope()).map_err(|_|failure(409,"encrypted_input_binding_changed"))?;
+                let input=hagency_agent_local::encrypted_inputs::Input{inbox_id:source.id.clone(),source_digest:source.source_digest.clone(),agent_generation:source.agent_generation,owner_direct:prepared.owner_direct,ciphertext:source.event.clone(),message};
+                let now=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_|failure(503,"invalid_local_clock"))?.as_secs();
+                let receipt=ledger.receive_encrypted_dispatch(device.owner_mxid(),&local,&input,hagency_agent_local::inbox::Limits::default(),i64::try_from(now).map_err(|_|failure(503,"invalid_local_clock"))?).map_err(|_|failure(409,"encrypted_input_persistence_failed"))?;
+                let record=ledger.inbox_record(device.owner_mxid(),&local.id).map_err(|_|failure(503,"local_state_unavailable"))?;
+                if !matches!(record.state,hagency_agent_local::inbox::State::Received|hagency_agent_local::inbox::State::Acknowledged){return Ok(json!({"inboxId":source.id,"dispatchId":local.id,"phase":"historical"}));}
+                authority.device().await?;
+                if prepared.dispatch.state!="encrypted_acknowledged"{
+                    let DeviceResponse::EncryptedAdmission(_)=native.ciphertext_mutation(DeviceOperation::AckCiphertext{lease:reference,expected:source.clone(),prepared:Box::new(prepared)},&pin,&authority).await? else{return Err(failure(502,"invalid_encrypted_admission"));};
+                }
+                // Receipt recording is historical evidence, not fresh run custody.
+                ledger.acknowledge_dispatch(device.owner_mxid(),&local.id).map_err(|_|failure(503,"encrypted_ack_record_failed"))?;
+                Ok(json!({"inboxId":source.id,"dispatchId":local.id,"phase":"acknowledged","sourceDigest":source.source_digest,"alreadyDurable":receipt.already_durable}))
+            })?
+        };
+        receiver
+            .await
+            .map_err(|_| failure(409, "agent_crypto_receive_unconfirmed"))?
     }
     pub async fn decrypt_agent_ciphertext(
         &self,

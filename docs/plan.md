@@ -1,5 +1,16 @@
 # Native migration working plan
 
+Current encrypted-inbox ACK checkpoint (2026-10-27): actual Synapse/NativeOwner
+now persists original SDK plaintext and source/history bindings atomically before
+metadata-only Server ACK. encrypted_* states keep ordinary execution closed;
+normalized sealed-payload uniqueness and authenticated inner thread handling reject
+new-header replay and outer relation forgery. Restart retains original dispatch.
+Independent HS/Python/PG/SQLite proves admissions2/ciphertexts3, compacted AS3,
+plaintext events0/calls0/live leases0/history lease1. Full encrypted model/tool
+start, original encrypted replies/files, shared requester trust, A3 and prior
+manual/platform/production OAuth gates remain. See current encrypted ACK report.
+
+
 Current ciphertext-intake checkpoint (2026-10-27): original verified AS ciphertext
 now persists in a separate inbox before routing compaction, with canonical source
 commitments and current-lease/member/generation scoped poll/read. Native receives

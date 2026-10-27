@@ -14774,3 +14774,31 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 - Prior89a7 head fast/App/spelling CI succeed; full Linux/macOS jobs and actual
   Windows tests/release succeed, while Windows cache finalization is still live.
   New-source CI must remain separate from these predecessor results.
+
+## 2026-10-27 — original encrypted input durable local receipt and metadata ACK
+
+- Resumed on codex/remote-owner-approvals; Client/Server fetched current main
+  before edits and reconfirmed ancestry. SDK stays on the pinned0.19.1 history
+  fork; 9b547c0e strips unencrypted outer relation fallback only in host receive.
+- Server prepare/ACK/admission bind original AS source/current lease; encrypted_*
+  modes and mapping constraints keep ordinary execution closed. Local input/source
+  and plaintext/transport digests commit atomically before ACK; whole snapshots
+  preserve them. Normalized sealed-payload uniqueness prevents changed-header work.
+- Fresh actual Synapse ACK1 passes normal/thread inputs, duplicate original ID,
+  native restart1→2/new lease, original snapshot export/inspect, fake outer relation,
+  sealed replay and wrong-scope negatives. Independent HS/Python/PG/SQLite proves
+  admissions2/ciphertexts3, AS-compacted3/plain events0/calls0/live leases0 and one
+  retained historical lease. Actual history API has no started executions; digest
+  comparison derives its exact immutable tuple encoding, not a synthetic execution.
+- Local167/3original ignores, Core283/9original ignores, App628/2original ignores,
+  fresh PG Server123/0ignores, SDK2 integration, affected all-target strict no-deps
+  Client Clippy/Server strict Clippy and affected format pass. OpenAPI103+4 with
+  30 negative guards, Rust1208bindings/no gaps and46static guards/caller audit pass.
+- Preserve original compiler/legacy-fixture/seal iteration and Clippy failures,
+  initial Server35/88ignored run, and Python string-hash diagnostic separately;
+  corrected final runs above do not relabel them. Prior744 four Client CI terminal
+  successes are predecessor evidence only. All owned ACK fixture services and PG
+  stopped; original data/logs retained. No paid inference/deployment/merge.
+- Continue separate encrypted model/tool Start and original encrypted replies/files,
+  shared requester trust, A3 and previous manual/platform/production OAuth gates.
+  Full goal stays unfinished. See encrypted inbox ACK dev-vibe report.

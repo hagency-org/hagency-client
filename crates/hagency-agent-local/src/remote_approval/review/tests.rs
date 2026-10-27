@@ -128,7 +128,7 @@ fn remote_reviewer_snapshot_retains_unknown_decision_and_previous_schema_migrate
     assert!(r.event_id.is_none());
     let old = Ledger::open_scoped(":memory:", OWNER, &"a".repeat(64)).unwrap();
     old.db
-        .execute_batch("DROP TABLE remote_verdict_receipts; DROP TABLE remote_verdict_publications")
+        .execute_batch("DROP TABLE encrypted_inputs; DROP TABLE remote_verdict_receipts; DROP TABLE remote_verdict_publications")
         .unwrap();
     let snapshot = old.snapshot(OWNER, &"a".repeat(64), 32).unwrap();
     let mut migrated = Ledger::open_scoped(":memory:", OWNER, &"a".repeat(64)).unwrap();

@@ -1,3 +1,13 @@
+- **Encrypted input ACK, 2026-10-27:** Commit local plaintext plus original AS
+  ciphertext/source/seal/transport/plaintext commitments atomically before ACK.
+  Server retains ciphertext body and encrypted_* modes; old plain execution must
+  refuse. Identical sealed payload under new outer headers cannot become work.
+  Matrix SDK group decryption can copy unencrypted outer m.relates_to into missing
+  inner metadata; strip it only in the dedicated roomless host helper and reject
+  outer-only relation input. Preserve authenticated inner relation. ACK/restart and
+  snapshot evidence grants no model start. Fresh actual ACK1 + independent proof
+  has admissions2/ciphers3, AS-compacted3/plain0/calls0/live0/history lease1.
+
 > Historical record: CLI and browser-console instructions below are retired.
 
 - **Original AS ciphertext intake, 2026-10-27:** Preserve a separate opaque

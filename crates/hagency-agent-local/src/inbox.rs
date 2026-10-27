@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 // index and WAL overhead are not a byte-exact file-size or secure-erasure promise.
 const PROOF_BYTES: usize = 208;
 const ACTIVE_RECORDS: &str = "state NOT IN ('replied','unknown') AND NOT (state IN ('rejected','failed') AND json_extract(envelope,'$.body')='')";
-const RETAINED_BYTES: &str = "SELECT coalesce(sum(length(CAST(envelope AS BLOB))+coalesce(length(CAST(reply AS BLOB)),0)+208),0) FROM local_inbox";
+const RETAINED_BYTES: &str = "SELECT (SELECT coalesce(sum(length(CAST(envelope AS BLOB))+coalesce(length(CAST(reply AS BLOB)),0)+208),0) FROM local_inbox)+(SELECT coalesce(sum(coalesce(length(CAST(ciphertext AS BLOB)),0)+coalesce(length(CAST(message AS BLOB)),0)+512),0) FROM encrypted_inputs)";
 fn no_provider_usage() -> crate::Usage {
     crate::Usage {
         input: 0,
@@ -75,7 +75,7 @@ impl Dispatch {
         }
         Ok(())
     }
-    fn digest(&self) -> Result<String> {
+    pub(crate) fn digest(&self) -> Result<String> {
         hash(&(
             &self.id,
             &self.binding_id,
@@ -295,6 +295,7 @@ fn compact_known_terminals(db: &rusqlite::Connection) -> Result<()> {
             (json(&d)?, &id),
         )?;
     }
+    crate::encrypted_inputs::compact(db)?;
     Ok(())
 }
 
@@ -304,6 +305,16 @@ impl Ledger {
         &mut self,
         owner: &str,
         event: &Dispatch,
+        limits: Limits,
+        now: i64,
+    ) -> Result<Receipt> {
+        self.receive_dispatch_kind(owner, event, None, limits, now)
+    }
+    pub(crate) fn receive_dispatch_kind(
+        &mut self,
+        owner: &str,
+        event: &Dispatch,
+        encrypted: Option<&crate::encrypted_inputs::Input>,
         limits: Limits,
         now: i64,
     ) -> Result<Receipt> {
@@ -325,6 +336,7 @@ impl Ledger {
         let tx = self
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        crate::encrypted_inputs::record(&tx, event, encrypted, &digest)?;
         tx.execute(
             "UPDATE inbox_limits SET max_records=?,max_bytes=? WHERE singleton=1",
             (limits.max_records as u64, limits.max_bytes as u64),
@@ -449,6 +461,7 @@ impl Ledger {
         let tx = self
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        crate::encrypted_inputs::require_plain(&tx, id)?;
         let (encoded, state, execution_id): (String, String, Option<String>) = tx.query_row(
             "SELECT envelope,state,execution_id FROM local_inbox WHERE id=?",
             [id],
@@ -494,6 +507,7 @@ impl Ledger {
         let tx = self
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        crate::encrypted_inputs::require_plain(&tx, &response.dispatch.id)?;
         let (encoded, digest, state, execution_id): (String, String, String, Option<String>) = tx
             .query_row(
             "SELECT envelope,immutable_digest,state,execution_id FROM local_inbox WHERE id=?",
@@ -707,6 +721,7 @@ impl Ledger {
         dispatch.body.clear();
         tx.execute("UPDATE local_inbox SET state='replied',envelope=?,reply=NULL WHERE id=? AND state IN ('reply_ready','replied')",
             (json(&dispatch)?,id))?;
+        crate::encrypted_inputs::compact(&tx)?;
         tx.commit()?;
         Ok(())
     }
@@ -823,7 +838,8 @@ impl Ledger {
                 continue;
             };
             let d: Dispatch = serde_json::from_str(&encoded)?;
-            if immutable != h.immutable_digest
+            if crate::encrypted_inputs::history_digest(&tx, &h.dispatch_id, &immutable)?
+                != h.immutable_digest
                 || execution.as_deref() != Some(&h.execution_id)
                 || d.binding_id != h.binding_id
                 || d.agent_id != h.agent_id

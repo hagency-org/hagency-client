@@ -87,3 +87,9 @@ Python/PG核验 AS压缩后原件/摘要保留、calls0/live lease0、历史leas
 [原始密文入站验收](agent-ciphertext-intake-2026-10-27.zh.md)。接下来消费证明到
 本地 durable inbox/history，再接精确任务ACK/准入、真实 Codex和加密回复/文件。
 读取与解密不等于执行许可；共享请求者信任、A3及先前门槛继续保留，总目标未完成。
+
+2026年10月27日：A4 原始加密输入现已接通本地明文/来源/历史摘要原子保存、
+Server 独立加密状态 prepare/ACK、重启原 ID 和密文重放隔离。真实 Synapse 与
+独立 HS/PG/SQLite 证明 admissions2/ciphertexts3、普通明文0/模型0/活租约0。
+完整加密模型与工具启动、回复/文件和共享信任仍待接通；A4/A3 与此前人工/平台
+验收继续进行。见 [加密输入 ACK 验收](agent-encrypted-inbox-ack-2026-10-27.zh.md)。

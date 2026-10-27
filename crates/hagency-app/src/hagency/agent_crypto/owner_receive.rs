@@ -272,6 +272,11 @@ impl AgentCryptoSession {
             }
             let value: Value =
                 serde_json::from_str(plain.raw().json().get()).map_err(|_| refused())?;
+            if event["content"].get("m.relates_to").is_some()
+                && value["content"].get("m.relates_to").is_none()
+            {
+                return Err(error("agent_crypto_unauthenticated_relation"));
+            }
             if value["sender"] != pin.user
                 || value["event_id"] != event["event_id"]
                 || value["type"] != "m.room.message"

@@ -93,6 +93,7 @@ impl Snapshot {
         db.execute_batch(crate::sent_files::HISTORY_SCHEMA)?;
         db.execute_batch(crate::remote_approval::SCHEMA)?;
         db.execute_batch(crate::remote_approval::review::SCHEMA)?;
+        db.execute_batch(crate::encrypted_inputs::SCHEMA)?;
         Ok(db)
     }
 }
@@ -277,7 +278,12 @@ fn validate(db: &Connection, owner: &str, profile: &str) -> Result<()> {
     let expected = Ledger::open_scoped(":memory:", owner, profile)?;
     let stored = objects(db)?;
     let current = objects(&expected.db)?;
-    let before_review: Vec<_> = current
+    let before_encrypted: Vec<_> = current
+        .iter()
+        .filter(|(_, name, _)| !crate::encrypted_inputs::OBJECTS.contains(&name.as_str()))
+        .cloned()
+        .collect();
+    let before_review: Vec<_> = before_encrypted
         .iter()
         .filter(|(_, name, _)| !crate::remote_approval::review::OBJECTS.contains(&name.as_str()))
         .cloned()
@@ -330,6 +336,7 @@ fn validate(db: &Connection, owner: &str, profile: &str) -> Result<()> {
         .cloned()
         .collect();
     if stored != current
+        && stored != before_encrypted
         && stored != before_review
         && stored != before_remote
         && stored != before_file_history
@@ -352,6 +359,7 @@ fn validate(db: &Connection, owner: &str, profile: &str) -> Result<()> {
     if identities != [owner] || profiles != [profile] {
         return Err(Error::Unauthorized);
     }
+    crate::encrypted_inputs::validate_snapshot(db)?;
     let integrity: String = db.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
     let foreign_keys = db.prepare("PRAGMA foreign_key_check")?.exists([])?;
     if integrity != "ok" || foreign_keys {
