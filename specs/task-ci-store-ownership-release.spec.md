@@ -46,6 +46,7 @@ Scenario: Custody shutdown releases its original lock despite a retained copy
   Then immediate reopen and replacement exclusivity have the same guarantees
 
 Scenario: Factory restart uses its original durable state without a lock retry
+  Test-Platforms: [linux, macos]
   Test: native_configured_fleet_reattaches_after_restart
   Given the actual configured offline factory, SDK stores and original owner
   When every original service closes and the same domain store reopens
