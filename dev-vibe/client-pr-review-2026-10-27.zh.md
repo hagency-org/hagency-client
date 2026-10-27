@@ -58,3 +58,34 @@ checkout 没有 specs/project.spec.md 或 task-writer。新增 Test selector
 
 GitHub插件写操作为integration403；已使用本机已认证的gh完成授权操作。
 触发Codex review只表示请求已提交，必须与服务实际完成的review区分。
+
+
+## 操作者澄清后的直接复审（不使用GitHub Codex）
+
+前述@codex只是已发布的请求，仓库没有安装GitHub Codex，不能视为外部
+review。此节是直接代码复审发现，更新前述“#9–#11未发现阻塞问题”的判断。
+
+发现P1：原生工具的本地批准消费后，还要await Server校验；另一SQLite
+句柄在该等待中提交策略撤销，旧代码仍向Codex发送accept，确定性回归观察
+到effect=1。106743e1在最终Server await之后重新检查原proposal的策略版本
+和期限，不重复消费批准。command/file/MCP × owner/rule × 三层策略共18
+组合均拒绝，既有允许执行测试仍通过。
+
+修复以正常merge依次同步到#10（6f5551ac）、#11（0eb40cf8）和#12，
+不force push、不重写历史。#10之后还断言原审计为Expired，不能进入Submitted。
+各分支本地Agent测试分别96/125/154通过，均3既有忽略；最终组合另行验证。
+
+CI结论：#9/#10的arm64取消由GitHub注释明确证明runner未获得分配、
+资源不足，既无编译日志也无执行结果，不是源码失败。#10矩阵第二次三平台
+均通过；原第一次Claude容量测试Timeout仍保留。#11的Windows失败在完成
+HTTP断言后的SQLite关闭，原日志没有关闭阶段，不能推断具体根因。
+0eb40cf8接入现有仅失败时输出的原始shutdown快照，保留原期限和panic，
+不把此诊断称为Windows生产修复。macOS同selector通过；Windows需新CI观察。
+
+本次没有新外部模型调用、安装Codex、合并PR或部署。
+
+最终本地组合：Agent171单元+3+8集成通过，3既有忽略；engine285通过，
+9既有忽略；Matrix pacing1/1；受影响库/tests严格no-deps Clippy、format、
+46静态guards、production caller与diff检查通过。前一精确头6103cbba的
+40509336784矩阵三平台actual jobs现均成功，fast40509323755也成功；
+这些结果不冒充本轮新合并头CI。当前诊断改动未改变生产关闭行为。

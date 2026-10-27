@@ -14872,3 +14872,40 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   /tmp/hagency-pr-review-clippy-final2.log, /tmp/hagency-pr-review-guards.log.
   The expanded regression explicitly reopens the retired owner and proves the
   original late encrypted receipt survives that boundary without a new lease.
+
+
+## 2026-10-27: Direct review and CI investigation without GitHub Codex
+
+- Operator clarified no GitHub Codex installation. Continued direct source review
+  of all four stacked PRs; no further @codex requests or tool installation.
+- Found and reproduced a programming authorization race: local approval consumed,
+  then awaited Server gate; a second SQLite handle commits high-risk Deny during
+  that final wait, yet the original fake peer executed. New regression fails
+  old PR9 with effects1 vs expected0, then passes18 combinations after the exact
+  proposal is checked again after the final awaited gate. No repeated grant or
+  approval consumption. Initial test compile needed Layer.clone(); corrected.
+- PR9 fix106743e1:85unit+3+8integration pass/3existing ignored; strict all-target
+  no-deps Clippy and format pass. PR10 merge6f5551ac preserves audit behavior;
+ 114unit+3+8integration pass/3existing ignored and strict Clippy. The regression
+  also requires the original audit to be Expired rather than Submitted.
+- PR11 merges the same fix via aed6bf89;143unit+3+8integration pass/3existing
+  ignored.0eb40cf8 adds only original pacing-shutdown failure observation using
+  existing common helper; macOS selector1/1 and strict Agent/Matrix all-target
+  no-deps Clippy/format pass. Original2s enqueue/reply and fatal errors unchanged.
+- Latest PR12 merge2830e716 inherits these fixes and retains prior6103cbba
+  encrypted-history repair; final local/remote validation is reported below.
+- CI classification: #9 macOS matrix and arm64 package plus #10 App arm64
+  annotations say hosted runner not acquired/capacity constrained. Do not change
+  product code for unexecuted jobs. #10 complete matrix attempt2 passes all actual
+  Linux/macOS/Windows jobs, preserving original Claude capacity/Timeout failure.
+  #11 original Windows pacing assertions passed before shutdown OutcomeUnknown;
+  original log has no phase data, so cause remains unproven and the new helper
+  captures future original evidence without claiming a production fix.
+- Final merged code validation: Agent171unit+3+8integration pass/3existing
+  ignored; engine285/0/9existing ignored; Matrix pacing1/1; strict affected
+  lib/tests no-deps Clippy,format,46static guards,production caller and diff
+  pass. Logs /tmp/hagency-review2-final-{agent,engine,pacing,clippy,guards}.log.
+- Previous PR12 exact6103cbba complete-matrix40509336784 now has actual
+  Linux/macOS/Windows jobs each success, with fast CI40509323755 success. This
+  is evidence only for6103cbba, not the later authorization-fix merge. No claim
+  that the historical Windows failure was repaired by the diagnostic helper.

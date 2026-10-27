@@ -5605,3 +5605,16 @@ PR #8 审查及验证记录见 `dev-vibe/pr-8-board-ux-review-2026-10-25.zh.md`�
   never proves final preparation absence or grants replacement IO. Retain the
   original local efile ID/manifest and unknown approval audit when a late receipt
   arrives. Ordinary /files/lookup cannot reconcile these publications.
+
+- **Native tool approval post-await fence, 2026-10-27 direct review:** the last
+  Server authorization can yield after local approval consumption. Another real
+  ledger handle may commit policy revocation during that wait. Revalidate the
+  exact original ToolProposal's current revisions and expiry after the awaited
+  gate and immediately before provider acceptance. Never consume twice. The
+  deterministic regression covers command/file/MCP, owner/rule approvals and all
+  Agent/Room/requester layers; downstream audit records remain Expired.
+- GitHub cancelled arm64 jobs on #9/#10 carried explicit runner-capacity failure
+  annotations: job never acquired a hosted runner. This is separate from source
+  build/test failure. #11's original Windows pacing failure was at final store
+  shutdown; only failure-only original phase observation was added. A passing
+  repeat or continue-on-error workflow cannot erase the original unknown result.
