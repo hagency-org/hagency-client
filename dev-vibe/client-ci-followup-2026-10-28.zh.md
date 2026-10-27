@@ -42,3 +42,24 @@ Palpo/execution生产源和owned harness在四个分支一致，因此同样的f
 修复也通过d53d31e6下沉到#9，再正常merge到#10 ffabbc21、#11 57058917
 和#12 3a3c2f7f。基础分支Palpo16/16、owned52/52、严格all-target Clippy
 再次通过。没有force push；后续只检查这些新头及包含本记录的#12最终头。
+
+## 纯HTTP fixture的无关数据库依赖
+
+新头d53d31e6的完整矩阵40561752670中，Windows job122393152490的唯一
+实际失败是native_matrix_get_rate_limit末尾DomainStore::shutdown返回
+OutcomeUnknown（rate_limit_tests.rs:64）。四轮HTTP响应、重试等待、凭证和
+请求计数断言已全部通过；不能把它误报为HTTP Timeout，也不能证明是哪段
+OS/数据库关闭阶段超时。原始完整日志保留在对应Actions job。
+
+rate-limit与pacing两个纯HTTP fixture仅为HostConfig启动完整domain仓库和
+writer，测试过程从不访问它。改为直接调用Http::new原本委托的
+Http::for_host，保留相同TLS根、凭证、endpoint、common limits及每场景
+预算，不再创建无关writer。所有HTTP断言、真实TLS peer与fake.close保留。
+生产代码及数据库关闭2s界限完全不变；专门store和service生命周期测试
+继续保留真实writer，任何关闭错误仍失败。旧pacing关闭观察记录为历史。
+
+本地Matrix库280/280、HTTP全部12项、数据库关闭8/8、严格Matrix all-target
+no-deps Clippy、format及静态guard46/46通过。修复从#9 fe449853经正常
+merge631a342f(#10)、29b20c1d(#11)传到#12。新头CI须另外实际完成。
+此前9db9212f的Windows完整job已实际通过（含31s owned与媒体验证），
+d53d31e6的双架构App CI和全部桌面打包也通过；这些不是新头CI的替代。

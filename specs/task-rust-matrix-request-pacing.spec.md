@@ -76,9 +76,12 @@ Scenario: Driver configuration admits only an explicit bounded cadence
 2026-10-07: Retired-Test/Retired-Filter records the removed Fleet production entry point. Other SDK Test/Filter selectors remain active. See [current Owner product](native-owner-client.spec.md) and [replacement coverage](../docs/design/2026-10-07-retired-product-test-coverage.zh-CN.md). This does not claim Fleet, resource publication, delegation or encrypted tasks are supported in the new product.
 
 
-## Original shutdown failure evidence
+## Historical shutdown failure evidence
 
-The shared-request pacing fixture observes its one original DomainStore shutdown
-with the existing failure-only phase snapshot. Enqueue/reply deadlines, error
-verdict and Drop-before-ACK ordering are unchanged. A later close or passing
-repeat cannot replace an earlier OutcomeUnknown observation.
+The original shared-request pacing fixture used the failure-only DomainStore
+shutdown snapshot. Its prior OutcomeUnknown remains a failure. The subsequent
+CI fixture repair removes the unrelated domain repository from the pure HTTP
+rate-limit and pacing tests; it does not change shutdown behavior. The same
+Http::for_host constructor retains TLS, credentials, shared cadence and limits.
+Dedicated store lifecycle and service tests retain their real writers, strict
+shutdown assertions and diagnostics.

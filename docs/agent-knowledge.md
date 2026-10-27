@@ -5636,3 +5636,12 @@ PR #8 审查及验证记录见 `dev-vibe/pr-8-board-ux-review-2026-10-25.zh.md`�
   used this retiring image. Migrate App CI plus desktop/optional mobile build
   host labels to pinned macos-15, retaining macos-15-intel and both architectures.
   Runtime deployment target remains12.0. Source: https://github.com/actions/runner-images/issues/13518
+
+- **Pure HTTP fixtures and teardown, 2026-10-28:** Windows#9 job122393152490
+  passed all native_matrix_get_rate_limit HTTP assertions but its unrelated
+  DomainStore shutdown returned OutcomeUnknown at line64. This is a shutdown
+  failure site, not proof of an HTTP timeout or particular OS close phase.
+  Rate-limit/pacing fixtures need no domain state: use Http::for_host with the
+  original TLS root/auth/endpoint/limits/pacing owner, avoiding an unrelated
+  repository and worker. This changes test dependencies, not production shutdown
+  or its2s deadlines; real store/service lifecycle failures remain fatal.

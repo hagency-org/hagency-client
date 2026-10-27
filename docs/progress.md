@@ -14954,3 +14954,30 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   Base-head local Palpo16/16,owned52/52 and strict all-target Clippy pass again,
   proving the patch does not depend on later feature APIs. PR12 content merge
   is identical to its already-tested fixture fixes, preserving ancestry.
+
+
+## 2026-10-28: Remove irrelevant domain lifecycle from pure HTTP fixtures
+
+- Original #9 d53d31e6 Full matrix40561752670 Windows job122393152490
+  passed the isolated31s owned selector, then failed only Matrix library
+  native_matrix_get_rate_limit at rate_limit_tests.rs:64: shutdown returned
+  OutcomeUnknown. Its HTTP result/auth/delay/count assertions had all passed.
+  The original2s shutdown error does not identify an unobserved close/OS phase.
+  Preserve the run; diagnostic repeats never replace its failed verdict.
+- Both rate-limit and pacing fixtures used a whole DomainRepository/DomainStore
+  solely to build HostConfig. They now use Http::for_host (the exact constructor
+  Http::new delegates to), same real TLS/root/auth/endpoint/common limits and
+  per-scenario budget. No database is constructed for these pure HTTP tests;
+  every HTTP assertion and fake cleanup remains. Actual store/service fixtures
+  and shutdown2s contracts are unchanged. The earlier pacing observer entry is
+  historical, not evidence that writer shutdown was repaired.
+- Actual edited base#9: Matrix lib280/280, all HTTP12 included; strict Matrix
+  all-target no-deps Clippy, formatting, domain shutdown8/8, guard46/46 pass.
+  Logs /tmp/hagency-ci3-{matrix-http-fixture,http-fixture-clippy,
+  http-fixture-domain,http-fixture-guards}.log. Base fix fe449853, normal
+  merges631a342f(#10),29b20c1d(#11), then #12. No force push.
+- Prior head9db9212f Windows full job actually passed including media storage;
+  prior d53d31e6 dual-arch App and all desktop package jobs also actually passed.
+  These historical results cannot substitute for the final new-head runs.
+  Final remote evidence will be posted in PR follow-up comments without creating
+  a new docs-only head. task-writer remains absent; no control-plane state faked.

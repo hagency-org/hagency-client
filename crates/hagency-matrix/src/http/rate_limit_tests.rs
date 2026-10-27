@@ -3,19 +3,27 @@ use crate::collector::fixtures as common;
 use serde_json::json;
 use std::time::Duration;
 
-async fn client(budget: Duration) -> (common::Fixture, common::Fake, Http) {
+async fn client(budget: Duration) -> (common::Fake, Http) {
     let fake = common::Fake::start(true).await;
-    let fixture = common::Fixture::new();
-    let mut config = fixture
-        .config(&fake.endpoint)
-        .with_root_pem(include_bytes!("../../tests/fixtures/ca.pem"))
-        .unwrap();
-    config.limits.request = budget;
-    config.limits.headers = config.limits.headers.min(budget);
-    config.limits.connect = config.limits.connect.min(budget);
-    config.limits.body_idle = config.limits.body_idle.min(budget);
-    let http = Http::new(&config).unwrap();
-    (fixture, fake, http)
+    // These transport tests need no domain repository or writer thread.
+    // Use the same constructor that Http::new delegates to, with identical
+    // credentials, roots and bounds, without unrelated database teardown.
+    let mut limits = common::limits();
+    limits.request = budget;
+    limits.headers = limits.headers.min(budget);
+    limits.connect = limits.connect.min(budget);
+    limits.body_idle = limits.body_idle.min(budget);
+    let authorization = HeaderValue::from_str(&format!("Bearer {}", common::TOKEN)).unwrap();
+    let root =
+        reqwest::Certificate::from_pem(include_bytes!("../../tests/fixtures/ca.pem")).unwrap();
+    let http = Http::for_host(
+        &Url::parse(&fake.endpoint).unwrap(),
+        Some(&authorization),
+        &limits,
+        &[root],
+    )
+    .unwrap();
+    (fake, http)
 }
 fn limited(header: Option<&str>, body: Value) -> Vec<u8> {
     let body = serde_json::to_vec(&body).unwrap();
@@ -35,7 +43,7 @@ async fn native_matrix_get_rate_limit() {
         (Some("0"), json!({"retry_after_ms":30}), 30),
         (None, json!({"errcode":"M_LIMIT_EXCEEDED"}), 1000),
     ] {
-        let (fixture, mut fake, http) = client(Duration::from_secs(3)).await;
+        let (mut fake, http) = client(Duration::from_secs(3)).await;
         let cancel = CancellationToken::new();
         let script = async {
             let first = fake.next().await;
@@ -61,7 +69,6 @@ async fn native_matrix_get_rate_limit() {
         );
         assert_eq!(result.unwrap().success().unwrap(), json!({"fresh":true}));
         assert_eq!(fake.requests(), 2);
-        fixture.store.shutdown().await.unwrap();
         fake.close().await;
     }
 }
@@ -77,7 +84,7 @@ async fn native_matrix_get_rate_limit_bounds() {
         (Some("18446744073709551615"), json!({})),
         (Some("1\r\nRetry-After: 2"), json!({})),
     ] {
-        let (fixture, mut fake, http) = client(Duration::from_millis(900)).await;
+        let (mut fake, http) = client(Duration::from_millis(900)).await;
         let cancel = CancellationToken::new();
         let (result, ()) = tokio::join!(http.request(&["bounded"], None, &cancel), async {
             fake.next().await.raw(limited(header, body));
@@ -85,10 +92,9 @@ async fn native_matrix_get_rate_limit_bounds() {
         assert_eq!(result.unwrap().success(), Err(Error::Remote(429)));
         assert_eq!(fake.requests(), 1);
         fake.no_request().await;
-        fixture.store.shutdown().await.unwrap();
         fake.close().await;
     }
-    let (fixture, mut fake, http) = client(Duration::from_millis(900)).await;
+    let (mut fake, http) = client(Duration::from_millis(900)).await;
     let cancel = CancellationToken::new();
     let (result, ()) = tokio::join!(http.request(&["bounded"], None, &cancel), async {
         for _ in 0..RATE_LIMIT_TRIES {
@@ -98,11 +104,10 @@ async fn native_matrix_get_rate_limit_bounds() {
     assert_eq!(result.unwrap().success(), Err(Error::Remote(429)));
     assert_eq!(fake.requests(), RATE_LIMIT_TRIES as u64);
     fake.no_request().await;
-    fixture.store.shutdown().await.unwrap();
     fake.close().await;
 
     // A fresh deadline per attempt would allow more than these two requests.
-    let (fixture, mut fake, http) = client(Duration::from_millis(300)).await;
+    let (mut fake, http) = client(Duration::from_millis(300)).await;
     let cancel = CancellationToken::new();
     let (result, ()) = tokio::join!(http.request(&["bounded"], None, &cancel), async {
         for _ in 0..2 {
@@ -112,10 +117,9 @@ async fn native_matrix_get_rate_limit_bounds() {
     assert_eq!(result.unwrap().success(), Err(Error::Remote(429)));
     assert_eq!(fake.requests(), 2);
     fake.no_request().await;
-    fixture.store.shutdown().await.unwrap();
     fake.close().await;
 
-    let (fixture, mut fake, http) = client(Duration::from_secs(3)).await;
+    let (mut fake, http) = client(Duration::from_secs(3)).await;
     let cancel = CancellationToken::new();
     let (result, ()) = tokio::join!(http.request(&["cancel"], None, &cancel), async {
         fake.next().await.json(429, json!({"retry_after_ms":2000}));
@@ -125,7 +129,6 @@ async fn native_matrix_get_rate_limit_bounds() {
     assert!(matches!(result, Err(Error::Cancelled)));
     assert_eq!(fake.requests(), 1);
     fake.no_request().await;
-    fixture.store.shutdown().await.unwrap();
     fake.close().await;
 }
 
@@ -134,7 +137,7 @@ async fn native_matrix_write_rate_limit_retries_like_get() {
     // Task #9 (TS fetchWithRateLimit): a write that gets 429 retries through
     // the same six-try budget as a read, on the shared cooldown gate.
     for method in [reqwest::Method::POST, reqwest::Method::PUT] {
-        let (fixture, mut fake, http) = client(Duration::from_secs(3)).await;
+        let (mut fake, http) = client(Duration::from_secs(3)).await;
         let cancel = CancellationToken::new();
         let (result, ()) = tokio::join!(
             async {
@@ -161,10 +164,9 @@ async fn native_matrix_write_rate_limit_retries_like_get() {
         );
         assert_eq!(fake.requests(), RATE_LIMIT_TRIES as u64);
         fake.no_request().await;
-        fixture.store.shutdown().await.unwrap();
         fake.close().await;
     }
-    let (fixture, mut fake, http) = client(Duration::from_secs(3)).await;
+    let (mut fake, http) = client(Duration::from_secs(3)).await;
     let cancel = CancellationToken::new();
     let (result, ()) = tokio::join!(http.request(&["lost"], None, &cancel), async {
         fake.next().await.unclean(Vec::new());
@@ -172,6 +174,5 @@ async fn native_matrix_write_rate_limit_retries_like_get() {
     assert!(matches!(result, Err(Error::Transport)));
     assert_eq!(fake.requests(), 1);
     fake.no_request().await;
-    fixture.store.shutdown().await.unwrap();
     fake.close().await;
 }
