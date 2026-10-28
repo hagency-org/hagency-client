@@ -614,8 +614,9 @@ impl Widget for MobileChatInfo {
             self.clear();
         }
         if matches!(event, Event::Signal) {
+            // The cache requests a redraw only when an avatar actually changes.
+            // Unrelated worker signals also reach this hidden desktop pane.
             crate::avatar_cache::process_avatar_updates(cx);
-            self.view.redraw(cx);
         }
         if !self.agent_picker_open {
             self.view.modal(cx, ids!(agent_picker_modal)).close(cx);
@@ -970,6 +971,19 @@ impl MobileChatInfoRef {
 #[cfg(test)]
 mod information_target_tests {
     use super::*;
+    #[test]
+    fn unrelated_worker_signals_do_not_redraw_the_chat_information_pane() {
+        let mut cx = Cx::new(Box::new(|_, _| {}));
+        let mut info = cx.with_vm(|vm| {
+            makepad_widgets::script_mod(vm); crate::app::register_widgets(vm);
+            let value = script_eval!(vm, {mod.widgets.MobileChatInfo {}});
+            MobileChatInfo::script_from_value(vm, value)
+        });
+        draw_information(&mut info, &mut cx);
+        cx.new_draw_event = Default::default();
+        for _ in 0..32 { info.handle_event(&mut cx, &Event::Signal, &mut Scope::empty()); }
+        assert!(!cx.new_draw_event.will_redraw(), "worker completion must not start another frame");
+    }
     fn member(id: &str, name: &str) -> UserProfile {
         UserProfile {user_id:OwnedUserId::try_from(id).unwrap(),username:Some(name.into()),avatar_state:AvatarState::Known(None)}
     }

@@ -2,14 +2,17 @@ use super::*;
 
 impl ProjectBoard {
     pub(super) fn notice(&mut self, cx: &mut Cx, message: &str) {
-        self.view.label(cx, ids!(dialog_notice)).set_text(cx, message);
+        self.view
+            .label(cx, ids!(dialog_notice))
+            .set_text(cx, message);
         self.view
             .label(cx, ids!(dialog_notice))
             .set_visible(cx, !message.is_empty());
         self.view.label(cx, ids!(notice)).set_text(cx, message);
-        self.view
-            .label(cx, ids!(notice))
-            .set_visible(cx, !message.is_empty() && !self.view.view(cx, ids!(inspector)).visible());
+        self.view.label(cx, ids!(notice)).set_visible(
+            cx,
+            !message.is_empty() && !self.view.view(cx, ids!(inspector)).visible(),
+        );
         self.view.redraw(cx);
     }
     pub(super) fn clear_content(&mut self, cx: &mut Cx) {
@@ -49,9 +52,11 @@ impl ProjectBoard {
             .set_visible(cx, false);
         self.comments.clear();
         self.members.clear();
+        self.member_names.clear();
         self.card_targets.clear();
         self.more_targets.clear();
         self.drag = None;
+        self.column_drag = None;
         self.landing = None;
         for id in [
             ids!(title).as_slice(),
@@ -75,6 +80,10 @@ impl ProjectBoard {
     ) {
         let project = project.unwrap_or("");
         let context_changed = self.identity != identity || self.project != project;
+        // The parent binds on every event, including Draw and while this board
+        // is hidden behind a room. Only a changed binding needs control sync;
+        // otherwise its redraw creates an endless event/draw/bind cycle.
+        if !context_changed && active == self.active { return; }
         if context_changed {
             self.remember_comment(cx);
             if !self.project.is_empty() && self.identity == identity {
@@ -228,6 +237,7 @@ impl ProjectBoard {
     pub(super) fn save_task(&mut self, cx: &mut Cx) {
         if self.pending.is_some()
             || self.conflict
+            || self.selected_column_archived()
             || (!self.creating && (!self.detail_loaded || self.selected.is_none()))
             || self
                 .selected
@@ -264,6 +274,7 @@ impl ProjectBoard {
                 BoardAction::Update {
                     task: task.id,
                     input: Update {
+                        state: Some(self.draft_state.clone()),
                         idempotency_key,
                         fields,
                         expected_version: task.version,
@@ -421,6 +432,9 @@ impl ProjectBoard {
             .set_scroll_pos(cx, dvec2(0.0, 0.0));
         self.fill_editor(cx, task.fields());
         self.selected = Some(task.clone());
+        self.draft_state = task.state.clone();
+        self.sync_column_labels(cx);
+        self.notice(cx, "");
         self.open_inspector(cx);
         self.view
             .label(cx, ids!(detail_heading))
@@ -461,19 +475,13 @@ impl ProjectBoard {
         let state = self
             .query
             .state
-            .as_deref()
-            .and_then(|s| {
-                self.snapshot
-                    .as_ref()?
-                    .lanes
-                    .iter()
-                    .position(|l| l.state == s)
-            })
+            .as_ref()
+            .and_then(|s| self.status_index(s))
             .unwrap_or(0);
         self.view
             .drop_down(cx, ids!(new_status))
             .set_selected_item(cx, state);
-        self.draft_state = self.column_state(state);
+        self.draft_state = self.status_state(state);
         self.selected = None;
         self.comments.clear();
         self.open_inspector(cx);
@@ -504,11 +512,7 @@ impl ProjectBoard {
         }
         let previous_filter = self.query.assignee.clone();
         let mut labels = vec![tr("All members").to_owned()];
-        labels.extend(
-            self.members
-                .iter()
-                .map(|id| collaboration::member_choice(id, &self.members)),
-        );
+        labels.extend(self.members.iter().map(|id| self.member_choice(id)));
         self.view
             .drop_down(cx, ids!(filter_assignee))
             .set_labels(cx, labels);
@@ -529,7 +533,7 @@ impl ProjectBoard {
                 if label.starts_with('@') && !joined.contains(&label) {
                     format!("{} · {}", label, tr("Former member"))
                 } else if label.starts_with('@') {
-                    collaboration::member_choice(&label, &self.members)
+                    self.member_choice(&label)
                 } else {
                     label
                 }
@@ -615,7 +619,8 @@ impl ProjectBoard {
         let archived = self
             .selected
             .as_ref()
-            .is_some_and(|t| t.archived_at.is_some());
+            .is_some_and(|t| t.archived_at.is_some())
+            || self.selected_column_archived();
         let writing = self.pending.is_some();
         let editing = (self.creating || self.selected.is_some() && self.detail_loaded)
             && !writing
@@ -641,9 +646,7 @@ impl ProjectBoard {
         if !editing {
             self.close_calendar(cx);
         }
-        self.view
-            .widget(cx, ids!(save))
-            .set_disabled(cx, !editing);
+        self.view.widget(cx, ids!(save)).set_disabled(cx, !editing);
         self.view.button(cx, ids!(new_task)).set_board_enabled(
             cx,
             self.snapshot.is_some() && !writing && !self.failed && self.columns_draft.is_none(),
@@ -696,25 +699,16 @@ impl ProjectBoard {
             self.view.button(cx, id).set_board_enabled(cx, enabled);
             self.view.widget(cx, id).set_disabled(cx, !enabled);
         }
+        self.view.button(cx, ids!(archive)).set_board_enabled(
+            cx,
+            !writing && !self.dirty && !self.conflict && !self.selected_column_archived(),
+        );
         self.view
             .button(cx, ids!(archive))
-            .set_board_enabled(cx, !writing && !self.dirty && !self.conflict);
-        self.view.button(cx, ids!(archive)).set_text(
-            cx,
-            tr(if archived {
-                "Restore"
-            } else {
-                "Archive"
-            }),
-        );
-        self.view.button(cx, ids!(save)).set_text(
-            cx,
-            tr(if self.saving {
-                "Saving…"
-            } else {
-                "Save"
-            }),
-        );
+            .set_text(cx, tr(if archived { "Restore" } else { "Archive" }));
+        self.view
+            .button(cx, ids!(save))
+            .set_text(cx, tr(if self.saving { "Saving…" } else { "Save" }));
         self.view.button(cx, ids!(close_detail)).set_text(
             cx,
             tr(if self.discard_armed {
@@ -782,13 +776,11 @@ impl ProjectBoard {
         {
             return;
         }
-        if matches!(done.kind, Read::Comments(..))
-            && done.detail_generation != self.detail_request
+        if matches!(done.kind, Read::Comments(..)) && done.detail_generation != self.detail_request
         {
             return;
         }
-        if matches!(done.kind, Read::Comments(..)) && done.request != self.comments_request
-        {
+        if matches!(done.kind, Read::Comments(..)) && done.request != self.comments_request {
             return;
         }
         if matches!(done.kind, Read::Snapshot | Read::Changes | Read::Page(_)) {
@@ -864,6 +856,7 @@ impl ProjectBoard {
                                     && self.pending.is_none()
                             });
                             let members = snapshot.members.clone();
+                            self.member_names = snapshot.member_names.clone();
                             self.snapshot = Some(snapshot);
                             self.refresh_notifications(cx);
                             self.failed = false;
@@ -976,21 +969,21 @@ impl ProjectBoard {
                             }
                             self.view.label(cx, ids!(detail_notice)).set_text(
                                 cx,
-                                tr(if task.archived_at.is_some() {
+                                tr(if self.selected_column_archived() {
+                                    "Archived column · restore the column to edit its cards."
+                                } else if task.archived_at.is_some() {
                                     "Archived · restore to edit this task."
                                 } else {
                                     "Visible to current Project members."
                                 }),
                             );
-                            self.view.drop_down(cx, ids!(move_state)).set_selected_item(
-                                cx,
-                                self.snapshot
-                                    .as_ref()
-                                    .and_then(|s| {
-                                        s.lanes.iter().position(|l| l.state == task.state)
-                                    })
-                                    .unwrap_or(0),
-                            );
+                            if !self.dirty && !self.conflict {
+                                self.draft_state = task.state.clone();
+                                self.view.drop_down(cx, ids!(move_state)).set_selected_item(
+                                    cx,
+                                    self.status_index(&task.state).unwrap_or(0),
+                                );
+                            }
                             self.detail_history(cx, id);
                         }
                     }
@@ -1011,8 +1004,9 @@ impl ProjectBoard {
                             .comments
                             .iter()
                             .map(|v| {
-                                let author =
-                                    markdown::escape_html(member_label(v["author"].as_str().unwrap_or("")));
+                                let author = markdown::escape_html(
+                                    self.member_name(v["author"].as_str().unwrap_or("")),
+                                );
                                 let time = timestamp(&v["createdAt"]);
                                 format!(
                                     "<p><strong>{author}</strong> · {time}</p>{}<hr/>",
@@ -1069,7 +1063,14 @@ impl ProjectBoard {
                     .filter(|task| {
                         task.project_id == self.project
                             && match &self.pending {
-                                Some(BoardAction::Update { task: id, .. }) => task.id == *id,
+                                Some(BoardAction::Update { task: id, input }) => {
+                                    task.id == *id
+                                        && input
+                                            .state
+                                            .as_ref()
+                                            .is_none_or(|state| task.state == *state)
+                                }
+                                Some(BoardAction::Create { input }) => task.state == input.state,
                                 _ => true,
                             }
                     });

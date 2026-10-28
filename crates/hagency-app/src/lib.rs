@@ -118,6 +118,7 @@ pub mod agent_chat_dummy;
 pub mod agent_access;
 pub mod sliding_sync;
 mod timeline_changes;
+mod timeline_projection;
 pub mod timeline_updates;
 mod matrix_context;
 pub mod space_service_sync;

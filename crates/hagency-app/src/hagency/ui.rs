@@ -3,7 +3,7 @@
 use makepad_widgets::*;
 use serde_json::{Value, json};
 use super::{backend::Service, model::*, approvals::Notices};
-use std::{collections::HashSet, time::Instant};
+use std::{cell::Cell, collections::HashSet, time::Instant};
 use crate::sliding_sync::spawn_async_task;
 use super::board::ProjectBoardWidgetExt;
 use crate::shared::{feedback::{InlineNoticeWidgetExt,InlineNoticeWidgetRefExt}, popup_list::PopupKind};
@@ -1160,8 +1160,10 @@ script_mod! {
     }
 }
 
-#[derive(Script, ScriptHook, Widget)]
+#[derive(Script, Widget)]
 pub struct HagencyPanel {
+    #[rust]
+    navigation_ready: Cell<bool>,
     #[source]
     source: ScriptObjectRef,
     #[deref]
@@ -1437,6 +1439,7 @@ impl HagencyPanel {
         self.detail_scroll_key.clear();self.view.view(cx,ids!(details_scroll)).set_scroll_pos(cx,dvec2(0.0,0.0));
     }
     fn enter_detail(&mut self,cx:&mut Cx,kind:&str,id:&str) {
+        self.navigation_ready.set(false);
         let key=format!("{}:{kind}:{id}",self.identity);
         if self.detail_scroll_key!=key {
             self.view.view(cx,ids!(details_scroll)).set_scroll_pos(cx,dvec2(0.0,0.0));self.detail_scroll_key=key;
@@ -1782,6 +1785,7 @@ impl HagencyPanel {
         self.view.label(cx, ids!(policy_usage)).set_text(cx, "");
     }
     fn set_busy(&mut self, cx: &mut Cx, busy: bool) {
+        self.navigation_ready.set(false);
         self.busy = busy;
         for id in [
             ids!(back),
@@ -1830,6 +1834,7 @@ impl HagencyPanel {
         }
     }
     fn list_page(&self, cx: &mut Cx) {
+        self.navigation_ready.set(false);
         self.status(cx, "");
         self.view.label(cx, ids!(heading)).set_text(
             cx,
@@ -2444,6 +2449,7 @@ impl HagencyPanel {
         false
     }
     fn section(&self, cx: &mut Cx, selected: &[LiveId]) {
+        self.navigation_ready.set(false);
         if !self.view.view(cx,selected).visible() {self.view.view(cx,ids!(details_scroll)).set_scroll_pos(cx,dvec2(0.0,0.0));}
         for id in [
             ids!(setup_section),
@@ -2572,6 +2578,7 @@ impl HagencyPanel {
         );
     }
     fn set_page(&mut self, cx: &mut Cx, page: Page) {
+        self.navigation_ready.set(false);
         self.status(cx, "");
         self.page = page;
         self.view.label(cx, ids!(heading)).set_text(
@@ -3638,8 +3645,16 @@ impl HagencyPanel {
         }
     }
 }
+impl ScriptHook for HagencyPanel {
+    fn on_after_apply(&mut self, _vm: &mut ScriptVm, _: &Apply, _: &mut Scope, _: ScriptValue) {
+        self.navigation_ready.set(false);
+    }
+}
 impl Widget for HagencyPanel {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        if matches!(event, Event::Actions(_) | Event::Startup | Event::LiveEdit | Event::ScriptReapply) {
+            self.navigation_ready.set(false);
+        }
         let board_active=self.active && !self.display_blocked && self.page==Page::Projects && self.view.view(cx,ids!(project_detail)).visible() && self.view.view(cx,ids!(board_section)).visible();
         let project=self.project(cx);
         self.view.project_board(cx,ids!(board)).bind(cx,&self.identity,project.as_deref(),board_active);
@@ -4787,7 +4802,10 @@ impl Widget for HagencyPanel {
         }
     }
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
-        self.sync_navigation(cx);
+        // Navigation styles also touch hidden Service controls. Applying their
+        // scripts on every Draw dirties the widget tree and schedules the next
+        // frame forever, even when the current page is an unchanged board.
+        if !self.navigation_ready.replace(true) { self.sync_navigation(cx); }
         while let Some(step) = self.view.draw_walk(cx, scope, walk).step() {
             let is_members =
                 step.widget_uid() == self.view.portal_list(cx, ids!(members_list)).widget_uid();
@@ -5494,7 +5512,7 @@ mod tests {
             assert!((viewport.pos.x+viewport.size.x-width).abs()<1.0,"scrolling viewport reaches the panel edge: {viewport:?}");
             let card=panel.view.portal_list(&cx,ids!(agent_list)).item(&mut cx,0,id!(Card)).area().rect(&cx);
             assert!((width-card.pos.x-card.size.x-20.0).abs()<1.0,"content keeps its own right gutter: {card:?}");
-            panel.agent_pending_commands.clear();draw(&mut cx,&mut panel,width);
+            panel.agent_pending_commands.clear();panel.sync_navigation(&mut cx);draw(&mut cx,&mut panel,width);
             assert!(!panel.view.view(&cx,ids!(agent_recovery)).visible());
             assert!(panel.view.portal_list(&cx,ids!(agent_list)).area().rect(&cx).pos.y<viewport.pos.y-50.0);
             panel.set_page(&mut cx,Page::Projects);panel.list_page(&mut cx);draw(&mut cx,&mut panel,width);

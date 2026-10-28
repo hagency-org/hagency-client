@@ -130,8 +130,9 @@ script_mod! {
 /// A unified base button widget used by the `NavigationTabBar` and `SpacesBar`.
 ///
 /// See the [module docs](self) for behavior and the selection model.
-#[derive(Script, ScriptHook, Widget, Animator)]
+#[derive(Script, Widget, Animator)]
 pub struct NavigationBarButton {
+    #[rust] selection_applied: Option<bool>,
     #[source] source: ScriptObjectRef,
     /// The inner View. Public so that wrapper widgets (e.g. `ProfileIcon`,
     /// `SpacesBarEntry`) which embed a `NavigationBarButton` via `#[deref]` can
@@ -148,6 +149,12 @@ pub struct NavigationBarButton {
     /// Pointer focus remains keyboard-operable without retaining a keyboard
     /// highlight around only the text half of a navigation row.
     #[rust] pointer_focus: bool,
+}
+
+impl ScriptHook for NavigationBarButton {
+    fn on_after_apply(&mut self, _vm: &mut ScriptVm, apply: &Apply, _: &mut Scope, _: ScriptValue) {
+        if !matches!(apply, Apply::Animate) { self.selection_applied = None; }
+    }
 }
 
 impl Widget for NavigationBarButton {
@@ -303,6 +310,11 @@ impl NavigationBarButton {
     /// the caller is responsible for clearing the selection on the other
     /// `NavigationBarButton`s in the group.
     pub fn set_selected(&mut self, cx: &mut Cx, is_selected: bool) {
+        // This setter is called during layout. A repeated cut still applies
+        // the script and schedules another frame in the pinned Makepad version.
+        let state = if is_selected { ids!(active.on) } else { ids!(active.off) };
+        if self.selection_applied == Some(is_selected) && self.animator_in_state(cx, state) { return; }
+        self.selection_applied = Some(is_selected);
         self.animator_toggle(cx, is_selected, Animate::No, ids!(active.on), ids!(active.off));
     }
 

@@ -440,9 +440,15 @@ pub struct RoomsListEntryContent {
 }
 
 impl ScriptHook for RoomsListEntryContent {
-    fn on_after_apply(&mut self, vm: &mut ScriptVm, _: &Apply, _: &mut Scope, _: ScriptValue) {
-        self.appearance = crate::theme::snapshot_for_vm(vm);
-        self.last_selection_drawn = None;
+    fn on_after_apply(&mut self, vm: &mut ScriptVm, apply: &Apply, _: &mut Scope, _: ScriptValue) {
+        // Animator application also invokes this hook. Invalidating the selected
+        // style here on every application creates an endless draw/apply cycle.
+        if matches!(apply, Apply::Animate) { return; }
+        let appearance = crate::theme::snapshot_for_vm(vm);
+        if self.appearance != appearance {
+            self.appearance = appearance;
+            self.last_selection_drawn = None;
+        }
     }
 }
 

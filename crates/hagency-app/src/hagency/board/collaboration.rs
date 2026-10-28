@@ -1,6 +1,28 @@
 use super::*;
 
 impl ProjectBoard {
+    pub(super) fn member_name<'a>(&'a self, id: &'a str) -> &'a str {
+        self.member_names
+            .get(id)
+            .filter(|name| !name.trim().is_empty())
+            .map(String::as_str)
+            .unwrap_or_else(|| member_label(id))
+    }
+    pub(super) fn member_choice(&self, id: &str) -> String {
+        let name = self.member_name(id);
+        if self
+            .members
+            .iter()
+            .filter(|m| self.member_name(m) == name)
+            .count()
+            > 1
+        {
+            format!("{name} ({id})")
+        } else {
+            name.to_owned()
+        }
+    }
+
     pub(super) fn remember_comment(&mut self, cx: &Cx) {
         let Some(task) = &self.selected else {
             return;
@@ -388,8 +410,10 @@ impl ProjectBoard {
                             value["title"].as_str().unwrap_or("")
                         ),
                     );
-                    row.label(cx, ids!(detail))
-                        .set_text(cx, &activity_text(value));
+                    row.label(cx, ids!(detail)).set_text(
+                        cx,
+                        &activity_text_with_names(value, &|id| self.member_name(id).to_owned()),
+                    );
                     self.notification_targets
                         .insert(row.button(cx, ids!(open)).widget_uid(), value.clone());
                 } else {
@@ -433,7 +457,11 @@ impl ProjectBoard {
         true
     }
 }
+#[cfg(test)]
 pub(super) fn activity_text(value: &Value) -> String {
+    activity_text_with_names(value, &|id| member_label(id).into())
+}
+fn activity_text_with_names(value: &Value, name: &impl Fn(&str) -> String) -> String {
     let kind = tr(match value["kind"].as_str().unwrap_or("") {
         "created" => "Created task",
         "edited" => "Edited task",
@@ -447,7 +475,7 @@ pub(super) fn activity_text(value: &Value) -> String {
     });
     let mut lines = vec![format!(
         "{} · {} · {}",
-        member_label(value["actor"].as_str().unwrap_or("")),
+        name(value["actor"].as_str().unwrap_or("")),
         timestamp(&value["occurredAt"]),
         kind
     )];
@@ -471,7 +499,7 @@ pub(super) fn activity_text(value: &Value) -> String {
                     if v.is_null() {
                         "—".into()
                     } else if let Some(s) = v.as_str() {
-                        member_label(s).to_owned()
+                        name(s)
                     } else {
                         v.to_string()
                     }
@@ -496,6 +524,7 @@ pub(super) fn activity_text(value: &Value) -> String {
     lines.join("\n")
 }
 
+#[cfg(test)]
 pub(super) fn member_choice(id: &str, members: &[String]) -> String {
     let label = member_label(id);
     if members.iter().filter(|m| member_label(m) == label).count() > 1 {

@@ -81,7 +81,8 @@ impl Widget for UpdateSettings {
                 cx.action(UpdateAction::AutoDownload(value));
             }
         }
-        if matches!(event, Event::Signal | Event::Actions(_)) {
+        if matches!(event, Event::Signal | Event::Actions(_))
+            && self.rendered.as_ref() != Some(&(cx.global::<UpdateState>().0.clone(), crate::i18n::language())) {
             self.view.redraw(cx);
         }
         self.view.handle_event(cx, event, scope);

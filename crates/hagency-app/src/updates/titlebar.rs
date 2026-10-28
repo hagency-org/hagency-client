@@ -1,4 +1,5 @@
 use super::{Phase, Snapshot, UpdateAction, UpdateState};
+use crate::i18n::Language;
 use makepad_widgets::*;
 use makepad_widgets::makepad_platform::event::finger::TouchState;
 
@@ -73,6 +74,8 @@ pub struct UpdateNotice {
     overlay: Option<DrawList2d>,
     #[rust]
     open: bool,
+    #[rust]
+    observed: Option<(Snapshot, Language)>,
 }
 
 impl ScriptHook for UpdateNotice {
@@ -98,11 +101,14 @@ impl UpdateNotice {
 impl Widget for UpdateNotice {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
         let state = cx.global::<UpdateState>().0.clone();
+        let observed = (state.clone(), crate::i18n::language());
+        let changed = self.observed.as_ref() != Some(&observed);
+        self.observed = Some(observed);
         if !titlebar_notice_visible(&state) {
             if self.open {
                 self.close(cx);
             }
-            if matches!(event, Event::Signal | Event::Actions(_)) {
+            if changed {
                 self.redraw_notice(cx);
             }
             return;
@@ -145,10 +151,7 @@ impl Widget for UpdateNotice {
                 self.close(cx);
             }
         }
-        if matches!(
-            event,
-            Event::Signal | Event::Actions(_) | Event::WindowGeomChange(_)
-        ) {
+        if changed || matches!(event, Event::Actions(_) | Event::WindowGeomChange(_)) {
             self.redraw_notice(cx);
         }
     }
@@ -255,6 +258,20 @@ mod tests {
     use super::*;
     use makepad_widgets::makepad_draw::cx_draw::CxDraw;
 
+    #[test]
+    fn unchanged_background_signals_do_not_repaint_the_update_overlay() {
+        let mut cx = Cx::new(Box::new(|_, _| {}));
+        let mut notice = notice(&mut cx);
+        notice.handle_event(&mut cx, &Event::Signal, &mut Scope::empty());
+        draw(&mut cx, &mut notice, 1280.0);
+        cx.new_draw_event = Default::default();
+        for _ in 0..32 { notice.handle_event(&mut cx, &Event::Signal, &mut Scope::empty()); }
+        assert!(!cx.new_draw_event.will_redraw());
+        cx.global::<UpdateState>().0.enabled = true;
+        cx.global::<UpdateState>().0.phase = Phase::Available;
+        notice.handle_event(&mut cx, &Event::Signal, &mut Scope::empty());
+        assert!(cx.new_draw_event.will_redraw(), "actual update state changes must remain visible");
+    }
     fn notice(cx: &mut Cx) -> UpdateNotice {
         cx.with_vm(|vm| {
             makepad_widgets::script_mod(vm);

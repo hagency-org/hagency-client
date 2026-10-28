@@ -2559,5 +2559,12 @@
   "New subtask": "新建子任务",
   "Save and add subtask": "保存并添加子任务",
   "Archive": "归档",
-  "Restore": "恢复"
+  "Restore": "恢复",
+  "Archive column": "归档列",
+  "Restore column": "恢复列",
+  "Archived": "已归档",
+  "Archived column · restore the column to edit its cards.": "此列已归档，请先恢复列再编辑卡片。",
+  "Restore this column before editing its cards.": "请先恢复此列，再编辑其中的卡片。",
+  "Use 2–12 unique column names, at least two active columns including a completed column, and a WIP limit between 1 and 10000.": "请使用 2–12 个不同的列名，至少保留两列未归档列（其中一列表示已完成），WIP 上限须为 1–10000。",
+  "Archived columns keep their cards. Restore them here.": "归档列会保留其中的卡片，可在此恢复。"
 }

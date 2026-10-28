@@ -2,6 +2,7 @@ use makepad_widgets::ScriptVm;
 
 pub mod attachment_download;
 pub mod cached_widget;
+pub mod loading_spinner;
 pub mod avatar;
 pub mod agent_usage;
 pub mod collapsible_header;
@@ -47,6 +48,7 @@ pub fn script_mod(vm: &mut ScriptVm) {
     crate::theme::script_mod(vm);
     cached_widget::script_mod(vm);
     styles::script_mod(vm);
+    loading_spinner::script_mod(vm);
     dropdown::script_mod(vm);
     design_tokens::script_mod(vm);
     helpers::script_mod(vm);

@@ -93,6 +93,7 @@ fn motion_enabled(cx: &mut Cx) -> bool {
 /// A single shimmering skeleton block.
 #[derive(Script, ScriptHook, Widget, Animator)]
 pub struct SkeletonBlock {
+    #[rust] drawn_since_frame: bool,
     #[source] source: ScriptObjectRef,
     #[deref] view: View,
     #[apply_default] animator: Animator,
@@ -100,6 +101,14 @@ pub struct SkeletonBlock {
 
 impl Widget for SkeletonBlock {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        // PortalList retains skeleton widgets after real rows replace them.
+        // Stop their looping pulse when a frame no longer draws this block;
+        // checking only this View's visible flag misses a hidden ancestor.
+        if self.animator.next_frame.is_event(event).is_some()
+            && !std::mem::take(&mut self.drawn_since_frame)
+        {
+            self.animator_cut(cx, ids!(pulse.off));
+        }
         if self.animator_handle_event(cx, event).must_redraw() {
             self.redraw(cx);
         }
@@ -107,7 +116,8 @@ impl Widget for SkeletonBlock {
     }
 
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
-        // Start the pulse once; a BounceLoop track then animates forever.
+        self.drawn_since_frame = true;
+        // Restart only when this block is actually presented again.
         if motion_enabled(cx)
             && !self.animator_in_state(cx, ids!(pulse.on))
             && !self.animator.is_track_animating(id!(pulse))
@@ -140,5 +150,57 @@ impl Widget for SkeletonListEntry {
         self.view.view(cx, ids!(skeleton_line_2_wrap)).set_visible(cx, self.num_lines >= 2.0);
         self.view.view(cx, ids!(skeleton_line_3_wrap)).set_visible(cx, self.num_lines >= 3.0);
         self.view.draw_walk(cx, scope, walk)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use makepad_widgets::makepad_draw::cx_draw::CxDraw;
+    fn draw(cx: &mut Cx, block: &mut SkeletonBlock) {
+        let pass = DrawPass::new(cx);
+        pass.set_size(cx, dvec2(120.0, 30.0));
+        let mut list = DrawList2d::new(cx);
+        let event = DrawEvent::default();
+        let mut draw = CxDraw::new(cx, &event);
+        let mut cx2d = Cx2d::new(&mut draw);
+        cx2d.begin_pass(&pass, None);
+        list.begin_always(&mut cx2d);
+        cx2d.begin_root_turtle(dvec2(120.0, 30.0), Layout::flow_overlay());
+        block.draw_walk_all(&mut cx2d, &mut Scope::empty(), Walk::fixed(120.0, 30.0));
+        cx2d.end_pass_sized_turtle();
+        list.end(&mut cx2d);
+        cx2d.end_pass(&pass);
+    }
+    fn frame(cx: &mut Cx, block: &mut SkeletonBlock, time: f64) {
+        let event = Event::NextFrame(NextFrameEvent {
+            frame: (time * 60.0) as u64, time,
+            set: [block.animator.next_frame].into_iter().collect(),
+        });
+        block.handle_event(cx, &event, &mut Scope::empty());
+    }
+    #[test]
+    fn retained_placeholder_stops_after_ancestor_hides_and_restarts_when_drawn() {
+        let mut cx = Cx::new(Box::new(|_, _| {}));
+        let mut block = cx.with_vm(|vm| {
+            makepad_widgets::script_mod(vm);
+            crate::app::register_widgets(vm);
+            let value = script_eval!(vm,{mod.widgets.SkeletonBlock {}});
+            SkeletonBlock::script_from_value(vm, value)
+        });
+        draw(&mut cx, &mut block);
+        frame(&mut cx, &mut block, 0.0);
+        assert!(block.animator.is_track_animating(id!(pulse)));
+        draw(&mut cx, &mut block);
+        frame(&mut cx, &mut block, 0.2);
+        assert!(block.animator.is_track_animating(id!(pulse)));
+        // The parent list has replaced the placeholder. The retained block is
+        // still individually visible, but no longer participates in drawing.
+        assert!(block.view.visible);
+        frame(&mut cx, &mut block, 0.4);
+        assert!(!block.animator.is_track_animating(id!(pulse)));
+        assert!(block.animator_in_state(&cx, ids!(pulse.off)));
+        draw(&mut cx, &mut block);
+        assert!(block.animator.is_track_animating(id!(pulse)));
     }
 }

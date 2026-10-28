@@ -22,6 +22,7 @@ mod collaboration;
 mod media;
 use media::MediaState;
 mod extensions;
+mod lists;
 use extensions::column_title;
 pub use view::script_mod;
 
@@ -209,6 +210,8 @@ pub struct ProjectBoard {
     #[rust]
     members: Vec<String>,
     #[rust]
+    member_names: HashMap<String, String>,
+    #[rust]
     reads: HashSet<u64>,
     #[rust]
     loading: bool,
@@ -280,6 +283,8 @@ pub struct ProjectBoard {
     columns_sequence: i64,
     #[rust]
     column_edit: usize,
+    #[rust]
+    column_drag: Option<(usize, Vec2d)>,
     #[rust]
     draft_checklist: Vec<ChecklistItem>,
     #[rust]
@@ -377,11 +382,12 @@ fn error_message(code: &str) -> &str {
             "Project access has expired. Sign in again or check your membership."
         }
         "invalid_board_columns" => {
-            "Use 2–12 unique column names, at least one completed column, and a WIP limit between 1 and 10000."
+            "Use 2–12 unique column names, at least two active columns including a completed column, and a WIP limit between 1 and 10000."
         }
         "board_wip_limit_reached" => {
             "This column has reached its WIP limit. Finish or move a task before adding another."
         }
+        "board_column_archived" => "Restore this column before editing its cards.",
         "board_column_not_empty" => {
             "Move all tasks, including archived tasks, before deleting this column."
         }
@@ -426,6 +432,7 @@ fn uncertain(code: &str) -> bool {
             | "board_attachment_not_found"
             | "invalid_board_columns"
             | "board_wip_limit_reached"
+            | "board_column_archived"
             | "board_column_not_empty"
             | "invalid_board_parent"
             | "invalid_board_checklist"

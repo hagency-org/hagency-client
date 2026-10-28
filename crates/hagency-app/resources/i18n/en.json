@@ -2559,5 +2559,12 @@
   "New subtask": "New subtask",
   "Save and add subtask": "Save and add subtask",
   "Archive": "Archive",
-  "Restore": "Restore"
+  "Restore": "Restore",
+  "Archive column": "Archive column",
+  "Restore column": "Restore column",
+  "Archived": "Archived",
+  "Archived column · restore the column to edit its cards.": "Archived column · restore the column to edit its cards.",
+  "Restore this column before editing its cards.": "Restore this column before editing its cards.",
+  "Use 2–12 unique column names, at least two active columns including a completed column, and a WIP limit between 1 and 10000.": "Use 2–12 unique column names, at least two active columns including a completed column, and a WIP limit between 1 and 10000.",
+  "Archived columns keep their cards. Restore them here.": "Archived columns keep their cards. Restore them here."
 }

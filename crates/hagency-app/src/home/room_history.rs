@@ -849,13 +849,14 @@ impl Widget for RoomHistoryPanel {
         }
         self.view.handle_event(cx, event, scope);
         if matches!(event, Event::Signal) {
-            if crate::history_store::ensure_healthy().is_err() {
+            if crate::history_store::ensure_healthy().is_err()
+                && self.error.as_deref() != Some("History index updates failed; reconnect before searching") {
                 self.matches.clear();self.detail=None;
                 self.query_revision.fetch_add(1,Ordering::Relaxed);
                 self.error=Some("History index updates failed; reconnect before searching".into());
                 self.update_status(cx);
+                self.redraw(cx);
             }
-            self.redraw(cx);
         }
         if let Event::Actions(actions) = event {
             for action in actions {

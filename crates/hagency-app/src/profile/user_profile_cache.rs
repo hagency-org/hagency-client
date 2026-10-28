@@ -219,16 +219,19 @@ impl UserProfileUpdate {
 
 /// Processes all pending user profile updates in the queue.
 ///
-/// This function requires passing in a reference to `Cx`,
-/// which isn't used, but acts as a guarantee that this function
-/// must only be called by the main UI thread.
-pub fn process_user_profile_updates(_cx: &mut Cx) {
+/// Repaints profile consumers only when data arrived. The `Cx` reference also
+/// confines the cache to the UI thread.
+pub fn process_user_profile_updates(cx: &mut Cx) {
+    let mut changed = false;
     USER_PROFILE_CACHE.with_borrow_mut(|cache| {
         while let Some(update) = PENDING_USER_PROFILE_UPDATES.pop() {
-            // Insert the updated info into the cache
             update.apply_to_cache(cache);
+            changed = true;
         }
     });
+    // Worker completion signals are global, including GPU/resource jobs.
+    // Repaint consumers only when the profile queue actually supplied data.
+    if changed { cx.redraw_all(); }
 }
 
 /// Invokes the given closure with cached user profile info for the given user ID

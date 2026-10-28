@@ -1990,10 +1990,14 @@ impl App {
         let visible = !self.embedded && self.app_state.logged_in
             && crate::home::home_screen::effective_is_desktop(cx);
         let collapsed = self.app_state.app_prefs.desktop_sidebar_collapsed;
+        // LiveEdit/ScriptReapply and reload clear this cache before drawing.
+        // Avoid serializing and hashing the complete stylesheet on every event.
+        let theme_revision = self.titlebar_sidebar_state.borrow().as_ref().map(|s| s.theme_revision)
+            .unwrap_or_else(|| crate::theme::snapshot(cx).revision);
         let state = TitlebarSidebarState {
             visible,
             collapsed,
-            theme_revision: crate::theme::snapshot(cx).revision,
+            theme_revision,
             language: crate::i18n::language(),
         };
         if self.titlebar_sidebar_state.borrow().as_ref() == Some(&state) {

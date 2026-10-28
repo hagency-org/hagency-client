@@ -88,6 +88,9 @@ makepad_widgets::script_mod! {
     let Column = RoundedView {width: 280 height: Fill padding: 12 flow: Down spacing: 12
         draw_bg +: {color: mod.widgets.RINX_PANEL_BG border_radius: 12.0 border_size:0.0 border_color:mod.widgets.RINX_BORDER}
         View {width: Fill height: 32 spacing: 8 align: Align{y: 0.5}
+            column_grip := View {width:20 height:32 cursor:MouseCursor.Hand align:Align{x:0.5 y:0.5}
+                Small {width:Fit text:"≡"}
+            }
             marker := RoundedView {width: 8 height: 8 draw_bg +: {color: mod.widgets.RINX_MUTED border_radius: 4.0}}
             heading := Text {width: Fill max_lines:1 text_overflow:Ellipsis draw_text.text_style: theme.font_bold{font_size: mod.widgets.RINX_BODY_SIZE}}
             count_badge := RoundedView {width:Fit height:Fit padding:Inset{left:8 right:8 top:3 bottom:3}
@@ -130,6 +133,7 @@ makepad_widgets::script_mod! {
                 apply_filters := Action {text: #(crate::i18n::tr("Filter")) i18n_text: "Filter"}
                 clear_filters := RinxGhostButton {height:36 visible:false text:#(crate::i18n::tr("Clear filters")) i18n_text:"Clear filters"}
                 refresh := RinxGhostButton {height:36 text: #(crate::i18n::tr("Refresh")) i18n_text: "Refresh"}
+                new_column := RinxGhostButton {text:#(crate::i18n::tr("New column")) i18n_text:"New column"}
                 manage_columns := RinxGhostButton {height:36 text:#(crate::i18n::tr("Columns & WIP")) i18n_text:"Columns & WIP"}
                 new_task := RinxPrimaryButton {height: 38 padding: Inset{left:18 right:18} text: #(crate::i18n::tr("New task")) i18n_text: "New task"}
             }
@@ -177,9 +181,11 @@ makepad_widgets::script_mod! {
                 column_left := Action {text:"←"}
                 column_right := Action {text:"→"}
                 add_column := Action {text:#(crate::i18n::tr("Add column")) i18n_text:"Add column"}
+                archive_column := Action {text:#(crate::i18n::tr("Archive column")) i18n_text:"Archive column"}
                 remove_column := Action {text:#(crate::i18n::tr("Delete column")) i18n_text:"Delete column"}
             }
             Small {text:#(crate::i18n::tr("WIP counts all active tasks. Delete only empty columns, including archived tasks. Changes apply when saved.")) i18n_text:"WIP counts all active tasks. Delete only empty columns, including archived tasks. Changes apply when saved."}
+            Small {text:#(crate::i18n::tr("Archived columns keep their cards. Restore them here.")) i18n_text:"Archived columns keep their cards. Restore them here."}
             rebase_columns := Action {visible:false text:#(crate::i18n::tr("Use latest board revision")) i18n_text:"Use latest board revision"}
             columns_notice := Small {}
         }

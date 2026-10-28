@@ -29,6 +29,7 @@ fn populate(board: &mut ProjectBoard) {
     board.epoch = 1;
     board.members = vec!["@alice:test".into(), "@bob:test".into()];
     board.snapshot = Some(Snapshot {
+        member_names: Default::default(),
         project_id: "p1".into(),
         sequence: 1,
         capability: CAPABILITY.into(),
@@ -36,6 +37,7 @@ fn populate(board: &mut ProjectBoard) {
         lanes: STATES
             .iter()
             .map(|state| ::hagency::project_board::Lane {
+                archived: false,
                 state: (*state).into(),
                 title: (*state).into(),
                 wip_limit: None,
@@ -104,14 +106,31 @@ fn kanban_dialog_centers_in_the_viewport_without_resizing_background_columns() {
         let panel = board.view.view(&cx, ids!(inspector)).area().rect(&cx);
         assert!(panel.pos.x + panel.size.x <= width + 1.0, "{panel:?}");
         assert!(board.view.view(&cx, ids!(board_scroll)).visible());
-        assert!((panel.pos.x + panel.size.x * 0.5 - width * 0.5).abs() < 1.0, "{panel:?}");
-        assert!((panel.pos.y + panel.size.y * 0.5 - 380.0).abs() < 1.0, "{panel:?}");
+        assert!(
+            (panel.pos.x + panel.size.x * 0.5 - width * 0.5).abs() < 1.0,
+            "{panel:?}"
+        );
+        assert!(
+            (panel.pos.y + panel.size.y * 0.5 - 380.0).abs() < 1.0,
+            "{panel:?}"
+        );
         assert!(panel.size.x <= 760.0 && panel.size.y < 760.0, "{panel:?}");
-        assert_eq!(board.view.view(&cx, ids!(board_scroll)).area().rect(&cx).size, rect.size);
+        assert_eq!(
+            board
+                .view
+                .view(&cx, ids!(board_scroll))
+                .area()
+                .rect(&cx)
+                .size,
+            rect.size
+        );
         let scrim = board.draw_dialog_bg.area().rect(&cx);
         assert_eq!(scrim.pos, dvec2(0.0, 0.0));
         assert_eq!(scrim.size, dvec2(width, 760.0));
-        assert!(board.draw_dialog_bg.color.w > 0.3, "the backdrop must visibly dim the application");
+        assert!(
+            board.draw_dialog_bg.color.w > 0.3,
+            "the backdrop must visibly dim the application"
+        );
     }
 }
 #[test]
@@ -166,6 +185,7 @@ fn kanban_conflicts_preserve_draft_and_unknown_saves_preserve_the_original_inten
     let action = BoardAction::Update {
         task: "task_one".into(),
         input: Update {
+            state: None,
             idempotency_key: "original-intent".into(),
             expected_version: 1,
             fields: board.fields(&mut cx),
@@ -456,6 +476,7 @@ fn kanban_dynamic_columns_and_nested_item_drafts_survive_conflicts() {
     board.pending = Some(BoardAction::Update {
         task: "child".into(),
         input: Update {
+            state: None,
             idempotency_key: "checklist-original".into(),
             expected_version: 1,
             fields: wire,
@@ -736,17 +757,17 @@ fn kanban_priority_badges_and_loading_feedback_follow_visual_state() {
         .portal_list(&cx, ids!(cards))
         .item(&mut cx, 0, id!(Card));
     let mut task = task("task_todo", "todo");
-    interaction::fill_card(&mut cx, &card, &task, false, false, false);
+    interaction::fill_card(&mut cx, &card, &task, false, false, false, None);
     assert!(card.view(&cx, ids!(priority_badge)).visible());
 
     task.priority = "normal".into();
-    interaction::fill_card(&mut cx, &card, &task, false, false, false);
+    interaction::fill_card(&mut cx, &card, &task, false, false, false, None);
     assert!(!card.view(&cx, ids!(priority_badge)).visible());
 
     task.priority = "urgent".into();
-    interaction::fill_card(&mut cx, &card, &task, false, false, false);
+    interaction::fill_card(&mut cx, &card, &task, false, false, false, None);
     assert!(card.view(&cx, ids!(priority_badge)).visible());
-    interaction::fill_card(&mut cx, &card, &task, false, false, true);
+    interaction::fill_card(&mut cx, &card, &task, false, false, true, None);
     assert!(card.view(&cx, ids!(priority_badge)).visible());
     let badge = card.view(&cx, ids!(priority_badge));
     let mut color = [0.0; 4];
@@ -756,7 +777,7 @@ fn kanban_priority_badges_and_loading_feedback_follow_visual_state() {
         .draw_bg
         .get_instance(&mut cx, id!(color), &mut color);
     assert_eq!(color[3], 0.0, "the lifted source badge must be transparent");
-    interaction::fill_card(&mut cx, &card, &task, false, false, false);
+    interaction::fill_card(&mut cx, &card, &task, false, false, false, None);
     badge
         .borrow()
         .unwrap()
@@ -1029,9 +1050,9 @@ fn unchanged_overdue_card_does_not_schedule_another_frame() {
         .view(&cx, column_path(0))
         .portal_list(&cx, ids!(cards))
         .item(&mut cx, 0, id!(Card));
-    interaction::fill_card(&mut cx, &card, &task, false, false, false);
+    interaction::fill_card(&mut cx, &card, &task, false, false, false, None);
     cx.new_draw_event = DrawEvent::default();
-    interaction::fill_card(&mut cx, &card, &task, false, false, false);
+    interaction::fill_card(&mut cx, &card, &task, false, false, false, None);
     assert!(
         !cx.new_draw_event.redraw_all && cx.new_draw_event.draw_lists.is_empty(),
         "An unchanged card must not redraw itself forever"
@@ -1097,6 +1118,7 @@ fn editable_followup_task() -> (Cx, ProjectBoard) {
     populate(&mut board);
     let parent = task("parent", "todo");
     board.selected = Some(parent.clone());
+    board.draft_state = parent.state.clone();
     board.detail_loaded = true;
     board.fill_editor(&mut cx, parent.fields());
     board.open_inspector(&mut cx);
@@ -1244,4 +1266,100 @@ fn clean_subtask_creation_is_immediate_and_comment_ack_does_not_close_editor() {
     board.apply_saved(&mut cx, &done);
     assert!(board.view.view(&cx, ids!(inspector)).visible());
     assert_eq!(board.selected.as_ref().unwrap().id, "parent");
+}
+
+#[test]
+fn save_submits_status_and_retains_draft_until_matching_state_receipt() {
+    let (mut cx, mut board) = editable_followup_task();
+    board.draft_state = "in_progress".into();
+    board.dirty = true;
+    board.save_task(&mut cx);
+    let Some(BoardAction::Update { input, .. }) = &board.pending else {
+        panic!("expected task update")
+    };
+    assert_eq!(input.state.as_deref(), Some("in_progress"));
+    assert_eq!(input.expected_version, 1);
+    let intent = serde_json::to_value(&board.pending).unwrap();
+    // A stale/wrong response cannot silently discard the changed status.
+    let done = followup_saved(&board, Ok(json!({"task":task_value("parent", "todo")})));
+    board.apply_saved(&mut cx, &done);
+    assert!(board.dirty && board.view.view(&cx, ids!(inspector)).visible());
+    assert_eq!(serde_json::to_value(&board.pending).unwrap(), intent);
+    let done = followup_saved(
+        &board,
+        Ok(json!({"task":task_value("parent", "in_progress")})),
+    );
+    board.apply_saved(&mut cx, &done);
+    assert!(board.pending.is_none() && !board.view.view(&cx, ids!(inspector)).visible());
+}
+
+#[test]
+fn archived_columns_leave_status_choices_and_lock_cards_without_losing_tasks() {
+    let (mut cx, mut board) = editable_followup_task();
+    board.snapshot.as_mut().unwrap().lanes[0].archived = true;
+    board.sync_column_labels(&mut cx);
+    assert_eq!(board.status_state(0), "in_progress");
+    assert_eq!(board.status_index("todo"), None);
+    assert!(board.selected_column_archived());
+    board.sync_controls(&mut cx);
+    assert!(board.view.widget(&cx, ids!(title)).disabled(&cx));
+    assert_eq!(board.snapshot.as_ref().unwrap().lanes[0].tasks.len(), 1);
+    board.snapshot.as_mut().unwrap().lanes[0].archived = false;
+    board.sync_column_labels(&mut cx);
+    board.sync_controls(&mut cx);
+    assert_eq!(board.status_state(0), "todo");
+    assert!(!board.view.widget(&cx, ids!(title)).disabled(&cx));
+}
+
+#[test]
+fn column_reordering_carries_archived_columns_and_uses_snapshot_sequence() {
+    let (mut cx, mut board) = panel();
+    populate(&mut board);
+    board.snapshot.as_mut().unwrap().lanes[2].archived = true;
+    board.reorder_column(&mut cx, 3, 0);
+    let Some(BoardAction::ConfigureColumns { input }) = &board.pending else {
+        panic!("expected ordered columns")
+    };
+    assert_eq!(input.expected_sequence, 1);
+    assert_eq!(
+        input
+            .columns
+            .iter()
+            .map(|c| c.id.as_str())
+            .collect::<Vec<_>>(),
+        ["in_review", "todo", "in_progress", "blocked", "done"]
+    );
+    assert!(input.columns[3].archived);
+}
+
+#[test]
+fn display_names_disambiguate_members_and_clearing_conflict_clears_notice() {
+    let (mut cx, mut board) = panel();
+    populate(&mut board);
+    board
+        .member_names
+        .insert("@alice:test".into(), "Design".into());
+    board
+        .member_names
+        .insert("@bob:test".into(), "Design".into());
+    assert_eq!(board.member_choice("@alice:test"), "Design (@alice:test)");
+    assert_eq!(board.member_name("@unknown:test"), "unknown");
+    board.conflict = true;
+    board.notice(&mut cx, "Old conflict");
+    board.conflict = false;
+    board.select(&mut cx, &task("latest", "todo"));
+    assert_eq!(board.view.label(&cx, ids!(notice)).text(), "");
+}
+
+#[test]
+fn unchanged_parent_binding_cannot_keep_a_hidden_or_visible_board_redrawing() {
+    for active in [false,true] {
+        let (mut cx, mut board) = panel();
+        populate(&mut board);
+        draw(&mut cx, &mut board, 1500.0, 760.0);
+        board.active = active;
+        cx.new_draw_event = DrawEvent::default();
+        board.bind(&mut cx, "account", Some("p1"), active);
+        assert!(!cx.new_draw_event.redraw_all && cx.new_draw_event.draw_lists.is_empty());
+    }
 }

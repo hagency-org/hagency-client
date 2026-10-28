@@ -53,6 +53,7 @@ impl ProjectBoard {
             BoardAction::Update {
                 task: parent.id,
                 input: Update {
+                    state: Some(self.draft_state.clone()),
                     idempotency_key,
                     fields,
                     expected_version: parent.version,
@@ -70,6 +71,28 @@ impl ProjectBoard {
             .map(|l| l.state.clone())
             .unwrap_or_else(|| "todo".into())
     }
+    pub(super) fn status_state(&self, index: usize) -> String {
+        self.snapshot
+            .as_ref()
+            .and_then(|s| s.lanes.iter().filter(|l| !l.archived).nth(index))
+            .map(|l| l.state.clone())
+            .unwrap_or_default()
+    }
+    pub(super) fn status_index(&self, state: &str) -> Option<usize> {
+        self.snapshot
+            .as_ref()?
+            .lanes
+            .iter()
+            .filter(|l| !l.archived)
+            .position(|l| l.state == state)
+    }
+    pub(super) fn selected_column_archived(&self) -> bool {
+        self.selected.as_ref().is_some_and(|task| {
+            self.snapshot
+                .as_ref()
+                .is_some_and(|s| s.lanes.iter().any(|l| l.state == task.state && l.archived))
+        })
+    }
     pub(super) fn sync_column_labels(&mut self, cx: &mut Cx) {
         let Some(snapshot) = &self.snapshot else {
             return;
@@ -77,31 +100,27 @@ impl ProjectBoard {
         let labels: Vec<_> = snapshot
             .lanes
             .iter()
+            .filter(|l| !l.archived)
             .map(|l| column_title(&l.title))
             .collect();
         for id in [ids!(new_status), ids!(move_state)] {
             self.view.drop_down(cx, id).set_labels(cx, labels.clone());
-        }
-        if self.creating
-            && let Some(index) = snapshot
-                .lanes
-                .iter()
-                .position(|l| l.state == self.draft_state)
-        {
             self.view
-                .drop_down(cx, ids!(new_status))
-                .set_selected_item(cx, index);
+                .drop_down(cx, id)
+                .set_selected_item(cx, self.status_index(&self.draft_state).unwrap_or(0));
+        }
+        if self.selected_column_archived()
+            && let Some(lane) = self.selected.as_ref().and_then(|task| snapshot.lanes.iter().find(|l| l.state == task.state))
+        {
+            self.view.drop_down(cx, ids!(move_state)).set_labels(cx, vec![format!("{} · {}", column_title(&lane.title), tr("Archived"))]);
+            self.view.drop_down(cx, ids!(move_state)).set_selected_item(cx, 0);
         }
         let mut filter = vec![tr("All statuses").into()];
         filter.extend(labels);
         self.view
             .drop_down(cx, ids!(filter_state))
             .set_labels(cx, filter);
-        let index = self
-            .query
-            .state
-            .as_ref()
-            .and_then(|q| snapshot.lanes.iter().position(|l| l.state == *q));
+        let index = self.query.state.as_ref().and_then(|q| self.status_index(q));
         if self.query.state.is_some() && index.is_none() {
             self.query.state = None;
         }
@@ -109,7 +128,7 @@ impl ProjectBoard {
             .drop_down(cx, ids!(filter_state))
             .set_selected_item(cx, index.map_or(0, |i| i + 1));
     }
-    fn show_column_form(&mut self, cx: &mut Cx) {
+    pub(super) fn show_column_form(&mut self, cx: &mut Cx) {
         let Some(columns) = &self.columns_draft else {
             return;
         };
@@ -122,7 +141,18 @@ impl ProjectBoard {
             columns
                 .iter()
                 .enumerate()
-                .map(|(i, c)| format!("{}. {}", i + 1, column_title(&c.title)))
+                .map(|(i, c)| {
+                    format!(
+                        "{}. {}{}",
+                        i + 1,
+                        column_title(&c.title),
+                        if c.archived {
+                            format!(" · {}", tr("Archived"))
+                        } else {
+                            String::new()
+                        }
+                    )
+                })
                 .collect(),
         );
         self.view
@@ -138,6 +168,14 @@ impl ProjectBoard {
         self.view
             .check_box(cx, ids!(column_done))
             .set_active(cx, column.is_done, Animate::No);
+        self.view.button(cx, ids!(archive_column)).set_text(
+            cx,
+            tr(if column.archived {
+                "Restore column"
+            } else {
+                "Archive column"
+            }),
+        );
         self.view.label(cx, ids!(columns_notice)).set_text(cx, "");
     }
     fn capture_column_form(&mut self, cx: &mut Cx) -> bool {
@@ -173,7 +211,10 @@ impl ProjectBoard {
         true
     }
     pub(super) fn handle_extensions(&mut self, cx: &mut Cx, actions: &Actions) {
-        if self.view.button(cx, ids!(manage_columns)).clicked(actions) && self.pending.is_none() {
+        if (self.view.button(cx, ids!(manage_columns)).clicked(actions)
+            || self.view.button(cx, ids!(new_column)).clicked(actions))
+            && self.pending.is_none()
+        {
             if self.dirty || self.quick_create_state.is_some() {
                 self.notice(
                     cx,
@@ -186,6 +227,7 @@ impl ProjectBoard {
                         .lanes
                         .iter()
                         .map(|l| ColumnDefinition {
+                            archived: l.archived,
                             id: l.state.clone(),
                             title: l.title.clone(),
                             wip_limit: l.wip_limit,
@@ -200,9 +242,24 @@ impl ProjectBoard {
                     .view(cx, ids!(column_settings))
                     .set_visible(cx, true);
                 self.show_column_form(cx);
+                if self.view.button(cx, ids!(new_column)).clicked(actions) {
+                    self.append_column(cx);
+                }
             }
         }
         if self.columns_draft.is_some() && self.pending.is_none() {
+            if self.view.button(cx, ids!(archive_column)).clicked(actions)
+                && self.capture_column_form(cx)
+            {
+                if let Some(c) = self
+                    .columns_draft
+                    .as_mut()
+                    .and_then(|c| c.get_mut(self.column_edit))
+                {
+                    c.archived = !c.archived;
+                }
+                self.show_column_form(cx);
+            }
             if self.view.button(cx, ids!(rebase_columns)).clicked(actions) {
                 if let Some(snapshot) = &self.snapshot {
                     self.columns_sequence = snapshot.sequence;
@@ -243,25 +300,7 @@ impl ProjectBoard {
             } else if self.view.button(cx, ids!(add_column)).clicked(actions)
                 && self.capture_column_form(cx)
             {
-                let columns = self.columns_draft.as_mut().unwrap();
-                if columns.len() < 12 {
-                    let mut i = 1;
-                    let title = loop {
-                        let title = format!("{} {}", tr("New column"), i);
-                        if columns.iter().all(|c| c.title != title) {
-                            break title;
-                        }
-                        i += 1;
-                    };
-                    columns.push(ColumnDefinition {
-                        id: format!("col_{}", uuid::Uuid::new_v4().simple()),
-                        title,
-                        wip_limit: None,
-                        is_done: false,
-                    });
-                    self.column_edit = columns.len() - 1;
-                    self.show_column_form(cx);
-                }
+                self.append_column(cx);
             } else if self.view.button(cx, ids!(remove_column)).clicked(actions)
                 && self.capture_column_form(cx)
             {
@@ -464,11 +503,14 @@ impl ProjectBoard {
         self.view
             .button(cx, ids!(add_subtask))
             .set_board_enabled(cx, editable && self.subtasks.len() < 100);
-        self.view.button(cx, ids!(add_subtask)).set_text(cx, tr(if self.dirty {
-            "Save and add subtask"
-        } else {
-            "Add subtask"
-        }));
+        self.view.button(cx, ids!(add_subtask)).set_text(
+            cx,
+            tr(if self.dirty {
+                "Save and add subtask"
+            } else {
+                "Add subtask"
+            }),
+        );
         self.view
             .button(cx, ids!(open_parent))
             .set_board_enabled(cx, !writing && !self.dirty);
@@ -593,7 +635,7 @@ impl ProjectBoard {
                 } else {
                     task.assignee_mxid
                         .as_deref()
-                        .map(member_label)
+                        .map(|id| self.member_name(id))
                         .unwrap_or_else(|| tr("Unassigned"))
                 };
                 row.label(cx, ids!(child_status))

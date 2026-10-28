@@ -5920,20 +5920,21 @@ async fn timeline_subscriber_handler(
     let room_id = timeline.room().room_id().to_owned();
     log!("Starting timeline subscriber for room {room_id}, thread {thread_root_event_id:?}...");
     let (mut timeline_items, mut subscriber) = timeline.subscribe().await;
+    let mut projection = TimelineProjection::default();
     log!("Received initial timeline update of {} items for room {room_id}, thread {thread_root_event_id:?}.", timeline_items.len());
 
     for event in timeline_items.iter().filter_map(|item|item.as_event()) {crate::agent_access::discovery::ingest(&timeline.room().client(), &room_id, event);}
     #[cfg(feature = "agent_chat")]
     for event in timeline_items.iter().filter_map(|item| item.as_event()) {crate::agent_chat::approval_runtime::ingest(&timeline.room().client(), &room_id, event);}
     if timeline_update_sender.send(TimelineUpdate::FirstUpdate {
-        initial_items: timeline_items.clone(),
+        initial_items: projection.initial(&timeline_items),
     }).is_err() {
         log!("Timeline for room {room_id}, thread {thread_root_event_id:?} was closed or recreated \
             before its first update; ending this subscriber task.");
         return;
     }
     if let Some(target) = window_anchor
-        && let Some(index) = timeline_items.iter().position(|item|item.as_event().is_some_and(|event|event.event_id()==Some(&target))) {
+        && let Some(index) = projection.items(&timeline_items).0.iter().position(|item|item.as_event().is_some_and(|event|event.event_id()==Some(&target))) {
         let _ = timeline_update_sender.send(TimelineUpdate::WindowAnchor {target,index});
     }
     SignalToUI::set_ui_signal();
@@ -5984,12 +5985,7 @@ async fn timeline_subscriber_handler(
             // changed while closed (otherwise the UI already has the current items).
             if now_open && !is_timeline_open && has_unsent_changes {
                 let len = timeline_items.len();
-                if timeline_update_sender.send(TimelineUpdate::NewItems {
-                    new_items: timeline_items.clone(),
-                    changed_indices: 0..len,
-                    clear_cache: true,
-                    is_append: false,
-                }).is_ok() {
+                if timeline_update_sender.send(projection.update(&timeline_items, 0..len, true, false)).is_ok() {
                     SignalToUI::set_ui_signal();
                 }
                 has_unsent_changes = false;
@@ -6021,7 +6017,7 @@ async fn timeline_subscriber_handler(
                         if timeline_update_sender.send(
                             TimelineUpdate::TargetEventFound {
                                 target_event_id: new_target_event_id.clone(),
-                                index: target_event_tl_index,
+                                index: projection.index(&timeline_items, target_event_tl_index),
                             }
                         ).is_err() {
                             log!("Timeline for room {room_id}, thread {thread_root_event_id:?} was closed \
@@ -6192,7 +6188,8 @@ async fn timeline_subscriber_handler(
                     }
                 }
             }
-            let is_progress_only = num_progress_updates == num_updates;
+            let is_progress_only = num_progress_updates == num_updates
+                && !projection.had_aliases && !projection.items(&timeline_items).1;
 
             if num_updates > 0 {
                 if !is_progress_only {
@@ -6229,12 +6226,7 @@ async fn timeline_subscriber_handler(
                             latest_progress_update = latest_progress_updates;
                             TimelineUpdate::LocalEchoProgress { new_items: timeline_items.clone() }
                         } else {
-                            TimelineUpdate::NewItems {
-                                new_items: timeline_items.clone(),
-                                changed_indices,
-                                clear_cache,
-                                is_append,
-                            }
+                            projection.update(&timeline_items, changed_indices, clear_cache, is_append)
                         };
                         if timeline_update_sender.send(update).is_err() {
                             log!("Timeline for room {room_id}, thread {thread_root_event_id:?} was closed \
@@ -6249,7 +6241,7 @@ async fn timeline_subscriber_handler(
                             if timeline_update_sender.send(
                                 TimelineUpdate::TargetEventFound {
                                     target_event_id: found_event_id.clone(),
-                                    index,
+                                    index: projection.index(&timeline_items, index),
                                 }
                             ).is_err() {
                                 log!("Timeline for room {room_id}, thread {thread_root_event_id:?} was closed \
@@ -6286,12 +6278,7 @@ async fn timeline_subscriber_handler(
             late_decryption_refresh_at = None;
             if is_timeline_open {
                 let len = timeline_items.len();
-                if timeline_update_sender.send(TimelineUpdate::NewItems {
-                    new_items: timeline_items.clone(),
-                    changed_indices: 0..len,
-                    clear_cache: true,
-                    is_append: false,
-                }).is_err() {
+                if timeline_update_sender.send(projection.update(&timeline_items, 0..len, true, false)).is_err() {
                     log!("Timeline for room {room_id}, thread {thread_root_event_id:?} was closed \
                         or recreated; ending this subscriber task.");
                     return;
@@ -6867,5 +6854,83 @@ mod focus_lifetime_tests {
         assert!(matches!(build_in_timeline_window(receiver, build, std::time::Duration::from_millis(1)).await, Some(Err(_))));
         assert!(weak.upgrade().is_none());
         drop(requests);
+    }
+}
+
+/// Keep raw SDK positions separate from the native presentation's event identity.
+#[derive(Default)]
+struct TimelineProjection {
+    had_aliases: bool,
+}
+impl TimelineProjection {
+    fn items(&self, raw: &Vector<Arc<TimelineItem>>) -> (Vector<Arc<TimelineItem>>, bool) {
+        crate::timeline_projection::unique(raw, |item| {
+            let event = item.as_event()?;
+            if let Some(id) = event.event_id() {
+                Some((
+                    format!("event:{id}"),
+                    if event.is_remote_event() {
+                        if event.content().is_unable_to_decrypt() { 2 } else { 3 }
+                    } else { 1 },
+                ))
+            } else {
+                event.transaction_id().map(|id| (format!("txn:{id}"), 1))
+            }
+        })
+    }
+    fn initial(&mut self, raw: &Vector<Arc<TimelineItem>>) -> Vector<Arc<TimelineItem>> {
+        let (items, aliases) = self.items(raw);
+        self.had_aliases = aliases;
+        if aliases {
+            warning!(
+                "SDK timeline replay aliases normalized: {} raw rows, {} unique rows",
+                raw.len(),
+                items.len()
+            );
+        }
+        items
+    }
+    fn update(
+        &mut self,
+        raw: &Vector<Arc<TimelineItem>>,
+        changed: std::ops::Range<usize>,
+        clear_cache: bool,
+        is_append: bool,
+    ) -> TimelineUpdate {
+        let (items, aliases) = self.items(raw);
+        let reindex = aliases || self.had_aliases;
+        if aliases && !self.had_aliases {
+            warning!(
+                "SDK timeline replay aliases normalized: {} raw rows, {} unique rows",
+                raw.len(),
+                items.len()
+            );
+        }
+        self.had_aliases = aliases;
+        let len = items.len();
+        TimelineUpdate::NewItems {
+            new_items: items,
+            changed_indices: if reindex { 0..len } else { changed },
+            clear_cache: clear_cache || reindex,
+            is_append,
+        }
+    }
+    fn index(&self, raw: &Vector<Arc<TimelineItem>>, index: usize) -> usize {
+        let Some(item) = raw.get(index) else {
+            return index;
+        };
+        let projected = self.items(raw).0;
+        projected
+            .iter()
+            .position(|row| {
+                match (
+                    item.as_event().and_then(|e| e.event_id()),
+                    row.as_event().and_then(|e| e.event_id()),
+                ) {
+                    (Some(a), Some(b)) => a == b,
+                    _ => item.unique_id() == row.unique_id(),
+                }
+            })
+            .unwrap_or(index)
     }
 }

@@ -251,10 +251,18 @@ struct LoadedProjects {
     result: Result<ProjectTreeSnapshot, String>,
 }
 
-#[derive(Script, ScriptHook, Widget)]
+use crate::theme::Snapshot as TreeAppearance;
+
+type RowStyles = HashMap<WidgetUid, (Vec4f, bool)>;
+
+#[derive(Script, Widget)]
 pub struct ProjectTree {
     #[deref]
     view: View,
+    #[rust]
+    appearance: TreeAppearance,
+    #[rust]
+    row_styles: RowStyles,
     #[rust]
     snapshot: Option<ProjectTreeSnapshot>,
     #[rust]
@@ -283,6 +291,12 @@ pub struct ProjectTree {
     identity: Option<String>,
     #[rust]
     error: Option<String>,
+}
+impl ScriptHook for ProjectTree {
+    fn on_after_apply(&mut self, vm: &mut ScriptVm, _: &Apply, _: &mut Scope, _: ScriptValue) {
+        self.appearance = crate::theme::snapshot_for_vm(vm);
+        self.row_styles.clear();
+    }
 }
 impl ProjectTree {
     fn handle_row_actions(&mut self, cx: &mut Cx, captured: &Actions) {
@@ -528,10 +542,14 @@ impl ProjectTree {
         });
     }
     fn rebuild(&mut self, cx: &mut Cx) {
+        self.rebuild_if_changed(cx);
+        self.redraw(cx);
+    }
+    fn rebuild_if_changed(&mut self, cx: &mut Cx) {
         if self.snapshot.as_ref().is_some_and(|s| !snapshot_current(s)) {
             self.clear(cx);
         }
-        self.rooms = if cx.has_global::<RoomsListRef>() {
+        let rooms = if cx.has_global::<RoomsListRef>() {
             {
                 let list = cx.get_global::<RoomsListRef>().clone();
                 list.project_tree_rooms(cx)
@@ -539,17 +557,23 @@ impl ProjectTree {
         } else {
             Vec::new()
         };
-        self.rows = workspace_rows(
+        let rows = workspace_rows(
             self.mode,
             self.snapshot
                 .as_ref()
                 .map(|s| s.projects.as_slice())
                 .unwrap_or_default(),
-            &self.rooms,
+            &rooms,
             &self.expanded,
             &self.query,
         );
-        self.redraw(cx);
+        let changed = rows != self.rows || rooms.len() != self.rooms.len()
+            || rooms.iter().zip(&self.rooms).any(|(a, b)| a.name.room_id() != b.name.room_id()
+                || a.name.display() != b.name.display() || a.unread != b.unread || a.marked != b.marked
+                || a.invited != b.invited || a.is_direct != b.is_direct || a.is_favorite != b.is_favorite);
+        self.rooms = rooms;
+        self.rows = rows;
+        if changed { self.redraw(cx); }
     }
 }
 fn snapshot_current(snapshot: &ProjectTreeSnapshot) -> bool {
@@ -628,7 +652,7 @@ impl Widget for ProjectTree {
             }
         }
         if self.active && (self.timer.is_event(event).is_some() || matches!(event, Event::Signal)) {
-            self.rebuild(cx);
+            self.rebuild_if_changed(cx);
             self.refresh_ready_account(cx);
             if self.timer.is_event(event).is_some() {
                 self.refresh(cx);
@@ -651,7 +675,7 @@ impl Widget for ProjectTree {
                     .as_ref()
                     .map(|room| room.room_id().clone())
             });
-        let selection_color = crate::theme::snapshot(cx).selected;
+        let selection_color = self.appearance.selected;
         while let Some(widget) = self.view.draw_walk(cx, scope, walk).step() {
             let Some(mut list) = widget.borrow_mut::<PortalList>() else {
                 continue;
@@ -667,9 +691,7 @@ impl Widget for ProjectTree {
                 let item = list.item(cx, index, id!(Row));
                 let row_selected = matches!(row,Row::Room(id)|Row::Invite(id) if selected.as_ref()==Some(id));
                 item.navigation_bar_button(cx, ids!(row)).set_selected(cx, row_selected);
-                let mut surface = item.view(cx, ids!(row_surface));
                 let background = if row_selected {selection_color} else {Vec4f::default()};
-                script_apply_eval!(cx, surface, {draw_bg.color: #(background)});
                 let project = if let Row::Project(id) = row {
                     self.snapshot
                         .as_ref()
@@ -700,7 +722,13 @@ impl Widget for ProjectTree {
                     .is_some_and(|p| self.expanded.contains(&p.id) || !self.query.is_empty());
                 let mut indent = item.view(cx, ids!(indent));
                 indent.set_visible(cx, room.is_some());
-                script_apply_eval!(cx, indent, {width: #(if room.is_some() {18.0} else {0.0})});
+                let style = (background, room.is_some());
+                if self.row_styles.get(&item.widget_uid()) != Some(&style) {
+                    self.row_styles.insert(item.widget_uid(), style);
+                    let mut surface = item.view(cx, ids!(row_surface));
+                    script_apply_eval!(cx, surface, {draw_bg.color: #(background)});
+                    script_apply_eval!(cx, indent, {width: #(if room.is_some() {18.0} else {0.0})});
+                }
                 item.label(cx, ids!(name)).set_text(cx, &text);
                 item.button(cx, ids!(more))
                     .set_visible(cx, project.is_some() || matches!(row, Row::Room(_)));

@@ -138,7 +138,12 @@ impl ProjectBoard {
                     .iter()
                     .any(|l| l.state == drag.task.state && l.is_done)
             });
-            super::interaction::fill_card(cx, &card, &drag.task, is_done, true, false);
+            super::interaction::fill_card(cx, &card, &drag.task, is_done, true, false,
+                drag.task
+                    .assignee_mxid
+                    .as_deref()
+                    .map(|id| self.member_name(id)),
+            );
             // Keep the exact pointer-to-card offset; the card never jumps to a
             // tooltip offset or moves away from the mouse near the window edge.
             preview.show_with_options(cx, pos, "");

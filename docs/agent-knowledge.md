@@ -5700,3 +5700,11 @@ PR #8 审查及验证记录见 `dev-vibe/pr-8-board-ux-review-2026-10-25.zh.md`�
 第二原生实例需要独立应用身份和 HAGENCY_APP_DATA_DIR；资源必须来自同一来源验证构建。LaunchServices 默认 cwd 为 /，手动复制 app 后直接启动可能卡在资源读取；沿用 Makepad 开发启动的工作目录握手。不要复制主用户 SDK 会话，也不要把 fixture 的两账号结果当真实 Pasion/Matrix 多人验收。真实普通账号已跑通 Space/Room 分别邀请、看板和评论/聊天/附件/重启；详细脱敏结果见 dev-vibe/two-user-project-validation-2026-10-28.zh.md。
 
 当前已有任务 Status 下拉框是 move_state，只有 Move to top/bottom 执行移动；Save 的干净草稿分支会关闭并忽略目标选择，属于易误操作的交互缺口。另已实测原生 B 重启后同一文件消息两行而 Server /messages 只有一个唯一事件，排查历史恢复/去重时须保留事件 ID 证据，不要误判为重复发送。reload_latest 重选任务后也须清理旧冲突 notice。
+
+## 2026-10-28：看板 v4 与全局 Signal 重绘
+
+Status 必须属于保存草稿并由 Server 单事务写入，不能仍只作 Move 目标。列归档是可恢复配置，保留卡片；更新/移动/评论等写入均须拒绝已归档列，Client 与 Server 一起升级 project-board-v4。Space 授权状态可同时提供当前成员展示名，授权仍用 MXID。
+
+SDK 恢复 timeline 可包含同一事件多个句柄。保留原始 Vector 的全部位置以应用 VectorDiff，仅发布按事件/事务 ID 唯一化的 UI 投影，锚点和缓存区间随之重映射；禁止按正文去重。真实双端已验证同一个文件一行、两个相同正文的独立事件两行。
+
+全局 Event::Signal 也来自资源/工作池完成，并不意味着本组件内容变化；隐藏面板也可能收到它。项目树、账号栏、聊天信息/移动端/历史页和更新覆盖层无条件重绘会形成约120fps空闲循环。仅实际数据变化刷新，资料缓存批量应用后统一失效；稳定样式/导航缓存不应每事件重建。HAGENCY_UI_IDLE_TRACE=1 可观察 debug 绘制/动画/Actions 计数。最终双端15秒空闲 CPU 时间差约6.3%/8.1%，不是 release 性能结论。

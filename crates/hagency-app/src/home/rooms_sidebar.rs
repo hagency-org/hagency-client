@@ -164,9 +164,13 @@ pub struct RoomsSideBar {
     #[rust]
     applied_view_mode: ViewModeOverride,
     #[rust] selected_primary: Option<LiveId>,
+    #[rust] painted_collapsed: Option<bool>,
 }
 
 impl ScriptHook for RoomsSideBar {
+    fn on_after_apply(&mut self, _vm: &mut ScriptVm, _: &Apply, _: &mut Scope, _: ScriptValue) {
+        self.painted_collapsed = None;
+    }
     fn on_after_new(&mut self, vm: &mut ScriptVm) {
         vm.with_cx_mut(|cx| {
             // Here we set the global singleton for the RoomsList widget,
@@ -353,9 +357,12 @@ impl Widget for RoomsSideBar {
             button.set_tooltip_text(crate::i18n::tr(if collapsed {"Expand sidebar"} else {"Collapse sidebar"}));
             button.walk.width = Size::Fixed(if collapsed {44.0} else {32.0});
         }
-        let mut icon = self.view.icon(cx, ids!(fold_icon));
-        if collapsed {script_apply_eval!(cx, icon, {draw_icon.svg: mod.widgets.ICON_CHEVRON_RIGHT});}
-        else {script_apply_eval!(cx, icon, {draw_icon.svg: mod.widgets.ICON_CHEVRON_LEFT});}
+        if self.painted_collapsed != Some(collapsed) {
+            self.painted_collapsed = Some(collapsed);
+            let mut icon = self.view.icon(cx, ids!(fold_icon));
+            if collapsed {script_apply_eval!(cx, icon, {draw_icon.svg: mod.widgets.ICON_CHEVRON_RIGHT});}
+            else {script_apply_eval!(cx, icon, {draw_icon.svg: mod.widgets.ICON_CHEVRON_LEFT});}
+        }
         for id in [id!(open_projects),id!(open_agents),id!(open_chats),id!(open_contacts),id!(open_miniapps),id!(more),id!(open_settings)] {
             self.view.navigation_bar_button(cx, &[id]).label(cx, ids!(label)).set_visible(cx, !collapsed);
         }
@@ -451,6 +458,24 @@ mod layout_tests {
                 child.children(&mut |_, child| nested.push(child));
                 collect_widgets::<T>(nested, result);
             }
+        }
+    }
+
+    #[test]
+    fn unchanged_navigation_selection_does_not_apply_or_schedule_another_frame() {
+        let mut cx=Cx::new(Box::new(|_,_|{}));
+        let mut button=cx.with_vm(|vm| {
+            makepad_widgets::script_mod(vm);crate::app::register_widgets(vm);
+            let value=script_eval!(vm,{mod.widgets.NavigationBarButton {width:80 height:32}});
+            crate::shared::navigation_bar_button::NavigationBarButton::script_from_value(vm,value)
+        });
+        draw_sized(&mut cx,&mut button,&mut AppState::default(),80.0,32.0);
+        for selected in [true,false] {
+            button.set_selected(&mut cx,selected);
+            cx.new_draw_event=DrawEvent::default();
+            button.set_selected(&mut cx,selected);
+            assert!(!cx.new_draw_event.redraw_all && cx.new_draw_event.draw_lists.is_empty());
+            assert!(button.animator_in_state(&cx,if selected {ids!(active.on)} else {ids!(active.off)}));
         }
     }
 

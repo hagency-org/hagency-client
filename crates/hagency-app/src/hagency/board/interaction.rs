@@ -19,6 +19,7 @@ impl Widget for ProjectBoard {
             cx.stop_timer(self.timer);
             return;
         }
+        self.handle_column_drag(cx, event);
         match event {
             Event::WindowLostFocus(_) => {
                 self.cancel_drag(cx);
@@ -31,8 +32,10 @@ impl Widget for ProjectBoard {
                     self.load(cx);
                 }
             }
-            Event::KeyDown(e) if e.key_code == KeyCode::Escape
-                && !self.view.view(cx, ids!(inspector)).visible() => {
+            Event::KeyDown(e)
+                if e.key_code == KeyCode::Escape
+                    && !self.view.view(cx, ids!(inspector)).visible() =>
+            {
                 self.close_calendar(cx);
                 if self.pending.is_none() {
                     self.clear_quick_create(cx);
@@ -275,13 +278,25 @@ impl Widget for ProjectBoard {
         }
         if self
             .view
+            .drop_down(cx, ids!(move_state))
+            .changed(actions)
+            .is_some()
+            && !self.creating
+        {
+            self.draft_state =
+                self.status_state(self.view.drop_down(cx, ids!(move_state)).selected_item());
+            self.dirty = true;
+            self.discard_armed = false;
+        }
+        if self
+            .view
             .drop_down(cx, ids!(new_status))
             .changed(actions)
             .is_some()
             && self.creating
         {
             self.draft_state =
-                self.column_state(self.view.drop_down(cx, ids!(new_status)).selected_item());
+                self.status_state(self.view.drop_down(cx, ids!(new_status)).selected_item());
             self.dirty = true;
             self.discard_armed = false;
         }
@@ -348,13 +363,7 @@ impl Widget for ProjectBoard {
                         .drop_down(cx, ids!(filter_state))
                         .selected_item()
                         .checked_sub(1)
-                        .and_then(|i| {
-                            self.snapshot
-                                .as_ref()?
-                                .lanes
-                                .get(i)
-                                .map(|l| l.state.clone())
-                        }),
+                        .map(|i| self.status_state(i)),
                     query: if search.trim().is_empty() {
                         None
                     } else {
@@ -406,7 +415,7 @@ impl Widget for ProjectBoard {
                 );
             } else if let Some(task) = self.selected.clone() {
                 let state =
-                    self.column_state(self.view.drop_down(cx, ids!(move_state)).selected_item());
+                    self.status_state(self.view.drop_down(cx, ids!(move_state)).selected_item());
                 let position = if self.view.button(cx, ids!(move_top)).clicked(actions) {
                     Position::Prepend
                 } else {
@@ -479,7 +488,6 @@ impl Widget for ProjectBoard {
                     },
                 );
             }
-
         }
         self.sync_controls(cx);
     }
@@ -532,7 +540,7 @@ impl Widget for ProjectBoard {
                         .state
                         .as_ref()
                         .is_none_or(|filter| filter == state)
-                        && lane.is_some(),
+                        && lane.is_some_and(|l| !l.archived),
                 );
                 column.label(cx, ids!(heading)).set_text(
                     cx,
@@ -659,6 +667,7 @@ impl Widget for ProjectBoard {
                         lane.is_some_and(|l| l.is_done),
                         self.selected.as_ref().is_some_and(|t| t.id == task.id),
                         lifted,
+                        task.assignee_mxid.as_deref().map(|id| self.member_name(id)),
                     );
                     card.draw_all(cx, scope);
                     self.card_areas.insert(task.id.clone(), card.area());
@@ -759,10 +768,11 @@ pub(super) fn fill_card(
     is_done: bool,
     selected: bool,
     lifted: bool,
+    assignee_name: Option<&str>,
 ) {
     if let Some(mut inner) = card.borrow_mut::<KanbanCard>() {
         let key = format!(
-            "{task:?}:{is_done}:{selected}:{lifted}:{}:{:?}:{}",
+            "{task:?}:{is_done}:{selected}:{lifted}:{assignee_name:?}:{}:{:?}:{}",
             inner.focused,
             crate::i18n::language(),
             chrono::Utc::now().date_naive()
@@ -815,7 +825,7 @@ pub(super) fn fill_card(
         cx,
         task.assignee_mxid
             .as_deref()
-            .map(member_label)
+            .map(|id| assignee_name.unwrap_or_else(|| member_label(id)))
             .unwrap_or_else(|| tr("Unassigned")),
     );
     let overdue = task

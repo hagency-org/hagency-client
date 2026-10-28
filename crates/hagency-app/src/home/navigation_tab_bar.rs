@@ -378,7 +378,7 @@ impl Widget for ProfileIcon {
             if self.own_profile.is_none() {
                 user_profile_cache::process_user_profile_updates(cx);
                 self.own_profile = get_own_profile(cx);
-                needs_redraw = true;
+                needs_redraw = self.own_profile.is_some();
             }
             // If we're waiting for an avatar image, process avatar updates.
             if let Some(p) = self.own_profile.as_mut() && p.avatar_state.uri().is_some() {
@@ -912,6 +912,17 @@ script_mod! {
 #[derive(Script, ScriptHook, Widget)]
 pub struct HagencyAccountBar {
     #[deref] view: View,
+    #[rust] drawn_identity: Option<Vec<String>>,
+}
+
+fn account_bar_identity(cx: &mut Cx) -> Vec<String> {
+    let profile = get_own_profile(cx);
+    let account = current_user_id();
+    let mxid = account.as_ref().map(|id| id.as_str()).unwrap_or("");
+    let name = profile.as_ref().map(|p| p.displayable_name())
+        .filter(|name| !name.is_empty() && *name != mxid)
+        .unwrap_or_else(|| account.as_ref().map(|id| id.localpart()).unwrap_or(""));
+    vec![mxid.to_owned(), name.to_owned()]
 }
 
 impl Widget for HagencyAccountBar {
@@ -925,7 +936,10 @@ impl Widget for HagencyAccountBar {
                 pos: dvec2(rect.pos.x, rect.pos.y),
             });
         }
-        if matches!(event, Event::Signal | Event::Actions(_)) {
+        if matches!(event, Event::Signal) {
+            user_profile_cache::process_user_profile_updates(cx);
+            if self.drawn_identity.as_ref() != Some(&account_bar_identity(cx)) { self.view.redraw(cx); }
+        } else if matches!(event, Event::Actions(_)) {
             self.view.redraw(cx);
         }
     }
@@ -940,16 +954,9 @@ impl Widget for HagencyAccountBar {
             button.walk.height = Size::Fixed(if collapsed {44.0} else {64.0});
             button.layout.padding = if collapsed {Inset{left:7.0,right:7.0,top:7.0,bottom:7.0}} else {Inset{left:8.0,right:8.0,top:6.0,bottom:6.0}};
         }
-        let profile = get_own_profile(cx);
-        let account = current_user_id();
-        let mxid = account.as_ref().map(|id| id.as_str()).unwrap_or("");
-        // When no display name is set, `displayable_name` falls back to the full
-        // user ID, duplicating the second line. Show the localpart instead.
-        let name = profile
-            .as_ref()
-            .map(|p| p.displayable_name())
-            .filter(|n| !n.is_empty() && *n != mxid)
-            .unwrap_or_else(|| account.as_ref().map(|id| id.localpart()).unwrap_or(""));
+        let identity = account_bar_identity(cx);
+        let mxid = identity[0].as_str();
+        let name = identity[1].as_str();
         if let Some(mut button) = self.view.navigation_bar_button(cx, ids!(account)).borrow_mut() {
             button.set_tooltip_text(if collapsed {format!("{name}\n{mxid}")} else {String::new()});
         }
@@ -958,6 +965,7 @@ impl Widget for HagencyAccountBar {
         if let Some(id) = current_user_id() {
             self.view.avatar(cx, ids!(avatar)).show_user_text(cx, &id, name);
         }
+        self.drawn_identity = Some(identity);
         self.view.draw_walk(cx, scope, walk)
     }
 }

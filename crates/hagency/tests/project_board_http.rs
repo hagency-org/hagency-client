@@ -108,6 +108,7 @@ async fn native_project_board_two_owners_share_durable_tasks_and_revocation() {
         .execute(command(BoardAction::Update {
             task: id.clone(),
             input: Update {
+                state: None,
                 idempotency_key: format!("{intent_prefix}-stale"),
                 expected_version: 1,
                 fields: Fields {
@@ -147,6 +148,7 @@ async fn native_project_board_two_owners_share_durable_tasks_and_revocation() {
         .lanes
         .iter()
         .map(|l| ColumnDefinition {
+            archived: false,
             id: l.state.clone(),
             title: l.title.clone(),
             wip_limit: l.wip_limit,
@@ -155,6 +157,7 @@ async fn native_project_board_two_owners_share_durable_tasks_and_revocation() {
         .collect();
     let custom = format!("verify_{intent_prefix}");
     columns.push(ColumnDefinition {
+        archived: false,
         id: custom.clone(),
         title: format!("Verify {intent_prefix}"),
         wip_limit: Some(1),
@@ -230,6 +233,7 @@ async fn native_project_board_two_owners_share_durable_tasks_and_revocation() {
         .execute(command(BoardAction::Update {
             task: child_id.clone(),
             input: Update {
+                state: None,
                 idempotency_key: format!("{intent_prefix}-checklist"),
                 expected_version: 1,
                 fields: changed.clone(),
@@ -293,6 +297,7 @@ async fn native_project_board_two_owners_share_durable_tasks_and_revocation() {
     bob.execute(command(BoardAction::Update {
         task: child_id,
         input: Update {
+            state: None,
             idempotency_key: format!("{intent_prefix}-independent"),
             expected_version: 3,
             fields: changed,

@@ -43,8 +43,18 @@ Cargo.lock 完整构建后端、管理前端和 Pasion 身份前端，再构建�
 `[account].password_registration_enabled` 后用 `restart` 生效。
 
 完整 Server 内包含 Pasion 登录、Palpo Matrix、Project、Agent 和看板 API；
-桌面登录后从“项目 → 项目详情 → 看板”进入。`project-board-v3` 是当前看板能力标识。
+桌面登录后从“项目 → 项目详情 → 看板”进入。`project-board-v4` 是当前看板能力标识。
 模型调用仍需在客户端配置自己的模型账号并显式启动 Agent。
+
+看板工具栏的 New column 可新建列；输入名称后点击 Save columns。拖动列头的
+`≡` 手柄调整顺序。在 Columns & WIP 选择列，点击 Archive / Restore 后
+用 Save columns 提交。归档列会隐藏，其卡片、负责人、评论和排序保留；恢复列后
+重新显示。已归档列内的卡片不可编辑或移入，须先恢复列。最多保留 12 列，
+且至少有 2 个活动列和 1 个活动完成列。
+
+任务详情中更改 Status 后点击 Save，会将状态与其他字段一次性保存；WIP 上限、
+版本冲突或权限拒绝时不提交部分字段，弹窗保留草稿。列排序和归档使用看板版本
+防止双端互相覆盖。Client 和 Server 需要一起升级到 v4。
 
 HTTP 开发地址只绑定本机 loopback，不需要域名、hosts 或证书设置。
 历史的 `https://hagency.local` 属于另一套 HTTPS 部署；本脚本不启动该域名，

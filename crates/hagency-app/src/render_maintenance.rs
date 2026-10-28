@@ -23,6 +23,8 @@ fn collect_completed(
 pub struct RenderMaintenance {
     timer: Timer,
     timer_ticks: u64,
+    #[cfg(debug_assertions)]
+    trace_counts: [u64; 4],
 }
 
 impl RenderMaintenance {
@@ -50,6 +52,20 @@ impl RenderMaintenance {
         if self.timer.is_empty() {
             // Complete the last submitted frame even when the UI is idle.
             self.timer = cx.start_interval(0.25);
+        }
+        #[cfg(debug_assertions)]
+        if std::env::var_os("HAGENCY_UI_IDLE_TRACE").is_some() {
+            match event {
+                Event::Draw(_) => self.trace_counts[0] += 1,
+                Event::NextFrame(_) => self.trace_counts[1] += 1,
+                Event::Actions(actions) => {self.trace_counts[2] += 1; self.trace_counts[3] += actions.len() as u64;},
+                _ => (),
+            }
+            if self.timer.is_event(event).is_some() && self.timer_ticks.is_multiple_of(4) {
+                makepad_widgets::log!("UI idle trace: draws={} frames={} action_batches={} actions={} shader_clock={} post_draw={}",
+                    self.trace_counts[0],self.trace_counts[1],self.trace_counts[2],self.trace_counts[3],cx.demo_time_repaint,cx.post_draw_hook.is_some());
+                self.trace_counts = [0; 4];
+            }
         }
         let timed = self.timer.is_event(event).is_some();
         if timed {

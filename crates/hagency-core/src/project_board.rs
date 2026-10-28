@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 pub const STATES: [&str; 5] = ["todo", "in_progress", "blocked", "in_review", "done"];
 pub const PRIORITIES: [&str; 4] = ["low", "normal", "high", "urgent"];
-pub const CAPABILITY: &str = "project-board-v3";
+pub const CAPABILITY: &str = "project-board-v4";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -141,6 +141,9 @@ pub struct Create {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Update {
+    /// Save field edits and an optional status change in one versioned transaction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
     pub idempotency_key: String,
     pub expected_version: i64,
     pub fields: Fields,
@@ -221,6 +224,8 @@ pub struct ChecklistItem {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ColumnDefinition {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub archived: bool,
     pub id: String,
     pub title: String,
     pub wip_limit: Option<i64>,
@@ -231,6 +236,7 @@ pub fn default_columns() -> Vec<ColumnDefinition> {
         .into_iter()
         .zip(["To do", "In progress", "Blocked", "In review", "Done"])
         .map(|(id, title)| ColumnDefinition {
+            archived: false,
             id: id.into(),
             title: title.into(),
             wip_limit: None,
@@ -257,7 +263,8 @@ impl ConfigureColumns {
         key(&self.idempotency_key)?;
         if self.expected_sequence < 0
             || !(2..=12).contains(&self.columns.len())
-            || !self.columns.iter().any(|c| c.is_done)
+            || self.columns.iter().filter(|c| !c.archived).count() < 2
+            || !self.columns.iter().any(|c| c.is_done && !c.archived)
         {
             return Err(InvalidInput("invalid_board_columns"));
         }
@@ -419,6 +426,8 @@ impl BoardTask {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Lane {
+    #[serde(default)]
+    pub archived: bool,
     pub state: String,
     pub title: String,
     pub wip_limit: Option<i64>,
@@ -436,6 +445,8 @@ pub struct Snapshot {
     pub sequence: i64,
     pub lanes: Vec<Lane>,
     pub members: Vec<String>,
+    #[serde(default)]
+    pub member_names: std::collections::HashMap<String, String>,
     pub capability: String,
 }
 
