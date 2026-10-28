@@ -5694,3 +5694,9 @@ PR #8 审查及验证记录见 `dev-vibe/pr-8-board-ux-review-2026-10-25.zh.md`�
 ## 2026-10-28：任务保存与子任务继续意图
 
 父任务 dirty 时不要静默禁用 Add subtask。使用明确“保存并添加子任务”动作，继续意图同时绑定父任务 ID 和原始幂等键，只在匹配的成功回执后打开子任务；未知结果保留键/意图，确定失败或上下文切换清理意图。普通 Save task 在有效 Create/Update 成功后关闭，其他评论/附件/移动回执不关闭；缺失任务、错误任务 ID 或错误 Project 不能伪装为保存成功。Activity 详情已从原生 UI 与读取路径移除，通知格式化和 Server 审计不因此删除。
+
+## 2026-10-28：双原生用户验收与当前交互缺口
+
+第二原生实例需要独立应用身份和 HAGENCY_APP_DATA_DIR；资源必须来自同一来源验证构建。LaunchServices 默认 cwd 为 /，手动复制 app 后直接启动可能卡在资源读取；沿用 Makepad 开发启动的工作目录握手。不要复制主用户 SDK 会话，也不要把 fixture 的两账号结果当真实 Pasion/Matrix 多人验收。真实普通账号已跑通 Space/Room 分别邀请、看板和评论/聊天/附件/重启；详细脱敏结果见 dev-vibe/two-user-project-validation-2026-10-28.zh.md。
+
+当前已有任务 Status 下拉框是 move_state，只有 Move to top/bottom 执行移动；Save 的干净草稿分支会关闭并忽略目标选择，属于易误操作的交互缺口。另已实测原生 B 重启后同一文件消息两行而 Server /messages 只有一个唯一事件，排查历史恢复/去重时须保留事件 ID 证据，不要误判为重复发送。reload_latest 重选任务后也须清理旧冲突 notice。
