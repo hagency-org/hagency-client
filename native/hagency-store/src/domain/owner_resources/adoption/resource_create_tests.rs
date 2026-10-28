@@ -213,27 +213,29 @@ async fn additional_configuration_models_and_ceiling_semantics_do_not_change_acc
     let ctx = context(&f);
     let s = session(backing.clone(), ctx.clone());
     let before = rows(&f, QUOTA).await;
-    for (command, ceiling, expected) in [
-        ("clear", CeilingChange::Clear {}, None),
+    for (command, ceiling, expected, model) in [
+        ("clear", CeilingChange::Clear {}, None, "gpt-5.6-sol"),
         (
             "zero",
             CeilingChange::Monthly {
                 tokens: 0.try_into().unwrap(),
             },
             Some(0),
+            "gpt-6.1-terra",
         ),
         (
             "finite",
             CeilingChange::Monthly {
-                tokens: 450.try_into().unwrap(),
+                tokens: 20_000_000.try_into().unwrap(),
             },
-            Some(450),
+            Some(20_000_000),
+            "gpt-6-luna",
         ),
     ] {
         let mut request = input(&f, &f.resource.id(), command).await;
         request.ceiling = ceiling;
         request.profile = ProfileChange::Select {
-            model: "gpt-5.6-sol".into(),
+            model: model.into(),
             reasoning: Some("high".into()),
         };
         let created = s
@@ -241,6 +243,7 @@ async fn additional_configuration_models_and_ceiling_semantics_do_not_change_acc
             .await
             .unwrap();
         let target = definition(&f, &created.resource_id).await;
+        assert_eq!(target.model, model);
         assert_eq!(target.reasoning.as_deref(), Some("high"));
         assert_eq!(
             target.ceiling.and_then(|c| c.tokens).map(u64::from),

@@ -6,7 +6,14 @@ use serde_json::{Value, json};
 
 #[test]
 fn current_codex_models_preserve_role_floors_and_family() {
-    for name in ["gpt-6.1-sol", "gpt-6-astra"] {
+    for name in [
+        "gpt-6.1-sol",
+        "gpt-6-astra",
+        "gpt-6.1-terra",
+        "gpt-6-luna",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+    ] {
         for (effort, tier, allowed) in [
             ("low", Tier::Lightweight, vec!["documentation"]),
             (

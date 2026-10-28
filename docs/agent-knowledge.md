@@ -5302,3 +5302,10 @@ context tests (both filters, --include-ignored); run server shared_context_ agai
 separate disposable PostgreSQL DB. Context admission failure must emit bounded stage/code
 without raw prompts or credentials. Historical cancelled work stays terminal; a new
 explicit chat message creates the next attempt. No live model turn was used for this fix.
+
+2026-10-28: Additional pools on a managed account must use CreateResourceConfiguration
+with the original source resource and current revision, not EnrollResources. Enrollment
+redeclares the shared seat quota and conflicts if it differs. A pool ceiling is independent
+of the shared account limit; creating a 20M pool must not raise that limit. Model discovery
+is the intersection of the live provider catalog and core role-capacity.json. Terra/Luna
+entries are now included; role floors and actual available reasoning efforts still apply.

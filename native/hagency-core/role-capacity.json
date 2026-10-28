@@ -154,6 +154,90 @@
         "provider": "deepseek",
         "model": "deepseek-v-flash",
         "family": "deepseek"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-6.1-terra",
+        "family": "gpt",
+        "reasoning": "high"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-6.1-terra",
+        "family": "gpt",
+        "reasoning": "xhigh"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-6.1-terra",
+        "family": "gpt",
+        "reasoning": "max"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-6-luna",
+        "family": "gpt",
+        "reasoning": "high"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-6-luna",
+        "family": "gpt",
+        "reasoning": "xhigh"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-6-luna",
+        "family": "gpt",
+        "reasoning": "max"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-5.6-terra",
+        "family": "gpt",
+        "reasoning": "high"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-5.6-terra",
+        "family": "gpt",
+        "reasoning": "xhigh"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-5.6-terra",
+        "family": "gpt",
+        "reasoning": "max"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-5.6-luna",
+        "family": "gpt",
+        "reasoning": "high"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-5.6-luna",
+        "family": "gpt",
+        "reasoning": "xhigh"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-5.6-luna",
+        "family": "gpt",
+        "reasoning": "max"
       }
     ],
     "medium": [
@@ -195,6 +279,34 @@
         "provider": "zai-coding",
         "model": "glm-5.3-flash",
         "family": "glm"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-6.1-terra",
+        "family": "gpt",
+        "reasoning": "medium"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-6-luna",
+        "family": "gpt",
+        "reasoning": "medium"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-5.6-terra",
+        "family": "gpt",
+        "reasoning": "medium"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-5.6-luna",
+        "family": "gpt",
+        "reasoning": "medium"
       }
     ],
     "lightweight": [
@@ -228,6 +340,34 @@
         "framework": "codex",
         "provider": "openai",
         "model": "gpt-6-astra",
+        "family": "gpt",
+        "reasoning": "low"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-6.1-terra",
+        "family": "gpt",
+        "reasoning": "low"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-6-luna",
+        "family": "gpt",
+        "reasoning": "low"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-5.6-terra",
+        "family": "gpt",
+        "reasoning": "low"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-5.6-luna",
         "family": "gpt",
         "reasoning": "low"
       }

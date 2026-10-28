@@ -411,7 +411,14 @@ mod tests {
     use super::*;
     #[test]
     fn current_codex_models_use_only_live_qualified_efforts_without_switching_defaults() {
-        for model in ["gpt-6.1-sol", "gpt-6-astra"] {
+        for model in [
+            "gpt-6.1-sol",
+            "gpt-6-astra",
+            "gpt-6.1-terra",
+            "gpt-6-luna",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+        ] {
             let raw = json!({"authenticated":true,"models":[{
                 "id":model,"model":model,"displayName":model,"isDefault":false,
                 "defaultReasoningEffort":"medium",

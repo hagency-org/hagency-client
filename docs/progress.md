@@ -14084,3 +14084,11 @@ Edward remains in 小白 chat; cancelled “和H100比较呢” needs a new expl
 Pasion signup enabled/contact-not-required settings and Appservice identity preserved.
 Evidence: /Users/ychen/home/hagency-desktop/.run/xiaobai-context-20261028/validation.json;
 investigation: /Users/ychen/home/hagency-client/.run/xiaobai-check-20261028-latest/handoff.json.
+
+2026-10-28: Enabled provider-advertised gpt-6.1-terra, gpt-6-luna, gpt-5.6-terra and
+gpt-5.6-luna in resource qualification, preserving existing role tiers, family and effort
+limits. Extended qualification/catalog tests and additional-configuration tests to cover
+Terra/Luna and a 20M pool without changing shared account quota or source associations.
+Validation: 4 qualification, 1 current-model catalog and 7 additional-configuration tests
+passed. No live model call, quota increase or capacity publication. Desktop integration
+and UI review evidence: ../hagency-desktop/.run/connection-status-20261028/.
