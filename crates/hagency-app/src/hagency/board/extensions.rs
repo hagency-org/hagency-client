@@ -121,7 +121,7 @@ impl ProjectBoard {
     }
     pub(super) fn handle_extensions(&mut self, cx: &mut Cx, actions: &Actions) {
         if self.view.button(cx, ids!(manage_columns)).clicked(actions) && self.pending.is_none() {
-            if self.dirty {
+            if self.dirty || self.quick_create_state.is_some() {
                 self.notice(
                     cx,
                     tr("Save or close your current draft before opening another task."),
@@ -370,7 +370,11 @@ impl ProjectBoard {
             .button(cx, ids!(manage_columns))
             .set_board_enabled(
                 cx,
-                self.snapshot.is_some() && !writing && !self.dirty && self.columns_draft.is_none(),
+                self.snapshot.is_some()
+                    && !writing
+                    && !self.dirty
+                    && self.columns_draft.is_none()
+                    && self.quick_create_state.is_none(),
             );
         self.view.button(cx, ids!(rebase_columns)).set_visible(
             cx,

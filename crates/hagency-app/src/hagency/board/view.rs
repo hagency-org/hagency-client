@@ -25,10 +25,9 @@ makepad_widgets::script_mod! {
     let Composer = RoundedView {width:Fill height:Fit flow:Down spacing:10 padding:12
         draw_bg +: {color:mod.widgets.RINX_SURFACE border_color:mod.widgets.RINX_BORDER border_size:1.0 border_radius:10.0}
         View {width:Fill height:30 spacing:4 align:Align{y:0.5}
-            edit := RinxGhostButton {height:30 text:#(crate::i18n::tr("Edit")) i18n_text:"Edit"}
+            edit := RinxGhostButton {height:30 text:#(crate::i18n::tr("Edit Markdown")) i18n_text:"Edit Markdown"}
             preview := RinxGhostButton {height:30 text:#(crate::i18n::tr("Preview")) i18n_text:"Preview"}
             View {width:Fill height:1}
-            Small {width:Fit text:"Markdown"}
         }
         tools := View {width:Fill height:Fit flow:Flow.Right{wrap:true} spacing:2
             bold := Format {text:"B" draw_text.text_style:theme.font_bold{font_size:mod.widgets.RINX_BODY_SIZE}}
@@ -46,7 +45,10 @@ makepad_widgets::script_mod! {
             paste_image := RinxGhostButton {height:30 text:#(crate::i18n::tr("Paste image")) i18n_text:"Paste image"}
         }
         source_wrap := View {width:Fill height:Fit
-            source := Input {height:160 is_multiline:true empty_text:#(crate::i18n::tr("Write in Markdown…")) i18n_empty_text:"Write in Markdown…"}
+            source := Input {height:190 is_multiline:true empty_text:#(crate::i18n::tr("Write in Markdown…")) i18n_empty_text:"Write in Markdown…"
+                draw_cursor +: {color:mod.widgets.RINX_ACCENT}
+                draw_selection +: {color:mod.widgets.RINX_TEXT_SELECTION_BG color_hover:mod.widgets.RINX_TEXT_SELECTION_BG color_focus:mod.widgets.RINX_TEXT_SELECTION_BG color_down:mod.widgets.RINX_TEXT_SELECTION_BG}
+            }
         }
         rendered := mod.widgets.BoardMarkdown {visible:false width:Fill height:Fit padding:2}
     }
@@ -104,6 +106,14 @@ makepad_widgets::script_mod! {
                 more := RinxGhostButton {width: Fill height:36 text: #(crate::i18n::tr("Load more tasks")) i18n_text: "Load more tasks"}
             }
             Filler := View {width: Fill height: 12}
+        }
+        quick_add := RinxGhostButton {width:Fill height:36 align:Align{x:0.0 y:0.5} text:#(crate::i18n::tr("+ Add a card")) i18n_text:"+ Add a card"}
+        quick_form := View {visible:false width:Fill height:Fit flow:Down spacing:8
+            quick_title := Input {height:64 is_multiline:true submit_on_enter:true empty_text:#(crate::i18n::tr("Enter a title…")) i18n_empty_text:"Enter a title…"}
+            View {width:Fill height:34 spacing:8
+                quick_save := RinxPrimaryButton {height:34 text:#(crate::i18n::tr("Add card")) i18n_text:"Add card"}
+                quick_cancel := RinxGhostButton {height:34 text:#(crate::i18n::tr("Cancel")) i18n_text:"Cancel"}
+            }
         }
     }
     mod.widgets.ProjectBoard = #(ProjectBoard::register_widget(vm)) {
@@ -235,7 +245,89 @@ makepad_widgets::script_mod! {
                     Text {text: #(crate::i18n::tr("Labels")) i18n_text: "Labels"}
                     labels := Input {empty_text: #(crate::i18n::tr("Comma-separated labels")) i18n_empty_text: "Comma-separated labels"}
                     Text {text: #(crate::i18n::tr("Due date")) i18n_text: "Due date"}
-                    due_date := Input {empty_text: "YYYY-MM-DD"}
+                    View {width:Fill height:38 spacing:6
+                        due_date := Input {empty_text:#(crate::i18n::tr("No due date")) i18n_empty_text:"No due date"}
+                        open_calendar := RinxGhostButton {width:38 height:38 padding:9 spacing:0 text:""
+                            draw_icon +: {svg: crate_resource("self://resources/icons/calendar.svg") color:mod.widgets.RINX_ACCENT}
+                            icon_walk:Walk{width:20 height:20}
+                        }
+                    }
+                    calendar := RoundedView {visible:false width:Fill height:Fit padding:10 spacing:4 flow:Down
+                        draw_bg +: {color:mod.widgets.RINX_PANEL_BG border_radius:10.0 border_color:mod.widgets.RINX_BORDER border_size:1.0}
+                        View {width:Fill height:32 spacing:4 align:Align{y:0.5}
+                            calendar_prev := RinxGhostButton {width:32 height:30 padding:0 text:"‹"}
+                            calendar_month := Text {width:Fill align:Align{x:0.5 y:0.5}}
+                            calendar_next := RinxGhostButton {width:32 height:30 padding:0 text:"›"}
+                        }
+                        View {width:Fill height:24 spacing:2
+                            Small {width:Fill align:Align{x:0.5 y:0.5} text:#(crate::i18n::tr("Mo")) i18n_text:"Mo"}
+                            Small {width:Fill align:Align{x:0.5 y:0.5} text:#(crate::i18n::tr("Tu")) i18n_text:"Tu"}
+                            Small {width:Fill align:Align{x:0.5 y:0.5} text:#(crate::i18n::tr("We")) i18n_text:"We"}
+                            Small {width:Fill align:Align{x:0.5 y:0.5} text:#(crate::i18n::tr("Th")) i18n_text:"Th"}
+                            Small {width:Fill align:Align{x:0.5 y:0.5} text:#(crate::i18n::tr("Fr")) i18n_text:"Fr"}
+                            Small {width:Fill align:Align{x:0.5 y:0.5} text:#(crate::i18n::tr("Sa")) i18n_text:"Sa"}
+                            Small {width:Fill align:Align{x:0.5 y:0.5} text:#(crate::i18n::tr("Su")) i18n_text:"Su"}
+                        }
+                        View {width:Fill height:30 spacing:2
+                            calendar_day_0 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_1 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_2 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_3 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_4 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_5 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_6 := RinxGhostButton {width:Fill height:30 padding:0}
+                        }
+                        View {width:Fill height:30 spacing:2
+                            calendar_day_7 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_8 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_9 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_10 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_11 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_12 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_13 := RinxGhostButton {width:Fill height:30 padding:0}
+                        }
+                        View {width:Fill height:30 spacing:2
+                            calendar_day_14 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_15 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_16 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_17 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_18 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_19 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_20 := RinxGhostButton {width:Fill height:30 padding:0}
+                        }
+                        View {width:Fill height:30 spacing:2
+                            calendar_day_21 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_22 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_23 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_24 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_25 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_26 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_27 := RinxGhostButton {width:Fill height:30 padding:0}
+                        }
+                        View {width:Fill height:30 spacing:2
+                            calendar_day_28 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_29 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_30 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_31 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_32 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_33 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_34 := RinxGhostButton {width:Fill height:30 padding:0}
+                        }
+                        View {width:Fill height:30 spacing:2
+                            calendar_day_35 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_36 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_37 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_38 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_39 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_40 := RinxGhostButton {width:Fill height:30 padding:0}
+                            calendar_day_41 := RinxGhostButton {width:Fill height:30 padding:0}
+                        }
+                        View {width:Fill height:32 spacing:4
+                            calendar_today := RinxGhostButton {width:Fill height:30 text:#(crate::i18n::tr("Today")) i18n_text:"Today"}
+                            calendar_clear := RinxGhostButton {width:Fill height:30 text:#(crate::i18n::tr("Clear date")) i18n_text:"Clear date"}
+                            calendar_close := RinxGhostButton {width:Fill height:30 text:#(crate::i18n::tr("Close")) i18n_text:"Close"}
+                        }
+                    }
                     Text {text: #(crate::i18n::tr("Description")) i18n_text: "Description"}
                     description_editor := Composer {}
                     attachments_section := RoundedView {width:Fill height:Fit flow:Down spacing:10 padding:12

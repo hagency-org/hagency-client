@@ -5682,3 +5682,7 @@ PR #8 审查及验证记录见 `dev-vibe/pr-8-board-ux-review-2026-10-25.zh.md`�
 #12 当前头42484608的App Intel job122486397191全部测试、Clippy、构建和静态检查均成功，最后在59m20s开始缓存上传，60分钟整体job上限将其取消；GitHub annotation明确 exceeded maximum execution time 1h0m0s。原attempt1保留，单job诊断补跑已触发。为避免依赖冷构建速度碰运气，#12 app-main的整体job预算从60改为有限90分钟，包含缓存和cleanup；原用例、断言、生产2s/25s/45s边界及执行次数完全不变。此为编译和收尾总预算，未放宽任何测试操作deadline。新头需重新通过实际CI。
 
 - **完整本地开发环境，2026-10-28：** 从 Client 运行 `./tools/local-dev.sh start --pull`，随后 `doctor`。实现位于相邻 Server scripts/local-dev.py / local_build.py；状态在 Server .run/local-dev，账号与原生运行资源在 ~/Library/Application Support/org.hagency.local-development。禁止从旧镜像或另一个 checkout 拼装 UI 资源：Hagency 品牌覆盖与上游 Pasion 的 Cargo.lock 版本是两组不同输入。必须检查完整源码清单、共享 /assets 和 HTTP 实际字节；readyz 只证明 AS 启动探针，不能证明 UI 或单个新账号的 Matrix 异步配置完成。2026-10-28 已实际验证真实注册到原生看板以及重启恢复；详细证据在 Server dev-vibe/local-development-coherent-main-validation-2026-10-28.zh.md。
+
+## 2026-10-28：看板原生 Markdown 指针选区
+
+固定 Makepad 77c8039 的 TextInput.set_is_read_only 即使值不变也会清空 laidout_text；不要在每个 Actions/hover 后无条件调用。先比较 is_read_only，仅在实际状态切换时设置，否则下一批鼠标定位/拖选会因布局失效被拒绝。保留原生选区、UndoGroup 和 IME 管线；不要用每次 set_text 或手工切片删除掩盖指针失效。看板回归 repeated_control_sync_preserves_markdown_hit_layout_and_native_selection 覆盖此边界。

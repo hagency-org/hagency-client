@@ -14,6 +14,8 @@ mod controller;
 mod interaction;
 mod drag;
 mod markdown;
+mod calendar;
+mod quick_create;
 mod collaboration;
 mod media;
 use media::MediaState;
@@ -217,6 +219,14 @@ pub struct ProjectBoard {
     selected: Option<BoardTask>,
     #[rust]
     creating: bool,
+    #[rust]
+    calendar_month: Option<chrono::NaiveDate>,
+    #[rust]
+    quick_create_state: Option<String>,
+    #[rust]
+    quick_save_key: Option<String>,
+    #[rust]
+    quick_focus: bool,
     #[rust]
     dirty: bool,
     #[rust]

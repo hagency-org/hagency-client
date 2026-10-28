@@ -9,6 +9,8 @@ impl ProjectBoard {
         self.view.redraw(cx);
     }
     pub(super) fn clear_content(&mut self, cx: &mut Cx) {
+        self.close_calendar(cx);
+        self.clear_quick_create(cx);
         self.clear_media(cx);
         self.layout_key.clear();
         self.notifications.clear();
@@ -292,6 +294,7 @@ impl ProjectBoard {
         }
     }
     pub(super) fn fill_editor(&mut self, cx: &mut Cx, fields: Fields) {
+        self.close_calendar(cx);
         self.view
             .text_input(cx, ids!(checklist_new))
             .set_text(cx, "");
@@ -334,7 +337,11 @@ impl ProjectBoard {
         self.sync_controls(cx);
     }
     pub(super) fn select(&mut self, cx: &mut Cx, task: &BoardTask) {
-        if self.pending.is_some() || self.dirty || self.columns_draft.is_some() {
+        if self.pending.is_some()
+            || self.dirty
+            || self.columns_draft.is_some()
+            || self.quick_create_state.is_some()
+        {
             self.notice(
                 cx,
                 tr("Save or close your current draft before opening another task."),
@@ -381,7 +388,11 @@ impl ProjectBoard {
         );
     }
     pub(super) fn new_task(&mut self, cx: &mut Cx) {
-        if self.pending.is_some() || self.dirty || self.columns_draft.is_some() {
+        if self.pending.is_some()
+            || self.dirty
+            || self.columns_draft.is_some()
+            || self.quick_create_state.is_some()
+        {
             self.notice(
                 cx,
                 tr("Save or close your current draft before opening another task."),
@@ -487,6 +498,7 @@ impl ProjectBoard {
         );
     }
     pub(super) fn sync_controls(&mut self, cx: &mut Cx) {
+        self.sync_quick_create(cx);
         self.view
             .view(cx, ids!(details_body))
             .set_visible(cx, !self.discussion);
@@ -582,6 +594,12 @@ impl ProjectBoard {
         self.view
             .button(cx, ids!(save))
             .set_board_enabled(cx, editing && (self.creating || self.dirty));
+        self.view
+            .button(cx, ids!(open_calendar))
+            .set_board_enabled(cx, editing);
+        if !editing {
+            self.close_calendar(cx);
+        }
         self.view
             .widget(cx, ids!(save))
             .set_disabled(cx, !(editing && (self.creating || self.dirty)));
@@ -1046,6 +1064,7 @@ impl ProjectBoard {
         }
         match &done.result {
             Ok(value) => {
+                let was_quick = self.is_quick_save();
                 let was_columns =
                     matches!(self.pending, Some(BoardAction::ConfigureColumns { .. }));
                 let was_comment = matches!(self.pending, Some(BoardAction::Comment { .. }));
@@ -1065,7 +1084,8 @@ impl ProjectBoard {
                     self.dirty = false;
                 }
                 self.conflict = false;
-                if let Ok(task) = serde_json::from_value::<BoardTask>(value["task"].clone())
+                if !was_quick
+                    && let Ok(task) = serde_json::from_value::<BoardTask>(value["task"].clone())
                     && task.project_id == self.project
                 {
                     self.detail_loaded = true;
@@ -1106,6 +1126,9 @@ impl ProjectBoard {
                         .set_visible(cx, false);
                     self.query.state = None;
                     self.reset_viewports(cx);
+                }
+                if was_quick {
+                    self.clear_quick_create(cx);
                 }
                 self.notice(
                     cx,

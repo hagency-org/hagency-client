@@ -32,6 +32,10 @@ impl Widget for ProjectBoard {
                 }
             }
             Event::KeyDown(e) if e.key_code == KeyCode::Escape => {
+                self.close_calendar(cx);
+                if self.pending.is_none() {
+                    self.clear_quick_create(cx);
+                }
                 self.cancel_drag(cx);
                 self.view
                     .label(cx, ids!(drag_notice))
@@ -121,6 +125,8 @@ impl Widget for ProjectBoard {
         };
         self.handle_extensions(cx, actions);
         self.handle_markdown(cx, actions);
+        self.handle_calendar(cx, actions);
+        self.handle_quick_create(cx, actions);
         self.handle_collaboration(cx, actions);
         self.media_actions(cx, actions);
         for action in actions {
@@ -277,22 +283,6 @@ impl Widget for ProjectBoard {
                 self.column_state(self.view.drop_down(cx, ids!(new_status)).selected_item());
             self.dirty = true;
             self.discard_armed = false;
-        }
-        for index in 0..self.column_count() {
-            if self
-                .view
-                .view(cx, column_path(index))
-                .button(cx, ids!(add))
-                .clicked(actions)
-            {
-                self.new_task(cx);
-                if self.creating && !self.dirty {
-                    self.view
-                        .drop_down(cx, ids!(new_status))
-                        .set_selected_item(cx, index);
-                    self.draft_state = self.column_state(index);
-                }
-            }
         }
         if self.view.button(cx, ids!(clear_filters)).clicked(actions) && !self.loading {
             self.query = Query::default();
@@ -763,6 +753,7 @@ impl Widget for ProjectBoard {
             }
         }
         self.resolve_landing_layout(cx);
+        self.focus_quick_create(cx);
         DrawStep::done()
     }
 }

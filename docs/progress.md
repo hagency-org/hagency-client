@@ -15083,3 +15083,10 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 - 当前开放本机注册。关闭注册的说明通过 Server 管理的 Pasion 构建补丁实现；上游/Cargo 缓存未改。真实浏览器验证统一蓝色、明暗关闭状态和返回登录；真实注册、PKCE、Matrix、Project、看板读写及完整原生浏览器授权/回调/看板显示通过。
 - 重复启动保留PID；stop/start 和 restart --pull 后原生账号自动恢复、任务 version1 保留、五项密钥/凭据指纹不变。Python16、Rust工具8+4、严格Clippy/格式/Bash/diff通过。证据和范围见 Server dev-vibe/local-development-coherent-main-validation-2026-10-28.zh.md。该轮验收时服务留运行、尚未提交/推送，未调用模型。
 - 本 checkout 没有 provisioned task-writer；此记录仅为协调与验证证据，不替代 canonical task state。
+
+## 2026-10-28 — 看板编辑器选区、日历和列内快捷创建
+
+- 在 Client main 复现鼠标拖选失效；根因是每次 Actions 无条件设置 TextInput 只读状态，清掉了原生指针命中需要的布局。改为仅实际切换状态时调用；保留保存/归档/冲突写锁，强调色光标和选区，明确“编辑 Markdown/预览”入口。
+- 日期右侧加入月历，默认定位高亮当天，支持翻月、选今天和清除；打开本身不隐式设置可选日期。各列底部和列头 + 支持仅标题快速创建，Enter 提交，沿用幂等重试和 Server WIP/权限验证，成功前保留标题。
+- 看板测试35通过，严格Clippy、翻译2556/1931/0缺失、原生样式294/0、工作区边界和diff检查通过。真实客户端完成快捷建卡#2、英文/中文鼠标选区删除/撤销、加粗/预览、选日/清除/保存和重启恢复；SQL独立确认初建可选元数据为空及后续版本/日期/Markdown原文。
+- 最终启动包为client-20fc9323-befa224fd3-fb048c12，Server使用当前main来源校验构建。本轮没有新增Server代码；以上为提交前的原生验收记录。本次按操作者要求将代码与文档提交到Client main，运行数据和构建产物排除在提交之外。详见dev-vibe/project-board-editor-calendar-quick-create-validation-2026-10-28.zh.md。

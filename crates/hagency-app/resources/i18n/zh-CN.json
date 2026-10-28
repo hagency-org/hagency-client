@@ -2540,5 +2540,19 @@
   "File receipts could not be refreshed. The last observed status is preserved.": "无法刷新文件回执，已保留最近观察到的状态。",
   "{state}\nFile: {filename}\nBytes: {bytes}\nCaption: {caption}\nSHA256: {hash}\nRoom: {room}\nRequester: {requester}\nThread: {thread}\nDispatch: {dispatch}\nExecution: {execution}\nOriginal request: {request}\nMatrix receipt: {event}\nApproval record: {audit}": "{state}\n文件：{filename}\n字节：{bytes}\n说明：{caption}\nSHA256：{hash}\nRoom：{room}\n请求者：{requester}\n线程：{thread}\n请求：{dispatch}\n执行：{execution}\n原准备请求：{request}\nMatrix 回执：{event}\n审批记录：{audit}",
   "Original file evidence conflicts with this receipt. Refresh the list; the last observed status is preserved.": "原文件证据与此回执冲突。请刷新列表，最近观察到的状态已保留。",
-  "Select an original file delivery from this Agent history.": "请从此 Agent 的历史中选择原文件投递。"
+  "Select an original file delivery from this Agent history.": "请从此 Agent 的历史中选择原文件投递。",
+  "Edit Markdown": "编辑 Markdown",
+  "No due date": "未设置截止日期",
+  "Mo": "一",
+  "Tu": "二",
+  "We": "三",
+  "Th": "四",
+  "Fr": "五",
+  "Sa": "六",
+  "Su": "日",
+  "Today": "今天",
+  "Clear date": "清除日期",
+  "+ Add a card": "+ 添加卡片",
+  "Add card": "添加卡片",
+  "Enter a title…": "输入卡片标题…"
 }

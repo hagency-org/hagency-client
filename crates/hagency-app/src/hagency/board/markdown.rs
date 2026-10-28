@@ -264,9 +264,13 @@ impl ProjectBoard {
             (ids!(comment_editor), comment),
         ] {
             let editor = self.view.view(cx, path);
-            editor
-                .text_input(cx, ids!(source))
-                .set_is_read_only(cx, !enabled);
+            let input = editor.text_input(cx, ids!(source));
+            // The native setter invalidates text layout even when the value is
+            // unchanged. Running it after every hover/action breaks the next
+            // pointer hit and drag selection before another layout is ready.
+            if input.is_read_only() == enabled {
+                input.set_is_read_only(cx, !enabled);
+            }
             for id in [ids!(insert_image), ids!(paste_image)] {
                 editor.button(cx, id).set_board_enabled(
                     cx,

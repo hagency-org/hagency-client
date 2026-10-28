@@ -2540,5 +2540,19 @@
   "This approval request has expired.": "This approval request has expired.",
   "Review the exact action before deciding.": "Review the exact action before deciding.",
   "This remote request could not be verified. Refresh its original request before deciding.": "This remote request could not be verified. Refresh its original request before deciding.",
-  "Private approvals are busy. Wait for the original operations to finish.": "Private approvals are busy. Wait for the original operations to finish."
+  "Private approvals are busy. Wait for the original operations to finish.": "Private approvals are busy. Wait for the original operations to finish.",
+  "Edit Markdown": "Edit Markdown",
+  "No due date": "No due date",
+  "Mo": "Mo",
+  "Tu": "Tu",
+  "We": "We",
+  "Th": "Th",
+  "Fr": "Fr",
+  "Sa": "Sa",
+  "Su": "Su",
+  "Today": "Today",
+  "Clear date": "Clear date",
+  "+ Add a card": "+ Add a card",
+  "Add card": "Add card",
+  "Enter a title…": "Enter a title…"
 }

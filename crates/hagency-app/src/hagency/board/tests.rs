@@ -847,6 +847,120 @@ fn comment_drafts_restore_per_task_without_cross_card_leaks() {
         ""
     );
 }
+
+#[test]
+fn repeated_control_sync_preserves_markdown_hit_layout_and_native_selection() {
+    let (mut cx, mut board) = panel();
+    populate(&mut board);
+    board.new_task(&mut cx);
+    let input = board.view.text_input(&cx, ids!(description_editor.source));
+    input.set_text(&mut cx, "Keep 需要删除 keep\nSecond line");
+    draw(&mut cx, &mut board, 1200.0, 1800.0);
+    input.set_selection(
+        &mut cx,
+        makepad_widgets::text::selection::Selection {
+            anchor: makepad_widgets::text::selection::Cursor {
+                index: 5,
+                prefer_next_row: true,
+            },
+            cursor: makepad_widgets::text::selection::Cursor {
+                index: 17,
+                prefer_next_row: true,
+            },
+        },
+    );
+    // Hover/action batches resync controls without guaranteeing an intervening
+    // draw. The read-only setter previously discarded the hit-test layout here.
+    board.sync_controls(&mut cx);
+    board.sync_controls(&mut cx);
+    assert_eq!(input.selection().start().index, 5);
+    assert_eq!(input.selection().end().index, 17);
+    let mut native = input.borrow_mut().unwrap();
+    assert!(native.move_cursor_line_end(&mut cx, true).is_ok());
+    drop(native);
+    input
+        .replace_range(
+            &mut cx,
+            5..17,
+            "",
+            makepad_widgets::text_input::UndoGroup::New,
+        )
+        .unwrap();
+    assert_eq!(input.text(), "Keep  keep\nSecond line");
+    board.pending = Some(BoardAction::Create {
+        input: Create {
+            idempotency_key: "pending-markdown-lock".into(),
+            fields: Fields {
+                title: "Draft".into(),
+                ..Default::default()
+            },
+            state: "todo".into(),
+        },
+    });
+    board.sync_controls(&mut cx);
+    assert!(input.is_read_only());
+    assert!(
+        input
+            .replace_range(
+                &mut cx,
+                0..0,
+                "blocked",
+                makepad_widgets::text_input::UndoGroup::New
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn quick_card_retries_original_intent_and_does_not_replace_open_detail() {
+    let (mut cx, mut board) = panel();
+    populate(&mut board);
+    board.selected = Some(task("original", "todo"));
+    board.detail_loaded = true;
+    let column = board.view.view(&cx, ids!(in_progress));
+    let click = |cx: &mut Cx, id: &[LiveId]| {
+        let uid = column.button(cx, id).widget_uid();
+        cx.capture_actions(|cx| {
+            cx.widget_action(uid, ButtonAction::Clicked(KeyModifiers::default()))
+        })
+    };
+    let actions = click(&mut cx, ids!(quick_add));
+    board.handle_quick_create(&mut cx, &actions);
+    assert_eq!(board.quick_create_state.as_deref(), Some("in_progress"));
+    column
+        .text_input(&cx, ids!(quick_title))
+        .set_text(&mut cx, "Only a title");
+    let actions = click(&mut cx, ids!(quick_save));
+    board.handle_quick_create(&mut cx, &actions);
+    let original = serde_json::to_value(&board.pending).unwrap();
+    assert!(board.is_quick_save());
+    assert_eq!(original["input"]["state"], "in_progress");
+    let done = Saved {
+        identity: "account".into(),
+        project: "p1".into(),
+        epoch: 1,
+        request: 0,
+        result: Err("server_unavailable".into()),
+    };
+    board.apply_saved(&mut cx, &done);
+    assert_eq!(serde_json::to_value(&board.pending).unwrap(), original);
+    assert_eq!(
+        column.text_input(&cx, ids!(quick_title)).text(),
+        "Only a title"
+    );
+    board.apply_saved(
+        &mut cx,
+        &Saved {
+            result: Ok(json!({"task":task_value("new", "in_progress")})),
+            ..done
+        },
+    );
+    assert!(board.pending.is_none() && board.quick_create_state.is_none());
+    assert_eq!(board.selected.as_ref().unwrap().id, "original");
+    assert_eq!(column.text_input(&cx, ids!(quick_title)).text(), "");
+    assert!(!column.view(&cx, ids!(quick_form)).visible());
+}
+
 #[test]
 fn activity_describes_assignment_and_attachment_changes() {
     let text = collaboration::activity_text(
