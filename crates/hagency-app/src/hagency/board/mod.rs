@@ -16,6 +16,8 @@ mod drag;
 mod markdown;
 mod calendar;
 mod quick_create;
+mod dialog;
+pub(crate) use dialog::route_task_dialog_input;
 mod collaboration;
 mod media;
 use media::MediaState;
@@ -181,6 +183,16 @@ pub struct ProjectBoard {
     source: ScriptObjectRef,
     #[deref]
     view: View,
+    #[live]
+    draw_dialog_bg: DrawColor,
+    #[rust]
+    dialog_draw_list: Option<DrawList2d>,
+    #[rust]
+    dialog_cancel_scope: Option<CancelScope>,
+    #[rust]
+    dialog_focus_pending: bool,
+    #[rust]
+    dialog_return_focus: Area,
     #[rust]
     connection_override: Option<BoardConnection>,
     #[rust]
@@ -461,6 +473,9 @@ fn column_path(index: usize) -> &'static [LiveId] {
 }
 impl ProjectBoardRef {
     pub fn bind(&self, cx: &mut Cx, identity: &str, project: Option<&str>, active: bool) {
+        if active {
+            dialog::bind_dialog_widget(cx, &self.0);
+        }
         if let Some(mut inner) = self.borrow_mut() {
             inner.bind(cx, identity, project, active);
         }
@@ -492,7 +507,7 @@ impl ProjectBoardRef {
                 board.selected = Some(task.clone());
                 board.detail_loaded = true;
                 board.fill_editor(cx, task.fields());
-                board.view.view(cx, ids!(inspector)).set_visible(cx, true);
+                board.open_inspector(cx);
                 board
                     .view
                     .label(cx, ids!(detail_heading))

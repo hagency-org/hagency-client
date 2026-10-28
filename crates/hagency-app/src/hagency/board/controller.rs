@@ -2,10 +2,14 @@ use super::*;
 
 impl ProjectBoard {
     pub(super) fn notice(&mut self, cx: &mut Cx, message: &str) {
+        self.view.label(cx, ids!(dialog_notice)).set_text(cx, message);
+        self.view
+            .label(cx, ids!(dialog_notice))
+            .set_visible(cx, !message.is_empty());
         self.view.label(cx, ids!(notice)).set_text(cx, message);
         self.view
             .label(cx, ids!(notice))
-            .set_visible(cx, !message.is_empty());
+            .set_visible(cx, !message.is_empty() && !self.view.view(cx, ids!(inspector)).visible());
         self.view.redraw(cx);
     }
     pub(super) fn clear_content(&mut self, cx: &mut Cx) {
@@ -60,7 +64,7 @@ impl ProjectBoard {
         }
         self.view.widget(cx, ids!(comments)).set_text(cx, "");
         self.view.label(cx, ids!(activity)).set_text(cx, "");
-        self.view.view(cx, ids!(inspector)).set_visible(cx, false);
+        self.hide_inspector(cx);
         self.view.redraw(cx);
     }
     pub(super) fn bind(
@@ -115,6 +119,9 @@ impl ProjectBoard {
             self.discard_armed = false;
         }
         if context_changed || active != self.active {
+            if !active {
+                self.hide_inspector(cx);
+            }
             self.active = active;
             cx.stop_timer(self.timer);
             self.timer = Timer::default();
@@ -371,7 +378,7 @@ impl ProjectBoard {
             .set_scroll_pos(cx, dvec2(0.0, 0.0));
         self.fill_editor(cx, task.fields());
         self.selected = Some(task.clone());
-        self.view.view(cx, ids!(inspector)).set_visible(cx, true);
+        self.open_inspector(cx);
         self.view
             .label(cx, ids!(detail_heading))
             .set_text(cx, &format!("#{}", task.number));
@@ -427,7 +434,7 @@ impl ProjectBoard {
         self.selected = None;
         self.comments.clear();
         self.activity.clear();
-        self.view.view(cx, ids!(inspector)).set_visible(cx, true);
+        self.open_inspector(cx);
         self.view
             .label(cx, ids!(detail_heading))
             .set_text(cx, tr("New task"));
@@ -618,6 +625,12 @@ impl ProjectBoard {
             .set_visible(cx, writing && !self.saving);
         self.view
             .button(cx, ids!(retry))
+            .set_board_enabled(cx, !self.saving);
+        self.view
+            .button(cx, ids!(dialog_retry))
+            .set_visible(cx, writing && !self.saving);
+        self.view
+            .button(cx, ids!(dialog_retry))
             .set_board_enabled(cx, !self.saving);
         self.view.button(cx, ids!(reload_latest)).set_visible(
             cx,

@@ -5686,3 +5686,7 @@ PR #8 审查及验证记录见 `dev-vibe/pr-8-board-ux-review-2026-10-25.zh.md`�
 ## 2026-10-28：看板原生 Markdown 指针选区
 
 固定 Makepad 77c8039 的 TextInput.set_is_read_only 即使值不变也会清空 laidout_text；不要在每个 Actions/hover 后无条件调用。先比较 is_read_only，仅在实际状态切换时设置，否则下一批鼠标定位/拖选会因布局失效被拒绝。保留原生选区、UndoGroup 和 IME 管线；不要用每次 set_text 或手工切片删除掩盖指针失效。看板回归 repeated_control_sync_preserves_markdown_hit_layout_and_native_selection 覆盖此边界。
+
+## 2026-10-28：原生看板详情覆盖层
+
+看板编辑弹窗须在 App 快捷键/普通导航分发前路由输入，灰色视觉遮罩本身不足以阻止导航。Dock 中活动看板注册原始控件弱引用，不依赖惰性树将透明 View 的 UID 解析为外层拥有者。独立 overlay draw list 保留 PortalList 的 draw-step 处理；隐藏宿主仅隔离普通布局，详情仍要显式分发输入。全窗遮罩用 DrawColor，通用 DrawQuad 默认像素透明。关闭保存打开前的焦点，不能仅 revert_key_focus（那可能是另一个弹窗内部控件）。提示/原请求重试留在弹窗内，异步消息和窗口生命周期不可被输入门禁吞掉。

@@ -3,8 +3,8 @@ use super::*;
 impl Widget for ProjectBoard {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
         if !self.active {
-            // Read-only design previews must still permit viewport interaction.
-            self.view.handle_event(cx, event, scope);
+            // Read-only design previews still exercise the modal input boundary.
+            self.handle_board_view_event(cx, event, scope);
             return;
         }
         if !self
@@ -31,7 +31,8 @@ impl Widget for ProjectBoard {
                     self.load(cx);
                 }
             }
-            Event::KeyDown(e) if e.key_code == KeyCode::Escape => {
+            Event::KeyDown(e) if e.key_code == KeyCode::Escape
+                && !self.view.view(cx, ids!(inspector)).visible() => {
                 self.close_calendar(cx);
                 if self.pending.is_none() {
                     self.clear_quick_create(cx);
@@ -119,7 +120,7 @@ impl Widget for ProjectBoard {
             self.view.redraw(cx);
         }
         self.media_event(cx, event);
-        self.view.handle_event(cx, event, scope);
+        self.handle_board_view_event(cx, event, scope);
         let Event::Actions(actions) = event else {
             return;
         };
@@ -309,7 +310,9 @@ impl Widget for ProjectBoard {
             self.failed = false;
             self.load(cx);
         }
-        if self.view.button(cx, ids!(retry)).clicked(actions) {
+        if self.view.button(cx, ids!(retry)).clicked(actions)
+            || self.view.button(cx, ids!(dialog_retry)).clicked(actions)
+        {
             self.retry_write(cx);
         }
         if self.view.button(cx, ids!(new_task)).clicked(actions) {
@@ -381,25 +384,7 @@ impl Widget for ProjectBoard {
             }
         }
         if self.view.button(cx, ids!(close_detail)).clicked(actions) {
-            if self.pending.is_some() {
-                self.notice(cx,tr("A previous save is unconfirmed. Retry its original request to avoid duplicates."));
-            } else if self.dirty && !self.discard_armed {
-                self.discard_armed = true;
-                self.notice(
-                    cx,
-                    tr("You have unsaved changes. Save them, or close again to discard the draft."),
-                );
-            } else {
-                self.remember_comment(cx);
-                self.clear_media(cx);
-                self.selected = None;
-                self.creating = false;
-                self.dirty = false;
-                self.discard_armed = false;
-                self.detail_request = nonce();
-                self.view.view(cx, ids!(inspector)).set_visible(cx, false);
-                self.notice(cx, "");
-            }
+            self.request_close_inspector(cx);
         }
         if self.view.button(cx, ids!(reload_latest)).clicked(actions)
             && let Some(task) = self.selected.clone()
@@ -580,16 +565,7 @@ impl Widget for ProjectBoard {
         );
         if self.layout_key != layout_key {
             self.layout_key = layout_key;
-            self.view
-                .view(cx, ids!(board_scroll))
-                .set_visible(cx, !inspector || width >= 950.0);
-            let mut panel = self.view.view(cx, ids!(inspector));
-            let size = if width < 950.0 {
-                Size::fill()
-            } else {
-                Size::Fixed(420.0)
-            };
-            script_apply_eval!(cx,panel,{width:#(size)});
+            self.view.view(cx, ids!(board_scroll)).set_visible(cx, true);
             self.prepare_extension_draw(cx);
             for index in 0..12 {
                 let lane = self.snapshot.as_ref().and_then(|s| s.lanes.get(index));
@@ -752,6 +728,7 @@ impl Widget for ProjectBoard {
                 }
             }
         }
+        self.draw_task_dialog(cx, scope);
         self.resolve_landing_layout(cx);
         self.focus_quick_create(cx);
         DrawStep::done()

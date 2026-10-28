@@ -1394,6 +1394,13 @@ impl AppMain for App {
             self.app_state.app_prefs.refresh_ui_zoom_override(cx);
         }
 
+        // The task editor owns application input while its modal is open.
+        // Async replies and window lifecycle events continue through normally.
+        if crate::hagency::board::route_task_dialog_input(
+            cx, event, &self.ui, &mut Scope::with_data(&mut self.app_state),
+        ) {
+            return;
+        }
         self.handle_ui_zoom_shortcuts(cx, event);
         self.handle_navigation_shortcuts(cx, event);
         if let Event::MacosMenuCommand(command) = event {

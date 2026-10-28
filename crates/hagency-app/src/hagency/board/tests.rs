@@ -71,7 +71,7 @@ pub(super) fn draw(cx: &mut Cx, board: &mut ProjectBoard, width: f64, height: f6
     cx2d.end_pass(&pass);
 }
 #[test]
-fn kanban_script_layout_and_narrow_inspector_use_the_available_viewport() {
+fn kanban_dialog_centers_in_the_viewport_without_resizing_background_columns() {
     let (mut cx, mut board) = panel();
     populate(&mut board);
     board.sync_members(&mut cx, board.members.clone());
@@ -103,12 +103,15 @@ fn kanban_script_layout_and_narrow_inspector_use_the_available_viewport() {
         draw(&mut cx, &mut board, width, 760.0);
         let panel = board.view.view(&cx, ids!(inspector)).area().rect(&cx);
         assert!(panel.pos.x + panel.size.x <= width + 1.0, "{panel:?}");
-        if width < 950.0 {
-            assert!(!board.view.view(&cx, ids!(board_scroll)).visible());
-            assert!(panel.size.x > width - 30.0);
-        } else {
-            assert!((panel.size.x - 420.0).abs() < 1.0);
-        }
+        assert!(board.view.view(&cx, ids!(board_scroll)).visible());
+        assert!((panel.pos.x + panel.size.x * 0.5 - width * 0.5).abs() < 1.0, "{panel:?}");
+        assert!((panel.pos.y + panel.size.y * 0.5 - 380.0).abs() < 1.0, "{panel:?}");
+        assert!(panel.size.x <= 760.0 && panel.size.y < 760.0, "{panel:?}");
+        assert_eq!(board.view.view(&cx, ids!(board_scroll)).area().rect(&cx).size, rect.size);
+        let scrim = board.draw_dialog_bg.area().rect(&cx);
+        assert_eq!(scrim.pos, dvec2(0.0, 0.0));
+        assert_eq!(scrim.size, dvec2(width, 760.0));
+        assert!(board.draw_dialog_bg.color.w > 0.3, "the backdrop must visibly dim the application");
     }
 }
 #[test]

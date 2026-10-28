@@ -118,6 +118,7 @@ makepad_widgets::script_mod! {
     }
     mod.widgets.ProjectBoard = #(ProjectBoard::register_widget(vm)) {
         skip_widget_tree_search: true
+        draw_dialog_bg +: {color:#0008}
         width: Fill height: Fill flow: Down spacing: 14
         toolbar := RoundedView {width: Fill height: Fit flow: Down spacing: 10 padding: 12
             draw_bg +: {color: mod.widgets.RINX_SURFACE border_color: mod.widgets.RINX_BORDER border_size: 1.0 border_radius: 12.0}
@@ -198,13 +199,18 @@ makepad_widgets::script_mod! {
                 custom_6 := Column {visible:false}
 
             }
-            inspector := RoundedView {visible: false width: 420 height: Fill padding: 18 flow: Down spacing: 12
+        }
+        // Kept out of normal layout; the board draws it in a pass-wide modal overlay.
+        inspector_host := View {visible:false
+            inspector := RoundedView {visible: false width: 760 height: 700 padding: 18 flow: Down spacing: 12
                 draw_bg +: {color: mod.widgets.RINX_SURFACE border_radius: 12.0 border_size: 1.0 border_color: mod.widgets.RINX_BORDER}
                 View {width: Fill height: 40 spacing: 8 align: Align{y: 0.5}
                     detail_heading := Text {width: Fill max_lines:1 text_overflow:Ellipsis draw_text.text_style: theme.font_bold{font_size: mod.widgets.RINX_SECTION_SIZE}}
                     save := RinxPrimaryButton {width: 108 height: 38 text: #(crate::i18n::tr("Save task")) i18n_text: "Save task"}
                     close_detail := RinxGhostButton {height:36 text: #(crate::i18n::tr("Close")) i18n_text: "Close"}
                 }
+                dialog_notice := Text {visible:false}
+                dialog_retry := Action {visible:false text:#(crate::i18n::tr("Retry original save")) i18n_text:"Retry original save"}
                 reload_latest := RinxGhostButton {visible: false width: Fill height:36 text: #(crate::i18n::tr("Discard draft and load latest")) i18n_text: "Discard draft and load latest"}
                 detail_tabs := RoundedView {width:Fill height:40 spacing:4 padding:3
                     draw_bg +: {color:mod.widgets.RINX_PANEL_BG border_radius:9.0}

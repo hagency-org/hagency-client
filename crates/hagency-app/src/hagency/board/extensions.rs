@@ -128,7 +128,6 @@ impl ProjectBoard {
                 );
             } else if let Some(snapshot) = &self.snapshot {
                 self.selected = None;
-                self.view.view(cx, ids!(inspector)).set_visible(cx, false);
                 self.columns_draft = Some(
                     snapshot
                         .lanes
@@ -142,6 +141,7 @@ impl ProjectBoard {
                         .collect(),
                 );
                 self.columns_sequence = snapshot.sequence;
+                self.hide_inspector(cx);
                 self.column_edit = 0;
                 self.view
                     .view(cx, ids!(column_settings))
