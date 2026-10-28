@@ -15,6 +15,7 @@ impl ProjectBoard {
     pub(super) fn clear_content(&mut self, cx: &mut Cx) {
         self.close_calendar(cx);
         self.clear_quick_create(cx);
+        self.subtask_after_save = None;
         self.clear_media(cx);
         self.layout_key.clear();
         self.notifications.clear();
@@ -47,7 +48,6 @@ impl ProjectBoard {
             .widget(cx, ids!(attachment_preview))
             .set_visible(cx, false);
         self.comments.clear();
-        self.activity.clear();
         self.members.clear();
         self.card_targets.clear();
         self.more_targets.clear();
@@ -63,7 +63,6 @@ impl ProjectBoard {
             self.view.text_input(cx, id).set_text(cx, "");
         }
         self.view.widget(cx, ids!(comments)).set_text(cx, "");
-        self.view.label(cx, ids!(activity)).set_text(cx, "");
         self.hide_inspector(cx);
         self.view.redraw(cx);
     }
@@ -165,7 +164,6 @@ impl ProjectBoard {
             Read::Attachment(..) => self.attachment_request = request,
             Read::Notifications(_) => self.notification_request = request,
             Read::Comments(..) => self.comments_request = request,
-            Read::Activity(..) => self.activity_request = request,
             _ => (),
         }
         self.reads.insert(request);
@@ -226,6 +224,53 @@ impl ProjectBoard {
         }
         self.pending = Some(action);
         self.retry_write(cx);
+    }
+    pub(super) fn save_task(&mut self, cx: &mut Cx) {
+        if self.pending.is_some()
+            || self.conflict
+            || (!self.creating && (!self.detail_loaded || self.selected.is_none()))
+            || self
+                .selected
+                .as_ref()
+                .is_some_and(|t| t.archived_at.is_some())
+        {
+            return;
+        }
+        if !self.creating && !self.dirty {
+            self.request_close_inspector(cx);
+            return;
+        }
+        let mut fields = self.fields(cx);
+        if let Err(e) = fields.validate() {
+            self.notice(cx, error_message(e.0));
+            return;
+        }
+        self.subtask_after_save = None;
+        let idempotency_key = uuid::Uuid::new_v4().to_string();
+        if self.creating {
+            self.write(
+                cx,
+                BoardAction::Create {
+                    input: Create {
+                        idempotency_key,
+                        fields,
+                        state: self.draft_state.clone(),
+                    },
+                },
+            );
+        } else if let Some(task) = self.selected.clone() {
+            self.write(
+                cx,
+                BoardAction::Update {
+                    task: task.id,
+                    input: Update {
+                        idempotency_key,
+                        fields,
+                        expected_version: task.version,
+                    },
+                },
+            );
+        }
     }
     pub(super) fn retry_write(&mut self, cx: &mut Cx) {
         if self.saving || !self.active {
@@ -363,11 +408,9 @@ impl ProjectBoard {
             .set_visible(cx, false);
         self.restore_comment(cx, Some(&task.id));
         self.comments.clear();
-        self.activity.clear();
         self.view
             .widget(cx, ids!(comments))
             .set_text(cx, tr("Loading…"));
-        self.view.label(cx, ids!(activity)).set_text(cx, "");
         self.creating = false;
         self.discussion = false;
         self.detail_loaded = false;
@@ -433,7 +476,6 @@ impl ProjectBoard {
         self.draft_state = self.column_state(state);
         self.selected = None;
         self.comments.clear();
-        self.activity.clear();
         self.open_inspector(cx);
         self.view
             .label(cx, ids!(detail_heading))
@@ -567,14 +609,6 @@ impl ProjectBoard {
                 ids!(first_comments),
                 self.reads.contains(&self.comments_request),
             ),
-            (
-                ids!(more_activity),
-                self.reads.contains(&self.activity_request),
-            ),
-            (
-                ids!(first_activity),
-                self.reads.contains(&self.activity_request),
-            ),
         ] {
             self.view.button(cx, id).set_board_enabled(cx, !pending);
         }
@@ -600,7 +634,7 @@ impl ProjectBoard {
         }
         self.view
             .button(cx, ids!(save))
-            .set_board_enabled(cx, editing && (self.creating || self.dirty));
+            .set_board_enabled(cx, editing);
         self.view
             .button(cx, ids!(open_calendar))
             .set_board_enabled(cx, editing);
@@ -609,7 +643,7 @@ impl ProjectBoard {
         }
         self.view
             .widget(cx, ids!(save))
-            .set_disabled(cx, !(editing && (self.creating || self.dirty)));
+            .set_disabled(cx, !editing);
         self.view.button(cx, ids!(new_task)).set_board_enabled(
             cx,
             self.snapshot.is_some() && !writing && !self.failed && self.columns_draft.is_none(),
@@ -668,9 +702,9 @@ impl ProjectBoard {
         self.view.button(cx, ids!(archive)).set_text(
             cx,
             tr(if archived {
-                "Restore task"
+                "Restore"
             } else {
-                "Archive task"
+                "Archive"
             }),
         );
         self.view.button(cx, ids!(save)).set_text(
@@ -678,7 +712,7 @@ impl ProjectBoard {
             tr(if self.saving {
                 "Saving…"
             } else {
-                "Save task"
+                "Save"
             }),
         );
         self.view.button(cx, ids!(close_detail)).set_text(
@@ -731,19 +765,10 @@ impl ProjectBoard {
         // inspector and clamps scroll to the top while an image is uploading.
         // Task selection clears the old task before requesting its detail.
         self.comments_after = 0;
-        self.activity_after = 0;
         self.read(
             cx,
             Read::Comments(id.into(), false),
             BoardAction::Comments {
-                task: id.into(),
-                after: 0,
-            },
-        );
-        self.read(
-            cx,
-            Read::Activity(id.into(), false),
-            BoardAction::Activity {
                 task: id.into(),
                 after: 0,
             },
@@ -757,13 +782,12 @@ impl ProjectBoard {
         {
             return;
         }
-        if matches!(done.kind, Read::Comments(..) | Read::Activity(..))
+        if matches!(done.kind, Read::Comments(..))
             && done.detail_generation != self.detail_request
         {
             return;
         }
         if matches!(done.kind, Read::Comments(..)) && done.request != self.comments_request
-            || matches!(done.kind, Read::Activity(..)) && done.request != self.activity_request
         {
             return;
         }
@@ -973,85 +997,43 @@ impl ProjectBoard {
                     Read::InlineImage(task, id, scope) => {
                         self.inline_image(cx, task, id, *scope, value)
                     }
-                    Read::Comments(id, append) | Read::Activity(id, append) => {
+                    Read::Comments(id, append) => {
                         if !self.selected.as_ref().is_some_and(|t| t.id == *id) {
                             return;
                         }
-                        let first_button = if matches!(done.kind, Read::Comments(..)) {
-                            ids!(first_comments)
-                        } else {
-                            ids!(first_activity)
-                        };
-                        self.view.button(cx, first_button).set_visible(cx, *append);
-                        let items = value["items"].as_array().cloned().unwrap_or_default();
-                        let comments = matches!(done.kind, Read::Comments(..));
+                        self.view
+                            .button(cx, ids!(first_comments))
+                            .set_visible(cx, *append);
+                        self.comments = value["items"].as_array().cloned().unwrap_or_default();
+                        self.comments_after = value["next"].as_i64().unwrap_or(0);
                         let media_scope = self.media_scope();
-                        let rows = if comments {
-                            &mut self.comments
-                        } else {
-                            &mut self.activity
-                        };
-                        rows.clear();
-                        rows.extend(items);
-                        let next = value["next"].as_i64().unwrap_or(0);
-                        if comments {
-                            self.comments_after = next
-                        } else {
-                            self.activity_after = next
-                        };
-                        let text = if comments {
-                            rows.iter()
-                                .map(|v| {
-                                    let author = markdown::escape_html(member_label(
-                                        v["author"].as_str().unwrap_or(""),
-                                    ));
-                                    let time = timestamp(&v["createdAt"]);
-                                    format!(
-                                        "<p><strong>{author}</strong> · {time}</p>{}<hr/>",
-                                        markdown::render_markdown_with_media(
-                                            v["body"].as_str().unwrap_or(""),
-                                            media_scope
-                                        )
+                        let text = self
+                            .comments
+                            .iter()
+                            .map(|v| {
+                                let author =
+                                    markdown::escape_html(member_label(v["author"].as_str().unwrap_or("")));
+                                let time = timestamp(&v["createdAt"]);
+                                format!(
+                                    "<p><strong>{author}</strong> · {time}</p>{}<hr/>",
+                                    markdown::render_markdown_with_media(
+                                        v["body"].as_str().unwrap_or(""),
+                                        media_scope
                                     )
-                                })
-                                .collect::<Vec<_>>()
-                                .join("")
-                        } else {
-                            rows.iter()
-                                .map(collaboration::activity_text)
-                                .collect::<Vec<_>>()
-                                .join("\n\n")
-                        };
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("");
+                        self.view.widget(cx, ids!(comments)).set_text(
+                            cx,
+                            if text.is_empty() {
+                                tr("No comments yet")
+                            } else {
+                                &text
+                            },
+                        );
                         self.view
-                            .widget(
-                                cx,
-                                if comments {
-                                    ids!(comments)
-                                } else {
-                                    ids!(activity)
-                                },
-                            )
-                            .set_text(
-                                cx,
-                                if text.is_empty() {
-                                    tr(if comments {
-                                        "No comments yet"
-                                    } else {
-                                        "No activity yet"
-                                    })
-                                } else {
-                                    &text
-                                },
-                            );
-                        self.view
-                            .button(
-                                cx,
-                                if comments {
-                                    ids!(more_comments)
-                                } else {
-                                    ids!(more_activity)
-                                },
-                            )
+                            .button(cx, ids!(more_comments))
                             .set_visible(cx, value["hasMore"] == true);
                     }
                 }
@@ -1078,6 +1060,29 @@ impl ProjectBoard {
         match &done.result {
             Ok(value) => {
                 let was_quick = self.is_quick_save();
+                let task_save = matches!(
+                    self.pending,
+                    Some(BoardAction::Create { .. } | BoardAction::Update { .. })
+                );
+                let confirmed = serde_json::from_value::<BoardTask>(value["task"].clone())
+                    .ok()
+                    .filter(|task| {
+                        task.project_id == self.project
+                            && match &self.pending {
+                                Some(BoardAction::Update { task: id, .. }) => task.id == *id,
+                                _ => true,
+                            }
+                    });
+                if task_save && confirmed.is_none() {
+                    self.notice(cx, error_message("invalid_board_response"));
+                    self.sync_controls(cx);
+                    return;
+                }
+                let next_subtask = self.subtask_after_save.take().filter(|(key, parent)| {
+                    matches!(&self.pending, Some(BoardAction::Update {task, input})
+                        if task == parent && input.idempotency_key == *key)
+                });
+                let close_after_save = task_save && !was_quick && next_subtask.is_none();
                 let was_columns =
                     matches!(self.pending, Some(BoardAction::ConfigureColumns { .. }));
                 let was_comment = matches!(self.pending, Some(BoardAction::Comment { .. }));
@@ -1121,7 +1126,9 @@ impl ProjectBoard {
                         self.comment_preview = false;
                         self.sync_markdown_views(cx);
                     }
-                    self.detail_history(cx, &task.id);
+                    if !task_save {
+                        self.detail_history(cx, &task.id);
+                    }
                     if was_attachment {
                         self.read(
                             cx,
@@ -1142,6 +1149,13 @@ impl ProjectBoard {
                 }
                 if was_quick {
                     self.clear_quick_create(cx);
+                }
+                if let Some((_, parent)) = next_subtask {
+                    if let Some(task) = confirmed.filter(|task| task.id == parent) {
+                        self.begin_subtask(cx, task);
+                    }
+                } else if close_after_save {
+                    self.request_close_inspector(cx);
                 }
                 self.notice(
                     cx,
@@ -1164,6 +1178,7 @@ impl ProjectBoard {
                 if !uncertain(code) {
                     self.cancel_media_uploads();
                     self.pending = None;
+                    self.subtask_after_save = None;
                 }
                 if denied(code) {
                     self.clear_content(cx);

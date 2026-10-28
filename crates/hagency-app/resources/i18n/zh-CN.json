@@ -2554,5 +2554,10 @@
   "Clear date": "清除日期",
   "+ Add a card": "+ 添加卡片",
   "Add card": "添加卡片",
-  "Enter a title…": "输入卡片标题…"
+  "Enter a title…": "输入卡片标题…",
+  "Discussion": "讨论",
+  "New subtask": "新建子任务",
+  "Save and add subtask": "保存并添加子任务",
+  "Archive": "归档",
+  "Restore": "恢复"
 }

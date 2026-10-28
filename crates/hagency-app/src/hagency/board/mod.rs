@@ -129,7 +129,6 @@ enum Read {
     Page(usize),
     Detail(String),
     Comments(String, bool),
-    Activity(String, bool),
 }
 #[derive(Debug)]
 struct Completed {
@@ -242,6 +241,8 @@ pub struct ProjectBoard {
     #[rust]
     dirty: bool,
     #[rust]
+    subtask_after_save: Option<(String, String)>,
+    #[rust]
     conflict: bool,
     #[rust]
     comments: Vec<Value>,
@@ -249,12 +250,6 @@ pub struct ProjectBoard {
     comments_after: i64,
     #[rust]
     comments_request: u64,
-    #[rust]
-    activity: Vec<Value>,
-    #[rust]
-    activity_after: i64,
-    #[rust]
-    activity_request: u64,
     #[rust]
     card_areas: HashMap<String, Area>,
     #[rust]
@@ -520,10 +515,6 @@ impl ProjectBoardRef {
                     .view
                     .widget(cx, ids!(comments))
                     .set_text(cx, tr("No comments yet"));
-                board
-                    .view
-                    .label(cx, ids!(activity))
-                    .set_text(cx, tr("Created task"));
             }
             board.sync_controls(cx);
         }

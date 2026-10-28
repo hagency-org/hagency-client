@@ -393,34 +393,8 @@ impl Widget for ProjectBoard {
             self.conflict = false;
             self.select(cx, &task);
         }
-        if self.view.button(cx, ids!(save)).clicked(actions) && self.pending.is_none() {
-            let mut fields = self.fields(cx);
-            if let Err(e) = fields.validate() {
-                self.notice(cx, error_message(e.0));
-            } else if self.creating {
-                self.write(
-                    cx,
-                    BoardAction::Create {
-                        input: Create {
-                            idempotency_key: uuid::Uuid::new_v4().to_string(),
-                            fields,
-                            state: self.draft_state.clone(),
-                        },
-                    },
-                );
-            } else if let Some(task) = &self.selected {
-                self.write(
-                    cx,
-                    BoardAction::Update {
-                        task: task.id.clone(),
-                        input: Update {
-                            idempotency_key: uuid::Uuid::new_v4().to_string(),
-                            expected_version: task.version,
-                            fields,
-                        },
-                    },
-                );
-            }
+        if self.view.button(cx, ids!(save)).clicked(actions) {
+            self.save_task(cx);
         }
         if self.view.button(cx, ids!(move_top)).clicked(actions)
             || self.view.button(cx, ids!(move_bottom)).clicked(actions)
@@ -493,19 +467,6 @@ impl Widget for ProjectBoard {
                 },
             );
         }
-        if self.view.button(cx, ids!(more_activity)).clicked(actions)
-            && let Some(task) = &self.selected
-        {
-            let id = task.id.clone();
-            self.read(
-                cx,
-                Read::Activity(id.clone(), true),
-                BoardAction::Activity {
-                    task: id,
-                    after: self.activity_after,
-                },
-            );
-        }
         if let Some(task) = &self.selected {
             let id = task.id.clone();
             if self.view.button(cx, ids!(first_comments)).clicked(actions) {
@@ -518,13 +479,7 @@ impl Widget for ProjectBoard {
                     },
                 );
             }
-            if self.view.button(cx, ids!(first_activity)).clicked(actions) {
-                self.read(
-                    cx,
-                    Read::Activity(id.clone(), false),
-                    BoardAction::Activity { task: id, after: 0 },
-                );
-            }
+
         }
         self.sync_controls(cx);
     }

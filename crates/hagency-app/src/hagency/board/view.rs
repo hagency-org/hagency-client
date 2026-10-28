@@ -206,7 +206,8 @@ makepad_widgets::script_mod! {
                 draw_bg +: {color: mod.widgets.RINX_SURFACE border_radius: 12.0 border_size: 1.0 border_color: mod.widgets.RINX_BORDER}
                 View {width: Fill height: 40 spacing: 8 align: Align{y: 0.5}
                     detail_heading := Text {width: Fill max_lines:1 text_overflow:Ellipsis draw_text.text_style: theme.font_bold{font_size: mod.widgets.RINX_SECTION_SIZE}}
-                    save := RinxPrimaryButton {width: 108 height: 38 text: #(crate::i18n::tr("Save task")) i18n_text: "Save task"}
+                    save := RinxPrimaryButton {width: 82 height: 38 text: #(crate::i18n::tr("Save")) i18n_text: "Save"}
+                    archive := RinxButton {height:38 text:#(crate::i18n::tr("Archive")) i18n_text:"Archive"}
                     close_detail := RinxGhostButton {height:36 text: #(crate::i18n::tr("Close")) i18n_text: "Close"}
                 }
                 dialog_notice := Text {visible:false}
@@ -215,7 +216,7 @@ makepad_widgets::script_mod! {
                 detail_tabs := RoundedView {width:Fill height:40 spacing:4 padding:3
                     draw_bg +: {color:mod.widgets.RINX_PANEL_BG border_radius:9.0}
                     detail_tab := RinxGhostButton {width:Fill height:34 padding:0 text:#(crate::i18n::tr("Task details")) i18n_text:"Task details"}
-                    discussion_tab := RinxGhostButton {width:Fill height:34 padding:0 text:#(crate::i18n::tr("Discussion & activity")) i18n_text:"Discussion & activity"}
+                    discussion_tab := RinxGhostButton {width:Fill height:34 padding:0 text:#(crate::i18n::tr("Discussion")) i18n_text:"Discussion"}
                 }
                 media_drop_hint := Small {visible:false width:Fill draw_text.color:mod.widgets.RINX_ACCENT}
                 editor_scroll := ScrollYView {width: Fill height: Fill flow: Down spacing: 12 padding:Inset{right:12 top:2}
@@ -396,9 +397,8 @@ makepad_widgets::script_mod! {
                                 child_status := Small {max_lines:1 text_overflow:Ellipsis}
                             }
                         }
-                        add_subtask := RinxGhostButton {width:Fill height:36 text:#(crate::i18n::tr("Add subtask")) i18n_text:"Add subtask"}
+                        add_subtask := RinxButton {width:Fill height:36 text:#(crate::i18n::tr("Add subtask")) i18n_text:"Add subtask"}
                     }
-                    archive := RinxGhostButton {width:Fill height:36 text:#(crate::i18n::tr("Archive task")) i18n_text:"Archive task"}
                     }
                     existing_actions := View {visible: false width: Fill height: Fit flow: Down spacing: 12
                         Hr {width: Fill height: 1}
@@ -410,10 +410,7 @@ makepad_widgets::script_mod! {
                         comment_draft_hint := Small {}
                         comment_editor := Composer {source_wrap +: {source +: {height:120}}}
                         add_comment := Action {text: #(crate::i18n::tr("Add comment")) i18n_text: "Add comment"}
-                        Text {text: #(crate::i18n::tr("Activity")) i18n_text: "Activity" draw_text.text_style:theme.font_bold{font_size:mod.widgets.RINX_BODY_SIZE}}
-                        activity := Small {}
-                        more_activity := RinxGhostButton {visible: false height:36 text: #(crate::i18n::tr("Load more activity")) i18n_text: "Load more activity"}
-                        first_activity := RinxGhostButton {visible:false height:36 text:#(crate::i18n::tr("Back to first activity")) i18n_text:"Back to first activity"}
+
                     }
                 }
             }

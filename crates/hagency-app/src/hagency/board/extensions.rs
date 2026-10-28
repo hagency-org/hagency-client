@@ -7,6 +7,59 @@ pub(super) fn column_title(title: &str) -> String {
     }
 }
 impl ProjectBoard {
+    pub(super) fn begin_subtask(&mut self, cx: &mut Cx, parent: BoardTask) {
+        self.new_task(cx);
+        if !self.creating || self.selected.is_some() {
+            return;
+        }
+        self.draft_parent = Some(parent.id.clone());
+        self.parent_task = Some(parent);
+        self.dirty = true;
+        self.dialog_focus_pending = true;
+        self.view
+            .label(cx, ids!(detail_heading))
+            .set_text(cx, tr("New subtask"));
+        self.sync_controls(cx);
+    }
+
+    pub(super) fn add_subtask(&mut self, cx: &mut Cx) {
+        if self.pending.is_some()
+            || self.conflict
+            || !self.detail_loaded
+            || self.subtasks.len() >= 100
+        {
+            return;
+        }
+        let Some(parent) = self
+            .selected
+            .clone()
+            .filter(|t| t.parent_id.is_none() && t.archived_at.is_none())
+        else {
+            return;
+        };
+        if !self.dirty {
+            self.begin_subtask(cx, parent);
+            return;
+        }
+        let mut fields = self.fields(cx);
+        if let Err(e) = fields.validate() {
+            self.notice(cx, error_message(e.0));
+            return;
+        }
+        let idempotency_key = uuid::Uuid::new_v4().to_string();
+        self.subtask_after_save = Some((idempotency_key.clone(), parent.id.clone()));
+        self.write(
+            cx,
+            BoardAction::Update {
+                task: parent.id,
+                input: Update {
+                    idempotency_key,
+                    fields,
+                    expected_version: parent.version,
+                },
+            },
+        );
+    }
     pub(super) fn column_count(&self) -> usize {
         self.snapshot.as_ref().map_or(0, |s| s.lanes.len())
     }
@@ -316,18 +369,8 @@ impl ProjectBoard {
                 self.view.redraw(cx);
             }
         }
-        if self.view.button(cx, ids!(add_subtask)).clicked(actions)
-            && self.pending.is_none()
-            && !self.dirty
-            && let Some(parent) = self.selected.clone()
-            && parent.parent_id.is_none()
-            && parent.archived_at.is_none()
-        {
-            self.new_task(cx);
-            self.draft_parent = Some(parent.id.clone());
-            self.parent_task = Some(parent);
-            self.dirty = true;
-            self.sync_controls(cx);
+        if self.view.button(cx, ids!(add_subtask)).clicked(actions) {
+            self.add_subtask(cx);
         }
         if self.view.button(cx, ids!(open_parent)).clicked(actions)
             && self.pending.is_none()
@@ -420,7 +463,12 @@ impl ProjectBoard {
             .set_board_enabled(cx, editable);
         self.view
             .button(cx, ids!(add_subtask))
-            .set_board_enabled(cx, editable && !self.dirty && self.subtasks.len() < 100);
+            .set_board_enabled(cx, editable && self.subtasks.len() < 100);
+        self.view.button(cx, ids!(add_subtask)).set_text(cx, tr(if self.dirty {
+            "Save and add subtask"
+        } else {
+            "Add subtask"
+        }));
         self.view
             .button(cx, ids!(open_parent))
             .set_board_enabled(cx, !writing && !self.dirty);

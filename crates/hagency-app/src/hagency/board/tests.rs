@@ -1091,3 +1091,157 @@ fn same_task_history_refresh_preserves_content_and_selected_preview() {
         "Keep this visible"
     );
 }
+
+fn editable_followup_task() -> (Cx, ProjectBoard) {
+    let (mut cx, mut board) = panel();
+    populate(&mut board);
+    let parent = task("parent", "todo");
+    board.selected = Some(parent.clone());
+    board.detail_loaded = true;
+    board.fill_editor(&mut cx, parent.fields());
+    board.open_inspector(&mut cx);
+    (cx, board)
+}
+
+fn followup_saved(board: &ProjectBoard, result: Result<Value, String>) -> Saved {
+    Saved {
+        identity: board.identity.clone(),
+        project: board.project.clone(),
+        epoch: board.epoch,
+        request: board.save_request,
+        result,
+    }
+}
+
+#[test]
+fn save_task_closes_only_after_confirmed_create_or_update_and_clean_save_needs_no_write() {
+    for creating in [false, true] {
+        let (mut cx, mut board) = editable_followup_task();
+        if creating {
+            board.new_task(&mut cx);
+        }
+        board
+            .view
+            .text_input(&cx, ids!(title))
+            .set_text(&mut cx, "Saved task");
+        board.dirty = true;
+        board.save_task(&mut cx);
+        assert!(board.pending.is_some());
+        assert!(board.view.view(&cx, ids!(inspector)).visible());
+        let done = followup_saved(
+            &board,
+            Ok(json!({"task":task_value(if creating {"new"} else {"parent"}, "todo")})),
+        );
+        board.apply_saved(&mut cx, &done);
+        assert!(!board.view.view(&cx, ids!(inspector)).visible());
+        assert!(
+            board.selected.is_none() && !board.creating && !board.dirty && board.pending.is_none()
+        );
+        assert!(board.dialog_cancel_scope.is_none());
+    }
+    let (mut cx, mut board) = editable_followup_task();
+    board.save_task(&mut cx);
+    assert!(board.pending.is_none());
+    assert!(!board.view.view(&cx, ids!(inspector)).visible());
+}
+
+#[test]
+fn failed_or_malformed_task_save_keeps_the_dialog_draft_and_original_uncertain_intent() {
+    for result in [
+        Err("server_unavailable".into()),
+        Ok(json!({})),
+        Ok(json!({"task":task_value("wrong", "todo")})),
+    ] {
+        let (mut cx, mut board) = editable_followup_task();
+        board
+            .view
+            .text_input(&cx, ids!(title))
+            .set_text(&mut cx, "Keep this draft");
+        board.dirty = true;
+        board.save_task(&mut cx);
+        let original = serde_json::to_value(&board.pending).unwrap();
+        let done = followup_saved(&board, result);
+        board.apply_saved(&mut cx, &done);
+        assert!(board.view.view(&cx, ids!(inspector)).visible());
+        assert!(board.dirty);
+        assert_eq!(
+            board.view.text_input(&cx, ids!(title)).text(),
+            "Keep this draft"
+        );
+        assert_eq!(serde_json::to_value(&board.pending).unwrap(), original);
+        assert!(board.view.button(&cx, ids!(dialog_retry)).visible());
+    }
+}
+
+#[test]
+fn dirty_parent_can_save_then_open_subtask_and_child_save_closes_the_dialog() {
+    let (mut cx, mut board) = editable_followup_task();
+    board
+        .view
+        .text_input(&cx, ids!(title))
+        .set_text(&mut cx, "Edited parent");
+    board.dirty = true;
+    board.sync_controls(&mut cx);
+    let button = board.view.button(&cx, ids!(add_subtask));
+    assert!(button.borrow().unwrap().enabled());
+    assert_eq!(button.text(), tr("Save and add subtask"));
+    board.add_subtask(&mut cx);
+    assert!(!board.creating);
+    let original = serde_json::to_value(&board.pending).unwrap();
+    assert_eq!(original["action"], "update");
+    let intent = board.subtask_after_save.clone();
+    let error = followup_saved(&board, Err("server_unavailable".into()));
+    board.apply_saved(&mut cx, &error);
+    assert_eq!(board.subtask_after_save, intent);
+    assert_eq!(serde_json::to_value(&board.pending).unwrap(), original);
+    let mut parent = task_value("parent", "todo");
+    parent["version"] = json!(2);
+    let done = followup_saved(&board, Ok(json!({"task":parent})));
+    board.apply_saved(&mut cx, &done);
+    assert!(board.view.view(&cx, ids!(inspector)).visible());
+    assert!(board.creating && board.selected.is_none() && board.pending.is_none());
+    assert_eq!(board.fields(&mut cx).parent_id.as_deref(), Some("parent"));
+    assert_eq!(
+        board.view.label(&cx, ids!(detail_heading)).text(),
+        tr("New subtask")
+    );
+    assert!(board.fields(&mut cx).due_date.is_none());
+    assert!(board.fields(&mut cx).assignee_mxid.is_none());
+    board
+        .view
+        .text_input(&cx, ids!(title))
+        .set_text(&mut cx, "Child title");
+    board.save_task(&mut cx);
+    let payload = serde_json::to_value(&board.pending).unwrap();
+    assert_eq!(payload["input"]["fields"]["parentId"], "parent");
+    let mut child = task_value("child", "todo");
+    child["parentId"] = json!("parent");
+    let done = followup_saved(&board, Ok(json!({"task":child})));
+    board.apply_saved(&mut cx, &done);
+    assert!(!board.view.view(&cx, ids!(inspector)).visible());
+}
+
+#[test]
+fn clean_subtask_creation_is_immediate_and_comment_ack_does_not_close_editor() {
+    let (mut cx, mut board) = editable_followup_task();
+    board.add_subtask(&mut cx);
+    assert!(board.creating && board.pending.is_none());
+    assert_eq!(board.fields(&mut cx).parent_id.as_deref(), Some("parent"));
+    assert!(board.view.widget(&cx, ids!(activity)).is_empty());
+    assert_eq!(
+        board.view.button(&cx, ids!(discussion_tab)).text(),
+        tr("Discussion")
+    );
+    let (mut cx, mut board) = editable_followup_task();
+    board.pending = Some(BoardAction::Comment {
+        task: "parent".into(),
+        input: Comment {
+            idempotency_key: "comment".into(),
+            body: "Keep editor open".into(),
+        },
+    });
+    let done = followup_saved(&board, Ok(json!({"task":task_value("parent", "todo")})));
+    board.apply_saved(&mut cx, &done);
+    assert!(board.view.view(&cx, ids!(inspector)).visible());
+    assert_eq!(board.selected.as_ref().unwrap().id, "parent");
+}

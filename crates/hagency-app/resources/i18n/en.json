@@ -2554,5 +2554,10 @@
   "Clear date": "Clear date",
   "+ Add a card": "+ Add a card",
   "Add card": "Add card",
-  "Enter a title…": "Enter a title…"
+  "Enter a title…": "Enter a title…",
+  "Discussion": "Discussion",
+  "New subtask": "New subtask",
+  "Save and add subtask": "Save and add subtask",
+  "Archive": "Archive",
+  "Restore": "Restore"
 }
