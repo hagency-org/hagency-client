@@ -14,7 +14,7 @@ fn agent(
     String,
     MatrixRoomObservation,
 ) {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&temp.path().join("state")).unwrap();
     db.register(&registration()).unwrap();
     let pool = resource("pool", "seat", 1000);

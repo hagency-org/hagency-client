@@ -54,7 +54,7 @@ enum Fault {
 async fn lost_reply(fault: Fault) {
     let usage = matches!(fault, Fault::Usage);
     let panic = matches!(fault, Fault::WorkspacePanic);
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let work = root.path().join("work");
     hagency_store::private::directory(&work).unwrap();
     let work = work.canonicalize().unwrap();

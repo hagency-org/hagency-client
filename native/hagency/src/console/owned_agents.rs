@@ -15,6 +15,8 @@ use std::{
 };
 mod commands;
 mod direct;
+#[cfg(test)]
+mod profile_directory_tests;
 
 pub(super) fn router() -> Router {
     Router::with_path("owned-agents")
@@ -181,6 +183,8 @@ struct ResetAgentPolicy {
 #[serde(deny_unknown_fields)]
 struct EditAgentModel {
     profile: ModelProfile,
+    #[serde(default,rename="expectedProfileDigest")]
+    expected_profile_digest:Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -478,15 +482,34 @@ pub(crate) fn profile_identity(
     );
     Ok(format!("{digest:x}"))
 }
-/// Only full authenticated profiles can select a local data directory. No old
-/// owner directory or database is imported when a different profile is selected.
-pub(crate) fn ledger_path(
+struct CheckedProfileDirectory {
+    path: PathBuf,
+    digest: String,
+    expected: LocalProfileIdentity,
+    legacy_marker: bool,
+}
+
+/// Validate the authenticated profile's private journal namespace without
+/// opening, creating, migrating or authorizing a personal SQLite ledger. Each
+/// journal must still check its own full identity and command custody. A copied
+/// database in this directory never gains authority from this path check.
+pub(crate) fn journal_profile_directory(
     root: &Path,
     origin: &str,
     issuer: &str,
     subject: &str,
     owner: &str,
 ) -> Result<PathBuf, Error> {
+    Ok(checked_profile_directory(root, origin, issuer, subject, owner)?.path)
+}
+
+fn checked_profile_directory(
+    root: &Path,
+    origin: &str,
+    issuer: &str,
+    subject: &str,
+    owner: &str,
+) -> Result<CheckedProfileDirectory, Error> {
     let digest = profile_identity(origin, issuer, subject, owner)?;
     hagency_store::private::directory(root).map_err(|_| Error::Unavailable)?;
     let owners = root.join("owned-agent-owners");
@@ -527,16 +550,34 @@ pub(crate) fn ledger_path(
     if stored != expected && stored != legacy {
         return Err(Error::Unauthorized);
     }
-    let path = directory.join("agent-local.sqlite");
+    Ok(CheckedProfileDirectory {
+        path: directory,
+        digest,
+        expected,
+        legacy_marker: stored == legacy,
+    })
+}
+
+/// Personal operations additionally validate the actual database's immutable
+/// owner/profile pin. Journal namespace validation alone cannot replace this.
+pub(crate) fn ledger_path(
+    root: &Path,
+    origin: &str,
+    issuer: &str,
+    subject: &str,
+    owner: &str,
+) -> Result<PathBuf, Error> {
+    let profile = checked_profile_directory(root, origin, issuer, subject, owner)?;
+    let path = profile.path.join("agent-local.sqlite");
     hagency_store::private::open(&path, true)
         .or_else(|_| hagency_store::private::open(&path, false))
         .map_err(|_| Error::Unavailable)?;
     // Pin the database too: directory markers alone cannot make copied data valid.
-    Ledger::open_scoped(&path, owner, &digest).map_err(|_| Error::Unauthorized)?;
-    if stored == legacy {
+    Ledger::open_scoped(&path, owner, &profile.digest).map_err(|_| Error::Unauthorized)?;
+    if profile.legacy_marker {
         hagency_store::private::replace(
-            &marker,
-            &serde_json::to_vec(&expected).map_err(|_| Error::Unavailable)?,
+            &profile.path.join("profile-identity.json"),
+            &serde_json::to_vec(&profile.expected).map_err(|_| Error::Unavailable)?,
         )
         .map_err(|_| Error::Unavailable)?;
     }
@@ -840,6 +881,7 @@ async fn call(req: &mut Request, depot: &Depot) -> Result<Value, OwnerError> {
                 return Err(error(400, "invalid_arguments"));
             }
             let mut model_change = None;
+            let mut expected_model_digest = None;
             let change = if method == Method::PUT && parts[1] == "agent-model-profile" {
                 let mut input: EditAgentModel = parse(req).await?;
                 if !input.profile.workspace_root.is_empty()
@@ -858,6 +900,7 @@ async fn call(req: &mut Request, depot: &Depot) -> Result<Value, OwnerError> {
                         .ok_or_else(|| error(400, "invalid_local_policy"))?
                         .into();
                 }
+                expected_model_digest=input.expected_profile_digest;
                 model_change = Some(input.profile);
                 None
             } else if method == Method::GET {
@@ -924,7 +967,9 @@ async fn call(req: &mut Request, depot: &Depot) -> Result<Value, OwnerError> {
                     ledger.set_agent_policy(&reply.owner, &agent, revision, &policy).map_err(local_error)?;
                 }
                 if let Some(profile)=model_change {
-                    ledger.set_agent_model_profile(&reply.owner,&agent,&profile).map_err(local_error)?;
+                    if let Some(expected)=expected_model_digest {
+                        ledger.set_agent_model_profile_checked(&reply.owner,&agent,&expected,&profile).map_err(local_error)?;
+                    } else {ledger.set_agent_model_profile(&reply.owner,&agent,&profile).map_err(local_error)?;}
                 }
                 let policy = ledger.agent_policy(&reply.owner, &agent).map_err(local_error)?;
                 let (spent, held) = ledger.agent_account(&reply.owner, &agent, policy.policy.budget.period, now()).map_err(local_error)?;
@@ -1505,7 +1550,7 @@ mod profile_tests {
     }
     #[test]
     fn profile_marker_accepts_long_identity_and_rejects_oversized_metadata() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let root = temp.path().join("state");
         let origin = "https://server.example/";
         let issuer = "https://server.example/auth/";
@@ -1524,7 +1569,7 @@ mod profile_tests {
 
     #[test]
     fn auth_path_upgrade_preserves_scoped_ledger_and_rewrites_only_matching_marker() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let root = temp.path().join("state");
         let origin = "https://server.example/";
         let issuer = "https://server.example/auth/";
@@ -1571,7 +1616,7 @@ mod profile_tests {
     #[test]
     fn profile_marker_rejects_symlink_and_nonprivate_file() {
         use std::os::unix::{fs::PermissionsExt, fs::symlink};
-        let temp = tempfile::tempdir().unwrap();
+        let temp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let file = temp.path().join("metadata.json");
         hagency_store::private::write_new(&file, b"{}").unwrap();
         let link = temp.path().join("link.json");
@@ -1583,7 +1628,7 @@ mod profile_tests {
 
     #[test]
     fn multi_profile_directories_preserve_local_budget_and_reject_foreign_copy() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let root = temp.path().join("state");
         let origin = "https://server.example/";
         let issuer = "https://server.example/auth/";

@@ -70,7 +70,7 @@ async fn native_file_service_shutdown_blocked_original_job() {
 
 #[test]
 fn native_file_service_shutdown_media_creation_requires_atomic_fresh_directory() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let parent = root.path().join("private");
     hagency_store::private::directory(&parent).unwrap();
     let existing = parent.join("existing");

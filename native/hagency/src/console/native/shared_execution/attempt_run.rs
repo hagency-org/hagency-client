@@ -1,0 +1,611 @@
+use super::super::managed_runtime::PreparedLaunch;
+use super::attempt_io::{
+    Acknowledgement as SharedRuntimeAcknowledgement, AttemptAction,
+    Delivery as SharedRuntimeDelivery, Reply as DeliveryReply, ResultInput as SharedProcessInput,
+};
+use super::io::{AckReply, ActivityReply, TicketReply, WorkReply};
+use super::*;
+use crate::console::lifecycle::DrainFailure;
+use hagency_runtime::owned::{ManagedProcessState, OwnedSession, SharedTextActivityControl};
+use std::future::Future;
+use tokio::sync::{oneshot, watch};
+struct Activity {
+    lease: SharedActivityLease,
+    until: Instant,
+    maximum: Instant,
+}
+async fn guarded<T>(
+    cancel: &mut watch::Receiver<bool>,
+    until: Instant,
+    future: impl Future<Output = Result<T, NativeError>>,
+) -> Result<T, NativeError> {
+    if *cancel.borrow() || Instant::now() >= until {
+        return Err(failure(409, "shared_execution_closed"));
+    }
+    tokio::select! {biased;_ = cancel.changed()=>Err(failure(409,"shared_execution_closed")),_ = tokio::time::sleep_until(until.into())=>Err(failure(409,"shared_execution_expired")),result=future=>result}
+}
+pub(super) async fn upload_process(
+    b: &Bound,
+    d: &SharedRuntimeDelivery,
+    until: Instant,
+    receipt: &SharedAttemptProcessReceipt,
+) -> Result<(SharedRuntimeAcknowledgement, u64, Instant), NativeError> {
+    receipt.validate_for(&d.command).map_err(store)?;
+    let started = Instant::now();
+    let ack: Timed<SharedRuntimeAcknowledgement> = b
+        .upload(
+            AttemptAction::Result {
+                id: d.command.command_id.clone(),
+                input: SharedProcessInput {
+                    command_digest: d.command_digest.clone(),
+                    token: d.token.clone(),
+                    receipt: receipt.clone(),
+                },
+            }
+            .into(),
+            until,
+        )
+        .await?;
+    if ack.value.observation_id != receipt.observation_id
+        || ack.value.receipt_digest != digest(receipt)?
+        || !matches!(
+            ack.value.state.as_str(),
+            "issued" | "qualified" | "stopped" | "unknown" | "fenced" | "cleanup_pending"
+        )
+    {
+        return Err(invalid());
+    }
+    Ok((ack.value, ack.observed, started))
+}
+fn activity(
+    sink: &SharedAttemptProcessSink,
+    lease: SharedActivityLease,
+    observed: u64,
+    started: Instant,
+    b: &Bound,
+    maximum: Instant,
+) -> Result<Activity, NativeError> {
+    lease.authority.validate().map_err(store)?;
+    if lease.command_digest != digest(sink.command())?
+        || lease.authority.runtime_command_id != sink.command().command_id
+        || lease.process_digest != sink.process_digest().map_err(store)?
+    {
+        return Err(invalid());
+    }
+    let until = io::window(
+        &lease.authority.token,
+        lease.expires_at_ms,
+        observed,
+        started,
+        &b.scope,
+    )?
+    .min(maximum);
+    if Instant::now() >= until {
+        return Err(failure(409, "shared_execution_expired"));
+    }
+    Ok(Activity {
+        lease,
+        until,
+        maximum,
+    })
+}
+async fn proof(
+    io: &Io,
+    r: &OwnerResourceRegistry,
+    sink: &Arc<SharedAttemptProcessSink>,
+    a: &Activity,
+) -> Result<(Bound, VerifiedSharedActivity), NativeError> {
+    let b = io.bound().await?;
+    let e = b
+        .enrollment(r, &sink.command().original_runtime_command, true)
+        .await?;
+    let verified = sink
+        .authorize_activity(e, &a.lease, a.until.min(b.scope.deadline))
+        .map_err(store)?;
+    Ok((b, verified))
+}
+async fn renew(
+    io: &Io,
+    r: &OwnerResourceRegistry,
+    sink: &Arc<SharedAttemptProcessSink>,
+    control: &SharedTextActivityControl,
+    a: &mut Activity,
+) -> Result<(), NativeError> {
+    let (b, verified) = proof(io, r, sink, a).await?;
+    let mut random = [0u8; 16];
+    getrandom::fill(&mut random).map_err(|_| failure(503, "native_random_unavailable"))?;
+    let id = format!(
+        "sar_{}",
+        random
+            .iter()
+            .map(|v| format!("{v:02x}"))
+            .collect::<String>()
+    );
+    r.prepare_shared_renewal(verified, id.clone())
+        .await
+        .map_err(store)?;
+    let started = Instant::now();
+    let reply: Timed<ActivityReply> = b
+        .upload(
+            Action::Renew(SharedActivityRenewInput {
+                authority: a.lease.authority.clone(),
+                renewal_id: id,
+            }),
+            a.until,
+        )
+        .await?;
+    let next = activity(
+        sink,
+        reply.value.activity,
+        reply.observed,
+        started,
+        &b,
+        a.maximum,
+    )?;
+    if next.lease.authority.epoch <= a.lease.authority.epoch {
+        return Err(invalid());
+    }
+    control
+        .renew(next.lease.authority.epoch, next.until, a.maximum)
+        .map_err(|_| failure(409, "shared_execution_expired"))?;
+    *a = next;
+    Ok(())
+}
+async fn maybe_renew(
+    io: &Io,
+    r: &OwnerResourceRegistry,
+    sink: &Arc<SharedAttemptProcessSink>,
+    control: &SharedTextActivityControl,
+    a: &mut Activity,
+) -> Result<(), NativeError> {
+    if a.until.saturating_duration_since(Instant::now()) <= Duration::from_secs(20) {
+        renew(io, r, sink, control, a).await?
+    }
+    Ok(())
+}
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn run(
+    r: OwnerResourceRegistry,
+    custody: SharedAttemptCustody,
+    launch: PreparedLaunch,
+    io: Io,
+    d: SharedRuntimeDelivery,
+    observed: u64,
+    started: Instant,
+    until: Instant,
+    mut cancel: watch::Receiver<bool>,
+    sender: oneshot::Sender<Result<SharedExecutionProgress, NativeError>>,
+) -> Result<(), DrainFailure> {
+    let mut sender = Some(sender);
+    let mut process = match launch.spawn(until) {
+        Ok(v) => v,
+        Err(error) => {
+            let _ = sender.take().unwrap().send(Err(error));
+            return Err(DrainFailure::Unknown);
+        }
+    };
+    let sink = match custody.bind_process(process.shared_text_process_source()) {
+        Ok(v) => Arc::new(v),
+        Err(e) => {
+            process.stop();
+            let _ = sender.take().unwrap().send(Err(store(e)));
+            return Err(DrainFailure::Unknown);
+        }
+    };
+    let result = guarded(&mut cancel, until, async {
+        io.check(&d.command.original_runtime_command).await?;
+        process
+            .initialize()
+            .await
+            .map_err(|_| failure(409, "shared_execution_initialize_failed"))?;
+        io.check(&d.command.original_runtime_command).await?;
+        let observation = process
+            .qualify_shared_tools(launch.instructions(), d.command.web_search, d.command.tool_policy.as_ref().map(|p|p.mode.as_str()))
+            .await
+            .map_err(|_| failure(409, "shared_execution_identity_failed"))?;
+        let receipt = sink.record(observation).await.map_err(store)?;
+        let b = io.bound().await?;
+        io::binding(&b.scope, &d.command.original_runtime_command, true)?;
+        let (ack, at, sent) = upload_process(&b, &d, until, &receipt).await?;
+        let lease = ack
+            .activity
+            .ok_or_else(|| failure(409, "shared_execution_activity_missing"))?;
+        let maximum = started
+            + Duration::from_millis(
+                d.command
+                    .original_runtime_command
+                    .reserve_command
+                    .expires_at_ms
+                    .checked_sub(observed)
+                    .ok_or_else(invalid)?,
+            );
+        let active = activity(&sink, lease, at, sent, &b, maximum)?;
+        process
+            .install_shared_text_activity(active.lease.authority.epoch, active.until, maximum)
+            .map_err(|_| failure(409, "shared_execution_expired"))?;
+        Ok(active)
+    })
+    .await;
+    let result = match result {
+        Ok(mut active) => {
+            let _ = sender
+                .take()
+                .unwrap()
+                .send(Ok(SharedExecutionProgress::Running {
+                    command_id: d.command.command_id.clone(),
+                }));
+            match process.shared_text_activity_control() {
+                Ok(control) => {
+                    work_loop(
+                        &io,
+                        &r,
+                        &sink,
+                        &control,
+                        &mut active,
+                        &mut process,
+                        &mut cancel,
+                    )
+                    .await
+                }
+                Err(_) => Err(failure(409, "shared_execution_closed")),
+            }
+        }
+        Err(e) => Err(e),
+    };
+    if let Some(sender) = sender.take() {
+        let _ = sender.send(
+            result
+                .as_ref()
+                .map_err(|e| failure(e.status, &e.code))
+                .map(|_| SharedExecutionProgress::Recorded {
+                    command_id: d.command.command_id.clone(),
+                    observation_id: String::new(),
+                    process_state: None,
+                }),
+        );
+    }
+    if let Err(error) = &result {
+        tracing::debug!(code = %error.code, "Shared text process ending after an operation failure");
+    }
+    // Original process cleanup is retained even when SDK/business authority is
+    // gone. Upload may fail, but local evidence is never discarded or recreated.
+    let observation = process.stop_shared_text_observation();
+    let stopped = observation.state() == ManagedProcessState::Stopped;
+    let receipt = sink
+        .record(observation)
+        .await
+        .map_err(|_| DrainFailure::Unknown)?;
+    let _ = report_process(&io, &r, &d.command, &receipt).await;
+    if stopped {
+        Ok(())
+    } else {
+        Err(DrainFailure::Unknown)
+    }
+}
+async fn work_loop(
+    io: &Io,
+    r: &OwnerResourceRegistry,
+    sink: &Arc<SharedAttemptProcessSink>,
+    control: &SharedTextActivityControl,
+    a: &mut Activity,
+    process: &mut OwnedSession,
+    cancel: &mut watch::Receiver<bool>,
+) -> Result<(), NativeError> {
+    let work = loop {
+        guarded(cancel, a.until, maybe_renew(io, r, sink, control, a)).await?;
+        let (b, verified) = proof(io, r, sink, a).await?;
+        let reply: Timed<WorkReply> = guarded(
+            cancel,
+            a.until,
+            b.upload(Action::WorkPoll(a.lease.authority.clone()), a.until),
+        )
+        .await?;
+        if let Some(w) = reply.value.work {
+            w.validate().map_err(store)?;
+            if cfg!(feature = "shared-intake") {
+                super::demands::bind_work(
+                    &b,
+                    r,
+                    &sink.command().original_runtime_command,
+                    &w,
+                    verified,
+                    a.until,
+                )
+                .await?;
+                let (_, fresh) = proof(io, r, sink, a).await?;
+                r.receive_shared_work(fresh, w.clone())
+                    .await
+                    .map_err(store)?;
+            } else {
+                r.receive_shared_work(verified, w.clone())
+                    .await
+                    .map_err(store)?;
+            }
+            let input = SharedWorkInput {
+                authority: a.lease.authority.clone(),
+                work_id: w.id.clone(),
+                work_digest: digest(&w)?,
+            };
+            let ack: Timed<AckReply> =
+                guarded(cancel, a.until, b.upload(Action::WorkAck(input), a.until)).await?;
+            if !ack.value.acknowledged {
+                return Err(invalid());
+            }
+            break w;
+        }
+        guarded(cancel, a.until, async {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            Ok(())
+        })
+        .await?;
+    };
+    let (b,p)=proof(io,r,sink,a).await?;
+    let input=if cfg!(feature="shared-context") {
+        Some(guarded(cancel,a.until,super::context_io::prepare(&b,r,p,&work,a.lease.authority.clone(),a.until)).await?)
+    }else{None};
+    let (_,p)=proof(io,r,sink,a).await?;
+    let call=if let Some(input)=&input {r.prepare_shared_input_call(p,work.clone(),input.clone()).await} else {r.prepare_shared_call(p,work.clone()).await}.map_err(store)?;
+    let (b,p)=proof(io,r,sink,a).await?;
+    let attempt=if let Some(input)=&input {r.begin_shared_input_start(p,work.clone(),call.call_id,input.clone()).await} else {r.begin_shared_start(p,work.clone(),call.call_id).await}.map_err(store)?;
+    let issued=guarded(cancel,a.until,super::context_io::start(&b,r,attempt,&work,input.as_ref(),a.lease.authority.clone(),a.until)).await?;
+    guarded(cancel, a.until, async {
+        io.check(&sink.command().original_runtime_command).await?;
+        issued.check().map_err(store)?;
+        process
+            .start_shared_text_thread()
+            .await
+            .map_err(|_| failure(409, "shared_execution_thread_unknown"))?;
+        io.check(&sink.command().original_runtime_command).await?;
+        issued.check().map_err(store)?;
+        issued.start_turn(process).await.map_err(store)?;
+        Ok(())
+    })
+    .await?;
+    let mut capture = issued.bind_turn(process).map_err(store)?;
+    let approvals_enabled=sink.command().tool_policy.as_ref().is_some_and(|p|p.mode=="standard");
+    let mut approvals=super::approvals::Approvals::default();
+    if approvals_enabled {super::approvals::enable(process)?;}
+    let terminal = loop {
+        let result = {
+            // Pin the actual read. Renewal branches keep polling this same
+            // future; only cancellation/expiry intentionally drops and stops it.
+            let read = process.next_shared_event_or_tick(approvals_enabled);
+            tokio::pin!(read);
+            loop {
+                // Anchor renewal to the lease, not to the latest stream event.
+                // A ready event must not starve an already-due renewal.
+                let wake = a.until.checked_sub(Duration::from_secs(20)).unwrap_or_else(Instant::now);
+                let event = tokio::select! {biased;
+                    _ = cancel.changed()=>break Err(failure(409,"shared_execution_closed")),
+                    _ = tokio::time::sleep_until(a.until.into())=>break Err(failure(409,"shared_execution_expired")),
+                    _ = tokio::time::sleep_until(wake.into())=>{guarded(cancel,a.until,maybe_renew(io,r,sink,control,a)).await}
+                    event=&mut read=>break event.map_err(|_|failure(409,"shared_execution_event_unknown")),
+                };
+                if let Err(e) = event {
+                    break Err(e);
+                }
+            }
+        };
+        let event = match result {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = capture.record_unknown().await;
+                return Err(e);
+            }
+        };
+        let Some(event)=event else {
+            guarded(cancel,a.until,maybe_renew(io,r,sink,control,a)).await?;
+            let b=io.bound().await?;
+            if let Some(receipt)=guarded(cancel,a.until,approvals.poll(&b,&work,&a.lease.authority,a.until,process,&mut capture)).await? {break receipt;}
+            continue;
+        };
+        let approval=event.approval().cloned();
+        let ended = matches!(
+            event.observation().kind(),
+            hagency_runtime::codex::session::ObservationKind::TurnEnded(_)
+        );
+        let recorded = match capture.observe(event).await {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = capture.record_unknown().await;
+                return Err(store(e));
+            }
+        };
+        if ended {
+            break recorded.ok_or_else(invalid)?;
+        }
+        if let Some(request)=approval {
+            let b=io.bound().await?;
+            guarded(cancel,a.until,approvals.register(&b,&work,&a.lease.authority,a.until,process,request)).await?;
+        }
+    };
+    // Reply delivery uses the central durable Matrix transaction. Keep this same
+    // process/activity alive while it is pending; do not make a successor turn.
+    loop {
+        guarded(cancel, a.until, maybe_renew(io, r, sink, control, a)).await?;
+        let status = match guarded(
+            cancel,
+            a.until,
+            report_work(io, r, sink.command(), &work, &terminal),
+        )
+        .await
+        {
+            Ok(status) => status,
+            // A lost acknowledgement is not a reason to fence a reply that the
+            // central transaction may still deliver. Retry only saved evidence,
+            // under this same live process; never repeat the model turn.
+            Err(error)
+                if matches!(
+                    error.code.as_str(),
+                    "server_unavailable"
+                        | "server_request_failed"
+                        | "management_outcome_unknown"
+                        | "allocation_ticket_expired"
+                ) =>
+            {
+                None
+            }
+            Err(error) => return Err(error),
+        };
+        if matches!(status.as_deref(), Some("sent" | "blocked")) {
+            return Ok(());
+        }
+        guarded(cancel, a.until, async {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            Ok(())
+        })
+        .await?;
+    }
+}
+pub(super) async fn recover_process_work(
+    io: &Io,
+    r: &OwnerResourceRegistry,
+    c: &SharedAttemptCommand,
+) -> Result<(), NativeError> {
+    let b = io.bound().await?;
+    let a = b.cleanup(r, &c.original_runtime_command).await?;
+    let ids = r
+        .shared_attempt_work_ids(a, c.clone())
+        .await
+        .map_err(store)?;
+    b.transport.check_scope(&b.scope, false).await?;
+    for id in ids {
+        let b = io.bound().await?;
+        let a = b.cleanup(r, &c.original_runtime_command).await?;
+        let saved = r
+            .recover_shared_attempt_work(a, c.clone(), id, None)
+            .await
+            .map_err(store)?;
+        b.transport.check_scope(&b.scope, false).await?;
+        if let Some(saved) = saved
+            && let Some(receipt) = saved.receipt
+        {
+            report_work(io, r, c, &saved.work, &receipt).await?;
+        }
+    }
+    Ok(())
+}
+pub(super) async fn report_process(
+    io: &Io,
+    r: &OwnerResourceRegistry,
+    c: &SharedAttemptCommand,
+    receipt: &SharedAttemptProcessReceipt,
+) -> Result<(), NativeError> {
+    let b = io.bound().await?;
+    let a = b.cleanup(r, &c.original_runtime_command).await?;
+    let saved = r
+        .recover_shared_attempt_process(a, c.clone(), Some(receipt.observation_id.clone()))
+        .await
+        .map_err(store)?
+        .ok_or_else(invalid)?;
+    if digest(&saved)? != digest(receipt)? {
+        return Err(invalid());
+    }
+    let started = Instant::now();
+    let reply: Timed<DeliveryReply> = b
+        .request(
+            AttemptAction::Recover {
+                id: c.command_id.clone(),
+                digest: digest(c)?,
+                observation: Some(receipt.observation_id.clone()),
+            }
+            .into(),
+            false,
+        )
+        .await?;
+    let d = reply.value.delivery.ok_or_else(invalid)?;
+    if d.execution_allowed || digest(&d.command)? != digest(c)? || d.command_digest != digest(c)? {
+        return Err(invalid());
+    }
+    if let Some(old) = &d.recorded {
+        if digest(old)? != digest(receipt)? {
+            return Err(invalid());
+        }
+        return Ok(());
+    }
+    let until = io::window(
+        &d.token,
+        d.lease_until_ms,
+        reply.observed,
+        started,
+        &b.scope,
+    )?;
+    upload_process(&b, &d, until, receipt).await?;
+    Ok(())
+}
+pub(super) async fn report_work(
+    io: &Io,
+    r: &OwnerResourceRegistry,
+    c: &SharedAttemptCommand,
+    work: &SharedWorkItem,
+    receipt: &SharedWorkReceipt,
+) -> Result<Option<String>, NativeError> {
+    let b = io.bound().await?;
+    let a = b.cleanup(r, &c.original_runtime_command).await?;
+    let saved = r
+        .recover_shared_attempt_work(
+            a,
+            c.clone(),
+            work.id.clone(),
+            Some(receipt.observation_id.clone()),
+        )
+        .await
+        .map_err(store)?
+        .and_then(|v| v.receipt)
+        .ok_or_else(invalid)?;
+    if digest(&saved)? != digest(receipt)? {
+        return Err(invalid());
+    }
+    let started = Instant::now();
+    let reply: Timed<TicketReply> = b
+        .request(
+            Action::WorkRecover {
+                id: work.id.clone(),
+                input: SharedWorkRecoverInput {
+                    runtime_command_digest: digest(c)?,
+                    work_digest: digest(work)?,
+                    observation_id: Some(receipt.observation_id.clone()),
+                },
+            },
+            false,
+        )
+        .await?;
+    let t = reply.value.ticket;
+    if t.work_id != work.id || t.work_digest != digest(work)? {
+        return Err(invalid());
+    }
+    if let Some(old) = t.recorded {
+        if digest(&old)? != digest(receipt)? {
+            return Err(invalid());
+        }
+        if t.reply_state.as_deref()==Some("sent") {super::context_io::observe_delivery(&b,r,&c.original_runtime_command,work).await?;}
+        return Ok(t.reply_state);
+    }
+    let until = io::window(
+        &t.token,
+        t.lease_until_ms,
+        reply.observed,
+        started,
+        &b.scope,
+    )?;
+    let ack: Timed<SharedWorkAcknowledgement> = b
+        .upload(
+            Action::WorkResult {
+                id: work.id.clone(),
+                input: Box::new(SharedWorkResultUpload {
+                    work_digest: digest(work)?,
+                    token: t.token,
+                    receipt: receipt.clone(),
+                }),
+            },
+            until,
+        )
+        .await?;
+    if ack.value.observation_id != receipt.observation_id
+        || ack.value.receipt_digest != digest(receipt)?
+    {
+        return Err(invalid());
+    }
+    if ack.value.reply_state.as_deref()==Some("sent") {super::context_io::observe_delivery(&b,r,&c.original_runtime_command,work).await?;}
+    Ok(ack.value.reply_state)
+}

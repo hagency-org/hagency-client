@@ -285,16 +285,16 @@ async fn verdict_and_answer(
 }
 
 /// One whoami outcome, classified (TS `ensureRepresentative` + `classifyMatrixFailure`).
-struct WhoamiOutcome {
-    state: String,
+pub(in crate::console) struct WhoamiOutcome {
+    pub(in crate::console) state: String,
     detail: Option<String>,
-    mxid: Option<String>,
+    pub(in crate::console) mxid: Option<String>,
 }
 
 /// Ask the homeserver who the credential belongs to. Appservice sides
 /// masquerade with `?user_id=` and the `as_token`; registration-token sides
 /// use the representative's own token. `base_url` is the side's API base URL.
-async fn whoami(
+pub(in crate::console) async fn whoami(
     base_url: &str,
     side: &hagency_store::SideRecord,
     credential: &hagency_store::Credential,

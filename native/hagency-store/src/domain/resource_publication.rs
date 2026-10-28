@@ -3,7 +3,7 @@ use super::{DomainRepository, read_resource, serialize};
 use crate::Error;
 use hagency_core::project::{Resource, identifier};
 use rusqlite::{TransactionBehavior, params};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     sync::{
         Arc, Mutex, TryLockError,
@@ -66,6 +66,8 @@ impl ResourcePublicationAccess {
             revision,
             published,
             deadline,
+            receipt: None,
+            legacy_lease: None,
         })
     }
     /// Never waits for a queued command or SQLite commit. Busy is not revocation.
@@ -105,11 +107,13 @@ impl Access {
 }
 /// One non-cloneable command from one exact original session. Not deserializable.
 pub struct ResourcePublicationCommand {
+    pub(crate) receipt: Option<crate::management::CommandReceipt>,
     pub(super) access: Arc<Access>,
     pub(super) resource: String,
     pub(super) revision: String,
     published: bool,
     pub(super) deadline: Instant,
+    legacy_lease: Option<crate::installation_authority::LegacyResourceLease>,
 }
 impl Drop for ResourcePublicationCommand {
     fn drop(&mut self) {
@@ -117,11 +121,31 @@ impl Drop for ResourcePublicationCommand {
     }
 }
 impl ResourcePublicationCommand {
+    /// Additional native writer exclusion; never replaces the original finite
+    /// command authority. Custody survives cancellation of the waiting caller.
+    pub fn with_legacy_lease(
+        mut self,
+        lease: crate::installation_authority::LegacyResourceLease,
+    ) -> Result<Self, Error> {
+        lease.check()?;
+        if self.legacy_lease.is_some() {
+            return Err(Error::LocalAuthority);
+        }
+        self.legacy_lease = Some(lease);
+        Ok(self)
+    }
+    pub(super) fn check_at(&self, revoked: bool, now: Instant) -> Result<(), Error> {
+        self.access.check_at(revoked, self.deadline, now)?;
+        if let Some(lease) = &self.legacy_lease {
+            lease.check()?;
+        }
+        Ok(())
+    }
     pub(crate) fn weight(&self) -> u32 {
         (self.resource.len() + self.revision.len() + 128) as u32
     }
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourcePublicationResult {
     pub resource_id: String,
@@ -135,6 +159,26 @@ pub fn resource_publication_revision(resource: &Resource) -> Result<String, Erro
     Ok(hagency_core::canonical::digest(&serde_json::to_value(
         &value,
     )?)?)
+}
+/// Shared publication semantics for legacy and canonical owner-scoped writers.
+/// Callers retain their own transaction, account checks and command authority.
+pub(crate) fn publication_change(
+    current: &Resource,
+    expected_revision: &str,
+    published: bool,
+) -> Result<(Resource, ResourcePublicationResult), Error> {
+    if resource_publication_revision(current)? != expected_revision {
+        return Err(Error::Conflict);
+    }
+    let mut resource = current.clone();
+    resource.published = published;
+    resource.roles = resource.eligible_roles();
+    let result = ResourcePublicationResult {
+        resource_id: resource.id(),
+        published,
+        revision: resource_publication_revision(&resource)?,
+    };
+    Ok((resource, result))
 }
 impl DomainRepository {
     pub fn publish_resource(
@@ -153,40 +197,34 @@ impl DomainRepository {
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let revoked = command.access.revoked.try_lock().map_err(lock_error)?;
-        command
-            .access
-            .check_at(*revoked, command.deadline, clock())?;
-        let mut resource = read_resource(&tx, &command.resource)?;
-        self.accounts.check_resource(&tx, &resource)?;
-        if resource_publication_revision(&resource)? != command.revision {
-            return Err(Error::Conflict);
+        command.check_at(*revoked, clock())?;
+        if let Some(receipt) = &command.receipt
+            && let Some(result) = receipt.lookup(&tx)?
+        {
+            command.check_at(*revoked, clock())?;
+            return Ok(result);
         }
-        resource.published = command.published;
-        resource.roles = resource.eligible_roles();
-        let result = ResourcePublicationResult {
-            resource_id: command.resource.clone(),
-            published: resource.published,
-            revision: resource_publication_revision(&resource)?,
-        };
-        command
-            .access
-            .check_at(*revoked, command.deadline, clock())?;
+        let resource = read_resource(&tx, &command.resource)?;
+        self.accounts.check_resource(&tx, &resource)?;
+        let (resource, result) = publication_change(&resource, &command.revision, command.published)?;
+        command.check_at(*revoked, clock())?;
         tx.execute(
             "UPDATE resources SET config=?1 WHERE id=?2",
             params![serialize(&resource)?, command.resource],
         )?;
-        command
-            .access
-            .check_at(*revoked, command.deadline, clock())?;
+        command.check_at(*revoked, clock())?;
         self.accounts.check_resource(&tx, &resource)?;
+        if let Some(receipt) = &command.receipt {
+            receipt.record(&tx, &result)?;
+            command.check_at(*revoked, clock())?;
+        }
         tx.commit()?;
         self.accounts
             .check_resource(&self.db, &resource)
             .map_err(|_| Error::OutcomeUnknown)?;
         // An already committed write is never described as rolled back.
         command
-            .access
-            .check_at(*revoked, command.deadline, clock())
+            .check_at(*revoked, clock())
             .map_err(|_| Error::OutcomeUnknown)?;
         Ok(result)
     }

@@ -23,7 +23,7 @@ struct Book {
 
 impl Book {
     fn open(ceiling: u64) -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let mut db = DomainRepository::open(&root.path().join("state")).unwrap();
         db.register(&registration()).unwrap();
         db.put_resource(&resource("budget_pool", "budget_seat", ceiling))

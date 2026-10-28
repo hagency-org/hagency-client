@@ -40,7 +40,7 @@ impl Fixture {
         Self::configured(start, thread, false).await
     }
     async fn configured(start: bool, thread: Option<&str>, verified: bool) -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let state = root.path().join("state");
         let custody = Store::start(Repository::open(&state).unwrap(), 16).unwrap();
         let mut db = DomainRepository::open(&state).unwrap();
@@ -1487,7 +1487,10 @@ async fn native_late_output_survives_restart() {
         .unwrap();
     let cap = f.cap.clone();
     // Keep the state directory alive across the fixture's close.
-    let root = std::mem::replace(&mut f._root, tempfile::tempdir().unwrap());
+    let root = std::mem::replace(
+        &mut f._root,
+        hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap(),
+    );
     f.close().await;
     // Backend restart: fresh stores over the same state; the capability
     // survived outside the process (the runner kept its credential headers).

@@ -26,7 +26,7 @@ fn options(root: &Path, no_local_codex: bool) -> hagency::setup::Options {
 }
 #[test]
 fn native_setup_sdk_materializes_explicit_private_profile_and_requires_explicit_replace() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let root = root.path().canonicalize().unwrap();
     let mut config = options(&root, false);
     let first = hagency::setup::run(&config).unwrap();
@@ -60,7 +60,7 @@ fn native_setup_sdk_materializes_explicit_private_profile_and_requires_explicit_
 }
 #[test]
 fn native_setup_sdk_refuses_foreign_state_without_import() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let root = root.path().canonicalize().unwrap();
     let config = options(&root, true);
     std::fs::create_dir(&config.state_dir).unwrap();
@@ -73,7 +73,7 @@ fn native_setup_sdk_refuses_foreign_state_without_import() {
 }
 #[test]
 fn native_setup_sdk_can_use_dedicated_unsigned_provider_home() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let root = root.path().canonicalize().unwrap();
     let config = options(&root, true);
     let result = hagency::setup::run(&config).unwrap();

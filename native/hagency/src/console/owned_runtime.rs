@@ -1,5 +1,8 @@
 //! Explicit owner-started, chat-only Codex host. No legacy execution fallback.
+mod drain;
+mod provider_custody;
 mod service;
+use super::lifecycle::{RetainedTask, TaskCustody};
 use super::{
     AuthorizedDevice, Console,
     device_execution::{
@@ -381,7 +384,7 @@ struct Entry {
     bindings: BTreeMap<String, BindingHandle>,
     cancel: watch::Sender<bool>,
     status: watch::Receiver<RuntimeStatus>,
-    task: tokio::task::JoinHandle<()>,
+    task: RetainedTask,
     device: DevicePin,
     approvals: BTreeMap<String, ApprovalSlot>,
 }
@@ -450,6 +453,7 @@ fn lock_agent(path: &std::path::Path, agent: &str) -> Result<AgentLock, RuntimeE
 }
 #[derive(Default, Clone)]
 pub(super) struct OwnedRuntime {
+    tasks: TaskCustody,
     entries: Arc<Mutex<BTreeMap<String, Entry>>>,
     services: Arc<Mutex<BTreeMap<String, service::ServiceEntry>>>,
 }
@@ -551,6 +555,7 @@ impl OwnedRuntime {
         _cookie: &str,
         mut config: StartConfig,
     ) -> Result<RuntimeStatus, RuntimeError> {
+        let _activity = self.tasks.enter().map_err(|_| RuntimeError::Stopped)?;
         match config.mode {
             BudgetMode::Strict => return Err(RuntimeError::StrictUnavailable),
             BudgetMode::Estimated { reservation: 0 } => {
@@ -697,6 +702,7 @@ impl OwnedRuntime {
         }
         let key = identity(&device, &config.agent_id);
         let mut entries = self.entries_for(&device).await?;
+        self.tasks.check_open().map_err(|_| RuntimeError::Stopped)?;
         verify_recovery_intent(&console, &device, &config)?;
         if let Some(entry) = entries
             .get_mut(&key)
@@ -745,6 +751,7 @@ impl OwnedRuntime {
             let failure = failure_code(&result);
             sender.send_replace(RuntimeStatus::new(&agent, "stopped", failure));
         });
+        let task = self.tasks.track(task);
         entries.insert(
             key,
             Entry {
@@ -1027,7 +1034,7 @@ impl OwnedRuntime {
     pub(super) async fn stop_profile(&self, device: &AuthorizedDevice) -> Result<(), RuntimeError> {
         self.drain_services(Some(&DevicePin::from(device))).await;
         let pin = DevicePin::from(device);
-        let mut entries = self.entries_for(device).await?;
+        let entries = self.entries_for(device).await?;
         let keys: Vec<_> = entries
             .iter()
             .filter(|(_, e)| {
@@ -1039,28 +1046,54 @@ impl OwnedRuntime {
             })
             .map(|(key, _)| key.clone())
             .collect();
-        let removed: Vec<_> = keys
+        let pending: Vec<_> = keys
             .into_iter()
-            .filter_map(|key| entries.remove(&key))
+            .filter_map(|key| {
+                entries.get(&key).map(|entry| {
+                    entry.cancel.send_replace(true);
+                    (key, entry.task.clone())
+                })
+            })
             .collect();
-        for entry in &removed {
-            entry.cancel.send_replace(true);
-        }
         drop(entries);
-        for entry in removed {
-            let _ = entry.task.await;
+        for (key, task) in pending {
+            let result = task.join().await;
+            let mut entries = self.entries.lock().await;
+            if entries
+                .get(&key)
+                .is_some_and(|entry| entry.task.same(&task))
+            {
+                entries.remove(&key);
+            }
+            if result.is_err() {
+                return Err(RuntimeError::Stopped);
+            }
         }
         Ok(())
     }
     pub async fn stop_all(&self) {
         self.drain_services(None).await;
-        let entries = std::mem::take(&mut *self.entries.lock().await);
-        for entry in entries.values() {
-            entry.cancel.send_replace(true);
+        let pending: Vec<_> = self
+            .entries
+            .lock()
+            .await
+            .iter()
+            .map(|(key, entry)| {
+                entry.cancel.send_replace(true);
+                (key.clone(), entry.task.clone())
+            })
+            .collect();
+        for (key, task) in pending {
+            let _ = task.join().await;
+            let mut entries = self.entries.lock().await;
+            if entries
+                .get(&key)
+                .is_some_and(|entry| entry.task.same(&task))
+            {
+                entries.remove(&key);
+            }
         }
-        for (_, entry) in entries {
-            let _ = entry.task.await;
-        }
+        let _ = self.tasks.settle().await;
     }
 }
 async fn canceled(receiver: &mut watch::Receiver<bool>) {
@@ -1466,6 +1499,7 @@ async fn run_host(
     stop: watch::Sender<bool>,
     status: watch::Sender<RuntimeStatus>,
 ) -> Result<(), RuntimeError> {
+    let provider_tasks = console.0.owned_runtime.tasks.clone();
     let profile_id = profile_identity(
         device.origin(),
         device.issuer(),
@@ -1481,7 +1515,7 @@ async fn run_host(
     let agent = initial.config.agent_id.clone();
     // Verify the owner's dedicated provider before any acquisition or explicit
     // takeover can disrupt an existing device. This is account/config only.
-    let mut provider = tokio::select! {biased;_=canceled(&mut cancel)=>return Err(RuntimeError::Stopped),p=runtime::spawn(&initial.config.profile,&initial.config.credential_ref)=>p.map_err(|_|RuntimeError::Provider)?};
+    let mut provider = tokio::select! {biased;_=canceled(&mut cancel)=>return Err(RuntimeError::Stopped),p=provider_custody::Provider::capture(&provider_tasks,runtime::spawn(&initial.config.profile,&initial.config.credential_ref))=>p.map_err(|_|RuntimeError::Provider)?};
     let checked = tokio::select! {biased;_=canceled(&mut cancel)=>Err(RuntimeError::Stopped),r=async {provider.session.initialize().await?;provider.session.verify_host_environment().await?;provider.session.require_local_account().await}=>r.map_err(|_|RuntimeError::Provider)};
     provider.stop().await.map_err(|_| RuntimeError::Provider)?;
     checked?;
@@ -1526,10 +1560,13 @@ async fn run_host(
         status.send_replace(RuntimeStatus::new(&agent,if models_allowed{"online"}else{"ledger_recovery_required"},if models_allowed{None}else{Some("ledger_recovery_required")}));
         supervise_bindings(initial,commands,&mut cancel,|work| {
             let transport=transport.clone();let owner=owner.clone();let profile_id=profile_id.clone();let path=path.clone();let reference=reference.clone();
+            let provider_tasks=provider_tasks.clone();
+            let completion=provider_tasks.checked();
             tokio::spawn(async move {
+                let Ok(completion)=completion else {return;};
                 let mut work=work;
                 let result=async {
-                    let mut provider=tokio::select! {biased;_=canceled(&mut work.receiver)=>return Err(RuntimeError::Stopped),p=runtime::spawn(&work.config.profile,&work.config.credential_ref)=>p.map_err(|_|RuntimeError::Profile)?};
+                    let mut provider=tokio::select! {biased;_=canceled(&mut work.receiver)=>return Err(RuntimeError::Stopped),p=provider_custody::Provider::capture(&provider_tasks,runtime::spawn(&work.config.profile,&work.config.credential_ref))=>p.map_err(|_|RuntimeError::Profile)?};
                     let checked=tokio::select! {biased;_=canceled(&mut work.receiver)=>Err(RuntimeError::Stopped),r=async {provider.session.initialize().await?;provider.session.verify_host_environment().await?;provider.session.require_local_account().await}=>r.map_err(|_|RuntimeError::Provider)};
                     provider.stop().await.map_err(|_|RuntimeError::Provider)?;checked?;
                     let mut ledger=local(Ledger::open_scoped(&path,&owner,&profile_id))?;
@@ -1538,6 +1575,7 @@ async fn run_host(
                 }.await;
                 let mut final_status=RuntimeStatus::new(&work.config.agent_id,"stopped",failure_code(&result)).with_capabilities(&work.config);
                 final_status.binding_id=Some(work.config.binding_id.clone());work.status.send_replace(final_status);
+                completion.complete();
             })
         }).await
     }.await;
@@ -2245,7 +2283,11 @@ async fn run_turn<T: Transport>(
     } else {
         None
     };
-    let mut provider = tokio::select! {biased; _=canceled(cancel)=>return Err(RuntimeError::Stopped), p=runtime::spawn_for_scope(&profile,&config.credential_ref,ledger,&scope)=>p.map_err(|error|provider_failure("provider_spawn", &error))?};
+    let provider_tasks = transport
+        .approval_host()
+        .map(|host| host.console.0.owned_runtime.tasks.clone())
+        .unwrap_or_default();
+    let mut provider = tokio::select! {biased; _=canceled(cancel)=>return Err(RuntimeError::Stopped), p=provider_custody::Provider::capture(&provider_tasks,runtime::spawn_for_scope(&profile,&config.credential_ref,ledger,&scope))=>p.map_err(|error|provider_failure("provider_spawn", &error))?};
     let (queue, mut receiver) = codex::approval_queue(1).map_err(|_| RuntimeError::Profile)?;
     let host = transport.approval_host();
     if config.host_files {
@@ -2593,7 +2635,7 @@ mod tests {
     }
     #[test]
     fn shared_room_summary_never_reads_or_discloses_owner_budget() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let ledger = Ledger::open(tmp.path().join("ledger.db"), "@alice:test").unwrap();
         let scope = Scope {
             agent: "not-registered".into(),
@@ -2613,7 +2655,7 @@ mod tests {
         use hagency_agent_local::{
             Budget, Layer, Limit, Period, Policy, RequestPolicy, ToolPolicy, Usage,
         };
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let mut ledger = Ledger::open(tmp.path().join("ledger.db"), OWNER).unwrap();
         let scope = Scope {
             agent: "agent-a".into(),
@@ -2707,7 +2749,7 @@ mod tests {
     }
     #[tokio::test]
     async fn runtime_restart_retains_explicit_binding_consent_but_never_a_live_task_or_takeover() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let path = tmp.path().join("runtime-intents.json");
         let intent = intended("a", "b", "device-a");
         change_intent(&path, "owner-a", "a", "b", Some(intent.clone())).unwrap();
@@ -2731,7 +2773,7 @@ mod tests {
     }
     #[test]
     fn runtime_stop_removes_only_exact_binding_and_keeps_other_intents_across_reopen() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let path = tmp.path().join("runtime-intents.json");
         for (a, b) in [("a", "b1"), ("a", "b2"), ("other", "b3")] {
             change_intent(&path, "owner-a", a, b, Some(intended(a, b, "device-a"))).unwrap();
@@ -2746,7 +2788,7 @@ mod tests {
     }
     #[test]
     fn runtime_stale_recovery_cannot_republish_after_other_manager_stop_or_new_start() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let path = tmp.path().join("runtime-intents.json");
         let original = intended("a", "b", "device");
         change_intent(&path, "owner-a", "a", "b", Some(original.clone())).unwrap();
@@ -2795,7 +2837,7 @@ mod tests {
     }
     #[test]
     fn runtime_concurrent_intent_writer_and_malformed_consent_fail_closed() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let path = tmp.path().join("runtime-intents.json");
         let held = hagency_store::private::open(&path.with_file_name("runtime-intents.lock"), true)
             .unwrap();
@@ -2811,7 +2853,7 @@ mod tests {
     }
     #[test]
     fn two_process_like_hosts_cannot_share_one_agent_context() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let path = tmp.path().join("ledger.db");
         let first = lock_agent(&path, "agent-a").unwrap();
         assert!(matches!(
@@ -2868,7 +2910,7 @@ mod tests {
                 bindings: BTreeMap::new(),
                 cancel,
                 status,
-                task,
+                task: runtime.tasks.track(task),
                 device: DevicePin::from(&returned_a),
                 approvals: BTreeMap::new(),
             },
@@ -2903,7 +2945,7 @@ mod tests {
                 bindings: BTreeMap::new(),
                 cancel,
                 status: status_receiver,
-                task,
+                task: runtime.tasks.track(task),
                 device: DevicePin {
                     origin: "test".into(),
                     issuer: "test-issuer".into(),
@@ -2927,7 +2969,7 @@ mod tests {
     }
     #[test]
     fn stable_room_context_requires_trusted_owner_direct_binding_and_its_owner() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let mut configuration = config(temp.path());
         let mut first = event();
         first.thread_root = first.room_id.clone();
@@ -3228,7 +3270,7 @@ mod tests {
         }
     }
     async fn fixture(mode: Mode) -> (Vec<&'static str>, State) {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let path = tmp.path().join("ledger.db");
         let mut ledger = setup(&path, tmp.path());
         if matches!(mode, Mode::ReplyRetry | Mode::CrossEpochReply) {
@@ -3302,7 +3344,7 @@ mod tests {
     }
     #[tokio::test]
     async fn last_worker_completion_consumes_already_accepted_new_binding_start() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let first = config(tmp.path());
         let mut next = first.clone();
         next.binding_id = "binding-b".into();
@@ -3348,7 +3390,7 @@ mod tests {
     }
     #[tokio::test]
     async fn closing_supervisor_seals_queued_binding_start_instead_of_leaving_starting() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let first = config(tmp.path());
         let mut next = first.clone();
         next.binding_id = "binding-b".into();
@@ -3413,7 +3455,7 @@ mod tests {
     }
     #[tokio::test]
     async fn historical_reply_denial_and_finish_transport_failure_do_not_block_new_dispatch() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let mut ledger = setup(&tmp.path().join("ledger"), tmp.path());
         let mut old = event();
         ledger
@@ -3538,7 +3580,7 @@ mod tests {
         .unwrap();
     }
     async fn multi_binding_fixture(fence: bool) {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let root = tmp.path().to_path_buf();
         let path = root.join("ledger");
         drop(setup(&path, &root));
@@ -3680,7 +3722,7 @@ mod tests {
     }
     #[tokio::test]
     async fn selected_binding_never_runs_or_recovers_other_room_inbox_records() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let path = tmp.path().join("ledger.db");
         let mut ledger = setup(&path, tmp.path());
         for (id, target) in [
@@ -3789,7 +3831,7 @@ mod tests {
     }
     #[tokio::test]
     async fn foreign_binding_poll_response_is_rejected_before_inbox_ack_or_model() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let mut ledger = setup(&tmp.path().join("ledger"), tmp.path());
         let (_stop, mut receiver) = watch::channel(false);
         let (status, _) = watch::channel(RuntimeStatus::new("agent-a", "test", None));
@@ -3868,7 +3910,7 @@ for raw in sys.stdin:
      {
         use hagency_agent_local::{Layer, Period};
         use std::os::unix::fs::PermissionsExt;
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
         for name in ["home", "codex", "workspace"] {
             std::fs::create_dir(root.join(name)).unwrap();
@@ -4017,7 +4059,7 @@ for raw in sys.stdin:
             Budget, Layer, Limit, Period, Policy, RequestPolicy, ToolPolicy,
         };
         use std::os::unix::fs::PermissionsExt;
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
         for name in ["home", "codex", "workspace"] {
             std::fs::create_dir(root.join(name)).unwrap();
@@ -4106,7 +4148,7 @@ for raw in sys.stdin:
     }
     #[tokio::test]
     async fn server_accepted_unsent_reply_survives_restart_and_new_lease_reconciliation() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let path = tmp.path().join("ledger.db");
         let mut ledger = setup(&path, tmp.path());
         ledger
@@ -4251,7 +4293,7 @@ for raw in sys.stdin:
             )]),
             cancel,
             status,
-            task: tokio::spawn(std::future::pending()),
+            task: TaskCustody::default().track(tokio::spawn(std::future::pending())),
             device: pin.clone(),
             approvals: BTreeMap::from([(
                 "nonce".into(),
@@ -4408,7 +4450,8 @@ for raw in sys.stdin:
             Budget, Layer, Limit, Period, Policy, RequestPolicy, ToolPolicy,
         };
         for scenario in 0..3 {
-            let temp = tempfile::tempdir().unwrap();
+            let temp =
+                hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
             let path = temp.path().join("ledger");
             let mut ledger = setup(&path, temp.path());
             let mut policy = Policy {
@@ -4610,7 +4653,7 @@ for raw in sys.stdin:
     }
     #[tokio::test]
     async fn history_missing_receipt_does_not_block_with_retained_execution_identity() {
-        let t = tempfile::tempdir().unwrap();
+        let t = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let mut l = setup(&t.path().join("ledger.db"), t.path());
         let (_stop, mut cancel) = watch::channel(false);
         let fake = HistoryFake {
@@ -4678,7 +4721,7 @@ for raw in sys.stdin:
     }
     #[tokio::test]
     async fn history_changed_between_pages_after_acquire_and_missing_page_are_never_empty() {
-        let t = tempfile::tempdir().unwrap();
+        let t = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let mut l = setup(&t.path().join("ledger.db"), t.path());
         let (_stop, mut cancel) = watch::channel(false);
         let expected = HistorySnapshot {
@@ -4728,7 +4771,7 @@ for raw in sys.stdin:
     }
     #[tokio::test]
     async fn recovery_required_reconciles_known_reply_without_poll_ack_or_model() {
-        let t = tempfile::tempdir().unwrap();
+        let t = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let path = t.path().join("ledger.db");
         let mut l = setup(&path, t.path());
         l.receive_dispatch(OWNER, &event(), inbox::Limits::default(), now())
@@ -4784,7 +4827,7 @@ for raw in sys.stdin:
     }
     #[tokio::test]
     async fn conflicting_history_requires_explicit_known_reply_recovery() {
-        let t = tempfile::tempdir().unwrap();
+        let t = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let path = t.path().join("ledger.db");
         let mut l = setup(&path, t.path());
         l.receive_dispatch(OWNER, &event(), inbox::Limits::default(), now())
@@ -4854,7 +4897,7 @@ for raw in sys.stdin:
     }
     #[tokio::test]
     async fn missing_historical_receipt_allows_new_work_without_owner_reconciliation() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let mut ledger = setup(&tmp.path().join("ledger"), tmp.path());
         let old = inbox::Prepared {
             dispatch: event(),
@@ -4948,7 +4991,7 @@ for raw in sys.stdin:
     #[tokio::test]
     async fn ack_transient_failure_retries_and_request_refusal_does_not_block_followup() {
         for refused in [false, true] {
-            let tmp = tempfile::tempdir().unwrap();
+            let tmp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
             let mut ledger = setup(&tmp.path().join("ledger"), tmp.path());
             let mut next = event();
             next.id = "dispatch-next".into();
@@ -5022,7 +5065,7 @@ for raw in sys.stdin:
     #[tokio::test]
     async fn restart_redelivery_of_prepared_or_unknown_start_retires_offer_without_replay() {
         for interrupted in [false, true] {
-            let tmp = tempfile::tempdir().unwrap();
+            let tmp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
             let mut ledger = setup(&tmp.path().join("ledger"), tmp.path());
             ledger
                 .receive_dispatch(OWNER, &event(), inbox::Limits::default(), now())
@@ -5175,7 +5218,7 @@ for raw in sys.stdin:
     }
     #[tokio::test]
     async fn restart_lease_busy_waits_for_natural_expiry_and_rechecks_history_without_takeover() {
-        let t = tempfile::tempdir().unwrap();
+        let t = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let mut l = setup(&t.path().join("ledger.db"), t.path());
         let fake = restart_fake(2, false);
         let (_stop, mut cancel) = watch::channel(false);
@@ -5211,7 +5254,7 @@ for raw in sys.stdin:
     #[tokio::test]
     async fn restart_lease_busy_deadline_is_finite_and_stop_interrupts_wait() {
         for stopped in [false, true] {
-            let t = tempfile::tempdir().unwrap();
+            let t = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
             let mut l = setup(&t.path().join("ledger.db"), t.path());
             let fake = restart_fake(usize::MAX, false);
             let (stop, mut cancel) = watch::channel(false);
@@ -5256,7 +5299,7 @@ for raw in sys.stdin:
     #[tokio::test]
     async fn restart_wait_never_retries_authorization_denial_or_manual_start_conflict() {
         for deny in [false, true] {
-            let t = tempfile::tempdir().unwrap();
+            let t = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
             let mut l = setup(&t.path().join("ledger.db"), t.path());
             let fake = restart_fake(usize::MAX, deny);
             let (_stop, mut cancel) = watch::channel(false);
@@ -5295,7 +5338,7 @@ for raw in sys.stdin:
     }
     #[tokio::test]
     async fn fresh_history_acquire_sends_snapshot_and_post_check_keeps_models_allowed() {
-        let t = tempfile::tempdir().unwrap();
+        let t = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let mut l = setup(&t.path().join("ledger.db"), t.path());
         let (_stop, mut cancel) = watch::channel(false);
         let lease = Response::Lease(Lease {
@@ -5330,7 +5373,7 @@ for raw in sys.stdin:
     }
     #[tokio::test]
     async fn history_wrong_witness_digest_is_not_an_empty_or_complete_ledger() {
-        let t = tempfile::tempdir().unwrap();
+        let t = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let mut l = setup(&t.path().join("ledger.db"), t.path());
         let (_stop, mut cancel) = watch::channel(false);
         let mut page = history_page("a", vec![], 0, None).unwrap();

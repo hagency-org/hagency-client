@@ -8,11 +8,24 @@ license.workspace = true
 publish.workspace = true
 
 [features]
+shared-budget-execution = ["agent-budget", "shared-context", "hagency-store/shared-budget-execution"]
+agent-budget = ["resource-adoption", "hagency-store/agent-budget"]
+shared-context = ["shared-intake", "hagency-store/shared-context", "hagency-runtime/shared-context"]
+shared-intake = ["shared-successors", "hagency-store/shared-intake"]
 default = []
 native-console-browser = []
+# Qualification/stop only; no Desktop capability, prompt or shared work route.
+managed-runtime = []
+# Explicit first text-turn opt-in; no mini-app execution capability.
+shared-execution = ["managed-runtime"]
+shared-successors = ["shared-execution"]
+test-support = ["hagency-store/test-support"]
+resource-adoption = ["hagency-store/resource-adoption"]
 
 [dependencies]
+toml = { version = "=1.1.5", default-features = false, features = ["parse", "serde", "std"] }
 percent-encoding = "=2.3.2"
+rusqlite = { workspace = true, features = ["hooks"] }
 hagency-agent-local = { path = "../hagency-agent-local" }
 hagency-core.workspace = true
 hagency-store.workspace = true
@@ -44,6 +57,7 @@ tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
+hagency-store = { workspace = true, features = ["test-support"] }
 # The offline pins of ADR-182 need the execution crate's diagnostics fault
 # (an unproven stop no real fixture can force); test builds only.
 hagency-execution = { workspace = true, features = ["test-diagnostics"] }

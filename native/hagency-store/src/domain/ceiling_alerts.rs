@@ -94,6 +94,122 @@ fn detail_json(
     }
 }
 
+/// Shared diagnostic reconciliation. This never changes admission or capacity.
+fn reconcile_resource(db: &rusqlite::Connection, resource: &Resource, now: u64) -> Result<SweepOutcome, Error> {
+    let mut outcome = SweepOutcome::default();
+    // No declared ceiling is unknown, not zero: such a resource cannot
+    // be past a limit that does not exist and is skipped entirely
+    // (`backend-v2.js:9397-9400`).
+    let Some(ceiling) = resource
+        .ceiling
+        .as_ref()
+        .and_then(|c| c.tokens)
+        .map(u64::from)
+    else {
+        return Ok(outcome);
+    };
+    let ceiling = bounded(ceiling)?;
+    let report = ceiling_report(db, &resource.id(), now)?;
+    let key = dedupe_key(&resource.id());
+    if report.drawn > ceiling {
+        let over = report.drawn - ceiling;
+        let detail = detail_json(
+            &resource.id(),
+            &report.preset_name,
+            ceiling,
+            report.reserved,
+            report.spent,
+            report.drawn,
+            over,
+        );
+        let summary = format!(
+            "{} has drawn {} against a ceiling of {} — {} past it",
+            resource.id(),
+            report.drawn,
+            ceiling,
+            over
+        );
+        let runbook = format!(
+            "raise the ceiling on preset {} to cover what is already committed, or revoke engagements on {} until the drawn figure is back under it",
+            report.preset_name,
+            resource.id()
+        );
+        let existing: Option<(bool, Option<String>, Option<u64>)> = db
+            .query_row(
+                "SELECT resolved_at_ms IS NOT NULL, status, suppress_until_ms FROM ceiling_alerts WHERE dedupe_key=?1",
+                [&key],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        // The preserved contract is one OPEN alert per resource,
+        // occurrences riding on it. On dedupe-repeat and reopen the
+        // retained store refreshes summary/lastPayload and the
+        // counter but never rewrites runbook/impact/recoveryCondition
+        // (`lib/alert-store.js:231-249,254-271`); only a fresh insert
+        // writes the four text fields.
+        match existing {
+            None => {
+                const IMPACT: &str = "no new engagement can be approved against this agent; the work already approved keeps running, because admission control cannot retract a commitment it already granted";
+                const RECOVERY: &str = "the drawn figure falls back under the ceiling, by raising the ceiling or ending engagements — this alert auto-resolves when that happens";
+                // The retained ingest files the full identity
+                // (`backend-v2.js:9422-9447`): kind
+                // `agent_ceiling_overrun`, severity `warning`,
+                // source `backend`, sourceAgent the resource id.
+                db.execute(
+                    "INSERT INTO ceiling_alerts(dedupe_key,resource_id,summary,detail,runbook,impact,recovery_condition,occurrences,first_seen_ms,last_seen_ms,alert_type,severity,source,source_agent,tags) VALUES(?1,?2,?3,?4,?5,?6,?7,1,?8,?8,'agent_ceiling_overrun','warning','backend',?2,'[\"ceiling\",\"budget\"]')",
+                    params![key, resource.id(), summary, detail, runbook, IMPACT, RECOVERY, now],
+                )?;
+                outcome.raised += 1;
+            }
+            Some((was_resolved, status, suppress_until)) => {
+                let changed = db.execute(
+                    if was_resolved {
+                        // A resolved row re-raised reopens as a FRESH
+                        // episode: display state reset beside the
+                        // resolved columns the sweep always cleared.
+                        "UPDATE ceiling_alerts SET resource_id=?2,summary=?3,detail=?4,occurrences=occurrences+1,last_seen_ms=?5,resolved_at_ms=NULL,resolved_by=NULL,status='open',note=NULL,transitioned_at_ms=NULL,transitioned_by=NULL,suppress_until_ms=NULL WHERE dedupe_key=?1"
+                    } else if status.as_deref() == Some("suppressed")
+                        && suppress_until.is_some_and(|until| now > until)
+                    {
+                        // The retained Bug-1 fix
+                        // (`lib/alert-store.js:245-248`): a
+                        // suppressed row reopens on a new occurrence
+                        // once its `suppressUntil` has passed, and
+                        // stays suppressed inside the window.
+                        "UPDATE ceiling_alerts SET resource_id=?2,summary=?3,detail=?4,occurrences=occurrences+1,last_seen_ms=?5,status='open',suppress_until_ms=NULL WHERE dedupe_key=?1"
+                    } else {
+                        // An unresolved row rides occurrences and
+                        // KEEPS its operator status; inside the
+                        // suppression window the row stays
+                        // suppressed, exactly like the retained
+                        // store.
+                        "UPDATE ceiling_alerts SET resource_id=?2,summary=?3,detail=?4,occurrences=occurrences+1,last_seen_ms=?5 WHERE dedupe_key=?1"
+                    },
+                    params![key, resource.id(), summary, detail, now],
+                )?;
+                if was_resolved {
+                    outcome.raised += 1;
+                } else {
+                    outcome.updated += 1;
+                }
+                debug_assert_eq!(changed, 1);
+            }
+        }
+    } else {
+        // Back under (or exactly on) the ceiling resolves by the same
+        // rule the ingest path would use, not a hand-rolled
+        // transition; a no-op when no alert is open
+        // (`lib/alert-store.js:337-355`). Exactly-on is not over,
+        // which is also why the raise side is strictly greater.
+        let changed = db.execute(
+            "UPDATE ceiling_alerts SET status='resolved',resolved_at_ms=?2,resolved_by='system' WHERE dedupe_key=?1 AND resolved_at_ms IS NULL",
+            params![key, now],
+        )?;
+        outcome.resolved += u64::try_from(changed).unwrap_or_default();
+    }
+    Ok(outcome)
+}
+
 impl DomainRepository {
     /// Sweep every resource with a declared finite ceiling and reconcile its
     /// overrun alert (`backend-v2.js:9393-9452`, slice a of the alarm plan):
@@ -120,116 +236,10 @@ impl DomainRepository {
         drop(statement);
         for row in rows {
             let resource: Resource = serde_json::from_str(&row)?;
-            // No declared ceiling is unknown, not zero: such a resource cannot
-            // be past a limit that does not exist and is skipped entirely
-            // (`backend-v2.js:9397-9400`).
-            let Some(ceiling) = resource
-                .ceiling
-                .as_ref()
-                .and_then(|c| c.tokens)
-                .map(u64::from)
-            else {
-                continue;
-            };
-            let ceiling = bounded(ceiling)?;
-            let report = ceiling_report(&tx, &resource.id(), now)?;
-            let key = dedupe_key(&resource.id());
-            if report.drawn > ceiling {
-                let over = report.drawn - ceiling;
-                let detail = detail_json(
-                    &resource.id(),
-                    &report.preset_name,
-                    ceiling,
-                    report.reserved,
-                    report.spent,
-                    report.drawn,
-                    over,
-                );
-                let summary = format!(
-                    "{} has drawn {} against a ceiling of {} — {} past it",
-                    resource.id(),
-                    report.drawn,
-                    ceiling,
-                    over
-                );
-                let runbook = format!(
-                    "raise the ceiling on preset {} to cover what is already committed, or revoke engagements on {} until the drawn figure is back under it",
-                    report.preset_name,
-                    resource.id()
-                );
-                let existing: Option<(bool, Option<String>, Option<u64>)> = tx
-                    .query_row(
-                        "SELECT resolved_at_ms IS NOT NULL, status, suppress_until_ms FROM ceiling_alerts WHERE dedupe_key=?1",
-                        [&key],
-                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-                    )
-                    .optional()?;
-                // The preserved contract is one OPEN alert per resource,
-                // occurrences riding on it. On dedupe-repeat and reopen the
-                // retained store refreshes summary/lastPayload and the
-                // counter but never rewrites runbook/impact/recoveryCondition
-                // (`lib/alert-store.js:231-249,254-271`); only a fresh insert
-                // writes the four text fields.
-                match existing {
-                    None => {
-                        const IMPACT: &str = "no new engagement can be approved against this agent; the work already approved keeps running, because admission control cannot retract a commitment it already granted";
-                        const RECOVERY: &str = "the drawn figure falls back under the ceiling, by raising the ceiling or ending engagements — this alert auto-resolves when that happens";
-                        // The retained ingest files the full identity
-                        // (`backend-v2.js:9422-9447`): kind
-                        // `agent_ceiling_overrun`, severity `warning`,
-                        // source `backend`, sourceAgent the resource id.
-                        tx.execute(
-                            "INSERT INTO ceiling_alerts(dedupe_key,resource_id,summary,detail,runbook,impact,recovery_condition,occurrences,first_seen_ms,last_seen_ms,alert_type,severity,source,source_agent,tags) VALUES(?1,?2,?3,?4,?5,?6,?7,1,?8,?8,'agent_ceiling_overrun','warning','backend',?2,'[\"ceiling\",\"budget\"]')",
-                            params![key, resource.id(), summary, detail, runbook, IMPACT, RECOVERY, now],
-                        )?;
-                        outcome.raised += 1;
-                    }
-                    Some((was_resolved, status, suppress_until)) => {
-                        let changed = tx.execute(
-                            if was_resolved {
-                                // A resolved row re-raised reopens as a FRESH
-                                // episode: display state reset beside the
-                                // resolved columns the sweep always cleared.
-                                "UPDATE ceiling_alerts SET resource_id=?2,summary=?3,detail=?4,occurrences=occurrences+1,last_seen_ms=?5,resolved_at_ms=NULL,resolved_by=NULL,status='open',note=NULL,transitioned_at_ms=NULL,transitioned_by=NULL,suppress_until_ms=NULL WHERE dedupe_key=?1"
-                            } else if status.as_deref() == Some("suppressed")
-                                && suppress_until.is_some_and(|until| now > until)
-                            {
-                                // The retained Bug-1 fix
-                                // (`lib/alert-store.js:245-248`): a
-                                // suppressed row reopens on a new occurrence
-                                // once its `suppressUntil` has passed, and
-                                // stays suppressed inside the window.
-                                "UPDATE ceiling_alerts SET resource_id=?2,summary=?3,detail=?4,occurrences=occurrences+1,last_seen_ms=?5,status='open',suppress_until_ms=NULL WHERE dedupe_key=?1"
-                            } else {
-                                // An unresolved row rides occurrences and
-                                // KEEPS its operator status; inside the
-                                // suppression window the row stays
-                                // suppressed, exactly like the retained
-                                // store.
-                                "UPDATE ceiling_alerts SET resource_id=?2,summary=?3,detail=?4,occurrences=occurrences+1,last_seen_ms=?5 WHERE dedupe_key=?1"
-                            },
-                            params![key, resource.id(), summary, detail, now],
-                        )?;
-                        if was_resolved {
-                            outcome.raised += 1;
-                        } else {
-                            outcome.updated += 1;
-                        }
-                        debug_assert_eq!(changed, 1);
-                    }
-                }
-            } else {
-                // Back under (or exactly on) the ceiling resolves by the same
-                // rule the ingest path would use, not a hand-rolled
-                // transition; a no-op when no alert is open
-                // (`lib/alert-store.js:337-355`). Exactly-on is not over,
-                // which is also why the raise side is strictly greater.
-                let changed = tx.execute(
-                    "UPDATE ceiling_alerts SET status='resolved',resolved_at_ms=?2,resolved_by='system' WHERE dedupe_key=?1 AND resolved_at_ms IS NULL",
-                    params![key, now],
-                )?;
-                outcome.resolved += u64::try_from(changed).unwrap_or_default();
-            }
+            let observed = reconcile_resource(&tx, &resource, now)?;
+            outcome.raised += observed.raised;
+            outcome.updated += observed.updated;
+            outcome.resolved += observed.resolved;
         }
         // Retention (`ALERT_RESOLVED_TTL_MS` parity): resolved rows older
         // than 7 days are pruned whole.
@@ -240,6 +250,28 @@ impl DomainRepository {
         )?;
         outcome.pruned = u64::try_from(pruned).unwrap_or_default();
         tx.commit()?;
+        Ok(outcome)
+    }
+
+    /// One authorized resource per writer job. Shared canonical owners must not
+    /// sweep or prune another profile's resource. The authority closure is checked
+    /// inside the same transaction both before and after the observation.
+    pub(crate) fn observe_resource_alert(
+        &mut self,
+        resource_id: &str,
+        now: u64,
+        check: impl Fn(&rusqlite::Connection) -> Result<(), Error>,
+    ) -> Result<SweepOutcome, Error> {
+        bounded(now)?;
+        let tx = self.db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        check(&tx)?;
+        let config: String = tx.query_row("SELECT config FROM resources WHERE id=?1", [resource_id], |row| row.get(0)).optional()?.ok_or(Error::NotFound)?;
+        let resource: Resource = serde_json::from_str(&config)?;
+        if resource.id() != resource_id { return Err(Error::Schema); }
+        let mut outcome = reconcile_resource(&tx, &resource, now)?;
+        outcome.pruned = tx.execute("DELETE FROM ceiling_alerts WHERE resource_id=?1 AND resolved_at_ms IS NOT NULL AND resolved_at_ms<?2", params![resource_id, now.saturating_sub(RESOLVED_RETENTION_MS)])? as u64;
+        check(&tx)?;
+        tx.commit().map_err(|_| Error::OutcomeUnknown)?;
         Ok(outcome)
     }
 
@@ -704,6 +736,14 @@ impl DomainRepository {
         &mut self,
         command: AlertTransition,
     ) -> Result<CeilingAlert, Error> {
+        let tx = self.db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let alert = transition_in_transaction(&tx, command)?;
+        tx.commit()?;
+        Ok(alert)
+    }
+}
+
+fn transition_in_transaction(tx: &rusqlite::Connection, command: AlertTransition) -> Result<CeilingAlert, Error> {
         let AlertTransition {
             key,
             to,
@@ -722,9 +762,6 @@ impl DomainRepository {
         if actor.len() > 128 || note.as_deref().is_some_and(|n| n.len() > 2048) {
             return Err(hagency_core::InvalidInput("invalid alert transition").into());
         }
-        let tx = self
-            .db
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let status: Option<String> = tx
             .query_row(
                 "SELECT status FROM ceiling_alerts WHERE dedupe_key=?1",
@@ -752,7 +789,7 @@ impl DomainRepository {
             _ => None,
         };
         let changed = tx.execute(
-            "UPDATE ceiling_alerts SET status=?2,note=?3,transitioned_at_ms=?4,transitioned_by=?5,resolved_at_ms=COALESCE(?6,resolved_at_ms),resolved_by=CASE WHEN ?6 IS NOT NULL THEN ?7 ELSE resolved_by END,assignee=CASE WHEN ?8 THEN COALESCE(?9,assignee) ELSE assignee END,suppress_until_ms=CASE WHEN ?10 IS NULL THEN suppress_until_ms ELSE ?11 END WHERE dedupe_key=?1",
+            "UPDATE ceiling_alerts SET status=?2,note=?3,transitioned_at_ms=?4,transitioned_by=?5,resolved_at_ms=COALESCE(?6,resolved_at_ms),resolved_by=CASE WHEN ?6 IS NOT NULL THEN ?7 ELSE resolved_by END,assignee=CASE WHEN ?8 THEN COALESCE(?9,assignee) ELSE assignee END,suppress_until_ms=CASE WHEN ?10 THEN ?11 ELSE suppress_until_ms END WHERE dedupe_key=?1",
             rusqlite::params![
                 key,
                 to,
@@ -781,10 +818,8 @@ impl DomainRepository {
                 params![key, seq, actor, text.chars().take(2048).collect::<String>(), now],
             )?;
         }
-        let alert = read_alert(&tx, &key)?;
-        tx.commit()?;
+        let alert = read_alert(tx, &key)?;
         Ok(alert)
-    }
 }
 
 /// The one column list every alert read selects (migration 045 shape), in
@@ -936,3 +971,5 @@ mod tests {
         );
     }
 }
+
+pub(crate) mod management;

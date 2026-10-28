@@ -32,7 +32,7 @@ fn setup(root: &std::path::Path) -> (DomainRepository, crate::OwnedApprovalScope
 #[tokio::test]
 async fn native_owned_approval_maintenance_clock() {
     for mode in ["transaction", "lock", "queue"] {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let (mut db, scope, wall) = setup(root.path());
         let inspect = rusqlite::Connection::open(root.path().join("state/domain.sqlite3")).unwrap();
         if mode == "transaction" {

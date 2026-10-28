@@ -15,7 +15,7 @@ use hagency_store::ReceiveWrite;
 use std::{collections::BTreeSet, future::Future, pin::pin, task::Poll, time::Instant};
 
 fn fixture() -> Fixture {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let work = root.path().join("received 工作区");
     hagency_store::private::directory(&work).unwrap();
     let work = work.canonicalize().unwrap();

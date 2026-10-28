@@ -1,6 +1,12 @@
 //! Host-only process scope primitives. Not runner authorization or a sandbox.
 use std::{collections::BTreeMap, ffi::OsString, io, path::PathBuf, time::Duration};
 
+pub mod legacy_writer;
+#[allow(unsafe_code)] // Narrow getpwuid_r boundary; never inherits HOME for ownership.
+mod owner_home;
+pub mod private_state;
+pub use owner_home::{owner_home, codex_process_home};
+
 mod child_identity;
 pub use child_identity::{ChildIdentity, OwnedChildIdentity, SignalOutcome};
 #[allow(unsafe_code)]

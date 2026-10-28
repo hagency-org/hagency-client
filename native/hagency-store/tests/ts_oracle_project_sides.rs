@@ -22,7 +22,7 @@ struct Sides {
 }
 
 fn open() -> Sides {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&root.path().join("state")).unwrap();
     db.register(&registration()).unwrap();
     Sides { root, db }

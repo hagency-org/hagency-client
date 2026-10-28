@@ -10,7 +10,7 @@ use hagency_store::{DomainRepository, Error};
 use serde_json::json;
 
 fn setup() -> (tempfile::TempDir, DomainRepository) {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&dir.path().join("state")).unwrap();
     db.register(&registration()).unwrap();
     (dir, db)

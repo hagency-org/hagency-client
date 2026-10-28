@@ -16,6 +16,7 @@ use tokio::sync::Mutex;
 
 pub(super) mod matrix_creations;
 mod profiles;
+mod sdk_resume;
 mod shared_matrix;
 pub(super) fn matrix_creation_router() -> Router {
     matrix_creations::router()
@@ -145,6 +146,7 @@ struct Revocation {
     oauth_done: bool,
 }
 pub(super) struct ServerLogin {
+    sdk_resume: sdk_resume::Journal,
     pub(super) native_expected: std::sync::Mutex<Option<(String, String)>>,
     path: Option<PathBuf>,
     profiles_path: Option<PathBuf>,
@@ -160,7 +162,7 @@ pub(super) struct ServerLogin {
     status: Mutex<Value>,
     sessions: Mutex<std::collections::HashMap<String, RemoteSession>>,
 }
-fn read_private_json(path: &Path, limit: u64) -> Result<Vec<u8>, Error> {
+pub(in crate::console) fn read_private_json(path: &Path, limit: u64) -> Result<Vec<u8>, Error> {
     use std::io::Read;
     let file = hagency_store::private::open(path, false).map_err(|_| Error::Unavailable)?;
     if file.metadata().map_err(|_| Error::Unavailable)?.len() > limit {
@@ -245,6 +247,7 @@ impl ServerLogin {
         };
         let revocation_pending = !revocations.is_empty();
         Ok(Self {
+            sdk_resume: sdk_resume::Journal::open(state)?,
             native_expected: std::sync::Mutex::new(None),
             path,
             profiles_path,
@@ -392,7 +395,16 @@ impl ServerLogin {
                 Err(Error::Unavailable)
             }
             Err(error) => {
-                self.queue_revocation(session).await;
+                if session.matrix_source.is_some() {
+                    // An SDK account switch can race local retirement. Renewal
+                    // refusal does not prove that the saved original account
+                    // was revoked: close this process's capability only. A
+                    // fresh same-owner resume independently verifies the
+                    // original device; explicit logout persists its tombstone.
+                    invalidate(session);
+                } else {
+                    self.queue_revocation(session).await;
+                }
                 *self.status.lock().await = json!({"state":"failed","code":"sign_in_required","deviceAuthorized":false,"transportOnline":false});
                 Err(error)
             }
@@ -433,6 +445,15 @@ impl ServerLogin {
             return;
         }
         let shared = session.matrix_source.is_some();
+        if shared {
+            // A later resume must not race an explicit or terminal revocation.
+            if self.sdk_resume.revoke(Some(&session.token)).is_err() {
+                tracing::error!(
+                    code = "native_logout_persistence_failed",
+                    "Native session revocation could not be persisted"
+                );
+            }
+        }
         let (oauth_token, hint) = if shared {
             session.oauth_token.clear();
             session.refresh_token = None;
@@ -454,10 +475,22 @@ impl ServerLogin {
         };
         invalidate(session);
         let mut revocations = self.revocations.lock().await;
-        revocations.push(pending);
+        // The saved SDK record may already have queued this exact native
+        // credential before the in-memory session is retired. Preserve any
+        // existing OAuth cleanup, and retry the original remote revoke once.
+        if !shared
+            || !revocations.iter().any(|r| {
+                r.origin == pending.origin
+                    && r.client_id == pending.client_id
+                    && r.session_token == pending.session_token
+            })
+        {
+            revocations.push(pending);
+        }
         let _ = self.save_revocations(&revocations);
     }
     pub(super) async fn revoke_native_all(&self) {
+        self.queue_saved_sdk_revocation().await;
         for session in self.sessions.lock().await.values_mut() {
             self.queue_revocation(session).await;
         }
@@ -1450,6 +1483,9 @@ async fn register_device(
 
 /// A closed set of owner operations. No caller supplies a URL or bearer token.
 pub(super) enum OwnerOperation {
+    Management(super::native::management_server::ServerOperation),
+    Allocation(super::native::allocation_transport::ServerOperation),
+    ProjectSetup(super::native::project_setup::ServerOperation),
     AgentCommandStatus {
         operation: String,
         command: String,
@@ -1595,6 +1631,15 @@ fn policy_scope(project: &str, room: Option<&str>) -> Result<String, OwnerError>
 impl OwnerOperation {
     fn request(self) -> Result<(reqwest::Method, String, Option<Value>), OwnerError> {
         use reqwest::Method;
+        if let Self::Management(operation) = self {
+            return operation.request();
+        }
+        if let Self::Allocation(operation) = self {
+            return operation.request();
+        }
+        if let Self::ProjectSetup(operation) = self {
+            return operation.request();
+        }
         let binding_request = match &self {
             Self::Binding { binding } => Some((Method::GET, binding, "")),
             Self::PauseBinding { binding } => Some((Method::POST, binding, "/pause")),
@@ -1611,6 +1656,9 @@ impl OwnerOperation {
             ));
         }
         let (method, suffix, body) = match self {
+            Self::Management(_) => unreachable!("management handled above"),
+            Self::Allocation(_) => unreachable!("allocation handled above"),
+            Self::ProjectSetup(_) => unreachable!("project setup handled above"),
             Self::SetThreadAutoReply { binding, enabled } => {
                 operation_id(&binding)?;
                 (
@@ -1784,17 +1832,23 @@ impl ServerLogin {
         cookie: &str,
         operation: OwnerOperation,
     ) -> Result<OwnerReply, OwnerError> {
-        self.owner_api_inner(Some(cookie), None, operation).await
+        self.owner_api_inner(Some(cookie), None, operation, None)
+            .await
     }
     async fn owner_api_inner(
         &self,
         cookie: Option<&str>,
         pin: Option<&super::device_execution::DeviceIdentity>,
         operation: OwnerOperation,
+        creation_scope: Option<&matrix_creations::Scope<'_>>,
     ) -> Result<OwnerReply, OwnerError> {
         let needs_device = matches!(
             &operation,
-            OwnerOperation::Create { .. } | OwnerOperation::AssignExecutionDevice { .. }
+            OwnerOperation::Create { .. }
+                | OwnerOperation::AssignExecutionDevice { .. }
+                | OwnerOperation::Management(..)
+                | OwnerOperation::Allocation(..)
+                | OwnerOperation::ProjectSetup(..)
         );
         let (method, path, body) = operation.request()?;
         if self.stopped.load(Ordering::Acquire) {
@@ -1841,6 +1895,10 @@ impl ServerLogin {
             .filter(|s| !s.invalidated && s.expires > Instant::now())
             .ok_or_else(|| OwnerError::new(401, "sign_in_required"))?;
         drop(renewal);
+        if let Some(scope) = creation_scope {
+            scope.matches(&session)?;
+            scope.check().await?;
+        }
         if pin.is_some_and(|pin| {
             session
                 .device
@@ -1899,6 +1957,9 @@ impl ServerLogin {
                 })
                 .unwrap_or("server_request_failed");
             return Err(OwnerError::new(status, code));
+        }
+        if let Some(scope) = creation_scope {
+            scope.check().await?;
         }
         let sessions = self.sessions.lock().await;
         // Cookie renewal can move this same grant while management HTTP is in
@@ -1960,7 +2021,7 @@ impl super::Console {
         }
         self.0
             .server_login
-            .owner_api_inner(None, Some(pin), operation)
+            .owner_api_inner(None, Some(pin), operation, None)
             .await
     }
     pub(super) async fn owner_api(
@@ -1977,7 +2038,7 @@ mod private_json_tests {
     use super::*;
     #[test]
     fn restart_reads_bounded_json_larger_than_a_single_token_without_restoring_authority() {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let binding = Binding {
             origin: "http://127.0.0.1:13377/".into(),
             client_id: "c".repeat(128),
@@ -2169,7 +2230,8 @@ mod oauth_refresh_tests {
             let result = if index == 0 {
                 // Standalone OAuth must reach renewal after the old proof
                 // expires, rather than turning a temporary outage into logout.
-                let root = tempfile::tempdir().unwrap();
+                let root =
+                    hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
                 let login = ServerLogin::new(Some(root.path())).unwrap();
                 login
                     .sessions

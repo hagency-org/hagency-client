@@ -7,7 +7,7 @@ use std::fs;
 #[test]
 fn native_owner_oauth_return_documents_allow_external_navigation_but_not_api_reads() {
     use std::io::{Read, Write};
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("state");
     let init = command()
         .args(["init", "--state-dir"])
@@ -45,7 +45,7 @@ fn native_owner_oauth_return_documents_allow_external_navigation_but_not_api_rea
 }
 #[test]
 fn native_owner_init_is_private_idempotent_and_has_no_legacy_store() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("中文 owner state");
     for _ in 0..2 {
         let out = command()
@@ -129,7 +129,7 @@ fn native_owner_rejects_legacy_data_without_import() {
         "fleet.json",
         "bootstrap.json",
     ] {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let state = root.path().join("state");
         hagency_store::private::directory(&state).unwrap();
         fs::write(state.join(name), b"legacy never import").unwrap();
@@ -145,7 +145,7 @@ fn native_owner_rejects_legacy_data_without_import() {
 }
 #[test]
 fn native_binary_survives_crash_without_node() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let bundle = assets(root.path());
     let state = root.path().join("state");
     let mut first = launch(&state, &bundle, false);
@@ -163,7 +163,7 @@ fn native_binary_survives_crash_without_node() {
 }
 #[test]
 fn native_owner_start_serves_only_owner_routes() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let bundle = assets(root.path());
     let run = launch(&root.path().join("state"), &bundle, true);
     for path in ["/console/", "/console/login/", "/console/agents-owned/"] {
@@ -202,7 +202,7 @@ fn native_owner_start_serves_only_owner_routes() {
 #[test]
 #[cfg(unix)]
 fn native_owner_open_uses_private_ipc_single_use_ticket_without_pasion_rights() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let bundle = assets(root.path());
     let state = root.path().join("state");
     let run = launch(&state, &bundle, false);
@@ -270,7 +270,7 @@ fn native_owner_open_uses_private_ipc_single_use_ticket_without_pasion_rights() 
 }
 #[test]
 fn native_owner_requires_console_and_valid_loopback_listener() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let bundle = assets(root.path());
     for address in ["0.0.0.0:13300", "127.0.0.1:0"] {
         let out = command()
@@ -310,7 +310,7 @@ fn native_owner_requires_console_and_valid_loopback_listener() {
 }
 #[test]
 fn native_owner_running_state_cannot_be_opened_twice() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let bundle = assets(root.path());
     let state = root.path().join("state");
     let _run = launch(&state, &bundle, false);
@@ -324,7 +324,7 @@ fn native_owner_running_state_cannot_be_opened_twice() {
 }
 #[test]
 fn native_logs_to_stderr_with_no_file_sink() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let bundle = assets(root.path());
     let state = root.path().join("state");
     let _run = launch(&state, &bundle, false);
@@ -335,7 +335,7 @@ fn native_logs_to_stderr_with_no_file_sink() {
 #[cfg(unix)]
 fn native_owner_service_install_uninstall_uses_only_per_user_supervisor() {
     use std::os::unix::fs::PermissionsExt;
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let bundle = assets(root.path());
     let run = launch(&root.path().join("live-state"), &bundle, true);
     let home = root.path().join("home");
@@ -434,7 +434,7 @@ fn native_owner_service_install_uninstall_uses_only_per_user_supervisor() {
 
 #[test]
 fn native_owner_setup_command_cannot_import_daily_provider_credentials() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let home = root.path().join("home");
     std::fs::create_dir_all(home.join(".codex")).unwrap();
     std::fs::write(home.join(".codex/auth.json"), b"synthetic never import").unwrap();
@@ -455,7 +455,7 @@ fn native_owner_setup_command_cannot_import_daily_provider_credentials() {
 }
 #[test]
 fn native_owner_start_invalid_console_creates_no_credentials() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("state");
     let out = owner::command()
         .args(["start", "--no-open", "--state-dir"])

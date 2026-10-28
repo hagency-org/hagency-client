@@ -372,7 +372,7 @@ fn copy_root_build_inputs(root: &Path, destination: &Path) {
 }
 #[test]
 fn native_upgrade_shared_templates_are_build_inputs() {
-    let fixture = tempfile::tempdir().unwrap();
+    let fixture = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let source = fixture.path().join("source");
     let copy = fixture.path().join("copy");
     fs::create_dir_all(source.join("native")).unwrap();
@@ -514,7 +514,7 @@ fn native_binary_version_matches_workspace() {
 
 #[test]
 fn native_release_entrypoints_scan_finds_no_node() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let tree = stage_release_tree(root.path());
     let findings = scan_node_entrypoints(&tree);
     assert!(
@@ -648,14 +648,14 @@ fn native_cutover_dryrun_version_identity() {
     // a mismatch fails the dry-run before a single process spawns.
     let workspace = workspace_version();
     assert_eq!(reported_version(), workspace);
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let _state = init_state(root.path()); // fresh temp state, per the runbook
 }
 
 #[test]
 fn native_cutover_dryrun_ready_gate_and_stop_contract() {
     // Runbook steps 3 and 6: gate on /ready, then SIGTERM inside the budget.
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = init_state(root.path());
     let mut running = spawn_service(&state);
     wait_ready(&running);
@@ -666,7 +666,7 @@ fn native_cutover_dryrun_ready_gate_and_stop_contract() {
 
 #[test]
 fn native_cutover_dryrun_owned_state_preserved_across_restart() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = init_state(root.path());
     seed_owned_state(&state);
     let marker = owner::marker(&state);
@@ -711,7 +711,7 @@ fn stage_next(root: &Path) -> PathBuf {
 /// task, no re-registration.
 #[test]
 fn native_upgrade_procedure_continues_state() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let n_artifact = stage_n(root.path());
     let next = stage_next(root.path());
     // Step 0: version identity before any service start.
@@ -764,7 +764,7 @@ fn native_upgrade_procedure_continues_state() {
 
 #[test]
 fn native_upgrade_rollback_restores_previous() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let n_artifact = stage_n(root.path());
     let next = stage_next(root.path());
     let state = init_state(root.path());
@@ -821,7 +821,7 @@ fn native_upgrade_rollback_restores_previous() {
 
 #[test]
 fn native_installer_delegates_current_service_and_refuses_legacy_state() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let install = root.path().join("install path");
     fs::create_dir(&install).unwrap();
     fs::copy(binary(), install.join("hagency")).unwrap();

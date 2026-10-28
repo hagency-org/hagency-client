@@ -168,6 +168,7 @@ pub struct Driver<R, W, E> {
     connection: Connection,
     origin: Instant,
     lifetime: Instant,
+    shared_activity: Option<std::sync::Arc<dyn Fn() -> Option<Instant> + Send + Sync>>,
     warm_state: WarmState,
     limits: Limits,
     input: [u8; READ_BYTES],
@@ -187,7 +188,7 @@ impl<R, W, E> Driver<R, W, E> {
         self.connection.pending_server_count()
     }
     pub(super) fn ensure_live(&mut self) -> Result<(), Error> {
-        let result = self.check(self.lifetime);
+        let result = self.check(self.effective_lifetime());
         if let Err(error) = result {
             self.stop(error);
         }
@@ -266,6 +267,7 @@ impl<R, W, E> Driver<R, W, E> {
             connection: Connection::default(),
             origin,
             lifetime,
+            shared_activity: None,
             warm_state: WarmState::Normal,
             limits,
             input: [0; READ_BYTES],
@@ -299,6 +301,44 @@ impl<R, W, E> Driver<R, W, E> {
     }
     pub(super) fn is_warm_idle(&self) -> bool {
         self.warm_state == WarmState::Idle
+    }
+    /// Native retained text process only. The original lifetime must still be
+    /// live; an expired transport cannot be revived by a later central reply.
+    pub(in crate::codex) fn renew_shared_activity(&mut self, until: Instant) -> Result<(), Error> {
+        self.check(self.lifetime)?;
+        if until <= Instant::now() || until > Instant::now() + Duration::from_secs(30) {
+            return Err(Error::Configuration);
+        }
+        self.lifetime = until;
+        Ok(())
+    }
+    pub(in crate::codex) fn attach_shared_activity(
+        &mut self,
+        clock: std::sync::Arc<dyn Fn() -> Option<Instant> + Send + Sync>,
+    ) -> Result<(), Error> {
+        self.check(self.effective_lifetime())?;
+        if self.shared_activity.is_some() || clock().is_none() {
+            return Err(Error::Configuration);
+        }
+        self.shared_activity = Some(clock);
+        // A silent model may outlive one activity epoch. The independently
+        // renewed, finite clock still ends every read promptly when not renewed.
+        self.limits.event_wait_ms = MAX_REQUEST_MS;
+        Ok(())
+    }
+    /// Only the installed finite shared-text clock can retain a completed
+    /// turn's pipes while its same-process reply is reconciled.
+    pub(in crate::codex) fn has_live_shared_activity(&self) -> bool {
+        self.termination.is_none()
+            && self
+                .shared_activity
+                .as_ref()
+                .is_some_and(|clock| clock().is_some_and(|until| Instant::now() < until))
+    }
+    fn effective_lifetime(&self) -> Instant {
+        self.shared_activity
+            .as_ref()
+            .map_or(self.lifetime, |clock| clock().unwrap_or_else(Instant::now))
     }
     pub(in crate::codex) fn enter_warm_idle(&mut self, until: Instant) -> Result<(), Error> {
         if self.warm_state != WarmState::Preparing
@@ -397,7 +437,7 @@ impl<R, W, E> Driver<R, W, E> {
         if self.termination.is_some() {
             return Err(Error::Closed);
         }
-        if Instant::now() >= deadline || Instant::now() >= self.lifetime {
+        if Instant::now() >= deadline || Instant::now() >= self.effective_lifetime() {
             return Err(Error::Timeout);
         }
         self.pending_before_call = (
@@ -412,8 +452,8 @@ impl<R, W, E> Driver<R, W, E> {
             .connection
             .deadline_ms()
             .and_then(|ms| self.origin.checked_add(Duration::from_millis(ms)))
-            .unwrap_or(self.lifetime);
-        operation.min(self.lifetime).min(protocol)
+            .unwrap_or_else(|| self.effective_lifetime());
+        operation.min(self.effective_lifetime()).min(protocol)
     }
 }
 
@@ -585,7 +625,15 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> Driver<R
             result = streams.stderr.read(&mut self.stderr_buffer), if self.stderr_open => Observed::Stderr(result),
         };
         match observed {
-            Observed::Deadline => return Err(Error::Timeout),
+            Observed::Deadline => {
+                // A retained read is not cancelled for renewal. Re-evaluate the
+                // same-process clock when its previous epoch deadline wakes.
+                self.check(operation_deadline)?;
+                if self.next_deadline(operation_deadline) <= Instant::now() {
+                    return Err(Error::Timeout);
+                }
+                return Ok(());
+            }
             Observed::Write(Ok(0)) | Observed::Read(Ok(0)) => return Err(Error::PeerEof),
             Observed::Write(Ok(n)) => {
                 let writing = self.writing.as_mut().ok_or(Error::Closed)?;

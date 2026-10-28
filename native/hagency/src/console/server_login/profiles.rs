@@ -94,6 +94,14 @@ impl Profiles {
     }
 }
 impl ServerLogin {
+    pub(super) async fn known_matrix_owner(&self, origin: &str, owner: &str) -> bool {
+        self.profiles
+            .lock()
+            .await
+            .accounts
+            .iter()
+            .any(|b| b.origin == origin && b.owner.as_deref() == Some(owner))
+    }
     pub(super) async fn known_server(&self, origin: &str) -> Option<Binding> {
         self.profiles
             .lock()
@@ -337,7 +345,7 @@ mod tests {
     }
     #[tokio::test]
     async fn profile_switch_preserves_identity_metadata_without_restoring_credentials() {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let login = ServerLogin::new(Some(root.path())).unwrap();
         let alice = binding("https://example.test/", "@alice:example.test", "alice-sub");
         let bob = binding("https://example.test/", "@bob:example.test", "bob-sub");
@@ -384,7 +392,7 @@ mod tests {
     }
     #[tokio::test]
     async fn existing_single_owner_binding_is_retained_as_one_profile_without_authority() {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let value = binding("https://example.test/", "@alice:example.test", "alice-sub");
         hagency_store::private::replace(
             &root.path().join("server-login.json"),
@@ -399,7 +407,7 @@ mod tests {
     }
     #[tokio::test]
     async fn switching_revokes_every_browser_authority_and_only_mints_local_bridge() {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let login = ServerLogin::new(Some(root.path())).unwrap();
         let authority = super::super::super::authority::Authority::new();
         let first = authority
@@ -447,7 +455,7 @@ mod tests {
     }
     #[tokio::test]
     async fn profile_limit_refuses_new_binding_without_overwriting_active_owner() {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let login = ServerLogin::new(Some(root.path())).unwrap();
         let first = binding("https://example.test/", "@owner0:example.test", "sub0");
         login.save(first).await.unwrap();

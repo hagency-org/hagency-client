@@ -127,7 +127,7 @@ async fn ready(store: &DomainStore, cap: &RunnerCapability, call: &str) -> crate
 
 #[tokio::test]
 async fn native_upload_worker_lost_and_concurrent() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let (db, cap) = fixture(root.path());
     let store = DomainStore::start(db, 8).unwrap();
     // Drop the actual successful committed return on the owner worker. This is
@@ -206,7 +206,7 @@ async fn native_upload_worker_lost_and_concurrent() {
 
 #[tokio::test]
 async fn native_upload_worker_queued_expiry() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let (db, cap) = fixture(root.path());
     let store = DomainStore::start(db, 8).unwrap();
     let id = ready(&store, &cap, "expired").await;

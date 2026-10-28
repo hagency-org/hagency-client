@@ -8,7 +8,7 @@ use hagency_store::DomainRepository;
 /// which `side_budget` counts: native mints commitments at reservation,
 /// where the retained JavaScript counted `active` only.
 fn allocated_store() -> (tempfile::TempDir, DomainRepository) {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&dir.path().join("state")).unwrap();
     db.register(&registration()).unwrap();
     let pool = resource("side_pool", "side_seat", 1000);

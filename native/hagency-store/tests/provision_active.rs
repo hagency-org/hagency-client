@@ -14,7 +14,7 @@ fn native_provisioning_active_account_scope() {
         "unknown",
         "failed",
     ] {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let mut db = DomainRepository::open(&root.path().join("state")).unwrap();
         let pool = resource("pool", "seat", 1000);
         db.register(&registration()).unwrap();

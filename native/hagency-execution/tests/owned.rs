@@ -87,7 +87,10 @@ impl Fixture {
         Self::configured_resource(approvals, managed, resource("pool", "seat", 1000))
     }
     fn configured_resource(approvals: bool, managed: bool, unmanaged_pool: Resource) -> Self {
-        let root = tempfile::tempdir().unwrap();
+        Self::configured_workspace(approvals, managed, unmanaged_pool, true)
+    }
+    fn configured_workspace(approvals: bool, managed: bool, unmanaged_pool: Resource, exclusive: bool) -> Self {
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let work = root.path().join("固定 工作目录");
         hagency_store::private::directory(&work).unwrap();
         let work = work.canonicalize().unwrap();
@@ -194,11 +197,22 @@ impl Fixture {
         db.register_workspace("work").unwrap();
         db.create_canonical_task("task", "session", "Exact frozen task", now())
             .unwrap();
-        db.enqueue_dispatch(&DispatchInput { id: "dispatch".into(), session_id: "session".into(), task_id: Some("task".into()), resources: vec![ResourceLease { id:"work".into(), exclusive:true }], payload: json!({"instruction":"do the offline work", "task_id":"impostor", "cwd":"/model/override", "model":"model-override", "done":true}) }).unwrap();
-        let cap = db
-            .claim_dispatch("owned_host", now(), 60_000, 60_000, 1)
-            .unwrap()
-            .unwrap();
+        db.enqueue_dispatch(&DispatchInput { id: "dispatch".into(), session_id: "session".into(), task_id: Some("task".into()), resources: vec![ResourceLease { id:"work".into(), exclusive }], payload: json!({"instruction":"do the offline work", "task_id":"impostor", "cwd":"/model/override", "model":"model-override", "done":true}) }).unwrap();
+        let cap = if exclusive {
+            db.claim_dispatch("owned_host", now(), 60_000, 60_000, 1).unwrap().unwrap()
+        } else {
+            use hagency_core::replies::{MatrixTransportObservation, RoomPrivacy};
+            use hagency_store::{OwnedClaimProfile, OwnedClaimRoom};
+            let mut profile=OwnedClaimProfile::new(
+                MatrixTransportObservation {engagement_id:e.id.clone(),registration_generation:1,generation:1,sender_mxid:"@worker:example.test".into(),device_id:"WORKER".into()},
+                vec![OwnedClaimRoom::new("!project:example.test".into(),1,RoomPrivacy::Group {}).unwrap().with_plaintext_project().unwrap()],
+                vec!["work".into()],
+            ).unwrap();
+            if let Some(account)=&bound_account {
+                profile=db.managed_account(account).unwrap().bind_claim_profile(profile).unwrap();
+            }
+            db.claim_owned_dispatch_for_host(&profile,"owned_host",now(),60_000,60_000,1).unwrap().expect("read-only work must be selected by the production profile")
+        };
         let domain = DomainStore::start(db, 16).unwrap();
         Self {
             root,
@@ -347,6 +361,137 @@ impl Fixture {
             ),
             0
         );
+    }
+}
+
+#[tokio::test]
+async fn native_owned_read_only_dispatch_overrides_unrestricted_policy() {
+    for (managed,yolo) in [(false,false),(false,true),(true,false),(true,true)] {
+        let f=Fixture::configured_workspace(true,managed,resource("pool","seat",1000),false);
+        f.domain.set_execution_policy(f.engagement.clone(),Some(json!({"yolo":yolo})),now()).await.unwrap();
+        let mode=if managed {"account-readonly"}else{"policy-readonly"};
+        let mut host=f.host(mode,"work",false).with_approvals(approval_fixture::policy()).unwrap();
+        if let Some(account)=&f.bound_account {
+            host=host.with_managed_account(f.domain.managed_account(account.clone()).await.unwrap()).unwrap();
+        }
+        let mut operation=Operation::start(f.domain.clone(),f.cap.clone(),host,limits()).unwrap();
+        let report=operation.wait().await.unwrap();
+        assert_eq!(report.protocol,Protocol::Completed,"managed={managed} yolo={yolo} failure={:?}",report.failure);
+        assert_eq!(report.failure,None,"managed={managed} yolo={yolo} cleanup={:?} observation={:?}",report.cleanup,report.runtime_observation());
+        assert_eq!(report.settlement,Settlement::Completed);
+        let requests:Vec<serde_json::Value>=fs::read_to_string(f.work.join("owned-dispatch.requests")).unwrap()
+            .lines().map(|line|serde_json::from_str(line).unwrap()).collect();
+        let thread=requests.iter().find(|r|r["method"]=="thread/start").unwrap();
+        let turn=requests.iter().find(|r|r["method"]=="turn/start").unwrap();
+        assert_eq!(thread["params"]["sandbox"],"read-only");
+        assert_eq!(thread["params"]["approvalPolicy"],"on-request");
+        assert_eq!(turn["params"]["sandboxPolicy"],json!({"type":"readOnly","networkAccess":false}));
+        assert_eq!(turn["params"]["approvalPolicy"],"on-request");
+        let captured:bool=f.sql().query_row("SELECT yolo FROM owned_dispatch_execution_policies WHERE dispatch_id='dispatch'",[],|r|r.get(0)).unwrap();
+        assert_eq!(captured,yolo,"Read-only dispatch must not overwrite the owner's saved policy");
+        assert_eq!(f.count("SELECT exclusive FROM dispatch_resources WHERE dispatch_id='dispatch' AND resource_id='work'"),0);
+        assert_eq!(f.count("SELECT dirty FROM workspace_resources WHERE id='work'"),0);
+        assert_eq!(f.count("SELECT COUNT(*) FROM resource_leases"),0);
+        assert_eq!(f.count("SELECT COUNT(*) FROM owner_approvals"),0);
+        assert_eq!(f.count("SELECT COUNT(*) FROM approval_grants"),0);
+        if managed {
+            let observed:serde_json::Value=serde_json::from_slice(&fs::read(f.work.join("account-observed.json")).unwrap()).unwrap();
+            assert_eq!(observed,json!({"marker":"selected-A","same_home":!cfg!(target_os="macos"),"ambient_key":false}));
+        }
+        drop(report);drop(operation);f.domain.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn native_owned_execution_policy_real_pipes() {
+    for (managed,yolo) in [(false,false),(false,true),(true,false),(true,true)] {
+        let f = Fixture::configured_account(true,managed);
+        f.domain.set_execution_policy(f.engagement.clone(), Some(json!({"yolo":yolo})), now()).await.unwrap();
+        let mode = match (managed,yolo) {(false,false)=>"normal",(false,true)=>"policy-unrestricted",(true,false)=>"account",(true,true)=>"account-unrestricted"};
+        let mut host = f.host(mode, "work", false)
+            .with_approvals(approval_fixture::policy())
+            .unwrap();
+        if let Some(account) = &f.bound_account {
+            host = host.with_managed_account(f.domain.managed_account(account.clone()).await.unwrap()).unwrap();
+        }
+        let mut operation = Operation::start(f.domain.clone(), f.cap.clone(), host, limits()).unwrap();
+        let report = operation.wait().await.unwrap();
+        assert_eq!(report.protocol, Protocol::Completed, "{:?} {:?}", report.failure, report.runtime_observation());
+        assert_eq!(report.failure, None, "managed={managed} yolo={yolo} cleanup={:?} observation={:?}", report.cleanup, report.runtime_observation());
+        assert_eq!(report.settlement, Settlement::Completed);
+        let requests: Vec<serde_json::Value> = fs::read_to_string(f.work.join("owned-dispatch.requests")).unwrap()
+            .lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+        let thread = requests.iter().find(|r| r["method"]=="thread/start").unwrap();
+        let turn = requests.iter().find(|r| r["method"]=="turn/start").unwrap();
+        let policy = if yolo {"never"} else {"on-request"};
+        assert_eq!(thread["params"]["approvalPolicy"], policy);
+        assert_eq!(turn["params"]["approvalPolicy"], policy);
+        assert_eq!(thread["params"]["sandbox"], if yolo {"danger-full-access"} else {"workspace-write"});
+        assert_eq!(turn["params"]["sandboxPolicy"]["type"], if yolo {"dangerFullAccess"} else {"workspaceWrite"});
+        let captured: bool = f.sql().query_row("SELECT yolo FROM owned_dispatch_execution_policies WHERE dispatch_id='dispatch'", [], |r|r.get(0)).unwrap();
+        assert_eq!(captured,yolo);
+        if managed {
+            let observed:serde_json::Value=serde_json::from_slice(&fs::read(f.work.join("account-observed.json")).unwrap()).unwrap();
+            assert_eq!(observed,json!({"marker":"selected-A","same_home":!cfg!(target_os="macos"),"ambient_key":false}));
+        }
+        if yolo { assert_eq!(f.count("SELECT COUNT(*) FROM approval_contexts"),0); }
+        assert_eq!(f.count("SELECT COUNT(*) FROM owner_approvals"),0);
+        assert_eq!(f.count("SELECT COUNT(*) FROM approval_grants"),0);
+        drop(report);
+        drop(operation);
+        f.domain.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn native_owned_execution_policy_unexpected_approval_is_refused() {
+    let f = Fixture::configured(true);
+    f.domain.set_execution_policy(f.engagement.clone(), Some(json!({"yolo":true})), now()).await.unwrap();
+    let host = f.host("policy-unrestricted-approval", "work", false)
+        .with_approvals(approval_fixture::policy()).unwrap();
+    let mut operation = Operation::start(f.domain.clone(), f.cap.clone(), host, limits()).unwrap();
+    let report = operation.wait().await.unwrap();
+    assert_eq!(report.failure, Some(Failure::UnsupportedApproval));
+    assert_eq!(f.count("SELECT COUNT(*) FROM approval_contexts"),0);
+    assert_eq!(f.count("SELECT COUNT(*) FROM owner_approvals"),0);
+    assert_eq!(f.count("SELECT COUNT(*) FROM approval_grants"),0);
+    f.quarantined();
+    drop(report);
+    drop(operation);
+    f.domain.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn native_owned_current_model_max_reasoning_real_pipes() {
+    for exclusive in [false, true] {
+        let mut pool = resource("pool", "seat", 1000);
+        pool.model = "gpt-6.1-sol".into();
+        pool.reasoning = Some("max".into());
+        // The nonexclusive case uses the real host claim query, so both
+        // dispatch selection and launch admission must retain the new effort.
+        let f = Fixture::configured_workspace(true, false, pool, exclusive);
+        let mut operation = f.operation(if exclusive { "normal" } else { "policy-readonly" });
+        let report = operation.wait().await.unwrap();
+        assert_eq!(report.protocol, Protocol::Completed, "{:?}", report.failure);
+        assert_eq!(report.failure, None);
+        assert_eq!(report.settlement, Settlement::Completed);
+        let requests: Vec<serde_json::Value> =
+            fs::read_to_string(f.work.join("owned-dispatch.requests"))
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+        let thread = requests.iter().find(|r| r["method"] == "thread/start").unwrap();
+        let turn = requests.iter().find(|r| r["method"] == "turn/start").unwrap();
+        assert_eq!(thread["params"]["model"], "gpt-6.1-sol");
+        assert_eq!(turn["params"]["model"], "gpt-6.1-sol");
+        assert_eq!(turn["params"]["effort"], "max");
+        assert_eq!(thread["params"]["approvalPolicy"], "on-request");
+        assert_eq!(thread["params"]["sandbox"], if exclusive { "workspace-write" } else { "read-only" });
+        assert_eq!(f.count("SELECT COUNT(*) FROM resource_leases"), 0);
+        drop(report);
+        drop(operation);
+        f.domain.shutdown().await.unwrap();
     }
 }
 

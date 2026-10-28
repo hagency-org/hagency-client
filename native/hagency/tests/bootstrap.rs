@@ -149,7 +149,7 @@ async fn native_configured_fleet_profile() {
 
 #[test]
 fn native_owner_bootstrap_refuses_old_driver_and_matrix_secret_files() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let bundle = owner::assets(root.path());
     for name in [
         "agent-driver.json",
@@ -183,7 +183,7 @@ fn native_owner_bootstrap_refuses_old_driver_and_matrix_secret_files() {
 }
 #[test]
 fn native_owner_bootstrap_no_anonymous_provider_model_tool_or_approval_access() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let bundle = owner::assets(root.path());
     let run = owner::launch(&root.path().join("state"), &bundle, true);
     for path in [
@@ -198,7 +198,7 @@ fn native_owner_bootstrap_no_anonymous_provider_model_tool_or_approval_access() 
 }
 #[test]
 fn native_owner_bootstrap_restart_does_not_restore_owner_session() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let bundle = owner::assets(root.path());
     let state = root.path().join("state");
     let mut first = owner::launch(&state, &bundle, true);

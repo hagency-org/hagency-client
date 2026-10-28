@@ -1,3 +1,23 @@
+## 2026-10-15 — Embedded management mini-app migration
+
+- Authorized full migration is active across Rinx, Desktop, Server and Client on
+  `feat/hagency-management-miniapp`. No provisioned task-writer exists in this
+  source checkout. The saved plan is Rinx `docs/design/hagency-management-miniapp-migration.md`.
+- Reviewed core/store/metering changes from hagency-rs `1212833a` restore the
+  coordinator domain beside the current owner engine. Resource services now
+  have direct native calls, scoped package authority, atomic replay receipts,
+  profile-bound ledgers and a bounded mutation queue. SDK mode opens no callback.
+- Evidence and remaining scope are tracked in Desktop
+  `docs/design/hagency-management-progress.md` and its action inventory. Central
+  shared execution, full mini-app UX, migration and MacBook E2E remain unfinished.
+- Follow-on work adds typed provider dispatch, sanitized provider/model discovery,
+  first-resource enrollment with native provider proof, and exact device-grant
+  central management requests. Desktop owns a native expiring provider-connection
+  confirmation; scripts cannot pass approval flags or credentials. Focused store
+  management tests pass (10), SDK central tests pass (15), provider-consent denial
+  and private-projection tests pass, and strict library lint passes. Real positive
+  provider onboarding, all management UI and full migration validation remain open.
+
 ## 2026-09-12 — Read-only inspection subcommands (brief 22)
 
 - Three `hagency` subcommands — `alerts`, `engagements`, `resources` —
@@ -13920,3 +13940,147 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 - Final local qualification: agent-local78passed/3ignored, complete Client library217passed/5ignored, complete Desktop library461passed/2ignored, Server non-DB library18passed/57ignored. Server all-target strict Clippy across Server/agent-service/xtask, OpenAPI validator and11self-tests pass. Client spec-binding and production-caller gates plus32script tests pass; Desktop i18n1823entries/1432sites/missing0. Full Client CI did not automatically trigger; explicitly dispatched fast38606806885 and full38606815292 at dd39c559.
 - Server final PR CI38606726334 passed, including75PostgreSQL tests/0ignored and wasm frontend check. Marked the draft ready and merged Server #5 to main229fe9fd; no production deployment or restart. Desktop/Linux and ARM macOS builds passed while other checks remained in progress.
 - Full Client browser CI failed before UI assertions: downloaded Chromium has no usable sandbox under Ubuntu24's AppArmor policy. Scoped a no-sandbox wrapper to the disposable hosted stub-UI tests; product and native browser inputs retain their original launch path. Full Windows diagnostic lane failed on Unix-only test helper dead-code warnings and its separate historical media example's u64 SQL compile errors; the workflow already marks Windows non-blocking, and these failures are retained rather than declared passing. Original logs remain in .run/pr-web-browser-job.log and .run/pr-web-windows-job.log. Further hosted qualification and Client/Desktop merges pending.
+
+## 2026-10-18: Empty-device initialization, isolated management44 work
+
+- Running checkpoint43 and all four original sessions remain unchanged. Implemented read-only empty inventory, native pre-drain review and exact post-drain validation; cancellation preserves the original worker. The native review/custody suite passes9 focused cases and22 source-quiescence cases, with both strict configurations.
+- Added a separate v4 empty-device preparation in the retained per-profile adoption journal, without provider identity or quota. Original v1/v2/v3 shapes are unchanged. Preparation, rollback, cross-profile/registry refusal, exact worker-restart recovery and mutual exclusion with populated adoption pass6 focused cases and90 adoption regressions. One Clippy conditional-style failure was repaired. Final unchanged sources pass6 preparation tests,22 dependent native regressions, and both strict configurations in both crates; evidence is under `.run/management44-stage/empty-initialization-final` in Desktop. Counts overlap earlier suites.
+- Source fencing, original native descriptor/restart handoff, canonical activation and the mini-app first-use path remain unfinished. No running user source was initialized, no provider call was made and no44 source was promoted. Real Codex OAuth remains a separate user-assisted check after the already activated HOME/keychain repair.
+
+### Native preparation and source fencing continuation
+
+- Native v3 initializer uses the existing atomic create-once slot before the v4 canonical preparation. Real NativeOwner close/reopen tests cover interruption before canonical commit and a lost committed result, with original device/profile/registry/digests retained. Original v1/v2 serialization remains unchanged. A test-helper import initially failed compilation and was corrected; failed evidence remains.
+- Native optional-source fencing syncs exact original main/WAL backups, publishes permanent legacy refusal, preserves absent personal storage, fences only present originals and records verified archive evidence as phase1. Store preparation/fencing passes10 focused and94 adoption regression cases. Native fencing passes18 focused and31 source regression cases plus strict default/enabled checks. Lookup/phase reporting changes then pass10 store cases and strict Clippy; the final backup-byte test reads files directly instead of opening immutable backups with SQLite. Counts overlap.
+- Recovery after physical fencing but before canonical phase recording reopens the original native owner in source-only mode and continues the same initialization; invalid/corrupt backups and changed histories fail without replacement. No source44 code is promoted. Active private-journal handoff, later canonical phases, operator-task backing and first-use UI/E2E remain unfinished. No new provider calls, live account creation, production deployment or role restart.
+
+
+## 2026-10-18: Empty-device activation and original native manager handoff (isolated management44)
+
+- Implemented provider-free v4 phases registry_ready, custody_ready and active. The actual retained private-journal worker verifies original command custody; active recovery checks permanent provenance and the exact saved result. Initialization creates no account, seat, resource or quota. Conflicting canonical task history is retained and blocks activation.
+- Canonical management now supports the empty plan with a separate immutable task-history receipt. Native empty initialization uses the same journal open/drain protocol as populated migration. Original descriptor/backup bytes survive interrupted phase2/3 recovery and native manager shutdown/reopen. The first prepared account, first task and pending request survive another reopen; preparing an account creates one undeclared identity seat, never a granted quota.
+- Qualification: 15 focused storage cases (included in 99 adoption regressions), 13 private-journal cases, 33 native source-quiescence cases, strict default/enabled Clippy for both store and native crates pass. Evidence: Desktop `.run/management44-stage/empty-active-handoff-v2/qualification.json`; source hashes remain unchanged. Earlier test/Clippy failures remain recorded and are explained in `docs/design/hagency-fresh-device-setup.md` in the paired desktop stage.
+- This is isolated native API/instance-restart validation with synthetic Matrix authentication; no real provider call, actual mini-app empty-setup test or full app-process restart is claimed. Source remains unpromoted. Desktop status/reopen routing, native first-use review, EN/CN mini-app flow and complete resource enrollment E2E are next. Running checkpoint43 and server32 are unchanged; real OAuth success remains unverified.
+
+
+## 2026-10-19: Original-admission grant confirmation and cancellation
+
+New native grant intents persist the original admission request identity without
+rewriting legacy digests. Prepare, re-review and confirmation check the current
+authenticated admission; a cached confirmation cannot reserve capacity after its
+request or observed revisions change. Re-review may refresh revisions of the same
+admission while keeping the original command, grant and intent IDs. Legacy
+unbound journals remain limited to the initial revision2 approval.
+
+The native cancellation API separately reviews and closes only an unattempted
+intent. It works after withdrawal, owner reopen and accounting-period expiry
+without provider login. Closing its review has no effect. Applying/unknown and
+recorded grants retain their original recovery path and receipts; cancellation
+cannot refund a hold or reinterpret an unknown outcome. Desktop cancellation
+controls are not yet integrated.
+
+The stale-confirmation regression failed before the fix. The final candidate
+and promoted main source each pass the same62 grant/enrollment/publication tests
+and default/enabled strict Clippy checks; these counts overlap, not124 distinct
+cases. Earlier runs retained one test-child stack overflow. The connection
+fixture now uses a separate executor task as Desktop does, keeping the ordinary
+stack limit and all assertions. These checks use synthetic provider/Matrix
+authentication, actual loopback HTTP and SQLite, NativeOwner reopen, and existing
+subprocess cases; they are not real-provider OAuth or full mini-app E2E.
+
+Evidence: Desktop `.run/management46-stage/native-consent-v3/qualification.json`
+and `.run/management46-consent-promotion/main-v1/qualification.json`; selected
+source hashes/backups are in that promotion directory. Running desktop45 and
+server32 were not replaced. Explicit new-round receipts, local old-grant fencing,
+resource amendment and the mini-app workflow remain unfinished. In particular,
+a current resource hash must not stand in for an original admission identity
+when publishing a previously unpublished v1 receipt after re-admission.
+
+2026-10-27: Added owner-selected hosted live web search for shared Agent successor runs. Old definitions, v1 bytes and reservations stay unchanged; omitted false flags preserve prior digests. Live-web mode is pinned in owner start/command matching and actual process qualification. Runtime policy tests 14, shared store 58, permission tests 3 and central regressions 17 pass; an unrelated parallel SQLite interruption passed on isolated retry. Real same-account gpt-6-astra weather probe completed with 4 web-search lifecycle events and source links; no Matrix message was sent. Final server release 20261027T222724Z is ready (schema 24); isolated Desktop PID37857 uses the required `onboarding-test-support` build. The owner-only live-web policy is enabled for 小白. Actual room memberships are joined, original assignment is matrix_verified, control is running, grant is active, reserve remains 1,000,000 tokens and no fence command remains in the active recovered control DB. Evidence under `.run/shared-live-web-20261027/`.
+
+Deployment recovery: a temporary default Desktop build omitted isolated installation support, allowing the owner proof to expire; existing server reconciliation incorrectly treated expiry as permanent revocation. Fixed executor/Matrix handling to block execution until renewed without permanently revoking. Fifteen focused central regressions pass, including expiry/renewal of the same assignment and explicit revocation cases. Compared all user/Agent/request/grant/control/work/reply business rows before switching only Hagency control to `hagency_web_recovery_20261027`; current fenced DB `hagency` and a consistent three-DB backup remain archived. Palpo and Pasion were not restored. Native recovery preserves the original canonical directory inode (registry binds it), restores the coherent pre-fence ledger and retains the complete fenced ledger archive. Initial attempts to reset monotonic Matrix effect history and to replace the registry directory were rejected; recovery preserves both invariants. Final readiness and screenshot are recorded; no live Matrix weather message was sent or delivery claimed.
+
+
+2026-10-27: Implemented owner-only per-Agent Standard/YOLO policies plus authenticated in-chat one-time/session/deny approval controls. Manager delegation is limited to canonical workspace file permissions; broader requests go to the resource owner. Validation: 10 runtime unit tests, 58 session tests, 6 native shared-execution tests, 6 pool/store tests, and 84 policy UI checks pass. Real PostgreSQL tests on mini4's disposable test database cover role boundaries, expiry, exact digest, session decisions and one-shot consumption, plus historical schema-13 upgrade/rollback. Release builds pass and real native MiniApp permission/policy screenshots were inspected. The generic Octo harness cannot validate the Hagency custom host requirement; the Desktop's custom-host packager validates and stamps the bundle. Evidence: `.run/shared-agent-permissions-20261027/`. Deployment verification follows; no live Matrix permission request has been sent by this task.
+
+Final regression expansion found and fixed a missing first-use workspace parent and explicit schema-version bounds in reconciliation/adoption/archive readers. The new first-workspace test passes, including unchanged credential bytes and separate workspace paths. All 93 enabled shared store tests pass serially (36 live/fixture tests remain ignored). A concurrent run after the schema fix retained two inventory assertions; both pass in the serial run with no relaxed assertion. The schema-101 retained-policy/missing-table regression passes.
+
+Deployment completed: mini4 server release `20261028T002404Z` (schema 25) passes public `/readyz`, with app-service identity unchanged and a pre-upgrade backup under `/Users/cloud/hagency-server/backups/before-20261028T002404Z`. All three test Desktop windows now run the final default+onboarding-test-support release. Owner schema 101 reopened under the original canonical directory inode, retains its one reserved Agent, and has zero new tool-policy records. 小白 remains matrix_verified/running. No Matrix message or live permission decision was sent.
+
+Live owner MiniApp verification also passed: resource detail retains the 1,000,000-token commitment; Agent execution permissions lists 小白 as chat-only; the new pending permission page successfully queries the deployed server and shows no pending requests. Left the owner on 小白's permissions page. No permission setting was saved.
+
+2026-10-28: Fixed continuous-stream activity renewal in shared v1/v2/v3; reproduced old expiry and verified 36-second continuous output completes with one provider start. Added authenticated room/thread execution status and localized Desktop notices. Added pool-owner Agent top-ups using existing append-only deltas, preserving unknown holds and original bytes; native/server and legacy regressions pass. The MiniApp requires six budget/top-up capabilities; live host refusal exposed the missing declarations, now fixed and rebuilt. Server release 20261028T010459Z is deployed on mini4, and all three isolated Desktops run pool-topup-capabilities-20261028T010459Z with onboarding-test-support. Actual chat screenshot inspected; matrix_verified/running and native reserved/no-fence remain.
+
+Actual recovery is NOT complete: the published parent grant is only 1,000,000 tokens and fully committed to 小白. Existing top-ups cannot expand that grant, so the user-authorized +1,000,000 was not submitted or applied (central top-ups empty; local delta rows zero). Known local usage is87,911; the incomplete call retains the rest of the original allocation; usable remaining0. No research replay, fabricated usage settlement, grant rewrite or Matrix message. Further work requires an explicit parent capacity increase protocol preserving the original Agent/grant evidence. An additional pool budget Back navigation defect remains (routes to legacy detail). Evidence: .run/shared-stream-renewal-20261028/validation.json, retained-calls-check.json and chat-budget-blocked-inspected.png.
+
+2026-10-28: Completed dspfac budget recovery. Added explicit owner-funded, Agent-specific version-2 top-ups beyond the immutable published pool grant, with native atomic resource/Seat conservation. Owner/manager boundaries, replay, unknown-call retention and legacy budget tests pass (native pool1, legacy11, host6, UI30+2, real PostgreSQL2). Actual owner UI exposed a second bug: budget discovery entered legacy configuration::pin, rejected with source_adoption_recovery_only after migration. The real multi-process adoption regression reproduced the old error and passes with a management-authorized device pin; four budget HTTP scope/replay tests pass with RUST_MIN_STACK=16777216 (default-stack overflow evidence retained).
+
+Deployed mini4 server release20261028T023953Z (schema25, ready, original appservice identity) and final three Desktop binaries owner-topup-adoption-fix-20261028 with onboarding-test-support. Through dspfac's actual UI submitted and approved exactly +1,000,000 for 小白; native and server receipts match for top-up mat_01m606ws77tc2by5w6591e0w6x. Effective ceiling2,000,000, budget revision2, known consumed87,911, retained1,000,000, available1,000,000. Exactly one native delta; original grant, original Agent command/allocation, six calls and YOLO policy unchanged. Inspected request/approval/applied/owner-budget/manager-budget screenshots, exercised pool Back, left owner on budget. Edward sees the new ceiling without owner funding rights. No provider replay or Matrix message sent; user can resend the research request. The central-only budget UI still shows native remaining as not observed and central known usage0; actual availability above is independently read from native accounting. Stopped the disposable test PostgreSQL container. Evidence: .run/owner-topup-20261028/validation.json and live-verification.json.
+
+2026-10-28: Investigated 小白 still not answering after top-ups. Native and central revision3 agree on7,000,000 effective tokens,87,911 known consumed and1,000,000 retained (6,000,000 available). The20:16 research message is pending behind the older budget-blocked17:48 message. Found raw-vs-canonical original block digest mismatch; deployed server release20261028T034316Z/schema26 with consistent three-DB backup, readiness and appservice identity preserved. Fifteen v3 server regressions pass, including actual v25 migration rollback/reopen and immutable original block preservation. Initial regression correctly exposed the database trigger's second raw-hash check; initial test helper compile failures are retained in evidence.
+
+Recovery then exposed a second bug: owner-enabled YOLO cannot pass SessionDriver metadata inspection because its guard requires read-only Settings. Fixed the metadata-only guard while preserving no-tools qualification restrictions, phase/MCP/server-request checks and policy verification. A real namespace metadata probe fails before and passes after (zero model turns);59 session and15 managed qualification tests pass. Actual UI screenshot still says queued. No new provider call, research result or Matrix reply is claimed. The now-expired unclaimed runtime has a permanent native fence and needs a proper never-started-process recovery path; no fence or unknown hold was removed. Server test PostgreSQL stopped. Evidence: .run/xiaobai-queue-20261028/. Desktop rollout recorded separately when complete.
+
+Owner Desktop updated to .run/xiaobai-tools-qualification-20261028/rinx-isolated (PID57836, port59483), using default+onboarding-test-support. Canonical directory inode and the original private ledger were preserved; owner account restored/verified. Admin/manager desktops are unchanged. The failed unclaimed attempt and original unknown call remain retained; 小白 still has no new model call or reply. This is a validated startup fix deployment, not completed queued-message recovery. Final evidence: .run/xiaobai-queue-20261028/validation.json.
+
+
+2026-10-28: Repaired the existing 小白 never-started recovery chain with native schema102/server schema27. Explicit not_started evidence acknowledges only an exact permanently fenced unclaimed v3 startup, without fabricating process/usage evidence. Authenticated terminal demand history releases the old FIFO position while preserving original offers/start intents/blocks. Migration-copy integrity/FK/old-call preservation,29 native tests,4 native HTTP/subprocess regressions and16 real PostgreSQL regressions passed. Earlier full store run had398 passed/21 failures; all21 failed cases then passed on serial reruns after correcting two stale migration fixtures; this is not one fully green suite run. Actual attempt7 was retained/acknowledged and the user's pending20:16 research began as attempt8 with live web search and continuing activity renewal.
+
+Actual research exposed a second failure at4096 stream events before final delivery (retained receipt independently matches accepted sequence4094 plus two metadata events). Fixed event budget and all reply-length boundaries across capture, native transport, server API/persistence and native SQLite schema103. Completed oversized replies now retain a labelled UTF-8 prefix and actual usage instead of silently losing the answer. Final validation:59 runtime tests,11 shared store tests including referenced-history migration rollback/immutability,5 native HTTP/subprocess tests including6000/12000 deltas and escaped output with lost completed-result response, and17 real PostgreSQL tests including full long-result HTTP/recovery/Matrix-sender paths pass. SQLite live-copy and final live integrity/FK checks pass. These fixtures do not constitute a successful live-provider reply.
+
+Deployed mini4 release20261028T050539Z, schema27, public readiness200/startupRoundtripConfirmed and unchanged appservice identity; consistent three-DB backup retained. Owner Desktop PID87429 runs xiaobai-long-reply-20261028, default+onboarding-test-support, schema103, original canonical inode208631362. Other Desktop installations retain their original data. Actual Edward chat screenshot shows the accurate interrupted/unknown-result notice. No new budget or chat message was submitted. Remaining live block: total ceiling7000000, known usage159408, retained7000000 across7 calls; latest call mac_ffd8d60a945f5c5a787c45b2e8e34e40490001b9 is unknown with71497 known and6000000 retained. User has been asked to authorize owner +1000000 and explicit resending of the research question for final validation. Keep that approval pending; do not release unknown holds, replay the unknown turn or claim 小白 already answered. Evidence and scoped diff: .run/xiaobai-recovery-20261028/.
+
+
+2026-10-28: User independently added another1,000,000 and resent the research question. Native/server matching receipt mat_01m60fhwwdmxs6q4swfvj7mzx3 confirms applied revision4, ceiling8,000,000. Retry event $0zy9ivfTWGYqjRbAtb56Xb7KViGikVcxh2Wi6hEi0ZQ issued attempt9 but never claimed a process/call. Explicit not_started receipt safely retained its fence; no new tokens consumed. Root cause: Codex had generated a71-byte project-trust-only config.toml in its isolated provider namespace during the prior run, but Hagency rejected any config file. Actual same-account metadata-only test reproduced provider_file_credentials_or_config_rejected.
+
+Fixed isolated namespace validation to accept bounded private project-trust metadata only while retaining keyring identity and rejecting auth.json, other execution/provider settings, unknown fields and symlinks. The original config bytes remain untouched. Added guarded launch-stage diagnostics. Final22 owner-provider tests pass (3 explicitly ignored); actual isolated live-web YOLO qualification passes with zero model turns. Initial new test incorrectly used a non-private temp root; corrected to a provisioned private child, and all negative cases now exercise config validation. Release build deployed as owner PID99639, xiaobai-trust-config-20261028, same canonical inode208631362/schema103; server stays20261028T050539Z. Verified calls, budget deltas, policies, fences and no-start receipts unchanged across restart. Current8,000,000 total/7,000,000 retained/1,000,000 available/159,408 known. Failed retry demand is now retained head_changed; no new live answer. Asked user for explicit permission to resend the exact research question as edward; do not send until authorized. Evidence: .run/xiaobai-trust-config-20261028/ and .run/xiaobai-recovery-20261028/user-topup-verified.json.
+
+2026-10-28: User explicitly authorized sending (允许代发). Sent the exact research question once through Edward's actual Desktop in 小白's original thread, event $QMxSBKNHd8NbbPvZkWUGOxmNsC39M5ATCjY0ZSdsb2k. Attempt10 completed after approximately five minutes with hosted web search; work swork_01m60mnj4stxrvpwfdjgvyvf5x is completed and Matrix reply $9LM3zya6PG-wQmy5ALKs1etJlMhXxbByyF2eIJnNBQo is sent. Actual Edward Desktop screenshot confirms the answer and source previews are visible in 小白 · 话题. The 13,153-byte/7,200-character body matches the native completed receipt and digest exactly, with no truncation. This verifies delivery, not independent factual accuracy of the research. Current Desktop displays Markdown markers literally in the long reply.
+
+Native call mac_8a3a5e320ead010acc6dfb645c7f04e34fd1b8f9 is settled with complete usage92,045 matching the server; only actual usage is retained for this call. Ceiling8,000,000, total known251,453, total retained7,092,045, available907,955. The two older incomplete calls retain their original aggregate7,000,000 hold; no refund, old-call replay or additional top-up was performed. Final live validation supersedes earlier pending-send/no-live-answer status, while those historical accounting limitations remain. Evidence: .run/xiaobai-live-retry-20261028/validation.json, original-intake.json and edward-reply-inspected.png.
+
+2026-10-28: Fixed the reported chat presentation regressions. Shared Agent replies omitted Matrix rich-text fields, and Desktop's legacy Agent recognition omitted the new _hagency_ namespace. The server now emits sanitized Matrix HTML while preserving original Markdown/relations and its event-size envelope; Desktop safely renders historical Agent Markdown, including folded/streaming fragments, without changing human plain-text messages. Plaintext URL linkification now preserves line breaks. Actual NVIDIA preview requests were403 because river's Palpo preview allowlists were empty; enabled public previews with existing DNS/IP/scheme/redirect protections retained. Actual public metadata/image returns200, local-address preview remains403, and Edward's real window now shows the thumbnail and formatted lists/headings/tables. PDF links without HTML metadata remain text cards.
+
+Shared chat processing previously had only a static label. Added a20fps activity spinner tied to authenticated room/thread execution state, stopped for terminal states, permission waits, errors, account/room changes and inactive tabs. Native widget lifecycle tests cover this; no new live provider request or Matrix message was sent to exercise animation. Also retained provider message-item identity through capture so commentary and final-answer Markdown blocks are separated instead of concatenated. The historical first glued ## heading remains in the original stored answer; no historical message edit was sent.
+
+Validation:2 server format tests,17 real PostgreSQL execution/delivery regressions,67 Desktop Agent tests (1 existing ignored),22 linkification tests,2 link-preview tests,3 activity tests, and the actual supervised native HTTP/recovery test across4 stream/escape/multi-item scenarios passed. Initial new-test compilation mistakes and a test-PostgreSQL readiness race were corrected and retained in evidence. Deployed mini4 release20261028T071336Z/schema27 with consistent three-DB/config backup and unchanged appservice identity. All three Desktops now run chat-regressions-final-20261028 (Edward41178/64288, manager41186/63099, owner41194/59483), default+onboarding-test-support. Owner canonical inode208631362, original calls/budget deltas/permissions, SQLite integrity and FK checks are unchanged/passing. Final evidence: .run/chat-regressions-20261028/validation.json, scoped.diff, files.json and inspected screenshots.
+
+
+2026-10-28: Owner direct funding and regression prevention deployed. dspfac can enter an
+amount and confirm once (optional note); no second self-approval. Manager requests retain
+resource-owner approval. The explicit approveImmediately+ownerFunded request executes both
+records atomically under the same transaction, real owner authority, exact budget snapshot
+and existing SQL approval triggers. Retry/lost reply reuses the original request and delta;
+old omitted/false fields preserve saved command bytes. Native requires both request and
+decision capabilities. UI distinguishes authorization/device application from task execution,
+labels server-confirmed consumption honestly, and does not label every account an applicant.
+Desktop main CI and installer release dependency now run the combined budget/chat regression
+gate; server CI already includes ignored PostgreSQL tests and now sets the tested 16MiB stack.
+117 Rust, 36 EN/CN bundle, 20 PostgreSQL tests and independent 4-page PDF acceptance pass.
+Actual dspfac UI reviewed through confirmation only, then cancelled; no live top-up/model
+call. Same budgets, calls, tool policies, app-service identity and canonical inode208631362.
+Server 20261028T170141Z; all 3 default+onboarding-test-support Desktops use .run/direct-owner-final-20261028/rinx-isolated.
+Evidence: /Users/ychen/home/hagency-desktop/.run/direct-owner-20261028/validation.json,
+owner-confirmation.png, owner-budget.png and scoped.diff. Owner left on 小白 budget page.
+
+
+2026-10-28: 小白 H100 follow-up cancellation fixed and deployed (server 20261028T173555Z,
+all three Desktop profiles .run/xiaobai-context-20261028/rinx-isolated). The request was
+accepted/acknowledged but stopped before context freeze/model admission: the server had
+regenerated historical plain Matrix content with the newer Markdown renderer, invalidating
+immutable delivery evidence. Compare original closed content instead; new rich receipts
+carry exact optional formattedBody evidence, validated natively against supported JSON
+encodings. Omitted field preserves old receipt bytes/digests. Validate first, then exclude
+HTML from provider input while retaining original Markdown. No history rewrite or new
+migration. Native context preparation now logs bounded stage/error code at WARN.
+All 16 combined release checks pass: 135 Rust tests plus bundle checks, and 15 server
+context tests pass including 13 disposable PostgreSQL tests. Native offline subprocess
+follow-ups are included in the release gate using a freshly built actual probe. Six live
+historical receipts passed read-only content/provenance checks before and after upgrade.
+Server readiness/Matrix startup roundtrip and restored Desktop sessions verified. Existing
+new owner-funded +1M at17:25:25UTC was independently applied: ceiling9M revision5,
+available1,907,955; 8 calls, known251,453, retained7,092,045, policies and owner canonical
+inode208631362 preserved. No new prompt, top-up, hold release or cancelled-work replay.
+Edward remains in 小白 chat; cancelled “和H100比较呢” needs a new explicit message.
+Pasion signup enabled/contact-not-required settings and Appservice identity preserved.
+Evidence: /Users/ychen/home/hagency-desktop/.run/xiaobai-context-20261028/validation.json;
+investigation: /Users/ychen/home/hagency-client/.run/xiaobai-check-20261028-latest/handoff.json.

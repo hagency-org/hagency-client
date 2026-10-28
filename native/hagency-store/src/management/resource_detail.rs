@@ -1,0 +1,88 @@
+//! Public resource observations, not an amendment or contribution authority.
+use super::{HostContext, Permission, ResourceSummary, Session};
+use crate::Error;
+use hagency_core::{
+    allocation::Ceiling,
+    project::identifier,
+    qualification::{ConfigurationChoice, Tier},
+};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResourceDetailQuery {
+    pub id: String,
+}
+impl ResourceDetailQuery {
+    /// Called before host initialization as well as at the native boundary.
+    pub fn validate(&self) -> Result<(), Error> {
+        identifier(&self.id, 128)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceDetail {
+    pub protocol: &'static str,
+    pub observed_at_ms: u64,
+    pub resource: ResourceSummary,
+    pub ceiling: Option<Ceiling>,
+    /// Default for newly provisioned agents; not a rewrite of existing policies.
+    pub execution_policy: hagency_core::execution::ExecutionPolicy,
+    /// Embedded model qualification, not a live provider/runtime check.
+    pub choices: Vec<ConfigurationChoice>,
+    pub model_tier: Option<Tier>,
+    pub model_family: Option<String>,
+    pub editing: ResourceEditing,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceEditing {
+    pub allowed: bool,
+    /// This is current readback, never authority for a subsequent mutation.
+    pub reason: Option<ResourceEditBlocker>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceEditBlocker {
+    ContributionHistoryNotProven,
+    PreviouslyOffered,
+    Published,
+    RetainedCommitments,
+    ManagedNamespaceRequired,
+    AccountUnavailable,
+    ReadOnly,
+}
+
+impl Session {
+    pub async fn resource_detail(
+        &self,
+        context: &HostContext,
+        query: ResourceDetailQuery,
+    ) -> Result<ResourceDetail, Error> {
+        self.check(context, Permission::ReadResources)?;
+        query.validate()?;
+        let mut result = match &self.store {
+            super::SessionStore::Legacy(store) => {
+                store.management_resource_detail(query.id).await?
+            }
+            #[cfg(feature = "resource-adoption")]
+            super::SessionStore::Adopted(store) => {
+                store
+                    .detail(&self.adopted_profile(store)?, query.id)
+                    .await?
+            }
+        };
+        self.check(context, Permission::ReadResources)?;
+        if result.editing.allowed && self.check(context, Permission::ConfigureResources).is_err() {
+            result.editing = ResourceEditing {
+                allowed: false,
+                reason: Some(ResourceEditBlocker::ReadOnly),
+            };
+        }
+        Ok(result)
+    }
+}

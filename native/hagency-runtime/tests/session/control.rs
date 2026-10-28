@@ -618,3 +618,14 @@ async fn native_codex_control_expired_callback_may_only_decline() {
         "a failed session refuses before any stage is read"
     );
 }
+
+#[tokio::test]
+async fn explicit_session_approval_writes_session_decision_without_a_policy_amendment() {
+    let (mut session,mut peer)=controlled(4096,4096).await;
+    let request=callback(&mut session,&mut peer,json!(17)).await;
+    let mut response=session.prepare_approval(request.session_response().unwrap()).unwrap();
+    let (result,wire)=tokio::join!(session.send_prepared_approval(&mut response),read(&mut peer.stdin));
+    assert!(matches!(result.unwrap(),PreparedUpdate::WriteAccepted(_)));
+    assert_eq!(wire["id"],17);assert_eq!(wire["result"],json!({"decision":"acceptForSession"}));
+    assert!(session.prepare_approval(request.response(true)).is_err(),"the same approval cannot be consumed twice");
+}

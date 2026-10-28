@@ -23,7 +23,16 @@ impl Fixture {
         reasoning: &str,
         encrypted: bool,
     ) -> Self {
-        let root = tempfile::tempdir().unwrap();
+        Self::with_runtime_model_and_room(framework, provider, reasoning, encrypted, None)
+    }
+    fn with_runtime_model_and_room(
+        framework: &str,
+        provider: Option<&str>,
+        reasoning: &str,
+        encrypted: bool,
+        model: Option<&str>,
+    ) -> Self {
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let mut db = DomainRepository::open(&root.path().join("state")).unwrap();
         db.register(&registration()).unwrap();
         let mut pool = resource("pool", "seat", 1000);
@@ -31,8 +40,16 @@ impl Fixture {
         if framework == "claude" {
             pool.model = "claude-opus-5".into();
         }
+        if framework == "octos" {
+            pool.model = "kimi-k3".into();
+            pool.octos_profile = Some("coding".into());
+        }
+        if let Some(model) = model {
+            pool.model = model.into();
+        }
         pool.provider = provider.map(str::to_owned);
-        pool.reasoning = Some(reasoning.into());
+        // An empty word is no reasoning setting, as Claude resources carry.
+        pool.reasoning = (!reasoning.is_empty()).then(|| reasoning.into());
         db.put_resource(&pool).unwrap();
         let proof = proof(&request("claim", "Worker", &pool, 100));
         let e = db.admit(&proof, 1000).unwrap();
@@ -582,7 +599,37 @@ fn native_owned_claim_profile_bounds() {
 }
 
 #[test]
-fn native_owned_claim_profile_unsupported_and_shared_lease() {
+fn native_owned_claim_reasoning_max_and_unknown_effort() {
+    for effort in ["max", "ultra", "future-effort"] {
+        let mut f = Fixture::with_runtime_model_and_room(
+            "codex", Some("openai"), "max", true, Some("gpt-6.1-sol"),
+        );
+        f.queue("selected", "work");
+        if effort != "max" {
+            // A retained provision from another provider version must not
+            // bypass the host's closed runtime effort set.
+            let sql = rusqlite::Connection::open(f._root.path().join("state/domain.sqlite3")).unwrap();
+            sql.execute("UPDATE effects SET payload=json_set(payload,'$.resource.reasoning',?1) WHERE kind='provision'", [effort]).unwrap();
+        }
+        let profile = f.profile("DEVICE_1", RoomPrivacy::Group {});
+        let claimed = f.db.claim_owned_dispatch_for_host(
+            &profile, "host", 2000, 60_000, 60_000, 1,
+        ).unwrap();
+        if effort == "max" {
+            let cap = claimed.expect("max must remain claimable after resource admission");
+            let scope = f.db.owned_dispatch_scope(&cap, 2001).unwrap();
+            assert_eq!(scope.resource().reasoning.as_deref(), Some("max"));
+        } else {
+            assert!(claimed.is_none(), "unknown effort must remain unclaimed: {effort}");
+            let sql = rusqlite::Connection::open(f._root.path().join("state/domain.sqlite3")).unwrap();
+            let attempts: u64 = sql.query_row("SELECT COUNT(*) FROM runner_attempts", [], |r| r.get(0)).unwrap();
+            assert_eq!(attempts, 0);
+        }
+    }
+}
+
+#[test]
+fn native_owned_claim_profile_readonly_and_unsupported_runtime() {
     {
         let mut f = Fixture::with_runtime("claude", None, "medium");
         f.queue("unsupported", "work");
@@ -602,7 +649,69 @@ fn native_owned_claim_profile_unsupported_and_shared_lease() {
             .unwrap()
             .unwrap()
             .dispatch_id,
-        "exclusive"
+        "readonly"
+    );
+}
+
+/// ADR-193: an Octos dispatch is claimable by its agent's own runtime when its
+/// resource names the profile it runs and carries no reasoning setting; with
+/// one, it stays unclaimed.
+#[test]
+fn native_owned_claim_profile_claims_an_octos_dispatch() {
+    let mut f = Fixture::with_runtime("octos", Some("moonshot"), "");
+    f.queue("octos", "work");
+    let profile = f.profile("DEVICE_1", RoomPrivacy::Group {});
+    assert_eq!(
+        f.db.claim_owned_dispatch_for_host(&profile, "host", 2000, 60_000, 60_000, 1)
+            .unwrap()
+            .unwrap()
+            .dispatch_id,
+        "octos"
+    );
+    let mut f = Fixture::with_runtime("octos", Some("moonshot"), "medium");
+    f.queue("reasoning", "work");
+    let profile = f.profile("DEVICE_1", RoomPrivacy::Group {});
+    assert!(
+        f.db.claim_owned_dispatch_for_host(&profile, "host", 2000, 60_000, 60_000, 1)
+            .unwrap()
+            .is_none()
+    );
+}
+
+/// ADR-193 decision 7: the profile an Octos resource runs is part of its
+/// model, like its provider and model. While an agent is engaged on it, the
+/// profile cannot change; other edits stay possible.
+#[test]
+fn native_octos_resource_profile_is_fixed_under_its_agents() {
+    let mut f = Fixture::with_runtime("octos", Some("moonshot"), "");
+    let edit = |profile: &str, tokens: u64| {
+        serde_json::from_value::<hagency_core::project::Resource>(json!({
+            "presetId": "pool", "seatId": "seat", "framework": "octos",
+            "model": "kimi-k3", "provider": "moonshot", "reasoning": null,
+            "octosProfile": profile, "ceiling": {"tokens": tokens, "period": "monthly"}}))
+        .unwrap()
+    };
+    assert!(matches!(
+        f.db.put_resource(&edit("other", 1000)),
+        Err(hagency_store::Error::State)
+    ));
+    f.db.put_resource(&edit("coding", 2000)).unwrap();
+}
+
+/// ADR-192: a Claude dispatch is claimable by its agent's own runtime when
+/// its resource is claude/anthropic with no reasoning setting; with one, it
+/// stays unclaimed (above).
+#[test]
+fn native_owned_claim_profile_claims_a_claude_dispatch() {
+    let mut f = Fixture::with_runtime("claude", Some("anthropic"), "");
+    f.queue("claude", "work");
+    let profile = f.profile("DEVICE_1", RoomPrivacy::Group {});
+    assert_eq!(
+        f.db.claim_owned_dispatch_for_host(&profile, "host", 2000, 60_000, 60_000, 1)
+            .unwrap()
+            .unwrap()
+            .dispatch_id,
+        "claude"
     );
 }
 
@@ -977,4 +1086,45 @@ fn native_owned_claim_reconciles_started_dispatch_after_host_death() {
         )
         .unwrap();
     assert_eq!(outcome, "outcome_unknown");
+}
+
+
+#[test]
+fn native_owned_claim_readonly_preserves_workspace_and_transport_guards() {
+    let mut f = Fixture::new();
+    f.queue_with("foreign_workspace", "other", false);
+    f.queue_with("reader_a", "work", false);
+    f.queue_with("reader_b", "work", false);
+    f.queue("writer", "work");
+    let profile = f.profile("DEVICE_1", RoomPrivacy::Group {});
+    let wrong = f.profile("FOREIGN", RoomPrivacy::Group {});
+    assert!(f.db.claim_owned_dispatch_for_host(&wrong,"foreign",2000,60_000,60_000,3).unwrap().is_none());
+    let sql = rusqlite::Connection::open(f._root.path().join("state/domain.sqlite3")).unwrap();
+    sql.execute("UPDATE workspace_resources SET dirty=1 WHERE id='work'",[]).unwrap();
+    assert!(f.db.claim_owned_dispatch_for_host(&profile,"dirty",2000,60_000,60_000,3).unwrap().is_none());
+    sql.execute("UPDATE workspace_resources SET dirty=0 WHERE id='work'",[]).unwrap();
+    let first=f.db.claim_owned_dispatch_for_host(&profile,"first",2000,60_000,60_000,3).unwrap().unwrap();
+    assert_eq!(first.dispatch_id,"reader_a");
+    let scope=f.db.owned_dispatch_scope(&first,2001).unwrap();
+    assert!(!scope.input().resources[0].exclusive);
+    let second=f.db.claim_owned_dispatch_for_host(&profile,"second",2001,60_000,60_000,3).unwrap().unwrap();
+    assert_eq!(second.dispatch_id,"reader_b");
+    assert!(f.db.claim_owned_dispatch_for_host(&profile,"writer_blocked",2002,60_000,60_000,3).unwrap().is_none());
+    let leases:u64=sql.query_row("SELECT count(*) FROM resource_leases WHERE exclusive=0",[],|r|r.get(0)).unwrap();
+    assert_eq!(leases,2);
+    assert_eq!(sql.query_row("SELECT count(*) FROM runner_dispatches WHERE id IN ('writer','foreign_workspace') AND state='queued'",[],|r|r.get::<_,u64>(0)).unwrap(),2);
+    f.db.revoke("revoked",&f.transport.engagement_id).unwrap();
+    assert!(f.db.start_owned_dispatch(&first,scope.fingerprint(),2003).is_err());
+}
+
+#[test]
+fn native_owned_claim_other_frameworks_keep_exclusive_workspace_requirement() {
+    for (framework,provider) in [("claude",None),("octos",Some("moonshot"))] {
+        let mut f=Fixture::with_runtime(framework,provider,"");
+        f.queue_with("reader","work",false);
+        f.queue("writer","work");
+        let profile=f.profile("DEVICE_1",RoomPrivacy::Group {});
+        let cap=f.db.claim_owned_dispatch_for_host(&profile,"host",2000,60_000,60_000,1).unwrap().unwrap();
+        assert_eq!(cap.dispatch_id,"writer", "{framework}");
+    }
 }

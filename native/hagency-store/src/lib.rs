@@ -1,16 +1,20 @@
 //! A single SQLite owner on a dedicated bounded worker; no IO in async handlers.
+pub use domain::owner_resources;
 pub use domain::resource_configuration::{
     CeilingChange, ProfileChange, ResourceConfigurationAccess, ResourceConfigurationCommand,
-    ResourceConfigurationResult,
+    ResourceConfigurationResult, ResourceEngagementChange,
 };
 pub mod agent_home;
 pub mod backup;
 mod database;
 mod domain;
+pub mod installation_authority;
 pub use domain::DOMAIN_SCHEMA_VERSION;
+pub use domain::coordinator;
 pub use domain::joined_rooms::{JoinedRoom, JoinedRoomState, MAX_JOINED_ROOMS};
 pub use domain::owner_anchors::OwnerAnchor;
 mod domain_worker;
+pub mod management;
 pub mod private;
 pub mod task_context;
 pub use domain::PrivateApprovalCard;
@@ -35,15 +39,16 @@ pub use domain::{
     OVER_BUDGET_NOTICE_KIND, OfferBook, OfferResource, OfferRole, OfferServing, OperatorMessage,
     OperatorTask, OperatorTaskComment, OverBudgetNotice, OwnedClaimProfile, OwnedClaimRoom,
     OwnedCompletion, OwnedDispatchScope, OwnedFailure, OwnedObservation, OwnedProvisionScope,
-    PEER_RECEIPT_CEILING, PEER_RETENTION_CEILING, PEER_RETENTION_FLOOR, PeerRetentionStatus,
-    PeerSweepOutcome, PendingInvite, Preview, ProjectSide, QuotaStatus, Reminder, ReminderReceipt,
-    ReminderSweep, Representative, RetentionStatus, RoleOffer, RuntimeProfile, RuntimeProfileRole,
-    SideBudget, SideCommitment, SideCredential, SideProject, SideProjectRecord, SideRecord,
-    SourceUsage, SuppressOutcome, Suppression, SweepOutcome, TASK_GRANULARITIES, TASK_PRIORITIES,
-    TASK_STATUSES, TaskFilters, Tombstone, UploadAdmission, UploadClaim, UploadIdentity,
-    UploadPreparation, UploadSend, UsageCeiling, UsageEvidence, UsagePeriod, UsagePeriodKind,
-    UsageReceipt, UsageReport, UsageSource, UsageSummary, UsageTotals, WhitelistEntry,
-    allowed_transitions, operator_transitions, over_budget_notice_body,
+    OwnedRuntimeLease, PEER_RECEIPT_CEILING, PEER_RETENTION_CEILING, PEER_RETENTION_FLOOR,
+    PeerRetentionStatus, PeerSweepOutcome, PendingInvite, Preview, ProjectSide, QuotaStatus,
+    Reminder, ReminderReceipt, ReminderSweep, Representative, RetentionStatus, RoleOffer,
+    RuntimeProfile, RuntimeProfileRole, SideBudget, SideCommitment, SideCredential, SideProject,
+    SideProjectRecord, SideRecord, SourceUsage, SuppressOutcome, Suppression, SweepOutcome,
+    TASK_GRANULARITIES, TASK_PRIORITIES, TASK_STATUSES, TaskFilters, Tombstone, UploadAdmission,
+    UploadClaim, UploadIdentity, UploadPreparation, UploadSend, UsageCeiling, UsageEvidence,
+    UsagePeriod, UsagePeriodKind, UsageReceipt, UsageReport, UsageSource, UsageSummary,
+    UsageTotals, WhitelistEntry, allowed_transitions, operator_transitions,
+    over_budget_notice_body,
 };
 pub use domain::{DeliveryFeedback, DeliveryWarning, DirectTarget, MentionState, MentionTarget};
 pub use domain::{OutcomeAction, OutcomeResolution};
@@ -77,12 +82,36 @@ pub enum Error {
     UnsafeSnapshot(String),
     #[error("session or resource requires inspected recovery")]
     Quarantined,
+    #[error("workspace has unresolved execution requiring inspection")]
+    WorkspaceInspectionRequired,
+    #[error("workspace has an active execution lease")]
+    WorkspaceActive,
+    #[error("stopped execution cannot currently be resolved")]
+    StoppedNotResolvable,
+    #[error("stopped execution review expired")]
+    StoppedReviewExpired,
     #[error("invalid input: {0}")]
     Invalid(#[from] hagency_core::InvalidInput),
     #[error("request identifier was reused with different content")]
     Conflict,
     #[error("registration generation differs from its durable binding")]
     Generation,
+    /// Owner grant review budget changed; emitted only before any ledger effect.
+    #[error("the budget shown in the owner grant review changed")]
+    OwnerGrantReviewChanged,
+    /// Emitted before a local-name transaction effect; not a general conflict.
+    #[error("the local resource name revision changed")]
+    ResourceNameRevisionChanged,
+    #[error("the resource configuration revision changed")]
+    ResourceEditRevisionChanged,
+    /// Exact original receipt was absent and the source CAS failed before
+    /// creating anything; distinct from command collision or uncertain commit.
+    #[error("the source resource configuration changed")]
+    ResourceConfigurationSourceChanged,
+    #[error("resource configuration requires an amendment or history recovery")]
+    ResourceEditNotAvailable,
+    #[error("operator task revision changed")]
+    OperatorTaskRevisionChanged,
     #[error("domain object does not exist")]
     NotFound,
     #[error("selected resource is withdrawn or does not qualify")]
@@ -95,6 +124,8 @@ pub enum Error {
     OverCommit { message: String },
     #[error("domain operation is not valid in its current state")]
     State,
+    #[error("the saved management change was cancelled before application")]
+    ManagementChangeCancelled,
     #[error("state is owned by another process")]
     Locked,
     #[error("state format is corrupt or newer than this binary")]

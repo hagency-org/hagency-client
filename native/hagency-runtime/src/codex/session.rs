@@ -2,6 +2,8 @@
 mod driver;
 mod hooks;
 mod observation;
+mod qualification;
+pub use qualification::QualificationRead;
 mod state;
 mod task_mcp;
 mod usage;
@@ -20,7 +22,9 @@ use std::path::{Component, PathBuf};
 
 pub const MAX_TEXT_BYTES: usize = 64 * 1024;
 pub const MAX_ITEMS: usize = 128;
-pub const MAX_EVENTS: usize = 4096;
+// Streaming deltas count as events; a valid bounded research answer can exceed
+// 4096 notifications. Text, item, queue and lifetime bounds remain independent.
+pub const MAX_EVENTS: usize = 65_536;
 pub const MAX_DEFERRED: usize = 16;
 pub const MAX_DEFERRED_BYTES: usize = 1024 * 1024;
 
@@ -124,6 +128,7 @@ pub struct Settings {
     model: String,
     effort: String,
     read_only: bool,
+    unrestricted: bool,
     task_mcp: Option<TaskMcp>,
 }
 impl Settings {
@@ -152,12 +157,32 @@ impl Settings {
             model,
             effort,
             read_only: false,
+            unrestricted: false,
             task_mcp: None,
         })
+    }
+    pub(crate) fn shared_mode_matches(&self, mode: Option<&str>) -> bool {
+        match mode {None=>self.read_only,Some("standard")=>!self.read_only && !self.unrestricted,Some("yolo")=>!self.read_only && self.unrestricted,_=>false}
     }
     pub fn read_only(mut self) -> Self {
         self.read_only = true;
         self
+    }
+    /// Apply an owner-selected next-dispatch policy. Read-only dispatches stay
+    /// read-only regardless of this setting; the host owns dispatch authority.
+    pub fn with_execution_policy(mut self, yolo: bool) -> Self {
+        self.unrestricted = yolo;
+        self
+    }
+    pub fn is_unrestricted(&self) -> bool {
+        self.unrestricted && !self.read_only
+    }
+    fn approval_policy(&self) -> &'static str {
+        if self.is_unrestricted() {
+            "never"
+        } else {
+            "on-request"
+        }
     }
     pub fn is_read_only(&self) -> bool {
         self.read_only
@@ -174,6 +199,8 @@ impl Settings {
     fn mode(&self) -> &'static str {
         if self.read_only {
             "read-only"
+        } else if self.is_unrestricted() {
+            "danger-full-access"
         } else {
             "workspace-write"
         }
@@ -181,13 +208,15 @@ impl Settings {
     fn policy(&self) -> Value {
         if self.read_only {
             json!({ "type": "readOnly", "networkAccess": false })
+        } else if self.is_unrestricted() {
+            json!({ "type": "dangerFullAccess" })
         } else {
             json!({ "type": "workspaceWrite", "writableRoots": [self.cwd], "networkAccess": false })
         }
     }
     fn thread_request(&self, resume: Option<&str>) -> Value {
         let mut params = json!({ "cwd": self.cwd, "model": self.model, "sandbox": self.mode(),
-            "approvalPolicy": "on-request", "approvalsReviewer": "user" });
+            "approvalPolicy": self.approval_policy(), "approvalsReviewer": "user" });
         if let Some(helper) = &self.task_mcp {
             params["config"] = helper.config(&self.cwd);
             params["developerInstructions"] = helper.guidance().into();
@@ -212,7 +241,7 @@ impl Settings {
     fn turn_request(&self, thread: &str, input: String) -> Value {
         json!({ "threadId": thread, "input": [{ "type": "text", "text": input, "text_elements": [] }],
             "cwd": self.cwd, "model": self.model, "effort": self.effort,
-            "approvalPolicy": "on-request", "approvalsReviewer": "user", "sandboxPolicy": self.policy() })
+            "approvalPolicy": self.approval_policy(), "approvalsReviewer": "user", "sandboxPolicy": self.policy() })
     }
 }
 

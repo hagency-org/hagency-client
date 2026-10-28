@@ -70,7 +70,7 @@ fn native_provisioning_original_activation_scope() {
         "foreign",
         "managed-refused",
     ] {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let state = root.path().join("state");
         let mut db = DomainRepository::open(&state).unwrap();
         let (account, pool) = if case == "managed-refused" {
@@ -120,7 +120,8 @@ fn native_provisioning_original_activation_scope() {
                 );
             }
             "foreign" => {
-                let other = tempfile::tempdir().unwrap();
+                let other =
+                    hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
                 let mut foreign = DomainRepository::open(&other.path().join("state")).unwrap();
                 provision(&mut foreign, &pool);
                 assert!(matches!(
@@ -175,7 +176,7 @@ fn native_provisioning_original_activation_scope() {
 #[test]
 fn native_reattach_scope_rebuilds_only_what_the_factory_completed() {
     for case in ["original", "adopted", "revoked", "tampered", "absent"] {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let state = root.path().join("state");
         let mut db = DomainRepository::open(&state).unwrap();
         let pool = resource("pool", "seat", 1000);
@@ -228,14 +229,16 @@ fn native_reattach_scope_rebuilds_only_what_the_factory_completed() {
             );
             if case != "absent" {
                 assert!(
-                    db.inline_factory_engagements().unwrap().is_empty(),
+                    db.inline_factory_engagements(&registration())
+                        .unwrap()
+                        .is_empty(),
                     "{case}"
                 );
             }
             continue;
         }
         assert_eq!(
-            db.inline_factory_engagements().unwrap(),
+            db.inline_factory_engagements(&registration()).unwrap(),
             vec![engagement.clone()]
         );
         let (rebuilt, registered, scope) = db.reattach_provision_scope(&engagement).unwrap();
@@ -269,7 +272,7 @@ fn native_reattach_scope_rebuilds_only_what_the_factory_completed() {
 #[test]
 fn native_reattach_scope_carries_its_managed_account() {
     for case in ["managed", "seat"] {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let state = root.path().join("state");
         let mut db = DomainRepository::open(&state).unwrap();
         db.register(&registration()).unwrap();
@@ -328,7 +331,7 @@ fn native_reattach_scope_carries_its_managed_account() {
 #[tokio::test]
 async fn native_managed_home_for_a_project_without_a_configured_source() {
     use hagency_store::agent_home::{HomeProject, ManagedHomePlan, ProjectMode};
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("state");
     let homes = root.path().join("homes");
     hagency_store::private::directory(&homes).unwrap();
@@ -399,7 +402,7 @@ async fn native_managed_home_for_a_project_without_a_configured_source() {
 #[tokio::test]
 async fn native_managed_home_reopens_after_a_restart() {
     use hagency_store::agent_home::{HomeProject, ManagedHomePlan, ProjectMode};
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("state");
     let homes = root.path().join("homes");
     hagency_store::private::directory(&homes).unwrap();
@@ -514,7 +517,7 @@ async fn native_managed_home_reopens_after_a_restart() {
 }
 #[test]
 fn native_warm_runtime_writer_scope() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&root.path().join("state")).unwrap();
     let pool = resource("pool", "seat", 1000);
     let effect = provision(&mut db, &pool);
@@ -530,6 +533,19 @@ fn native_warm_runtime_writer_scope() {
     db.validate_warm_runtime_scope(&scope).unwrap();
     scope.claim_warm().unwrap();
     assert!(matches!(scope.clone().claim_warm(), Err(Error::Busy)));
+    let runtime = scope.claim_runtime().unwrap();
+    let worker = runtime.clone();
+    let recaptured = db
+        .provision_runtime_scope(&effect, &registration())
+        .unwrap();
+    assert!(matches!(recaptured.claim_runtime(), Err(Error::Busy)));
+    drop(runtime);
+    assert!(matches!(recaptured.claim_runtime(), Err(Error::Busy)));
+    drop(worker);
+    let replacement = recaptured.claim_runtime().unwrap();
+    assert!(matches!(scope.claim_runtime(), Err(Error::Busy)));
+    assert!(matches!(recaptured.claim_warm(), Err(Error::Busy)));
+    drop(replacement);
     assert!(matches!(
         db.provision_runtime_scope(&effect, &registration())
             .unwrap()
@@ -575,7 +591,7 @@ fn native_warm_runtime_scope_refusals() {
         "foreign",
         "reopen",
     ] {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let state = root.path().join("state");
         let mut db = DomainRepository::open(&state).unwrap();
         let mut pool = resource("pool", "seat", 1000);
@@ -633,7 +649,8 @@ fn native_warm_runtime_scope_refusals() {
                 assert!(db.validate_warm_runtime_scope(&scope).is_err());
             }
             "foreign" => {
-                let other = tempfile::tempdir().unwrap();
+                let other =
+                    hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
                 let mut foreign = DomainRepository::open(&other.path().join("state")).unwrap();
                 let same = provision(&mut foreign, &pool);
                 assert_eq!(value(same), value(&effect));
@@ -658,7 +675,7 @@ fn native_warm_runtime_scope_refusals() {
 }
 #[test]
 fn native_warm_runtime_managed_readiness() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&root.path().join("state")).unwrap();
     let (account, pool) = managed(&mut db);
     let effect = provision(&mut db, &pool);
@@ -700,4 +717,130 @@ fn native_warm_runtime_managed_readiness() {
     login(&mut db, &account, LoginOutcome::Observed, now() + 60_000);
     account.retire();
     assert!(db.validate_warm_runtime_scope(&scope).is_err());
+}
+
+#[test]
+fn restarted_factories_list_only_agents_of_their_exact_registration() {
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
+    let state = root.path().join("state");
+    let mut db = DomainRepository::open(&state).unwrap();
+    let pool = resource("shared_pool", "shared_seat", 1000);
+    db.put_resource(&pool).unwrap();
+    let first = registration();
+    let second = Registration {
+        fleet_id: format!("hf_{}", "b".repeat(32)),
+        representative_mxid: format!("@hf_{}_representative:example.test", "b".repeat(32)),
+        ..first.clone()
+    };
+    let mut agents = Vec::new();
+    for (index, registered) in [&first, &second].into_iter().enumerate() {
+        db.register(registered).unwrap();
+        let mut req = request(
+            &format!("agent_{index}"),
+            &format!("Agent{index}"),
+            &pool,
+            100,
+        );
+        req.fleet_id = registered.fleet_id.clone();
+        let mut observed = observation(&req);
+        observed.reception.joined.remove(&first.representative_mxid);
+        observed
+            .reception
+            .joined
+            .insert(registered.representative_mxid.clone());
+        observed.project.joined.remove(&first.representative_mxid);
+        observed
+            .project
+            .joined
+            .insert(registered.representative_mxid.clone());
+        observed.project.binding.as_mut().unwrap()["fleetId"] =
+            serde_json::json!(registered.fleet_id);
+        let verified = hagency_core::authority::verify_request(registered, req, observed).unwrap();
+        db.admit(&verified, 1000).unwrap();
+        db.approve(&format!("approve_{index}"), &verified, 1000)
+            .unwrap();
+        let effect = db.claim_effect().unwrap().unwrap();
+        let scope = db.provision_runtime_scope(&effect, registered).unwrap();
+        scope.claim_warm().unwrap();
+        db.complete_original_provision(&scope).unwrap();
+        agents.push(effect.engagement_id);
+    }
+    drop(db);
+    let mut db = DomainRepository::open(&state).unwrap();
+    for (index, registered) in [&first, &second].into_iter().enumerate() {
+        assert_eq!(
+            db.inline_factory_engagements(registered).unwrap(),
+            vec![agents[index].clone()]
+        );
+        let mut wrong = registered.clone();
+        wrong.generation += 1;
+        assert!(db.inline_factory_engagements(&wrong).unwrap().is_empty());
+        wrong = registered.clone();
+        wrong.reception_room_id = "!other:example.test".into();
+        assert!(db.inline_factory_engagements(&wrong).unwrap().is_empty());
+        let (_, actual, scope) = db.reattach_provision_scope(&agents[index]).unwrap();
+        assert_eq!(&actual, registered);
+        scope.claim_warm().unwrap();
+    }
+}
+
+#[test]
+fn native_provision_recovery_scope_is_inspection_only() {
+    for changed in [
+        "none",
+        "revoke",
+        "generation",
+        "payload",
+        "claimed",
+        "foreign",
+    ] {
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
+        let mut db = DomainRepository::open(&root.path().join("state")).unwrap();
+        let pool = resource("pool", "seat", 1000);
+        let effect = provision(&mut db, &pool);
+        db.observe_effect(&effect.id, effect.fence, &EffectOutcome::Unknown)
+            .unwrap();
+        let inspection = db
+            .inspect_provision_scope(&effect, &registration())
+            .unwrap();
+        assert!(db.provision_runtime_account(&inspection).is_err());
+        assert!(db.complete_original_provision(&inspection).is_err());
+        match changed {
+            "revoke" => {
+                db.revoke("revoke", &effect.engagement_id).unwrap();
+            }
+            "generation" => {
+                db.register(&Registration {
+                    generation: 2,
+                    ..registration()
+                })
+                .unwrap();
+            }
+            "payload" => {
+                rusqlite::Connection::open(root.path().join("state/domain.sqlite3")).unwrap().execute("UPDATE effects SET payload=json_set(payload,'$.runtimeName','changed') WHERE id=?1", [&effect.id]).unwrap();
+            }
+            "claimed" => {
+                inspection.claim_warm().unwrap();
+            }
+            "foreign" => {
+                let other =
+                    hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
+                let mut foreign = DomainRepository::open(&other.path().join("state")).unwrap();
+                assert!(foreign.resume_inspected_provision(&inspection).is_err());
+            }
+            _ => {}
+        }
+        if changed == "none" || changed == "foreign" {
+            db.resume_inspected_provision(&inspection).unwrap();
+            let resumed = db.effect(&effect.id).unwrap();
+            assert_eq!(resumed.state, EffectState::Started);
+            assert_eq!(resumed.fence, effect.fence);
+            assert_eq!(resumed.payload, effect.payload);
+            assert!(db.resume_inspected_provision(&inspection).is_err());
+            db.validate_provision_account(&effect, &registration())
+                .unwrap();
+        } else {
+            assert!(db.resume_inspected_provision(&inspection).is_err());
+        }
+    }
 }

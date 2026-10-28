@@ -2,23 +2,25 @@
 //! or automatic retry of an uncertain POST createRoom. The private command journal
 //! is scoped to the native installation's pinned origin/MXID/Pasion subject.
 use super::{OwnerError, OwnerOperation, OwnerReply, ServerLogin, http, origin, session_key};
-use crate::console::{body, console, cookie, current, recheck, same_origin};
+use crate::console::{body, console, cookie, current, same_origin};
 use reqwest::{Method, Url};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
     sync::atomic::Ordering,
     time::{Duration, Instant},
 };
 use tokio::sync::Mutex;
+pub(in crate::console) mod service;
+pub(super) use service::Scope;
 const MARKER: &str = "im.hagency.client.creation";
 static COMMANDS: Mutex<()> = Mutex::const_new(());
 fn error(status: u16, code: &str) -> OwnerError {
     OwnerError::new(status, code)
 }
-pub(super) fn room_id(room: &str) -> Result<(), OwnerError> {
+pub(in crate::console) fn room_id(room: &str) -> Result<(), OwnerError> {
     if room.starts_with('!')
         && room.len() <= 255
         && !room
@@ -39,6 +41,7 @@ pub(super) fn segment(room: &str) -> Result<String, OwnerError> {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
+    AgentRoom,
     Space,
     Room,
 }
@@ -63,14 +66,15 @@ struct Command {
     project: Option<Value>,
     last_error: Option<String>,
 }
-#[derive(Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Resume {
-    room_id: Option<String>,
+pub struct Resume {
+    pub room_id: Option<String>,
 }
 // This enum is deliberately private: browser input never becomes arbitrary paths,
 // state types, request bodies, authorization headers, or a remote proxy.
 pub(in crate::console) enum MatrixOperation {
+    Managed(crate::console::native::project_setup::matrix::Operation),
     DirectCreate {
         agent: String,
         owner: String,
@@ -93,6 +97,7 @@ pub(in crate::console) enum MatrixOperation {
 impl MatrixOperation {
     fn request(self) -> Result<(Method, String, Option<Value>), OwnerError> {
         Ok(match self {
+            Self::Managed(operation) => return operation.request(),
             Self::DirectCreate {
                 agent,
                 owner,
@@ -164,6 +169,12 @@ impl MatrixOperation {
             Self::Create(input, owner, service) => {
                 let marker = json!({"commandId":input.command_id,"owner":owner,"kind":input.kind,"projectId":input.project_id,"spaceId":input.space_id});
                 let mut body = json!({"name":input.name,"visibility":"private","preset":"private_chat","invite":[service],"initial_state":[{"type":"m.room.join_rules","state_key":"","content":{"join_rule":"invite"}},{"type":MARKER,"state_key":"","content":marker}]});
+                if input.kind == Kind::AgentRoom {
+                    body["initial_state"].as_array_mut().unwrap().extend([
+                        json!({"type":"m.room.history_visibility","state_key":"","content":{"history_visibility":"joined"}}),
+                        json!({"type":"m.room.guest_access","state_key":"","content":{"guest_access":"forbidden"}}),
+                    ]);
+                }
                 if input.kind == Kind::Space {
                     body["creation_content"] = json!({"type":"m.space"});
                 }
@@ -258,30 +269,18 @@ impl ServerLogin {
             json!({"spaces":spaces,"nextCursor":next,"incomplete":!errors.is_empty(),"errors":errors}),
         )
     }
-    async fn matrix_identity(&self, cookie: &str) -> Result<(String, String, String), OwnerError> {
-        let _ = self.owner_api(cookie, OwnerOperation::Projects).await?;
-        let sessions = self.sessions.lock().await;
-        let session = sessions
-            .get(&session_key(cookie))
-            .ok_or_else(|| error(401, "sign_in_required"))?;
-        Ok((
-            session.binding.origin.clone(),
-            session
-                .binding
-                .owner
-                .clone()
-                .ok_or_else(|| error(401, "sign_in_required"))?,
-            session
-                .binding
-                .subject
-                .clone()
-                .ok_or_else(|| error(401, "sign_in_required"))?,
-        ))
-    }
     pub(in crate::console) async fn matrix_api(
         &self,
         cookie: &str,
         op: MatrixOperation,
+    ) -> Result<OwnerReply, OwnerError> {
+        self.matrix_api_scoped(cookie, op, None).await
+    }
+    async fn matrix_api_scoped(
+        &self,
+        cookie: &str,
+        op: MatrixOperation,
+        scope: Option<&Scope<'_>>,
     ) -> Result<OwnerReply, OwnerError> {
         let (method, path, body) = op.request()?;
         if self.stopped.load(Ordering::Acquire) {
@@ -309,6 +308,10 @@ impl ServerLogin {
             .filter(|s| !s.invalidated && s.expires > Instant::now())
             .ok_or_else(|| error(401, "sign_in_required"))?;
         drop(renewal);
+        if let Some(scope) = scope {
+            scope.matches(&session)?;
+            scope.check().await?;
+        }
         let shared_token = if let Some(source) = &session.matrix_source {
             let snapshot = source.access_token().await.map_err(|failure| {
                 let code = super::super::native::sdk_source_failure(failure);
@@ -328,6 +331,9 @@ impl ServerLogin {
         } else {
             None
         };
+        if let Some(scope) = scope {
+            scope.check().await?;
+        }
         let server = origin(&session.binding.origin).map_err(|_| error(401, "sign_in_required"))?;
         let mut request = http()
             .map_err(|_| error(503, "matrix_unavailable"))?
@@ -379,6 +385,9 @@ impl ServerLogin {
             if after.client_id != session.binding.client_id {
                 return Err(error(401, "matrix_account_changed"));
             }
+        }
+        if let Some(scope) = scope {
+            scope.check().await?;
         }
         let sessions = self.sessions.lock().await;
         let current = sessions.values().find(|s| s.token == session.token);
@@ -448,7 +457,7 @@ fn validate_input(input: &Input) -> Result<(), OwnerError> {
         return Err(error(400, "invalid_arguments"));
     }
     match input.kind {
-        Kind::Space if input.project_id.is_none() && input.space_id.is_none() => Ok(()),
+        Kind::Space | Kind::AgentRoom if input.project_id.is_none() && input.space_id.is_none() => Ok(()),
         Kind::Room => {
             super::operation_id(
                 input
@@ -500,16 +509,16 @@ fn created_by(state: &Value, command: &Command) -> bool {
         && (create["content"]["type"] == "m.space") == (command.input.kind == Kind::Space)
         && content(state, "m.room.join_rules", "").is_some_and(|c| c["join_rule"] == "invite")
 }
-fn public(command: &Command) -> Value {
-    json!({"commandId":command.input.command_id,"kind":command.input.kind,"name":command.input.name,"projectId":command.input.project_id,"spaceId":command.input.space_id,"roomId":command.room_id,"phase":command.phase,"project":command.project,"lastError":command.last_error})
-}
 async fn checked_project(
     login: &ServerLogin,
     cookie: &str,
     input: &Input,
+    scope: Option<&Scope<'_>>,
 ) -> Result<(), OwnerError> {
     if input.kind == Kind::Room {
-        let projects = login.owner_api(cookie, OwnerOperation::Projects).await?;
+        let projects = login
+            .owner_api_inner(Some(cookie), None, OwnerOperation::Projects, scope)
+            .await?;
         if !projects.value["projects"].as_array().is_some_and(|p| {
             p.iter().any(|p| {
                 Some(p["id"].as_str().unwrap_or("")) == input.project_id.as_deref()
@@ -525,14 +534,15 @@ async fn continue_known(
     login: &ServerLogin,
     cookie: &str,
     command: &mut Command,
+    scope: Option<&Scope<'_>>,
 ) -> Result<(), OwnerError> {
-    checked_project(login, cookie, &command.input).await?;
+    checked_project(login, cookie, &command.input, scope).await?;
     let room = command
         .room_id
         .clone()
         .ok_or_else(|| error(409, "matrix_creation_outcome_unknown"))?;
     let state = login
-        .matrix_api(cookie, MatrixOperation::State(room.clone()))
+        .matrix_api_scoped(cookie, MatrixOperation::State(room.clone()), scope)
         .await?
         .value;
     if !created_by(&state, command) {
@@ -541,15 +551,20 @@ async fn continue_known(
     if command.input.kind == Kind::Space {
         command.project = Some(
             login
-                .owner_api(cookie, OwnerOperation::AdoptProject { space: room })
+                .owner_api_inner(
+                    Some(cookie),
+                    None,
+                    OwnerOperation::AdoptProject { space: room },
+                    scope,
+                )
                 .await?
                 .value["project"]
                 .clone(),
         );
-    } else {
+    } else if command.input.kind == Kind::Room {
         let space = command.input.space_id.clone().unwrap();
         let space_state = login
-            .matrix_api(cookie, MatrixOperation::State(space.clone()))
+            .matrix_api_scoped(cookie, MatrixOperation::State(space.clone()), scope)
             .await?
             .value;
         let host = command
@@ -564,9 +579,10 @@ async fn continue_known(
             }
         } else {
             login
-                .matrix_api(
+                .matrix_api_scoped(
                     cookie,
                     MatrixOperation::Child(space.clone(), room.clone(), child),
+                    scope,
                 )
                 .await?;
         }
@@ -577,16 +593,22 @@ async fn continue_known(
             }
         } else {
             login
-                .matrix_api(cookie, MatrixOperation::Parent(room.clone(), space, parent))
+                .matrix_api_scoped(
+                    cookie,
+                    MatrixOperation::Parent(room.clone(), space, parent),
+                    scope,
+                )
                 .await?;
         }
         login
-            .owner_api(
-                cookie,
+            .owner_api_inner(
+                Some(cookie),
+                None,
                 OwnerOperation::AdoptRoom {
                     project: command.input.project_id.clone().unwrap(),
                     room,
                 },
+                scope,
             )
             .await?;
     }
@@ -604,11 +626,11 @@ pub(crate) fn router() -> Router {
                 .push(Router::with_path("resume").post(resume)),
         )
 }
-async fn context<'a>(
+fn context<'a>(
     req: &Request,
     depot: &'a Depot,
     mutating: bool,
-) -> Result<(&'a ServerLogin, String, PathBuf, (String, String, String)), OwnerError> {
+) -> Result<(&'a crate::console::Console, String), OwnerError> {
     if req.uri().query().is_some() || !same_origin(req, depot, mutating) {
         return Err(error(403, "invalid_origin"));
     }
@@ -617,23 +639,9 @@ async fn context<'a>(
     let cookie = cookie(req)
         .map_err(|_| error(401, "sign_in_required"))?
         .to_owned();
-    let login = &console.0.server_login;
-    let identity = login.matrix_identity(&cookie).await?;
-    let root = login
-        .state_directory()
-        .ok_or_else(|| error(503, "local_state_unavailable"))?;
-    let ledger = crate::console::owned_agents::ledger_path(
-        &root,
-        &identity.0,
-        &format!("{}auth/", identity.0),
-        &identity.2,
-        &identity.1,
-    )
-    .map_err(|_| error(503, "local_state_unavailable"))?;
-    let path = ledger.parent().unwrap().join("matrix-creations.json");
-    Ok((login, cookie, path, identity))
+    Ok((console, cookie))
 }
-fn finish(res: &mut Response, value: Result<Value, OwnerError>) {
+fn finish<T: Serialize + Send>(res: &mut Response, value: Result<T, OwnerError>) {
     match value {
         Ok(value) => res.render(Json(value)),
         Err(error) => {
@@ -646,193 +654,54 @@ fn finish(res: &mut Response, value: Result<Value, OwnerError>) {
 }
 #[handler]
 async fn start(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    finish(res, do_start(req, depot).await);
-}
-async fn do_start(req: &mut Request, depot: &Depot) -> Result<Value, OwnerError> {
-    let bytes = body(req, 16384)
-        .await
-        .map_err(|_| error(400, "invalid_arguments"))?;
-    let input: Input =
-        serde_json::from_slice(&bytes).map_err(|_| error(400, "invalid_arguments"))?;
-    validate_input(&input)?;
-    let (login, cookie, path, identity) = context(req, depot, true).await?;
-    let _guard = COMMANDS.lock().await;
-    let mut records = load(&path)?;
-    if let Some(old) = records
-        .iter()
-        .find(|c| c.input.command_id == input.command_id)
-    {
-        if old.input != input
-            || (&old.origin, &old.owner, &old.subject) != (&identity.0, &identity.1, &identity.2)
-        {
-            return Err(error(409, "creation_command_conflict"));
-        }
-        return Ok(json!({"creation":public(old)}));
+    let result = async {
+        let bytes = body(req, 16384)
+            .await
+            .map_err(|_| error(400, "invalid_arguments"))?;
+        let input = serde_json::from_slice(&bytes).map_err(|_| error(400, "invalid_arguments"))?;
+        let (console, cookie) = context(req, depot, true)?;
+        service::invoke(console, &cookie, service::Action::Start(input), None).await
     }
-    if records.len() >= 256 {
-        return Err(error(503, "local_creation_journal_full"));
-    }
-    checked_project(login, &cookie, &input).await?;
-    recheck(depot).map_err(|_| error(401, "sign_in_required"))?;
-    let discovery = login
-        .matrix_api(&cookie, MatrixOperation::Discovery)
-        .await?
-        .value;
-    let service = service_identity(&discovery, &identity.1)?;
-    let mut command = Command {
-        input: input.clone(),
-        origin: identity.0,
-        owner: identity.1,
-        subject: identity.2,
-        room_id: None,
-        phase: "creating".into(),
-        project: None,
-        last_error: None,
-    };
-    records.push(command.clone());
-    save(&path, &records)?;
-    let created = login
-        .matrix_api(
-            &cookie,
-            MatrixOperation::Create(input, command.owner.clone(), service),
-        )
-        .await;
-    match created {
-        Ok(reply) => {
-            if let Some(room) = reply.value["room_id"]
-                .as_str()
-                .filter(|room| room_id(room).is_ok())
-            {
-                command.room_id = Some(room.into());
-                command.phase = "created".into();
-            } else {
-                command.phase = "unknown".into();
-                command.last_error = Some("invalid_matrix_response".into());
-            }
-        }
-        Err(failure) => {
-            command.phase = "unknown".into();
-            command.last_error = Some(failure.code);
-        }
-    }
-    *records.last_mut().unwrap() = command.clone();
-    save(&path, &records)?;
-    if command.room_id.is_some() {
-        if let Err(failure) = continue_known(login, &cookie, &mut command).await {
-            command.phase = "partial".into();
-            command.last_error = Some(failure.code);
-        }
-        *records.last_mut().unwrap() = command.clone();
-        save(&path, &records)?;
-    }
-    recheck(depot).map_err(|_| error(401, "sign_in_required"))?;
-    Ok(json!({"creation":public(&command)}))
+    .await;
+    finish(res, result);
 }
 #[handler]
 async fn creation_status(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    finish(res, do_status(req, depot).await);
-}
-async fn do_status(req: &Request, depot: &Depot) -> Result<Value, OwnerError> {
-    let (_, _, path, identity) = context(req, depot, false).await?;
-    let command_id = req
-        .param::<String>("commandId")
-        .ok_or_else(|| error(400, "invalid_arguments"))?;
-    super::operation_id(&command_id)?;
-    let _guard = COMMANDS.lock().await;
-    let records = load(&path)?;
-    let command = records
-        .iter()
-        .find(|c| c.input.command_id == command_id)
-        .ok_or_else(|| error(404, "creation_command_not_found"))?;
-    if (&command.origin, &command.owner, &command.subject)
-        != (&identity.0, &identity.1, &identity.2)
-    {
-        return Err(error(403, "creation_identity_mismatch"));
+    let result = async {
+        let id = req
+            .param::<String>("commandId")
+            .ok_or_else(|| error(400, "invalid_arguments"))?;
+        let (console, cookie) = context(req, depot, false)?;
+        service::invoke(console, &cookie, service::Action::Status(id), None).await
     }
-    Ok(json!({"creation":public(command)}))
+    .await;
+    finish(res, result);
 }
 #[handler]
 async fn resume(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    finish(res, do_resume(req, depot).await);
-}
-async fn do_resume(req: &mut Request, depot: &Depot) -> Result<Value, OwnerError> {
-    let raw = body(req, 4096)
-        .await
-        .map_err(|_| error(400, "invalid_arguments"))?;
-    let input: Resume = if raw.is_empty() {
-        Resume::default()
-    } else {
-        serde_json::from_slice(&raw).map_err(|_| error(400, "invalid_arguments"))?
-    };
-    let (login, cookie, path, identity) = context(req, depot, true).await?;
-    let id = req
-        .param::<String>("commandId")
-        .ok_or_else(|| error(400, "invalid_arguments"))?;
-    super::operation_id(&id)?;
-    let _guard = COMMANDS.lock().await;
-    let mut records = load(&path)?;
-    let index = records
-        .iter()
-        .position(|c| c.input.command_id == id)
-        .ok_or_else(|| error(404, "creation_command_not_found"))?;
-    let mut command = records[index].clone();
-    if (&command.origin, &command.owner, &command.subject)
-        != (&identity.0, &identity.1, &identity.2)
-    {
-        return Err(error(403, "creation_identity_mismatch"));
-    }
-    if command.phase == "complete" {
-        return Ok(json!({"creation":public(&command)}));
-    }
-    if command.room_id.is_none() {
-        let candidates = if let Some(room) = input.room_id {
-            room_id(&room)?;
-            vec![room]
+    let result = async {
+        let raw = body(req, 4096)
+            .await
+            .map_err(|_| error(400, "invalid_arguments"))?;
+        let input = if raw.is_empty() {
+            Resume::default()
         } else {
-            let joined = login
-                .matrix_api(&cookie, MatrixOperation::JoinedRooms)
-                .await?
-                .value;
-            let rooms = joined["joined_rooms"]
-                .as_array()
-                .filter(|r| r.len() <= 64)
-                .ok_or_else(|| error(409, "creation_recovery_room_id_required"))?;
-            rooms
-                .iter()
-                .map(|r| {
-                    r.as_str()
-                        .map(str::to_owned)
-                        .ok_or_else(|| error(502, "invalid_matrix_response"))
-                })
-                .collect::<Result<Vec<_>, _>>()?
+            serde_json::from_slice(&raw).map_err(|_| error(400, "invalid_arguments"))?
         };
-        let mut matches = Vec::new();
-        for room in candidates {
-            if let Ok(state) = login
-                .matrix_api(&cookie, MatrixOperation::State(room.clone()))
-                .await
-                && created_by(&state.value, &command)
-            {
-                matches.push(room);
-            }
-        }
-        if matches.len() != 1 {
-            return Err(error(409, "matrix_creation_outcome_unknown"));
-        }
-        command.room_id = matches.pop();
-        command.phase = "created".into();
-        records[index] = command.clone();
-        save(&path, &records)?;
+        let id = req
+            .param::<String>("commandId")
+            .ok_or_else(|| error(400, "invalid_arguments"))?;
+        let (console, cookie) = context(req, depot, true)?;
+        service::invoke(
+            console,
+            &cookie,
+            service::Action::Resume { id, input },
+            None,
+        )
+        .await
     }
-    recheck(depot).map_err(|_| error(401, "sign_in_required"))?;
-    if let Err(failure) = continue_known(login, &cookie, &mut command).await {
-        command.phase = "partial".into();
-        command.last_error = Some(failure.code);
-    }
-    records[index] = command.clone();
-    save(&path, &records)?;
-    recheck(depot).map_err(|_| error(401, "sign_in_required"))?;
-    Ok(json!({"creation":public(&command)}))
+    .await;
+    finish(res, result);
 }
 
 #[cfg(test)]
@@ -903,18 +772,8 @@ fn candidate_space(
 #[handler]
 async fn creations(req: &Request, depot: &Depot, res: &mut Response) {
     let result = async {
-        let (_, _, path, identity) = context(req, depot, false).await?;
-        let _guard = COMMANDS.lock().await;
-        let records = load(&path)?;
-        let values = records
-            .iter()
-            .filter(|c| {
-                (&c.origin, &c.owner, &c.subject) == (&identity.0, &identity.1, &identity.2)
-            })
-            .map(|c| json!({"input":c.input,"creation":public(c)}))
-            .collect::<Vec<_>>();
-        recheck(depot).map_err(|_| error(401, "sign_in_required"))?;
-        Ok(json!({"creations":values}))
+        let (console, cookie) = context(req, depot, false)?;
+        service::invoke(console, &cookie, service::Action::List, None).await
     }
     .await;
     finish(res, result);

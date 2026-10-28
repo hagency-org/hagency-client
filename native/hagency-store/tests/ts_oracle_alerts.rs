@@ -23,7 +23,7 @@ struct Alarm {
 }
 
 fn open(ceiling: u64) -> Alarm {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&root.path().join("state")).unwrap();
     db.register(&registration()).unwrap();
     let mut pool: Resource = resource("oracle_alarm_pool", "oracle_alarm_seat", ceiling);

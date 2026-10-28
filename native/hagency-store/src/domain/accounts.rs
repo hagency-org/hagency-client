@@ -155,7 +155,7 @@ impl ManagedLaunch {
         }
         let path = self.binding.root.path.join(&self.binding.association.id);
         let path = path.to_str().ok_or(Error::Private)?.to_owned();
-        environment.insert("HOME".into(), path.clone().into());
+        environment.insert("HOME".into(), hagency_platform::codex_process_home(std::path::Path::new(&path)).map_err(|_| Error::Private)?.into_os_string());
         environment.insert("CODEX_HOME".into(), path.into());
         Ok(())
     }
@@ -369,6 +369,12 @@ impl Registry {
         }
         Ok(())
     }
+    pub(super) fn managed_account(&self, db: &Connection, id: &str) -> Result<ManagedAccount, Error> {
+        valid_id(id)?;
+        let binding = self.bindings.get(id).ok_or(Error::LocalAuthority)?;
+        self.current(db, binding)?;
+        Ok(ManagedAccount { binding: binding.clone() })
+    }
     pub(super) fn check_profile(
         &self,
         db: &Connection,
@@ -517,20 +523,19 @@ impl DomainRepository {
             .collect()
     }
     pub fn managed_account(&self, id: &str) -> Result<ManagedAccount, Error> {
-        valid_id(id)?;
-        let binding = self
-            .accounts
-            .bindings
-            .get(id)
-            .ok_or(Error::LocalAuthority)?;
-        self.accounts.current(&self.db, binding)?;
-        Ok(ManagedAccount {
-            binding: binding.clone(),
-        })
+        self.accounts.managed_account(&self.db, id)
     }
     /// Reserve the original public identity before filesystem effects. Inspection
     /// remains possible if the following one-shot materialization is interrupted.
     pub fn reserve_account(&mut self, profile: &str) -> Result<AccountChoice, Error> {
+        self.reserve_account_checked(profile, |_, _| Ok(()))
+    }
+    /// The original reservation and its caller's custody commit together.
+    pub(crate) fn reserve_account_checked(
+        &mut self,
+        profile: &str,
+        record: impl FnOnce(&Connection, &AccountChoice) -> Result<(), Error>,
+    ) -> Result<AccountChoice, Error> {
         let deadline = Instant::now() + std::time::Duration::from_secs(5);
         if profile != ACCOUNT_PROFILE {
             return Err(Error::Unqualified);
@@ -570,6 +575,8 @@ impl DomainRepository {
             "INSERT INTO managed_accounts(id,ordinal,generation,state) VALUES(?1,?2,1,'preparing')",
             params![id, count + 1],
         )?;
+        let choice = AccountChoice::new(id.clone(), (count + 1) as u8, AccountState::Preparing)?;
+        record(&tx, &choice)?;
         preparation_deadline(deadline)?;
         tx.commit().map_err(|_| Error::OutcomeUnknown)?;
         self.accounts.preparations.insert(
@@ -585,6 +592,17 @@ impl DomainRepository {
     /// Exactly one attempt from this original writer. Never adopts an existing
     /// directory or re-arms a preparation recovered after caller/process loss.
     pub fn materialize_account(&mut self, id: &str) -> Result<AccountChoice, Error> {
+        self.materialize_account_checked(id, || Ok(()))
+    }
+    pub(crate) fn account_preparation_live(&self, id: &str) -> bool {
+        self.accounts.preparations.get(id).is_some_and(|p| Instant::now() < p.deadline)
+    }
+    pub(crate) fn materialize_account_checked(
+        &mut self,
+        id: &str,
+        check: impl Fn() -> Result<(), Error>,
+    ) -> Result<AccountChoice, Error> {
+        check()?;
         valid_id(id)?;
         self.accounts.root.check()?;
         let preparation = self.accounts.preparations.get_mut(id).ok_or(Error::State)?;
@@ -603,6 +621,7 @@ impl DomainRepository {
         }
         preparation_deadline(deadline)?;
         self.accounts.root.check()?;
+        check()?;
         #[cfg(unix)]
         {
             use cap_std::fs::DirBuilderExt;
@@ -631,6 +650,7 @@ impl DomainRepository {
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         preparation_deadline(deadline)?;
+        check()?;
         let (key, deployment) = self.accounts.key(&tx)?;
         let (seat, tuple) = keyed_identity(&key, &deployment, &namespace)?;
         let collision:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM managed_accounts WHERE seat_id=?1 OR identity_tuple=?2) OR EXISTS(SELECT 1 FROM seats WHERE id=?1)",params![seat,tuple],|r|r.get(0))?;
@@ -663,6 +683,7 @@ impl DomainRepository {
         binding.check()?;
         // Custody precedes commit and survives a possible-commit error.
         self.accounts.bindings.insert(id.into(), binding);
+        check()?;
         preparation_deadline(deadline)?;
         tx.commit().map_err(|_| Error::OutcomeUnknown)?;
         preparation_deadline(deadline)?;
@@ -676,18 +697,33 @@ impl DomainRepository {
         id: &str,
         logout: LogoutObservation,
     ) -> Result<AccountChoice, Error> {
+        self.retire_account_checked(id, logout, |_, _| Ok(()), |_, _| Ok(()))
+    }
+    pub(crate) fn retire_account_checked(
+        &mut self,
+        id: &str,
+        logout: LogoutObservation,
+        before: impl FnOnce(&Connection, &AccountChoice) -> Result<(), Error>,
+        record: impl FnOnce(&Connection, &AccountChoice) -> Result<(), Error>,
+    ) -> Result<AccountChoice, Error> {
         valid_id(id)?;
         if logout.detail.len() > 512 {
             return Err(
                 hagency_core::InvalidInput("logout classification exceeds its bound").into(),
             );
         }
+        let tx = self.db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (ordinal, state): (u8, String) = tx.query_row("SELECT ordinal,state FROM managed_accounts WHERE id=?1", [id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?.ok_or(Error::NotFound)?;
+        let choice = AccountChoice::new(id.into(), ordinal, serde_json::from_value(serde_json::Value::String(state))?)?;
+        // Check ownership, revision, dependencies and queued authority under the
+        // write lock before invalidating any live launch handle.
+        before(&tx, &choice)?;
+        if tx.query_row("SELECT EXISTS(SELECT 1 FROM owner_resource_namespaces WHERE account_id=?1)",[id],|r|r.get::<_,bool>(0))? {
+            return Err(Error::Conflict);
+        }
         if let Some(binding) = self.accounts.bindings.get(id) {
             binding.retired.store(true, Ordering::Release);
         }
-        let tx = self
-            .db
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         if tx.execute(
             "UPDATE managed_accounts SET state='retired' WHERE id=?1 AND state='active'",
             [id],
@@ -736,6 +772,8 @@ impl DomainRepository {
                 params![shadow, id, attempt, retired_at_ms, retired_at_ms.saturating_add(DEFAULT_READINESS_TTL)],
             )?;
         }
+        let retired = AccountChoice::new(id.into(), ordinal, AccountState::Retired)?;
+        record(&tx, &retired)?;
         tx.commit().map_err(|_| Error::OutcomeUnknown)?;
         self.account_choices()?
             .into_iter()
@@ -754,6 +792,9 @@ impl DomainRepository {
     /// non-`observed` outcome and expiry alike — a read never writes, never
     /// promotes, and an expired fact stays on disk as history.
     pub fn account_readiness(&self, id: &str, now: u64) -> Result<AccountReadiness, Error> {
+        let pending: bool = self.db.query_row("SELECT EXISTS(SELECT 1 FROM account_login_attempts WHERE account_id=?1 AND state='attempting')", [id], |r|r.get(0))?;
+        if pending {return Ok(AccountReadiness::unknown(now));}
+
         valid_id(id)?;
         // The LATEST observation of ANY outcome decides: a newer `refused`
         // or `uncertain` receipt is newer information than an older
@@ -792,10 +833,17 @@ impl DomainRepository {
     /// settles it as `uncertain` — never as `observed` (the
     /// SQLite-before-effect ordering `materialize_account` uses).
     pub fn begin_account_login(&mut self, id: &str, now: u64) -> Result<LoginAttempt, Error> {
+        self.begin_account_login_checked(id, now, |_, _| Ok(()))
+    }
+    pub(crate) fn begin_account_login_checked(
+        &mut self,
+        id: &str,
+        now: u64,
+        record: impl FnOnce(&Connection, &LoginAttempt) -> Result<(), Error>,
+    ) -> Result<LoginAttempt, Error> {
         valid_id(id)?;
-        let tx = self
-            .db
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self.db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if tx.query_row("SELECT EXISTS(SELECT 1 FROM owner_resource_namespaces WHERE account_id=?1)",[id],|r|r.get::<_,bool>(0))? {return Err(Error::Conflict);}
         let state: Option<String> = tx
             .query_row(
                 "SELECT state FROM account_login_attempts WHERE account_id=?1",
@@ -820,11 +868,10 @@ impl DomainRepository {
              VALUES(?1,?2,?3,?4,'attempting',NULL)",
             params![id, attempt, now, deadline],
         )?;
+        let attempt = LoginAttempt { account_id: id.to_owned(), attempt };
+        record(&tx, &attempt)?;
         tx.commit()?;
-        Ok(LoginAttempt {
-            account_id: id.to_owned(),
-            attempt,
-        })
+        Ok(attempt)
     }
 
     /// Settle the allocated attempt with the parent's classification of the
@@ -935,6 +982,7 @@ pub struct LoginAttempt {
     attempt: u64,
 }
 impl LoginAttempt {
+    pub(crate) fn number(&self) -> u64 { self.attempt }
     /// The account this attempt was allocated for. Task #28's settle route
     /// cross-checks the path id against this before settling, so a mismatched
     /// attempt never settles a different account's row.
@@ -1128,6 +1176,8 @@ impl DomainRepository {
             provider: None,
             model: command.model,
             reasoning: command.reasoning,
+            octos_profile: None,
+            execution_policy: None,
             ceiling: command.ceiling,
             roles: Vec::new(),
             published: true,

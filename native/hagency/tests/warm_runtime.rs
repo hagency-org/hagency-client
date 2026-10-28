@@ -64,7 +64,7 @@ struct Fixture {
 }
 impl Fixture {
     async fn new(managed: bool) -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let state = root.path().join("state");
         let custody =
             hagency_store::Store::start(hagency_store::Repository::open(&state).unwrap(), 16)
@@ -238,6 +238,9 @@ impl Fixture {
         .unwrap()
     }
     async fn activate(&self, capability_ms: u64) -> RunnerCapability {
+        self.activate_workspace(capability_ms, true).await
+    }
+    async fn activate_workspace(&self, capability_ms: u64, exclusive: bool) -> RunnerCapability {
         // Explicit offline fixture activation. This is NOT evidence that the
         // product factory can observe its own physical Applied/Active outcome.
         self.domain
@@ -313,7 +316,16 @@ impl Fixture {
             )
             .await
             .unwrap();
-        self.domain.enqueue_dispatch(DispatchInput {id:"dispatch".into(),session_id:"session".into(),task_id:Some("task".into()),resources:vec![ResourceLease {id:"work".into(),exclusive:true}],payload:json!({"instruction":"offline task","cwd":"/impostor","model":"impostor","done":true})}).await.unwrap();
+        self.domain.enqueue_dispatch(DispatchInput {id:"dispatch".into(),session_id:"session".into(),task_id:Some("task".into()),resources:vec![ResourceLease {id:"work".into(),exclusive}],payload:json!({"instruction":"offline task","cwd":"/impostor","model":"impostor","done":true})}).await.unwrap();
+        if !exclusive {
+            use hagency_store::{OwnedClaimProfile, OwnedClaimRoom};
+            let profile=OwnedClaimProfile::new(
+                MatrixTransportObservation {engagement_id:self.effect.engagement_id.clone(),registration_generation:1,generation:1,sender_mxid:"@worker:example.test".into(),device_id:"DEVICE".into()},
+                vec![OwnedClaimRoom::new("!project:example.test".into(),1,RoomPrivacy::Group {}).unwrap().with_plaintext_project().unwrap()],
+                vec!["work".into()],
+            ).unwrap();
+            return self.domain.claim_owned_dispatch_for_host(profile,"owned_host".into(),capability_ms,capability_ms,1).await.unwrap().expect("warm read-only task selected by the production profile");
+        }
         self.domain
             .claim_dispatch("owned_host".into(), now(), capability_ms, capability_ms, 1)
             .await
@@ -535,6 +547,62 @@ async fn native_warm_owned_runtime_unknown_capacity() {
     third.close().await;
     other.close().await;
     failed.close().await;
+}
+
+#[tokio::test]
+async fn native_warm_execution_policy_uses_dispatch_snapshot() {
+    for yolo in [false, true] {
+        let mut f = Fixture::new(false).await;
+        let engagement = f.effect.engagement_id.clone();
+        f.domain.set_execution_policy(engagement.clone(), Some(json!({"yolo":!yolo})), now()).await.unwrap();
+        let mut warm = f.start(Some(ApprovalHost::new(2, 1, 1000, 2000).unwrap()));
+        warm.ready().await.unwrap();
+        f.initialized().await;
+        f.no_task_io();
+        let original_pid = f.receipt("warm-initialized")["pid"].clone();
+        // The process already exists. Its next task must use the latest owner
+        // setting, without restarting it or dropping its task-helper binding.
+        f.domain.set_execution_policy(engagement.clone(), Some(json!({"yolo":yolo})), now()).await.unwrap();
+        if yolo { fs::write(f.work.join("owned-mcp.unrestricted-policy"), b"expect unrestricted task").unwrap(); }
+        let cap = f.activate(60_000).await;
+        let mut operation = warm.dispatch_requiring_workspace(cap.clone(), limits()).unwrap();
+        let registration = tokio::time::timeout(Duration::from_secs(4), async {
+            loop {
+                if let Some(registration) = operation.take_workspace_registration() { break registration; }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }).await.unwrap();
+        let (binding, ack) = registration.into_parts();
+        binding.validate_current(&cap).await.unwrap();
+        assert_eq!(f.state("SELECT state FROM runner_dispatches"), "started");
+        f.no_task_io();
+        // A second edit affects only later tasks, while this started dispatch
+        // continues to use the captured mode and original authorization hash.
+        f.domain.set_execution_policy(engagement, Some(json!({"yolo":!yolo})), now()).await.unwrap();
+        ack.registered().unwrap();
+        let report = operation.wait().await.unwrap();
+        assert_eq!(report.protocol, Protocol::Completed, "{:?} {:?}", report.failure, report.runtime_observation());
+        assert_eq!(report.failure, None);
+        assert_eq!(f.receipt("warm-thread")["pid"], original_pid);
+        assert_eq!(f.receipt("receipt")["helper_exit"], true);
+        assert_eq!(f.receipt("readback")["task"]["status"], "in_progress");
+        let requests = f.requests();
+        assert_eq!(requests.iter().filter(|r|r["method"]=="initialize").count(),1);
+        let thread = requests.iter().find(|r|r["method"]=="thread/start").unwrap();
+        let turn = requests.iter().find(|r|r["method"]=="turn/start").unwrap();
+        let policy = if yolo {"never"} else {"on-request"};
+        assert_eq!(thread["params"]["approvalPolicy"],policy);
+        assert_eq!(turn["params"]["approvalPolicy"],policy);
+        assert_eq!(turn["params"]["sandboxPolicy"]["type"],if yolo {"dangerFullAccess"} else {"workspaceWrite"});
+        assert_eq!(f.count("SELECT yolo FROM owned_dispatch_execution_policies WHERE dispatch_id='dispatch'"),u64::from(yolo));
+        if yolo { assert_eq!(f.count("SELECT COUNT(*) FROM approval_contexts"),0); }
+        assert_eq!(f.count("SELECT COUNT(*) FROM owner_approvals"),0);
+        assert_eq!(f.count("SELECT COUNT(*) FROM approval_grants"),0);
+        drop(report);
+        drop(operation);
+        drop(binding);
+        f.close().await;
+    }
 }
 
 #[tokio::test]
@@ -1083,6 +1151,64 @@ async fn native_warm_local_codex_budgets() {
             drop(report);
             drop(operation);
         }
+        f.close().await;
+    }
+}
+
+#[tokio::test]
+async fn native_warm_readonly_dispatch_overrides_saved_policy() {
+    for yolo in [false, true] {
+        let mut f = Fixture::new(false).await;
+        let engagement = f.effect.engagement_id.clone();
+        f.domain.set_execution_policy(engagement.clone(), Some(json!({"yolo":!yolo})), now()).await.unwrap();
+        let mut warm = f.start(Some(ApprovalHost::new(2, 1, 1000, 2000).unwrap()));
+        warm.ready().await.unwrap();
+        f.initialized().await;
+        f.no_task_io();
+        let original_pid = f.receipt("warm-initialized")["pid"].clone();
+        // The process already exists. Its next task must use the latest owner
+        // setting, without restarting it or dropping its task-helper binding.
+        f.domain.set_execution_policy(engagement.clone(), Some(json!({"yolo":yolo})), now()).await.unwrap();
+        fs::write(f.work.join("owned-mcp.readonly-policy"), b"expect read-only task").unwrap();
+        let cap = f.activate_workspace(60_000,false).await;
+        let mut operation = warm.dispatch_requiring_workspace(cap.clone(), limits()).unwrap();
+        let registration = tokio::time::timeout(Duration::from_secs(4), async {
+            loop {
+                if let Some(registration) = operation.take_workspace_registration() { break registration; }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }).await.unwrap();
+        let (binding, ack) = registration.into_parts();
+        binding.validate_current(&cap).await.unwrap();
+        assert_eq!(f.state("SELECT state FROM runner_dispatches"), "started");
+        f.no_task_io();
+        // A second edit affects only later tasks, while this started dispatch
+        // continues to use the captured mode and original authorization hash.
+        f.domain.set_execution_policy(engagement, Some(json!({"yolo":!yolo})), now()).await.unwrap();
+        ack.registered().unwrap();
+        let report = operation.wait().await.unwrap();
+        assert_eq!(report.protocol, Protocol::Completed, "{:?} {:?}", report.failure, report.runtime_observation());
+        assert_eq!(report.failure, None);
+        assert_eq!(f.receipt("warm-thread")["pid"], original_pid);
+        assert_eq!(f.receipt("receipt")["helper_exit"], true);
+        assert_eq!(f.receipt("readback")["task"]["status"], "in_progress");
+        let requests = f.requests();
+        assert_eq!(requests.iter().filter(|r|r["method"]=="initialize").count(),1);
+        let thread = requests.iter().find(|r|r["method"]=="thread/start").unwrap();
+        let turn = requests.iter().find(|r|r["method"]=="turn/start").unwrap();
+        let policy = "on-request";
+        assert_eq!(thread["params"]["approvalPolicy"],policy);
+        assert_eq!(turn["params"]["approvalPolicy"],policy);
+        assert_eq!(thread["params"]["sandbox"],"read-only");
+        assert_eq!(turn["params"]["sandboxPolicy"],json!({"type":"readOnly","networkAccess":false}));
+        assert_eq!(f.count("SELECT yolo FROM owned_dispatch_execution_policies WHERE dispatch_id='dispatch'"),u64::from(yolo));
+        assert_eq!(f.count("SELECT dirty FROM workspace_resources WHERE id='work'"),0);
+        assert_eq!(f.count("SELECT COUNT(*) FROM resource_leases"),0);
+        assert_eq!(f.count("SELECT COUNT(*) FROM owner_approvals"),0);
+        assert_eq!(f.count("SELECT COUNT(*) FROM approval_grants"),0);
+        drop(report);
+        drop(operation);
+        drop(binding);
         f.close().await;
     }
 }

@@ -28,7 +28,7 @@ impl Fixture {
         Self::family("codex").await
     }
     async fn family(family: &str) -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let mut db = DomainRepository::open(&root.path().join("state")).unwrap();
         db.register(&registration()).unwrap();
         let mut pool = resource("pool", "seat", 1000);

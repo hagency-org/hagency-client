@@ -184,6 +184,7 @@ pub fn remove_usage_schema(db: &rusqlite::Connection) {
 
 /// Remove delivery and upload additions before constructing an older database.
 pub fn remove_upload_schema(db: &rusqlite::Connection) {
+    remove_coordinator_schema(db);
     // Migration 025 adds columns to `ceiling_alerts`, and an ADD COLUMN replay
     // over an already-upgraded table fails on the duplicate column (no ADD
     // COLUMN migration in this store supports that replay). Every chained
@@ -195,6 +196,31 @@ pub fn remove_upload_schema(db: &rusqlite::Connection) {
         .unwrap();
     db.execute_batch("DROP TABLE IF EXISTS approval_responses; DROP TABLE IF EXISTS received_files; DROP TABLE IF EXISTS file_deliveries; DROP TABLE IF EXISTS file_uploads; DROP TABLE IF EXISTS room_trust;")
         .unwrap();
+}
+
+/// Remove ADR 0011 additions when a migration fixture reconstructs an older DB.
+pub fn remove_owner_resource_schema(db: &rusqlite::Connection) {
+    db.execute_batch("DROP TABLE IF EXISTS owner_operator_graph_recipients; DROP TABLE IF EXISTS owner_operator_graph_outbox; DROP TABLE IF EXISTS owner_operator_graph_commands; DROP TABLE IF EXISTS owner_operator_graphs; DROP TABLE IF EXISTS owner_operator_graph_archive_chunks; DROP TABLE IF EXISTS owner_operator_graph_archives; DROP TABLE IF EXISTS owned_dispatch_execution_policies;DROP TABLE IF EXISTS approval_binding_incarnations; DROP TABLE IF EXISTS owner_resource_provenance;").unwrap();
+    // Rewind schemas87–94 before their referenced parent tables. Otherwise
+    // SQLite validates a surviving context trigger against a dropped table
+    // during the older fixture's ALTER TABLE, before migration replay begins.
+    db.execute_batch("DROP TABLE IF EXISTS owner_namespace_enrollments; DROP TABLE IF EXISTS owner_resource_namespaces; DROP TABLE IF EXISTS management_account_profiles; DROP TABLE IF EXISTS owner_shared_budget_demand_decisions; DROP TABLE IF EXISTS owner_shared_budget_work_refusals; DROP TABLE IF EXISTS owner_shared_budget_start_intents; DROP TABLE IF EXISTS owner_managed_budget_deltas; DROP TABLE IF EXISTS owner_managed_budget_commands; DROP TABLE IF EXISTS owner_operator_task_transfer_comments; DROP TABLE IF EXISTS owner_operator_task_transfer_tasks; DROP TABLE IF EXISTS owner_shared_context_call_pins; DROP TABLE IF EXISTS owner_shared_reply_deliveries; DROP TABLE IF EXISTS owner_shared_contexts; DROP TABLE IF EXISTS owner_shared_input_modes;").unwrap();
+    db.execute_batch(
+        "DROP TABLE IF EXISTS owner_shared_stop_receipts;DROP TABLE IF EXISTS owner_shared_stop_intents;DROP TABLE IF EXISTS owner_shared_demand_bindings;DROP TABLE IF EXISTS owner_shared_demand_decisions;DROP TABLE IF EXISTS owner_shared_demands;DROP TABLE IF EXISTS owner_shared_demand_controls;DROP TABLE IF EXISTS owner_operator_task_comments;DROP TABLE IF EXISTS owner_operator_tasks;DROP TABLE IF EXISTS owner_operator_task_histories;DROP TABLE IF EXISTS owner_resource_display_names;DROP TABLE IF EXISTS owner_shared_start_intents;DROP TABLE IF EXISTS owner_shared_successor_fences;DROP TABLE IF EXISTS owner_shared_successor_call_pins;DROP TABLE IF EXISTS owner_shared_successor_observations;DROP TABLE IF EXISTS owner_shared_successor_attempts;DROP TABLE IF EXISTS owner_shared_activity_renewals;DROP TABLE IF EXISTS owner_shared_work_observations;DROP TABLE IF EXISTS owner_shared_work_events;DROP TABLE IF EXISTS owner_shared_work_inbox;DROP TABLE IF EXISTS owner_shared_process_observations;DROP TABLE IF EXISTS owner_shared_runtime_lifetimes;DROP TRIGGER IF EXISTS owner_metadata_excludes_shared;DROP TABLE IF EXISTS owner_managed_runtime_observations;DROP TABLE IF EXISTS owner_managed_runtime_stops;DROP TABLE IF EXISTS owner_managed_runtime_lifetimes;DROP TABLE IF EXISTS owner_resource_adoptions; DROP TABLE IF EXISTS owner_managed_fences;",
+    )
+    .unwrap();
+    db.execute_batch("DROP TABLE IF EXISTS owner_managed_observations; DROP TABLE IF EXISTS owner_managed_call_pins; DROP TABLE IF EXISTS owner_managed_assignment_pins; DROP TABLE IF EXISTS owner_managed_calls; DROP TABLE IF EXISTS owner_managed_effects; DROP TABLE IF EXISTS owner_managed_agents; DROP TABLE IF EXISTS owner_project_authorities;").unwrap();
+    db.execute_batch("DROP TABLE IF EXISTS owner_parent_settlements; DROP TABLE IF EXISTS owner_capacity_receipts; DROP TABLE IF EXISTS owner_project_reservations; DROP TABLE IF EXISTS owner_capacity_grants;").unwrap();
+    db.execute_batch("DROP TABLE IF EXISTS owner_resource_receipts; DROP TABLE IF EXISTS owner_resource_grants; DROP TABLE IF EXISTS owner_resource_accounts; DROP TABLE IF EXISTS owner_resource_identity;").unwrap();
+}
+
+pub fn remove_coordinator_schema(db: &rusqlite::Connection) {
+    remove_owner_resource_schema(db);
+    db.execute_batch(
+        "DROP TABLE IF EXISTS management_intents; DROP TABLE IF EXISTS management_commands; DROP TABLE IF EXISTS management_identity;",
+    )
+    .unwrap();
+    db.execute_batch("DROP TABLE IF EXISTS coordinator_migrations; DROP TABLE IF EXISTS coordinator_project_setup; DROP TABLE IF EXISTS coordinator_project_setup_attempts; DROP TABLE IF EXISTS coordinator_agent_profiles; DROP TABLE IF EXISTS coordinator_settlements; DROP TABLE IF EXISTS coordinator_refusals; DROP TABLE IF EXISTS coordinator_delegations; DROP TABLE IF EXISTS coordinator_deliveries; DROP TABLE IF EXISTS coordinator_publications; DROP TABLE IF EXISTS coordinator_commands; DROP TABLE IF EXISTS coordinator_agents; DROP TABLE IF EXISTS coordinator_projects; DROP TABLE IF EXISTS coordinator_resources; DROP TABLE IF EXISTS coordinator_engagements;").unwrap();
 }
 
 pub fn remove_attachment_schema(db: &rusqlite::Connection) {

@@ -379,7 +379,7 @@ impl Host {
         let [workspace] = scope.input().resources.as_slice() else {
             return Err(super::Failure::Admission);
         };
-        if !workspace.exclusive || !limits.validate() {
+        if !limits.validate() {
             return Err(super::Failure::Admission);
         }
         // ADR-011 (board #78, TS backend-v2.js:2057-2075): a dispatch whose
@@ -435,11 +435,18 @@ impl Host {
             return Err(super::Failure::Admission);
         }
         let effort = resource.reasoning.as_deref().unwrap_or("medium");
-        if !["none", "minimal", "low", "medium", "high", "xhigh"].contains(&effort) {
+        if !["none", "minimal", "low", "medium", "high", "xhigh", "max"].contains(&effort) {
             return Err(super::Failure::Admission);
         }
         let mut settings = Settings::new(path.clone(), resource.model.clone(), effort.into())
-            .map_err(|_| super::Failure::Admission)?;
+            .map_err(|_| super::Failure::Admission)?
+            .with_execution_policy(scope.execution_policy().yolo);
+        // The immutable dispatch lease determines workspace access. A saved
+        // owner preference cannot turn a nonexclusive lease into a writer;
+        // the same settings also fence write-capable approval requests.
+        if !workspace.exclusive {
+            settings = settings.read_only();
+        }
         // Every byte comes from the immutable dispatch payload. This informational
         // text grants neither task maintenance, process authority nor approval.
         let input = hagency_core::canonical::encode_payload(&scope.input().payload)
@@ -621,7 +628,7 @@ impl Host {
         }
         let path = std::path::PathBuf::from(root.approval_path()?);
         let effort = resource.reasoning.as_deref().unwrap_or("medium");
-        if !["none", "minimal", "low", "medium", "high", "xhigh"].contains(&effort) {
+        if !["none", "minimal", "low", "medium", "high", "xhigh", "max"].contains(&effort) {
             return Err(super::Failure::Admission);
         }
         let settings = Settings::new(path.clone(), resource.model.clone(), effort.into())

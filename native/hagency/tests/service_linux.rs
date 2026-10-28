@@ -5,7 +5,7 @@ mod owner;
 use owner::*;
 #[test]
 fn native_service_unit_starts_and_reports_ready() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let bundle = assets(root.path());
     let run = launch(&root.path().join("state"), &bundle, true);
     assert_eq!(
@@ -21,7 +21,7 @@ fn native_service_unit_starts_and_reports_ready() {
 fn native_service_unit_stops_cleanly_within_timeout_budget() {
     #[cfg(unix)]
     {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let bundle = assets(root.path());
         let mut run = launch(&root.path().join("state"), &bundle, true);
         stop_clean(&mut run);
@@ -37,7 +37,7 @@ fn native_service_unit_stops_cleanly_within_timeout_budget() {
 }
 #[test]
 fn native_service_unit_restart_preserves_owner_state() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let bundle = assets(root.path());
     let state = root.path().join("state");
     let mut run = launch(&state, &bundle, true);

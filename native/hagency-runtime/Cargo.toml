@@ -7,17 +7,20 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "net"] }
 tracing.workspace = true
 hagency-platform.workspace = true
+hagency-core.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Win32_System_Threading"] }
 
 [features]
+shared-context = []
 # An offline pin for a stop the guardian could not prove (ADR-182). Enabled
 # only through hagency-execution's own test-diagnostics feature; never in a
 # production build.

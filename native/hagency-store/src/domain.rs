@@ -1,4 +1,7 @@
 //! Allocation and canonical task/dispatch state share this one database owner.
+pub mod owner_resources;
+mod reconciliation;
+mod resource_detail;
 use crate::{Error, database};
 use hagency_core::{
     InvalidInput, JSON_SAFE_MAX,
@@ -17,12 +20,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{fs::File, path::Path};
 pub(crate) mod accounts;
+mod management_accounts;
+mod management_account_login;
+mod management_account_models;
 mod activity;
 pub use activity::{ActivityEvent, ActivityUpdate};
 mod agent_fences;
 mod agent_lifecycle;
 mod agent_message_leftovers;
 mod console_feed;
+mod web_catalog;
+pub mod coordinator;
 pub use agent_fences::{AgentFence, FenceReason};
 pub use agent_message_leftovers::{
     DeliveryEventRow, NewOperatorMessage, OperatorMessage, SuppressOutcome, Suppression, Tombstone,
@@ -67,6 +75,7 @@ pub use execution::{
 };
 pub use messages::{CorpusSweepOutcome, MESSAGE_RETENTION_FLOOR, RetentionStatus};
 mod notice_custody;
+mod operator_task_views;
 mod operator_tasks;
 pub use operator_tasks::{
     MAX_TASK_COMMENTS, MAX_TASK_PAGE, OperatorTask, OperatorTaskComment, TASK_GRANULARITIES,
@@ -97,7 +106,7 @@ pub use peers::{
     PEER_RECEIPT_CEILING, PEER_RETENTION_CEILING, PEER_RETENTION_FLOOR, PeerRetentionStatus,
     PeerSweepOutcome,
 };
-pub use provision_runtime::OwnedProvisionScope;
+pub use provision_runtime::{OwnedProvisionScope, OwnedRuntimeLease};
 pub use side_registration::{IssueSideRegistration, IssueSideRegistrationRequest, SideCredential};
 pub(crate) mod file_delivery;
 mod peers;
@@ -131,11 +140,269 @@ pub struct DomainRepository {
     _ownership: File,
     approval_owner: std::sync::Arc<()>,
     warm_scopes: std::collections::BTreeMap<String, OwnedProvisionScope>,
+    _legacy_writer: Option<hagency_platform::legacy_writer::LegacyWriterAdmission>,
 }
 /// Current domain schema version (the last sequential migration).
-pub const DOMAIN_SCHEMA_VERSION: i32 = 60;
+pub const DOMAIN_SCHEMA_VERSION: i32 = 103;
+const DOMAIN_MIGRATIONS: &[(i32, &str)] = &[
+    (2, include_str!("migrations/002-role-publication.sql")),
+    (3, include_str!("migrations/003-task-dispatch.sql")),
+    (4, include_str!("migrations/004-message-inputs.sql")),
+    (5, include_str!("migrations/005-task-intents.sql")),
+    (6, include_str!("migrations/006-internal-conversations.sql")),
+    (7, include_str!("migrations/007-peer-inputs.sql")),
+    (8, include_str!("migrations/008-recovery-reports.sql")),
+    (9, include_str!("migrations/009-conversation-lifecycle.sql")),
+    (10, include_str!("migrations/010-task-graphs.sql")),
+    (11, include_str!("migrations/011-final-replies.sql")),
+    (12, include_str!("migrations/012-verified-ingress.sql")),
+    (13, include_str!("migrations/013-owner-approvals.sql")),
+    (14, include_str!("migrations/014-notice-custody.sql")),
+    (15, include_str!("migrations/015-matrix-transport.sql")),
+    (
+        16,
+        include_str!("migrations/016-owned-task-completions.sql"),
+    ),
+    (17, include_str!("migrations/017-usage-ledger.sql")),
+    (18, include_str!("migrations/018-attachment-visibility.sql")),
+    (19, include_str!("migrations/019-file-uploads.sql")),
+    (20, include_str!("migrations/020-file-deliveries.sql")),
+    (21, include_str!("migrations/021-received-files.sql")),
+    (22, include_str!("migrations/022-approval-responses.sql")),
+    (23, include_str!("migrations/023-managed-accounts.sql")),
+    (24, include_str!("migrations/024-ceiling-alerts.sql")),
+    (25, include_str!("migrations/025-alert-transitions.sql")),
+    (26, include_str!("migrations/026-corpus-retention.sql")),
+    (27, include_str!("migrations/027-peer-corpus-retention.sql")),
+    (
+        28,
+        include_str!("migrations/028-account-login-readiness.sql"),
+    ),
+    (
+        29,
+        include_str!("migrations/029-account-logout-receipt.sql"),
+    ),
+    (30, include_str!("migrations/030-engagement-retention.sql")),
+    (31, include_str!("migrations/031-execution-retention.sql")),
+    // The number follows landing order: base head 31 + 1.
+    // Integration renumbers again if another slice lands first.
+    (
+        32,
+        include_str!("migrations/032-approval-denial-reason.sql"),
+    ),
+    // PC-C1 landed first and holds 32 (integration 3580f3bb);
+    // MA-S2 takes the next free number, 033, by landing order.
+    (33, include_str!("migrations/033-dispatch-park-reason.sql")),
+    (
+        34,
+        include_str!("migrations/034-owned-stop-inspections.sql"),
+    ),
+    (35, include_str!("migrations/035-outcome-resolutions.sql")),
+    (36, include_str!("migrations/036-dispatch-discussion.sql")),
+    (
+        37,
+        include_str!("migrations/037-runner-attempt-evidence.sql"),
+    ),
+    (38, include_str!("migrations/038-agent-fences.sql")),
+    (39, include_str!("migrations/039-attempt-over-budget.sql")),
+    // Task #13's migration number is 046 (the board's
+    // assignment); the walker requires the next sequential
+    // list version, so the file keeps 046 and the tuple
+    // carries 40. Integration renumbers on merge.
+    (40, include_str!("migrations/046-side-registrations.sql")),
+    (41, include_str!("migrations/040-command-notices.sql")),
+    // Integration of lane/agentctl: its board-assigned number
+    // was 049; it lands as the next sequential tuple 42 (file
+    // name kept).
+    (42, include_str!("migrations/049-agent-lifecycle.sql")),
+    // Integration of lane/taskmgmt: its board-assigned number
+    // was 044; it lands as the next sequential tuple 43 (file
+    // name kept).
+    (43, include_str!("migrations/044-operator-tasks.sql")),
+    // Integration of lane/offers: its board-assigned number
+    // was 043; its 040-042 reserved placeholders are deleted
+    // (the board instruction) and the real migration lands as
+    // the next sequential tuple 44 (file name kept).
+    (
+        44,
+        include_str!("migrations/043-offers-whitelist-agent-definitions.sql"),
+    ),
+    // Integration of lane/alerts: its board-assigned number
+    // was 045 (already the next sequential tuple; landing
+    // order made them coincide).
+    (45, include_str!("migrations/045-alert-parity.sql")),
+    // Integration of ../nav task/20: its board-assigned number
+    // was 061; it lands as the next sequential tuple 46 (file
+    // name kept).
+    (46, include_str!("migrations/061-side-allocations.sql")),
+    // Integration of ../firstres task/27: its board-assigned
+    // number was 040; it lands as the next sequential tuple 47
+    // (file name kept).
+    (
+        47,
+        include_str!("migrations/040-workspace-dirty-release.sql"),
+    ),
+    // Integration of lane/verdict: its board-assigned number
+    // was 047; its 040-046 walker placeholders are deleted
+    // (the board instruction) and the real migration lands as
+    // the next sequential tuple 48 (file name kept).
+    (
+        48,
+        include_str!("migrations/047-engagement-verdict-audit.sql"),
+    ),
+    // Integration of ../regissue task/12: its board-assigned
+    // number was 060; it lands as the next sequential tuple 49
+    // (file name kept).
+    (49, include_str!("migrations/060-pending-invites.sql")),
+    // Integration of lane/sidelife: the addition notice named
+    // migration 042; the branch file carries 040 — it lands as
+    // the next sequential tuple 50 (file name kept).
+    (50, include_str!("migrations/040-side-credentials.sql")),
+    // Integration of ../provision task/53: its board-assigned
+    // number was 066; it lands as the next sequential tuple 51
+    // (file name kept).
+    (51, include_str!("migrations/066-reminders.sql")),
+    // Integration of lane/activity task/1: its board-assigned
+    // number was 040; it lands as the next sequential tuple 52
+    // (file name kept).
+    (52, include_str!("migrations/040-dispatch-activity.sql")),
+    // Task #80's migration number is 073 (the board's
+    // assignment); the walker requires the next sequential
+    // list version, so the file keeps 073 and the tuple
+    // carries 53.
+    (53, include_str!("migrations/073-room-trust.sql")),
+    // Task #73's migration number is 069 (the board's
+    // assignment); the walker requires the next sequential
+    // list version, so the file keeps 069 and the tuple
+    // carries 54.
+    (54, include_str!("migrations/069-thread-directives.sql")),
+    // Board #49's migration number is 067 (the board's
+    // assignment); integrated as the next sequential tuple 55.
+    // The file keeps its assigned 067 name.
+    (
+        55,
+        include_str!("migrations/067-agent-message-leftovers.sql"),
+    ),
+    // Task #61's migration number is 065 (the board's
+    // assignment); the walker requires the next sequential
+    // list version, so the file keeps 065 and the tuple
+    // carries 56.
+    (
+        56,
+        include_str!("migrations/065-final-reply-incidental.sql"),
+    ),
+    // ADR-186 §A: no board number; the file carries its list
+    // version.
+    (57, include_str!("migrations/057-engagement-allocation.sql")),
+    // ADR-186 §B: no board number; the file carries its list
+    // version.
+    (58, include_str!("migrations/058-quota-holds.sql")),
+    // ADR-187 §C: owner anchors pinned on first use.
+    (59, include_str!("migrations/059-owner-anchors.sql")),
+    // ADR-188: rooms an agent joined by invitation.
+    (60, include_str!("migrations/074-joined-rooms.sql")),
+    (
+        61,
+        include_str!("migrations/075-coordinator-engagements.sql"),
+    ),
+    (
+        62,
+        include_str!("migrations/062-coordinator-deliveries.sql"),
+    ),
+    (
+        63,
+        include_str!("migrations/063-coordinator-delegations.sql"),
+    ),
+    (64, include_str!("migrations/064-coordinator-refusals.sql")),
+    (
+        65,
+        include_str!("migrations/065-coordinator-settlements.sql"),
+    ),
+    (
+        66,
+        include_str!("migrations/066-coordinator-agent-profiles.sql"),
+    ),
+    (
+        67,
+        include_str!("migrations/067-coordinator-project-setup.sql"),
+    ),
+    (
+        68,
+        include_str!("migrations/068-coordinator-legacy-adoption.sql"),
+    ),
+    // ADR-193: no board number; the file carries its list
+    // version.
+    (69, include_str!("migrations/069-octos-usage-sources.sql")),
+    (70, include_str!("migrations/070-management-commands.sql")),
+    (71, include_str!("migrations/071-management-intents.sql")),
+    (
+        72,
+        include_str!("migrations/072-owner-resource-registry.sql"),
+    ),
+    (
+        73,
+        include_str!("migrations/073-owner-capacity-reservations.sql"),
+    ),
+    (
+        74,
+        include_str!("migrations/076-owner-parent-settlements.sql"),
+    ),
+    (75, include_str!("migrations/077-owner-managed-agents.sql")),
+    (76, include_str!("migrations/078-owner-managed-custody.sql")),
+    (77, include_str!("migrations/079-owner-managed-fences.sql")),
+    (
+        78,
+        include_str!("migrations/080-owner-resource-adoptions.sql"),
+    ),
+    (79, include_str!("migrations/081-owner-managed-runtime.sql")),
+    (
+        80,
+        include_str!("migrations/082-owner-shared-execution.sql"),
+    ),
+    (
+        81,
+        include_str!("migrations/083-owner-shared-successors.sql"),
+    ),
+    (
+        82,
+        include_str!("migrations/084-owner-shared-start-intents.sql"),
+    ),
+    (
+        83,
+        include_str!("migrations/085-owner-resource-display-names.sql"),
+    ),
+    (84, include_str!("migrations/086-owner-operator-tasks.sql")),
+    (85, include_str!("migrations/087-owner-shared-demands.sql")),
+    (
+        86,
+        include_str!("migrations/088-owner-shared-stop-intents.sql"),
+    ),
+    (87,include_str!("migrations/089-owner-shared-context.sql")),
+    (88, include_str!("migrations/090-owner-operator-task-transfer.sql")),
+    (89, include_str!("migrations/091-owner-managed-budget.sql")),
+    (90, include_str!("migrations/092-owner-shared-budget-execution.sql")),
+    (91, include_str!("migrations/093-management-account-profiles.sql")),
+    (92, include_str!("migrations/094-owner-resource-namespaces.sql")),
+    (93, include_str!("migrations/095-owner-resource-provenance.sql")),
+    (94, include_str!("migrations/096-approval-binding-incarnations.sql")),
+    (95, include_str!("migrations/097-owned-dispatch-execution-policy.sql")),
+    (96, include_str!("migrations/098-owner-operator-graph-archives.sql")),
+    (97, include_str!("migrations/099-owner-operator-graph-journal.sql")),
+    (98, include_str!("migrations/100-owner-operator-graph-recipients.sql")),
+    (99, include_str!("migrations/101-owner-web-catalog-settings.sql")),
+    (100, include_str!("migrations/102-owner-pool-agents.sql")),
+    (101, include_str!("migrations/103-owner-shared-tool-policy.sql")),
+    (102, include_str!("migrations/104-owner-unstarted-shared-attempts.sql")),
+    (103, include_str!("migrations/105-owner-shared-long-replies.sql")),
+];
 
 impl DomainRepository {
+    pub(crate) fn management_intent(
+        &mut self,
+        command: crate::management::JournalCommand,
+    ) -> Result<Vec<crate::management::PendingIntent>, Error> {
+        crate::management::execute_intent(&mut self.db, command)
+    }
     pub(super) fn drop_observed(self, probe: &std::sync::Arc<crate::shutdown::Probe>) {
         use crate::shutdown::{Phase, SqliteCloseScope};
         // Match the declared field drop order. Ownership is still a local
@@ -144,6 +411,7 @@ impl DomainRepository {
             db,
             _ownership,
             accounts,
+            _legacy_writer,
             ..
         } = self;
         drop(accounts);
@@ -156,6 +424,7 @@ impl DomainRepository {
         probe.mark(Phase::OwnershipDropStarted);
         drop(_ownership);
         probe.mark(Phase::OwnershipDropFinished);
+        drop(_legacy_writer);
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -360,6 +629,9 @@ pub struct AgentRosterRow {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EngagementLabel {
+    pub coordinator_managed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matrix_profile: Option<Value>,
     pub id: String,
     pub agent_name: String,
     pub project_name: Option<String>,
@@ -713,6 +985,15 @@ fn budget(
     exclude_engagement_id: Option<&str>,
     for_auto_join: bool,
 ) -> Result<Budget, Error> {
+    budget_with_grant(db, resource, exclude_engagement_id, for_auto_join, None)
+}
+fn budget_with_grant(
+    db: &Connection,
+    resource: &Resource,
+    exclude_engagement_id: Option<&str>,
+    for_auto_join: bool,
+    within_grant: Option<&str>,
+) -> Result<Budget, Error> {
     let declaration: Option<String> = db
         .query_row(
             "SELECT config FROM seats WHERE id=?1",
@@ -747,7 +1028,13 @@ fn budget(
             fulfillment: None,
         });
     }
-    Ok(allocation::resource_budget(&allocation::Input {
+    commitments.extend(coordinator::additional_commitments(
+        db,
+        resource,
+        within_grant,
+    )?);
+    commitments.extend(owner_resources::additional_commitments(db, resource)?);
+    let mut result = allocation::resource_budget(&allocation::Input {
         preset: allocation::Preset {
             id: resource.preset_id.clone(),
             ceiling: resource.ceiling.clone(),
@@ -757,7 +1044,13 @@ fn budget(
         commitments,
         exclude_engagement_id: exclude_engagement_id.map(str::to_owned),
         for_auto_join,
-    })?)
+    })?;
+    if owner_resources::unsettled_resource(db, resource)? {
+        result.remaining_tokens = None;
+        result.pool.remaining = None;
+        result.seat.remaining = None;
+    }
+    Ok(result)
 }
 
 /// The headroom an approval or a top-up is checked against (ADR-186 §A2):
@@ -774,14 +1067,32 @@ struct Headroom {
     period_mismatch: bool,
 }
 fn headroom(db: &Connection, resource: &Resource, at: u64) -> Result<Headroom, Error> {
+    headroom_with_grant(db, resource, at, None)
+}
+fn headroom_with_grant(
+    db: &Connection,
+    resource: &Resource,
+    at: u64,
+    within_grant: Option<&str>,
+) -> Result<Headroom, Error> {
     let report = usage::ceiling_report(db, &resource.id(), at)?;
-    let spent_budget = budget(db, resource, None, false)?;
+    let spent_budget = budget_with_grant(db, resource, None, false, within_grant)?;
     // backend-v2.js:14057: a seat declaration whose period mismatches the
     // pool's nulls the whole figure rather than falling back to the pool.
     let period_mismatch = spent_budget.seat.status == allocation::SeatStatus::PeriodMismatch;
+    let credit = within_grant
+        .map(|id| coordinator::unused_grant(db, id, resource))
+        .transpose()?
+        .unwrap_or(0);
+    let effective_draw = report
+        .reserved
+        .saturating_sub(credit)
+        .max(report.spent.unwrap_or(0));
+    let unsettled = owner_resources::unsettled_resource(db, resource)?;
     let by_ceiling = report
         .ceiling_tokens
-        .map(|c| c.saturating_sub(report.drawn));
+        .map(|c| c.saturating_sub(effective_draw))
+        .filter(|_| !unsettled);
     let remaining = [
         by_ceiling,
         spent_budget.seat.remaining.map(u64::from),
@@ -790,7 +1101,7 @@ fn headroom(db: &Connection, resource: &Resource, at: u64) -> Result<Headroom, E
     .into_iter()
     .flatten()
     .min()
-    .filter(|_| !period_mismatch);
+    .filter(|_| !period_mismatch && !unsettled);
     Ok(Headroom {
         report,
         by_ceiling,
@@ -809,6 +1120,17 @@ fn check_grant(
     granted: u64,
     now: u64,
 ) -> Result<(), Error> {
+    check_grant_within(tx, resource, agent, granted, now, None)
+}
+
+fn check_grant_within(
+    tx: &Connection,
+    resource: &Resource,
+    agent: &str,
+    granted: u64,
+    now: u64,
+    within_grant: Option<&str>,
+) -> Result<(), Error> {
     // Admission uses the drawn ceiling (backend-v2.js:14036-14060), and
     // approve is the operator verdict path, so `for_auto_join` is false —
     // auto-join is the other remainingFor caller, not this one.
@@ -817,7 +1139,7 @@ fn check_grant(
         by_ceiling,
         remaining,
         period_mismatch,
-    } = headroom(tx, resource, now)?;
+    } = headroom_with_grant(tx, resource, now, within_grant)?;
     if period_mismatch {
         return Err(Error::NoCeiling);
     }
@@ -902,6 +1224,50 @@ impl DomainRepository {
         }).collect()
     }
     pub fn open(directory: &Path) -> Result<Self, Error> {
+        Self::open_mode(directory, true, None, None)
+    }
+    /// Bind a fresh embedded ledger to the authenticated server/subject/owner
+    /// profile. Validate copied data before recovery can alter execution state.
+    /// Populated unscoped data requires the explicit migration workflow.
+    pub fn open_managed(directory: &Path, profile: &str) -> Result<Self, Error> {
+        if profile.len() != 64
+            || !profile
+                .bytes()
+                .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+        {
+            return Err(Error::LocalAuthority);
+        }
+        Self::open_mode(directory, true, Some(profile), None)
+    }
+    /// Offline owner operations retain the same exclusive writer lock but do
+    /// not run crash recovery or advance runtime clocks during an inventory.
+    /// Runtime startup must always use `open` and perform its normal recovery.
+    pub fn open_for_migration(directory: &Path) -> Result<Self, Error> {
+        Self::open_mode(directory, false, None, None)
+    }
+    fn open_canonical(
+        directory: &Path,
+        authority: owner_resources::CanonicalStoreAuthority,
+    ) -> Result<Self, Error> {
+        Self::open_mode(directory, false, None, Some(authority))
+    }
+    fn open_mode(
+        directory: &Path,
+        recover: bool,
+        profile: Option<&str>,
+        canonical: Option<owner_resources::CanonicalStoreAuthority>,
+    ) -> Result<Self, Error> {
+        #[cfg(test)]
+        hagency_platform::legacy_writer::test_support::initialize_process_root()?;
+        let legacy_writer = if let Some(canonical) = canonical {
+            canonical.check(directory)?;
+            None
+        } else {
+            Some(
+                hagency_platform::legacy_writer::LegacyWriterAdmission::acquire_for_legacy_startup(
+                )?,
+            )
+        };
         let mut database = database::open(
             directory,
             database::Schema {
@@ -909,166 +1275,71 @@ impl DomainRepository {
                 lock: "domain.lock",
                 application_id: 0x48414732,
                 version: DOMAIN_SCHEMA_VERSION,
-                migrations: &[
-                    (2, include_str!("migrations/002-role-publication.sql")),
-                    (3, include_str!("migrations/003-task-dispatch.sql")),
-                    (4, include_str!("migrations/004-message-inputs.sql")),
-                    (5, include_str!("migrations/005-task-intents.sql")),
-                    (6, include_str!("migrations/006-internal-conversations.sql")),
-                    (7, include_str!("migrations/007-peer-inputs.sql")),
-                    (8, include_str!("migrations/008-recovery-reports.sql")),
-                    (9, include_str!("migrations/009-conversation-lifecycle.sql")),
-                    (10, include_str!("migrations/010-task-graphs.sql")),
-                    (11, include_str!("migrations/011-final-replies.sql")),
-                    (12, include_str!("migrations/012-verified-ingress.sql")),
-                    (13, include_str!("migrations/013-owner-approvals.sql")),
-                    (14, include_str!("migrations/014-notice-custody.sql")),
-                    (15, include_str!("migrations/015-matrix-transport.sql")),
-                    (
-                        16,
-                        include_str!("migrations/016-owned-task-completions.sql"),
-                    ),
-                    (17, include_str!("migrations/017-usage-ledger.sql")),
-                    (18, include_str!("migrations/018-attachment-visibility.sql")),
-                    (19, include_str!("migrations/019-file-uploads.sql")),
-                    (20, include_str!("migrations/020-file-deliveries.sql")),
-                    (21, include_str!("migrations/021-received-files.sql")),
-                    (22, include_str!("migrations/022-approval-responses.sql")),
-                    (23, include_str!("migrations/023-managed-accounts.sql")),
-                    (24, include_str!("migrations/024-ceiling-alerts.sql")),
-                    (25, include_str!("migrations/025-alert-transitions.sql")),
-                    (26, include_str!("migrations/026-corpus-retention.sql")),
-                    (27, include_str!("migrations/027-peer-corpus-retention.sql")),
-                    (
-                        28,
-                        include_str!("migrations/028-account-login-readiness.sql"),
-                    ),
-                    (
-                        29,
-                        include_str!("migrations/029-account-logout-receipt.sql"),
-                    ),
-                    (30, include_str!("migrations/030-engagement-retention.sql")),
-                    (31, include_str!("migrations/031-execution-retention.sql")),
-                    // The number follows landing order: base head 31 + 1.
-                    // Integration renumbers again if another slice lands first.
-                    (
-                        32,
-                        include_str!("migrations/032-approval-denial-reason.sql"),
-                    ),
-                    // PC-C1 landed first and holds 32 (integration 3580f3bb);
-                    // MA-S2 takes the next free number, 033, by landing order.
-                    (33, include_str!("migrations/033-dispatch-park-reason.sql")),
-                    (
-                        34,
-                        include_str!("migrations/034-owned-stop-inspections.sql"),
-                    ),
-                    (35, include_str!("migrations/035-outcome-resolutions.sql")),
-                    (36, include_str!("migrations/036-dispatch-discussion.sql")),
-                    (
-                        37,
-                        include_str!("migrations/037-runner-attempt-evidence.sql"),
-                    ),
-                    (38, include_str!("migrations/038-agent-fences.sql")),
-                    (39, include_str!("migrations/039-attempt-over-budget.sql")),
-                    // Task #13's migration number is 046 (the board's
-                    // assignment); the walker requires the next sequential
-                    // list version, so the file keeps 046 and the tuple
-                    // carries 40. Integration renumbers on merge.
-                    (40, include_str!("migrations/046-side-registrations.sql")),
-                    (41, include_str!("migrations/040-command-notices.sql")),
-                    // Integration of lane/agentctl: its board-assigned number
-                    // was 049; it lands as the next sequential tuple 42 (file
-                    // name kept).
-                    (42, include_str!("migrations/049-agent-lifecycle.sql")),
-                    // Integration of lane/taskmgmt: its board-assigned number
-                    // was 044; it lands as the next sequential tuple 43 (file
-                    // name kept).
-                    (43, include_str!("migrations/044-operator-tasks.sql")),
-                    // Integration of lane/offers: its board-assigned number
-                    // was 043; its 040-042 reserved placeholders are deleted
-                    // (the board instruction) and the real migration lands as
-                    // the next sequential tuple 44 (file name kept).
-                    (
-                        44,
-                        include_str!("migrations/043-offers-whitelist-agent-definitions.sql"),
-                    ),
-                    // Integration of lane/alerts: its board-assigned number
-                    // was 045 (already the next sequential tuple; landing
-                    // order made them coincide).
-                    (45, include_str!("migrations/045-alert-parity.sql")),
-                    // Integration of ../nav task/20: its board-assigned number
-                    // was 061; it lands as the next sequential tuple 46 (file
-                    // name kept).
-                    (46, include_str!("migrations/061-side-allocations.sql")),
-                    // Integration of ../firstres task/27: its board-assigned
-                    // number was 040; it lands as the next sequential tuple 47
-                    // (file name kept).
-                    (
-                        47,
-                        include_str!("migrations/040-workspace-dirty-release.sql"),
-                    ),
-                    // Integration of lane/verdict: its board-assigned number
-                    // was 047; its 040-046 walker placeholders are deleted
-                    // (the board instruction) and the real migration lands as
-                    // the next sequential tuple 48 (file name kept).
-                    (
-                        48,
-                        include_str!("migrations/047-engagement-verdict-audit.sql"),
-                    ),
-                    // Integration of ../regissue task/12: its board-assigned
-                    // number was 060; it lands as the next sequential tuple 49
-                    // (file name kept).
-                    (49, include_str!("migrations/060-pending-invites.sql")),
-                    // Integration of lane/sidelife: the addition notice named
-                    // migration 042; the branch file carries 040 — it lands as
-                    // the next sequential tuple 50 (file name kept).
-                    (50, include_str!("migrations/040-side-credentials.sql")),
-                    // Integration of ../provision task/53: its board-assigned
-                    // number was 066; it lands as the next sequential tuple 51
-                    // (file name kept).
-                    (51, include_str!("migrations/066-reminders.sql")),
-                    // Integration of lane/activity task/1: its board-assigned
-                    // number was 040; it lands as the next sequential tuple 52
-                    // (file name kept).
-                    (52, include_str!("migrations/040-dispatch-activity.sql")),
-                    // Task #80's migration number is 073 (the board's
-                    // assignment); the walker requires the next sequential
-                    // list version, so the file keeps 073 and the tuple
-                    // carries 53.
-                    (53, include_str!("migrations/073-room-trust.sql")),
-                    // Task #73's migration number is 069 (the board's
-                    // assignment); the walker requires the next sequential
-                    // list version, so the file keeps 069 and the tuple
-                    // carries 54.
-                    (54, include_str!("migrations/069-thread-directives.sql")),
-                    // Board #49's migration number is 067 (the board's
-                    // assignment); integrated as the next sequential tuple 55.
-                    // The file keeps its assigned 067 name.
-                    (
-                        55,
-                        include_str!("migrations/067-agent-message-leftovers.sql"),
-                    ),
-                    // Task #61's migration number is 065 (the board's
-                    // assignment); the walker requires the next sequential
-                    // list version, so the file keeps 065 and the tuple
-                    // carries 56.
-                    (
-                        56,
-                        include_str!("migrations/065-final-reply-incidental.sql"),
-                    ),
-                    // ADR-186 §A: no board number; the file carries its list
-                    // version.
-                    (57, include_str!("migrations/057-engagement-allocation.sql")),
-                    // ADR-186 §B: no board number; the file carries its list
-                    // version.
-                    (58, include_str!("migrations/058-quota-holds.sql")),
-                    // ADR-187 §C: owner anchors pinned on first use.
-                    (59, include_str!("migrations/059-owner-anchors.sql")),
-                    // ADR-188: rooms an agent joined by invitation.
-                    (60, include_str!("migrations/074-joined-rooms.sql")),
-                ],
+                migrations: DOMAIN_MIGRATIONS,
                 sql: include_str!("domain.sql"),
                 verify: &[
+                    "SELECT singleton,profile_digest FROM management_identity LIMIT 0",
+                    "SELECT singleton,id,root_identity,revision FROM owner_resource_identity LIMIT 0",
+                    "SELECT provider_digest,seat_id FROM owner_resource_accounts LIMIT 0",
+                    "SELECT profile,resource_id,revision,active FROM owner_resource_grants LIMIT 0",
+                    "SELECT command_id,digest,result FROM owner_resource_receipts LIMIT 0",
+                    "SELECT resource_id,registry_id,creation_command_id,creation_digest,creation_profile,first_offer_kind,first_offer_profile,first_offer_command_id,first_offer_revision,first_offer_at_ms FROM owner_resource_provenance LIMIT 0",
+                    "SELECT id,profile,resource_id,preset_id,seat_id,allocated_tokens,receipt,active FROM owner_capacity_grants LIMIT 0",
+                    "SELECT id,grant_id,project_id,project_revision,reserve_command_id,reserve_digest,requested_tokens,retained_tokens,state,binding_digest FROM owner_project_reservations LIMIT 0",
+                    "SELECT command_id,profile,executor_device_id,digest,result FROM owner_capacity_receipts LIMIT 0",
+                    "SELECT accounting_mode FROM owner_capacity_grants LIMIT 0",
+                    "SELECT accounting_mode FROM owner_project_reservations LIMIT 0",
+                    "SELECT grant_id,fence_revision,retained_tokens,receipt,receipt_digest,manifest FROM owner_parent_settlements LIMIT 0",
+                    "SELECT allocation_id,reserve_command,reserve_digest,manager_mxid,definition_digest FROM owner_project_authorities LIMIT 0",
+                    "SELECT id,profile,agent_id,request_id,project_reservation_id,original_command_id,original_command_digest,original_command,definition_digest,allocated_tokens,budget_revision,state,permanent_fence FROM owner_managed_agents LIMIT 0",
+                    "SELECT id,child_id,kind,state,fence,payload_digest,original_result,original_result_digest FROM owner_managed_effects LIMIT 0",
+                    "SELECT id,child_id,execution_id,immutable_digest,assignment_generation,state,reserved_tokens,known_consumed_tokens,usage_complete,unrepresentable_usage,original_result_digest FROM owner_managed_calls LIMIT 0",
+                    "SELECT child_id,assignment_id,assignment_generation,binding_digest,provider_digest FROM owner_managed_assignment_pins LIMIT 0",
+                    "SELECT call_id,assignment_digest,execution_digest,prepare_revision,issue_revision FROM owner_managed_call_pins LIMIT 0",
+                    "SELECT id,child_id,target_id,kind,content_digest,evidence,result,ledger_revision FROM owner_managed_observations LIMIT 0",
+                    "SELECT profile,agent_id,request_id,original_command_id,original_command_digest,original_command,project_reservation_id,executor_device_id,fence_revision FROM owner_managed_fences LIMIT 0",
+                    "SELECT id,profile,plan_digest,plan,phase,source_evidence,custody_evidence,result FROM owner_resource_adoptions LIMIT 0",
+                    "SELECT child_id,profile,assignment_id,command_id,command_payload,command_digest,binding_digest,provider_digest,issued_revision,incarnation,source_effect_state FROM owner_managed_runtime_lifetimes LIMIT 0",
+                    "SELECT child_id,profile,assignment_id,command_id,command_payload,command_digest,binding_digest,provider_digest,issued_revision,incarnation FROM owner_shared_runtime_lifetimes LIMIT 0",
+                    "SELECT id,child_id,payload,digest,ledger_revision FROM owner_shared_process_observations LIMIT 0",
+                    "SELECT id,child_id,execution_id,payload,digest,received_revision FROM owner_shared_work_inbox LIMIT 0",
+                    "SELECT id,work_id,kind,payload,digest,ledger_revision FROM owner_shared_work_events LIMIT 0",
+                    "SELECT id,work_id,payload,digest,ledger_revision FROM owner_shared_work_observations LIMIT 0",
+                    "SELECT id,child_id,requested_epoch,requested_revision FROM owner_shared_activity_renewals LIMIT 0",
+                    "SELECT id,child_id,profile,process_attempt,predecessor_id,predecessor_digest,predecessor_stop_digest,start_intent_id,command_payload,command_digest,original_runtime_digest,binding_digest,provider_digest,observed_revision,issued_revision,incarnation FROM owner_shared_successor_attempts LIMIT 0",
+                    "SELECT id,attempt_id,payload,digest,ledger_revision FROM owner_shared_successor_observations LIMIT 0",
+                    "SELECT call_id,attempt_id,work_id,execution_digest FROM owner_shared_successor_call_pins LIMIT 0",
+                    "SELECT command_id,child_id,profile,process_attempt,predecessor_id,start_intent_id,command_payload,command_digest,fence_revision,claimed_revision FROM owner_shared_successor_fences LIMIT 0",
+                    "SELECT id,child_id,profile,device_id,device_generation,predecessor_digest,original_runtime_digest,original_runtime_payload,predecessor_payload,input_payload,input_digest,ledger_revision FROM owner_shared_start_intents LIMIT 0",
+                    "SELECT command_id,child_id,profile,device_id,device_generation,actor_mxid,assignment_id,selected_revision,input_payload,input_digest,ledger_revision FROM owner_shared_stop_intents LIMIT 0",
+                    "SELECT command_id,applied_revision,ledger_revision FROM owner_shared_stop_receipts LIMIT 0",
+                    "SELECT command_id,child_id,profile,executor_device_id,top_up_id,command_digest,command_payload,receipt_payload,receipt_digest,ledger_revision FROM owner_managed_budget_commands LIMIT 0",
+                    "SELECT command_id,child_id,budget_revision,previous_digest,budget_digest,applied_tokens,effective_ceiling_tokens,ledger_revision FROM owner_managed_budget_deltas LIMIT 0",
+                    "SELECT migration_id,task_id,payload_digest,payload FROM owner_operator_task_transfer_tasks LIMIT 0",
+                    "SELECT migration_id,sequence,task_id,ordinal,payload_digest,payload FROM owner_operator_task_transfer_comments LIMIT 0",
+                    "SELECT work_id,mode,ledger_revision FROM owner_shared_input_modes LIMIT 0",
+                    "SELECT work_id,assignment_id,room_id,thread_root,ordinal,payload,digest,input_digest,ledger_revision FROM owner_shared_contexts LIMIT 0",
+                    "SELECT work_id,payload,digest,ledger_revision FROM owner_shared_reply_deliveries LIMIT 0",
+                    "SELECT call_id,work_id,context_digest,input_digest,ledger_revision FROM owner_shared_context_call_pins LIMIT 0",
+                    "SELECT child_id,profile,control_revision,stopped_through FROM owner_shared_demand_controls LIMIT 0",
+                    "SELECT id,child_id,profile,device_id,device_generation,event_id,offer_payload,offer_digest,ledger_revision FROM owner_shared_demands LIMIT 0",
+                    "SELECT demand_id,disposition,start_intent_id,input_payload,input_digest,budget_payload,ledger_revision FROM owner_shared_demand_decisions LIMIT 0",
+                    "SELECT demand_id,work_id,binding_payload,binding_digest,ledger_revision FROM owner_shared_demand_bindings LIMIT 0",
+                    "SELECT child_id,command_id,command_payload,command_digest,fence_revision FROM owner_managed_runtime_stops LIMIT 0",
+                    "SELECT id,child_id,command_id,payload,digest,ledger_revision FROM owner_managed_runtime_observations LIMIT 0",
+                    "SELECT actor_scope,command_id,operation,digest,result FROM management_commands LIMIT 0",
+                    "SELECT actor_scope,command_id,operation,digest,input,reply,state FROM management_intents LIMIT 0",
+                    "SELECT id,engagement_id,digest,receipt,accepted_at FROM coordinator_migrations LIMIT 0",
+                    "SELECT account_id,profile FROM management_account_profiles LIMIT 0",
+                    "SELECT resource_id,account_id,generation,profile FROM owner_resource_namespaces LIMIT 0",
+                    "SELECT command_id,profile,input_digest,resource_id FROM owner_namespace_enrollments LIMIT 0",
+                    "SELECT id,engagement_id,project_id,digest,command,result FROM coordinator_project_setup_attempts LIMIT 0",
+                    "SELECT engagement_id,project_id,attempt_id,observation FROM coordinator_project_setup LIMIT 0",
+                    "SELECT id,digest,command,definition,state,reason,agent_id,received_at,updated_at FROM coordinator_deliveries LIMIT 0",
+                    "SELECT engagement_id,revision,digest,change,authority,accepted_at FROM coordinator_delegations LIMIT 0",
+                    "SELECT id,engagement_id,digest,receipt,refused_at FROM coordinator_refusals LIMIT 0",
+                    "SELECT agent_id,command_id,digest,receipt,accepted_at FROM coordinator_settlements LIMIT 0",
+                    "SELECT agent_id,command_id,desired_name,confirmed_name,last_error,updated_at,observed_at FROM coordinator_agent_profiles LIMIT 0",
                     "SELECT allocated_tokens FROM engagements LIMIT 0",
                     "SELECT id,engagement_id,dispatch_id,spend,allocation,began_at,lifted_at,lifted_allocation FROM quota_holds LIMIT 0",
                     "SELECT owner_mxid,master_key,source,pinned_at,mismatch_key,mismatch_at FROM owner_anchors LIMIT 0",
@@ -1120,6 +1391,13 @@ impl DomainRepository {
                     "SELECT n.send_fence,n.cancel_requested,n.task_epoch,n.source_event_id,i.digest,i.observation FROM task_notices n CROSS JOIN notice_send_inspections i LIMIT 0",
                     "SELECT r.available,r.config,b.incarnation,c.digest,a.state,g.context_key,v.digest FROM approval_rooms r CROSS JOIN approval_bindings b CROSS JOIN approval_contexts c CROSS JOIN owner_approvals a CROSS JOIN approval_grants g CROSS JOIN approval_verdict_receipts v LIMIT 0",
                     "SELECT engagement_id FROM current_approval_bindings LIMIT 0",
+                    "SELECT engagement_id,incarnation FROM approval_binding_incarnations LIMIT 0",
+                    "SELECT dispatch_id,engagement_id,yolo,captured_at FROM owned_dispatch_execution_policies LIMIT 0",
+                    "SELECT a.command_id,a.registry_id,a.profile,a.owner_mxid,a.source_binding,a.manifest,a.state,c.document,c.chunk_index,c.bytes FROM owner_operator_graph_archives a LEFT JOIN owner_operator_graph_archive_chunks c ON c.command_id=a.command_id LIMIT 0",
+                    "SELECT registry_id,profile,owner_mxid,scope_id,graph_id,revision,document,document_digest FROM owner_operator_graphs LIMIT 0",
+                    "SELECT profile,command_id,registry_id,owner_mxid,scope_id,graph_id,expected_revision,input_digest,request_digest,receipt FROM owner_operator_graph_commands LIMIT 0",
+                    "SELECT registry_id,profile,owner_mxid,scope_id,graph_id,node_id,message_id,payload,payload_digest,state FROM owner_operator_graph_outbox LIMIT 0",
+                    "SELECT registry_id,profile,owner_mxid,scope_id,graph_id,node_id,revision,snapshot,snapshot_digest FROM owner_operator_graph_recipients LIMIT 0",
                     "SELECT e.id,e.context,e.evidence,e.projection,f.payload,p.owner_mxid,r.config,s.config,d.result,g.config,rp.role,rt.config,rd.capability_hash,ro.task,mi.digest,si.wake,di.message_sequence,ti.anchor_event_id,tn.delivery,tf.dispatch_id,tin.message_sequence,tir.digest,ic.digest,ip.session_id,pm.digest,psi.wake,pdi.message_sequence,lpi.session_id,tdpr.dispatch_id,drr.task_id,crr.execution_epoch,co.digest,ds.fence,ud.id,ic.revision FROM engagements e LEFT JOIN effects f ON f.engagement_id=e.id CROSS JOIN projects p CROSS JOIN resources r CROSS JOIN seats s CROSS JOIN decisions d CROSS JOIN registrations g CROSS JOIN role_publications rp CROSS JOIN canonical_tasks rt CROSS JOIN runner_dispatches rd CROSS JOIN task_outbox ro CROSS JOIN admitted_messages mi CROSS JOIN session_inputs si CROSS JOIN dispatch_inputs di CROSS JOIN task_intents ti CROSS JOIN task_notices tn CROSS JOIN task_followup_ready tf CROSS JOIN task_inputs tin CROSS JOIN task_input_receipts tir CROSS JOIN internal_conversations ic CROSS JOIN internal_participants ip CROSS JOIN peer_messages pm CROSS JOIN peer_session_inputs psi CROSS JOIN peer_dispatch_inputs pdi CROSS JOIN live_peer_inputs lpi CROSS JOIN task_dispatch_input_ready tdpr CROSS JOIN dispatch_recovery_reports drr CROSS JOIN current_recovery_reports crr CROSS JOIN conversation_operations co CROSS JOIN dispatch_stops ds CROSS JOIN unresolved_dispatches ud CROSS JOIN runner_sessions sc INDEXED BY canonical_runner_session LIMIT 0",
                     "SELECT tg.config,gn.state,gn.result_value,gc.digest,gd.digest FROM task_graphs tg CROSS JOIN graph_nodes gn CROSS JOIN graph_commands gc CROSS JOIN graph_dependencies gd LIMIT 0",
                     "SELECT id FROM current_graph_scopes LIMIT 0",
@@ -1143,29 +1421,68 @@ impl DomainRepository {
         if !transport_trigger {
             return Err(Error::Schema);
         }
-        // A previous owner died after an intent became externally executable. Inspection,
-        // not automatically repeating that effect, is the only safe default.
-        let tx = database
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute("UPDATE engagements SET projection=json_set(projection,'$.cleanup','uncertain') WHERE id IN (SELECT engagement_id FROM effects WHERE kind='retire' AND state='started')",[])?;
-        tx.execute(
-            "UPDATE effects SET state='uncertain' WHERE state='started'",
-            [],
-        )?;
-        graphs::reconcile(&tx, graphs::now_ms()?)?;
-        replies::reconcile(&tx, graphs::now_ms()?, true)?;
-        notice_custody::reconcile(&tx, graphs::now_ms()?, true)?;
-        execution::recover_all(&tx, graphs::now_ms()?)?;
-        approvals::recover(&tx)?;
-        tx.execute("UPDATE approval_responses SET state='outcome_unknown' WHERE state IN ('authorized','response_may_send')", [])?;
-        tx.execute("UPDATE received_files SET state='outcome_unknown',failure='outcome_unknown' WHERE state IN ('reserved','write_possible')", [])?;
-        tx.execute(
-            "UPDATE managed_accounts SET state='uncertain' WHERE state='preparing'",
-            [],
-        )?;
-        accounts::reconcile_login_attempts(&tx, graphs::now_ms()?)?;
-        tx.commit()?;
+        if let Some(profile) = profile {
+            let tx = database
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let stored: Option<String> = tx
+                .query_row(
+                    "SELECT profile_digest FROM management_identity WHERE singleton=1",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            match stored {
+                Some(stored) if stored != profile => return Err(Error::LocalAuthority),
+                Some(_) => {}
+                None => {
+                    let tables = tx.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name<>'management_identity'")?
+                        .query_map([], |r| r.get::<_, String>(0))?
+                        .collect::<Result<Vec<_>, _>>()?;
+                    for table in tables {
+                        let quoted = table.replace('"', "\"\"");
+                        let populated: bool = tx.query_row(
+                            &format!("SELECT EXISTS(SELECT 1 FROM \"{quoted}\")"),
+                            [],
+                            |r| r.get(0),
+                        )?;
+                        if populated {
+                            return Err(Error::LocalAuthority);
+                        }
+                    }
+                    tx.execute(
+                        "INSERT INTO management_identity(singleton,profile_digest) VALUES(1,?1)",
+                        [profile],
+                    )?;
+                }
+            }
+            tx.commit()?;
+        }
+        if recover {
+            // A previous owner died after an intent became externally executable. Inspection,
+            // not automatically repeating that effect, is the only safe default.
+            let tx = database
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute("UPDATE engagements SET projection=json_set(projection,'$.cleanup','uncertain') WHERE id IN (SELECT engagement_id FROM effects WHERE kind='retire' AND state='started')",[])?;
+            tx.execute(
+                "UPDATE effects SET state='uncertain' WHERE state='started'",
+                [],
+            )?;
+            graphs::reconcile(&tx, graphs::now_ms()?)?;
+            replies::reconcile(&tx, graphs::now_ms()?, true)?;
+            notice_custody::reconcile(&tx, graphs::now_ms()?, true)?;
+            execution::recover_all(&tx, graphs::now_ms()?)?;
+            approvals::recover(&tx)?;
+            tx.execute("UPDATE approval_responses SET state='outcome_unknown' WHERE state IN ('authorized','response_may_send')", [])?;
+            tx.execute("UPDATE received_files SET state='outcome_unknown',failure='outcome_unknown' WHERE state IN ('reserved','write_possible')", [])?;
+            tx.execute(
+                "UPDATE managed_accounts SET state='uncertain' WHERE state='preparing'",
+                [],
+            )?;
+            accounts::reconcile_login_attempts(&tx, graphs::now_ms()?)?;
+            tx.commit()?;
+        }
         let accounts = accounts::Registry::open(&database.connection, directory)?;
         Ok(Self {
             accounts,
@@ -1173,15 +1490,24 @@ impl DomainRepository {
             _ownership: database.ownership,
             approval_owner: std::sync::Arc::new(()),
             warm_scopes: std::collections::BTreeMap::new(),
+            _legacy_writer: legacy_writer,
         })
     }
     pub fn register(&mut self, registration: &Registration) -> Result<(), Error> {
-        registration.validate()?;
         let tx = self
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::register_transaction(&tx, registration)?;
+        tx.commit()?;
+        Ok(())
+    }
+    fn register_transaction(
+        tx: &Transaction<'_>,
+        registration: &Registration,
+    ) -> Result<(), Error> {
+        registration.validate()?;
         bounded_row(
-            &tx,
+            tx,
             "registrations",
             "fleet_id",
             &registration.fleet_id,
@@ -1207,9 +1533,8 @@ impl DomainRepository {
         }
         tx.execute("INSERT INTO registrations(fleet_id,generation,config) VALUES(?1,?2,?3) ON CONFLICT(fleet_id) DO UPDATE SET generation=excluded.generation,config=excluded.config",
             params![registration.fleet_id,registration.generation,serialize(registration)?])?;
-        graphs::reconcile(&tx, graphs::now_ms()?)?;
-        matrix_routes::reconcile(&tx, graphs::now_ms()?)?;
-        tx.commit()?;
+        graphs::reconcile(tx, graphs::now_ms()?)?;
+        matrix_routes::reconcile(tx, graphs::now_ms()?)?;
         Ok(())
     }
     /// Bind the fleet's reception room after a verified connection probe (TS
@@ -1238,6 +1563,8 @@ impl DomainRepository {
             return Err(Error::Generation);
         }
         if registration.reception_room_id == room {
+            coordinator::verified_after_probe(&tx, fleet_id, generation)?;
+            tx.commit()?;
             return Ok(());
         }
         if !registration.reception_room_id.is_empty() {
@@ -1249,12 +1576,28 @@ impl DomainRepository {
             "UPDATE registrations SET config=?2 WHERE fleet_id=?1",
             params![fleet_id, serialize(&registration)?],
         )?;
+        coordinator::verified_after_probe(&tx, fleet_id, generation)?;
         matrix_routes::reconcile(&tx, graphs::now_ms()?)?;
         tx.commit()?;
         Ok(())
     }
     pub fn put_resource(&mut self, resource: &Resource) -> Result<CatalogResource, Error> {
         self.edit_resource(resource, Some(resource.published))
+    }
+    /// Create a local source without advertising it or replacing a concurrent
+    /// operator's configuration. Publication and server allocation are separate.
+    pub fn create_resource_source(
+        &mut self,
+        resource: &Resource,
+    ) -> Result<CatalogResource, Error> {
+        let tx = self
+            .db
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let resource = prepare_resource_write(&tx, resource, Some(false), true)?;
+        self.accounts.check_resource(&tx, &resource)?;
+        write_resource_configuration(&tx, &resource, true)?;
+        tx.commit()?;
+        Ok(resource.catalog())
     }
     pub fn edit_resource(
         &mut self,
@@ -1375,6 +1718,24 @@ impl DomainRepository {
             .map(|s| Ok(serde_json::from_str(&s?)?))
             .collect()
     }
+    /// Transport pages are scoped by registration, never by server hostname.
+    pub fn fleet_engagements(
+        &self,
+        fleet: &str,
+        after: &str,
+        limit: usize,
+    ) -> Result<Vec<Engagement>, Error> {
+        if limit == 0 || limit > 100 {
+            return Err(InvalidInput("page limit must be 1..100").into());
+        }
+        let mut query = self.db.prepare(
+            "SELECT projection FROM engagements WHERE fleet_id=?1 AND id>?2 ORDER BY id LIMIT ?3",
+        )?;
+        query
+            .query_map(params![fleet, after, limit], |r| r.get::<_, String>(0))?
+            .map(|row| Ok(serde_json::from_str(&row?)?))
+            .collect()
+    }
     /// The console engagements list (board #60 item 3): the label the triage
     /// list already rendered, widened to the figures TS's `/api/engagements`
     /// (`backend-v2.js:14964-14975`) carries and native was dropping, and a
@@ -1444,9 +1805,18 @@ impl DomainRepository {
             // Compare before the state moves into the label.
             let pending = engagement.state == EngagementState::Pending;
             let allocated_tokens = u64::from(engagement.allocation());
-            let spent_tokens = quota_holds::spend(&self.db, &engagement.id)?;
+            let observed_tokens = quota_holds::spend(&self.db, &engagement.id)?;
+            let accounted_tokens: Option<u64> = self.db.query_row(
+                "SELECT json_extract(receipt,'$.consumedTokens') FROM coordinator_settlements WHERE agent_id=?1",
+                [&engagement.id], |row| row.get(0)).optional()?;
+            let spent_tokens = match (observed_tokens, accounted_tokens) {
+                (Some(observed), Some(accounted)) => Some(observed.max(accounted)),
+                (observed, accounted) => observed.or(accounted),
+            };
             let quota_paused = quota_holds::paused(&self.db, &engagement.id)?;
             labels.push(EngagementLabel {
+                matrix_profile: {let profile=self.matrix_agent_profile(&engagement.id)?; (profile["state"]!="default").then_some(profile)},
+                coordinator_managed:self.db.query_row("SELECT EXISTS(SELECT 1 FROM coordinator_engagements c JOIN engagements e ON e.fleet_id=c.id WHERE e.id=?1)",[&engagement.id],|r|r.get(0))?,
                 id: engagement.id.clone(),
                 agent_name: engagement.agent_name.as_str().to_owned(),
                 project_name: engagement.project_name.clone(),
@@ -2087,13 +2457,11 @@ impl DomainRepository {
             requested_tokens: request.requested_tokens,
             state: EngagementState::Pending,
             cleanup: CleanupState::NotRequired,
-            workspace_mode: request
-                .agent_definition
-                .workspace_mode
-                .clone()
-                .unwrap_or_else(|| "shared".into()),
-            worktrees_dir: request.agent_definition.worktrees_dir.clone(),
-            worktree_bootstrap: request.agent_definition.worktree_bootstrap.clone(),
+            // Never the request's: `verify_request` refuses a request that
+            // names any workspace setting.
+            workspace_mode: "shared".into(),
+            worktrees_dir: None,
+            worktree_bootstrap: Vec::new(),
         };
         tx.execute("INSERT INTO projects(fleet_id,id,generation,room_id,owner_mxid,owner_room_id) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(fleet_id,id) DO NOTHING",
             params![request.fleet_id,request.target_project_id,proof.registration().generation,request.target_room_id,request.owner_mxid,request.owner_dm_room_id])?;
@@ -2127,6 +2495,16 @@ impl DomainRepository {
         now: u64,
         allocated: Option<u64>,
     ) -> Result<Engagement, Error> {
+        self.approve_allocating_inner(command_id, proof, now, allocated, None)
+    }
+    fn approve_allocating_inner(
+        &mut self,
+        command_id: &str,
+        proof: &VerifiedRequest,
+        now: u64,
+        allocated: Option<u64>,
+        coordinator: Option<&coordinator::AgentApproval>,
+    ) -> Result<Engagement, Error> {
         let allocated = allocated
             .map(|value| {
                 if value == 0 {
@@ -2143,6 +2521,18 @@ impl DomainRepository {
         authority(&tx, proof, now)?;
         project_authority(&tx, proof)?;
         let request = proof.request();
+        if let Some(command) = coordinator {
+            coordinator::check_agent(&tx, command, proof, now)?;
+            if let Some(value) =
+                coordinator::replay(&tx, command_id, &coordinator::command_digest(command)?)?
+            {
+                return Ok(value);
+            }
+        } else if coordinator::binding(&tx, &request.fleet_id)?.is_some() {
+            // An old console endpoint cannot add a second verdict or bypass the
+            // explicit coordinator once this engagement has migrated.
+            return Err(Error::LocalAuthority);
+        }
         let id = request.engagement_id()?;
         let (stored_digest, generation): (String, u64) = tx
             .query_row(
@@ -2158,9 +2548,13 @@ impl DomainRepository {
         if generation != proof.registration().generation {
             return Err(Error::Generation);
         }
-        let digest = match allocated {
-            None => decision_digest("approve", &id)?,
-            Some(amount) => canonical::digest(&json!(["approve", id, u64::from(amount)]))?,
+        let digest = if let Some(command) = coordinator {
+            coordinator::command_digest(command)?
+        } else {
+            match allocated {
+                None => decision_digest("approve", &id)?,
+                Some(amount) => canonical::digest(&json!(["approve", id, u64::from(amount)]))?,
+            }
         };
         if let Some(value) = replay_decision(&tx, command_id, &digest)? {
             return Ok(value);
@@ -2180,7 +2574,14 @@ impl DomainRepository {
         // The engagement being decided is still pending, so it holds nothing
         // yet and the headroom is exactly the retained decide() figure with
         // `excludeEngagementId: id`.
-        check_grant(&tx, &resource, value.agent_name.as_str(), granted, now)?;
+        check_grant_within(
+            &tx,
+            &resource,
+            value.agent_name.as_str(),
+            granted,
+            now,
+            coordinator.map(|c| c.request.resource_allocation_id.as_str()),
+        )?;
         value.state = EngagementState::Reserved;
         value.project_name = proof.project_name().map(str::to_owned);
         value.allocated_tokens = allocated;
@@ -2198,6 +2599,9 @@ impl DomainRepository {
             &value,
             Some("engagement.approved"),
         )?;
+        if let Some(command) = coordinator {
+            coordinator::commit_agent(&tx, command, &value)?;
+        }
         tx.commit()?;
         Ok(value)
     }
@@ -2240,6 +2644,13 @@ impl DomainRepository {
             return Ok(value);
         }
         let mut value = read_engagement(&tx, id)?;
+        let fleet: String =
+            tx.query_row("SELECT fleet_id FROM engagements WHERE id=?1", [id], |r| {
+                r.get(0)
+            })?;
+        if coordinator::binding(&tx, &fleet)?.is_some() {
+            return Err(Error::LocalAuthority);
+        }
         if !matches!(
             value.state,
             EngagementState::Reserved | EngagementState::Active
@@ -2281,7 +2692,24 @@ impl DomainRepository {
         })
     }
     pub fn reject(&mut self, command_id: &str, id: &str) -> Result<Engagement, Error> {
-        self.end(command_id, id, false)
+        let tx = self
+            .db
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // Like approve and top-up: once a coordinator decides this fleet's
+        // requests, a console rejection would be a second verdict on them.
+        let fleet: Option<String> = tx
+            .query_row("SELECT fleet_id FROM engagements WHERE id=?1", [id], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        if let Some(fleet) = fleet
+            && coordinator::binding(&tx, &fleet)?.is_some()
+        {
+            return Err(Error::LocalAuthority);
+        }
+        let value = end_in_transaction(&tx, command_id, id, false)?;
+        tx.commit()?;
+        Ok(value)
     }
     pub fn revoke(&mut self, command_id: &str, id: &str) -> Result<Engagement, Error> {
         self.end(command_id, id, true)
@@ -2312,59 +2740,7 @@ impl DomainRepository {
         let tx = self
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let digest = decision_digest(if revoke { "revoke" } else { "reject" }, id)?;
-        if let Some(value) = replay_decision(&tx, command_id, &digest)? {
-            return Ok(value);
-        }
-        let mut value = read_engagement(&tx, id)?;
-        if !matches!(
-            value.state,
-            EngagementState::Pending | EngagementState::Reserved | EngagementState::Active
-        ) || !revoke && value.state != EngagementState::Pending
-        {
-            return Err(Error::State);
-        }
-        let effect: Option<(String, String)> = tx
-            .query_row(
-                "SELECT state,payload FROM effects WHERE engagement_id=?1 AND kind='provision'",
-                [id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()?;
-        if let Some((state, payload)) = effect {
-            tx.execute("UPDATE effects SET state='cancelled',fence=fence+1 WHERE engagement_id=?1 AND kind='provision'", [id])?;
-            if state != "pending" {
-                value.cleanup = CleanupState::Pending;
-                tx.execute("INSERT INTO effects(id,engagement_id,kind,state,payload) VALUES(?1,?2,'retire','pending',?3)", params![format!("retire_{id}"),id,payload])?;
-            }
-        }
-        value.state = if revoke {
-            EngagementState::Revoked
-        } else {
-            EngagementState::Rejected
-        };
-        write_engagement(&tx, &value)?;
-        // ADR-095 Slice 6: the ended-at instant is advisory metadata on the
-        // side table (never a column here), read by the engagements phase's
-        // receipt payload. First terminal transition wins.
-        tx.execute(
-            "INSERT INTO engagement_ends(engagement_id,ended_at) VALUES(?1,?2) \
-             ON CONFLICT(engagement_id) DO NOTHING",
-            params![value.id, graphs::now_ms()?],
-        )?;
-        graphs::reconcile(&tx, graphs::now_ms()?)?;
-        matrix_routes::reconcile(&tx, graphs::now_ms()?)?;
-        record_decision(
-            &tx,
-            command_id,
-            &digest,
-            &value,
-            Some(if revoke {
-                "engagement.revoked"
-            } else {
-                "engagement.rejected"
-            }),
-        )?;
+        let value = end_in_transaction(&tx, command_id, id, revoke)?;
         tx.commit()?;
         Ok(value)
     }
@@ -2392,6 +2768,15 @@ impl DomainRepository {
         )?;
         let rows = statement.query_map([fleet_id], |r| r.get(0))?;
         Ok(rows.collect::<Result<_, _>>()?)
+    }
+    /// Candidates only; encrypted Matrix custody decides whether any can resume.
+    pub fn uncertain_provisions(&self, fleet_id: &str) -> Result<Vec<String>, Error> {
+        project::identifier(fleet_id, 128)?;
+        let mut statement = self.db.prepare(
+            "SELECT e.id FROM effects f JOIN engagements e ON e.id=f.engagement_id JOIN registrations r ON r.fleet_id=e.fleet_id WHERE e.fleet_id=?1 AND f.kind='provision' AND f.state='uncertain' AND e.state='reserved' AND e.generation=r.generation ORDER BY f.id LIMIT 16")?;
+        Ok(statement
+            .query_map([fleet_id], |r| r.get(0))?
+            .collect::<Result<_, _>>()?)
     }
     /// Revoked engagements of one fleet whose retirement is still pending and
     /// whose agent never published a Matrix transport (read-only). No worker
@@ -2518,12 +2903,27 @@ impl DomainRepository {
         Ok(result)
     }
     pub fn pending_unattached_retirements(&self, fleet_id: &str) -> Result<Vec<String>, Error> {
+        self.pending_retirements(fleet_id, true)
+    }
+    /// Appservice identity cleanup also survives a lost live worker or restart.
+    /// Completing it never settles runner custody or refunds unknown usage.
+    pub fn pending_identity_retirements(&self, fleet_id: &str) -> Result<Vec<String>, Error> {
+        self.pending_retirements(fleet_id, false)
+    }
+    fn pending_retirements(&self, fleet_id: &str, unattached: bool) -> Result<Vec<String>, Error> {
         project::identifier(fleet_id, 128)?;
         let mut statement = self.db.prepare(
-            "SELECT e.id FROM effects f JOIN engagements e ON e.id=f.engagement_id JOIN registrations r ON r.fleet_id=e.fleet_id WHERE e.fleet_id=?1 AND f.kind='retire' AND f.state='pending' AND e.state='revoked' AND e.generation=r.generation AND NOT EXISTS(SELECT 1 FROM matrix_transports t WHERE t.engagement_id=e.id) ORDER BY f.id LIMIT 16",
+            "SELECT e.id FROM effects f JOIN engagements e ON e.id=f.engagement_id JOIN registrations r ON r.fleet_id=e.fleet_id WHERE e.fleet_id=?1 AND f.kind='retire' AND (f.state='pending' OR (?2=0 AND f.state='uncertain')) AND e.state='revoked' AND e.generation=r.generation AND (?2=0 OR NOT EXISTS(SELECT 1 FROM matrix_transports t WHERE t.engagement_id=e.id)) ORDER BY f.id LIMIT 16",
         )?;
-        let rows = statement.query_map([fleet_id], |r| r.get(0))?;
+        let rows = statement.query_map(params![fleet_id, unattached], |r| r.get(0))?;
         Ok(rows.collect::<Result<_, _>>()?)
+    }
+    /// Inspect the original uncertain retirement for an idempotent remote
+    /// identity check. This cannot rearm provisioning, execution or local IO.
+    pub fn inspect_retirement_effect(&self, id: &str) -> Result<Option<Effect>, Error> {
+        project::identifier(id, 128)?;
+        let effect: Option<String> = self.db.query_row("SELECT f.id FROM effects f JOIN engagements e ON e.id=f.engagement_id JOIN registrations r ON r.fleet_id=e.fleet_id WHERE e.id=?1 AND e.state='revoked' AND f.kind='retire' AND f.state='uncertain' AND e.generation=r.generation",[id],|r|r.get(0)).optional()?;
+        effect.map(|id| read_effect(&self.db, &id)).transpose()
     }
     fn claim_matching_effect(&mut self, expected: Option<&str>) -> Result<Option<Effect>, Error> {
         let tx = self
@@ -2600,6 +3000,7 @@ fn observe_effect_transaction(
     let state = match outcome {
         EffectOutcome::Applied { .. } => {
             if effect.kind == "provision" {
+                exec_policy::inherit_resource_policy(tx, &value.id, &value.resource_id)?;
                 value.state = EngagementState::Active;
             } else {
                 value.cleanup = CleanupState::Complete;
@@ -2634,6 +3035,67 @@ fn observe_effect_transaction(
         params![id, state, digest],
     )?;
     write_engagement(tx, &value)?;
+    Ok(value)
+}
+pub(super) fn end_in_transaction(
+    tx: &Transaction<'_>,
+    command_id: &str,
+    id: &str,
+    revoke: bool,
+) -> Result<Engagement, Error> {
+    let digest = decision_digest(if revoke { "revoke" } else { "reject" }, id)?;
+    if let Some(value) = replay_decision(tx, command_id, &digest)? {
+        return Ok(value);
+    }
+    let mut value = read_engagement(tx, id)?;
+    if !matches!(
+        value.state,
+        EngagementState::Pending | EngagementState::Reserved | EngagementState::Active
+    ) || !revoke && value.state != EngagementState::Pending
+    {
+        return Err(Error::State);
+    }
+    let effect: Option<(String, String)> = tx
+        .query_row(
+            "SELECT state,payload FROM effects WHERE engagement_id=?1 AND kind='provision'",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    if let Some((state, payload)) = effect {
+        tx.execute("UPDATE effects SET state='cancelled',fence=fence+1 WHERE engagement_id=?1 AND kind='provision'", [id])?;
+        if state != "pending" {
+            value.cleanup = CleanupState::Pending;
+            tx.execute("INSERT INTO effects(id,engagement_id,kind,state,payload) VALUES(?1,?2,'retire','pending',?3)", params![format!("retire_{id}"),id,payload])?;
+        }
+    }
+    value.state = if revoke {
+        EngagementState::Revoked
+    } else {
+        EngagementState::Rejected
+    };
+    write_engagement(tx, &value)?;
+    // ADR-095 Slice 6: the ended-at instant is advisory metadata on the
+    // side table (never a column here), read by the engagements phase's
+    // receipt payload. First terminal transition wins.
+    tx.execute(
+        "INSERT INTO engagement_ends(engagement_id,ended_at) VALUES(?1,?2) \
+             ON CONFLICT(engagement_id) DO NOTHING",
+        params![value.id, graphs::now_ms()?],
+    )?;
+    graphs::reconcile(tx, graphs::now_ms()?)?;
+    matrix_routes::reconcile(tx, graphs::now_ms()?)?;
+    record_decision(
+        tx,
+        command_id,
+        &digest,
+        &value,
+        Some(if revoke {
+            "engagement.revoked"
+        } else {
+            "engagement.rejected"
+        }),
+    )?;
     Ok(value)
 }
 fn read_effect(db: &Connection, id: &str) -> Result<Effect, Error> {
@@ -2690,7 +3152,8 @@ fn prepare_resource_write(
             || old.framework != resource.framework
             || old.model != resource.model
             || old.provider != resource.provider
-            || old.reasoning != resource.reasoning)
+            || old.reasoning != resource.reasoning
+            || old.octos_profile != resource.octos_profile)
     {
         let count:i64=tx.query_row("SELECT COUNT(*) FROM engagements WHERE resource_id=?1 AND state IN ('reserved','active')",[resource.id()],|r|r.get(0))?;
         if count != 0 {
@@ -2715,3 +3178,6 @@ fn write_resource_configuration(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod legacy_writer_tests;

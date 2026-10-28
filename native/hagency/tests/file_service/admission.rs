@@ -441,7 +441,8 @@ async fn native_file_service_admission_network_wait_process() {
     const REFUSED: &str = "file-service child: Windows staging unavailable; no POST qualified";
     if std::env::var(CHILD).ok().as_deref() != Some("isolated_fixture_v1") {
         use tokio::io::AsyncReadExt;
-        let temporary = tempfile::tempdir().unwrap();
+        let temporary =
+            hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
@@ -652,7 +653,8 @@ async fn native_file_service_shutdown_original_job_unwind() {
         "file-service child: Windows staging unavailable; no unwind admission qualified";
     if std::env::var(CHILD).ok().as_deref() != Some("isolated_fixture_v1") {
         use tokio::io::AsyncReadExt;
-        let temporary = tempfile::tempdir().unwrap();
+        let temporary =
+            hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",

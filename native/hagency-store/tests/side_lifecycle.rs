@@ -26,7 +26,7 @@ fn appservice() -> serde_json::Value {
 /// credential value (TS `publicSide` allow-list).
 #[test]
 fn side_record_projection_omits_credential_bytes() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&dir.path().join("state")).unwrap();
     db.ensure_side(side_id()).unwrap();
     let side = db.side(side_id()).unwrap().expect("side exists");
@@ -61,7 +61,7 @@ fn side_record_projection_omits_credential_bytes() {
 /// credential keeps working until a `verify` proves the new one (TS :509-560).
 #[test]
 fn staged_replacement_keeps_old_credential_until_promoted() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&dir.path().join("state")).unwrap();
     db.ensure_side(side_id()).unwrap();
     // A live credential, verified accepted.
@@ -136,7 +136,7 @@ fn staged_replacement_keeps_old_credential_until_promoted() {
 /// verdict to unverified (TS :515-520).
 #[test]
 fn non_stage_set_credential_resets_the_verdict() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&dir.path().join("state")).unwrap();
     db.ensure_side(side_id()).unwrap();
     db.set_credential(side_id(), Some(appservice()), false)
@@ -172,7 +172,7 @@ fn non_stage_set_credential_resets_the_verdict() {
 /// The representative mxid must live on the side's server (TS `setRepresentative`).
 #[test]
 fn representative_mxid_must_live_on_the_side_server() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&dir.path().join("state")).unwrap();
     db.ensure_side(side_id()).unwrap();
     // Correct host.
@@ -197,7 +197,7 @@ fn representative_mxid_must_live_on_the_side_server() {
 /// A room may belong to one project only, and its server must be the side's.
 #[test]
 fn project_room_is_unique_and_must_live_on_the_side() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&dir.path().join("state")).unwrap();
     db.ensure_side(side_id()).unwrap();
     let project = db
@@ -231,7 +231,7 @@ fn project_room_is_unique_and_must_live_on_the_side() {
 /// An active side refuses removal; deactivation first, then remove (TS :10584).
 #[test]
 fn active_side_refuses_removal() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&dir.path().join("state")).unwrap();
     db.ensure_side(side_id()).unwrap();
     assert!(matches!(

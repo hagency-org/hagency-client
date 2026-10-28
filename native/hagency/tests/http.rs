@@ -55,7 +55,7 @@ fn component_states(value: &Value) -> std::collections::BTreeMap<String, String>
 
 #[tokio::test]
 async fn native_health_readiness_ready() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = dir.path().join("state");
     // A short period plus a settled first tick keeps the rollup
     // deterministic: the loop is alive and the last tick is a real sweep.
@@ -97,7 +97,7 @@ async fn native_health_readiness_ready() {
 /// predicate by the F3 test.
 #[tokio::test]
 async fn native_health_readiness_refused_tick_is_ready() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = dir.path().join("state");
     let custody = Store::start(Repository::open(&state).unwrap(), 16).unwrap();
     let domain = DomainStore::start(DomainRepository::open(&state).unwrap(), 16).unwrap();
@@ -208,7 +208,7 @@ fn native_health_readiness_enumerates_every_state() {
 
 #[tokio::test]
 async fn native_health_readiness_names_stopped_sweep() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = dir.path().join("state");
     // A long period means the only transition under test is the stop.
     let custody = Store::start(Repository::open(&state).unwrap(), 16).unwrap();
@@ -273,7 +273,7 @@ async fn native_health_readiness_names_stopped_sweep() {
 
 #[tokio::test]
 async fn native_health_readiness_names_closed_domain_writer() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = dir.path().join("state");
     let custody = Store::start(Repository::open(&state).unwrap(), 16).unwrap();
     let domain = DomainStore::start(DomainRepository::open(&state).unwrap(), 16).unwrap();
@@ -317,7 +317,7 @@ async fn native_health_readiness_names_closed_domain_writer() {
 
 #[tokio::test]
 async fn native_resource_management_is_authenticated() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = dir.path().join("state");
     let custody = Store::start(Repository::open(&state).unwrap(), 16).unwrap();
     let domain = DomainStore::start(DomainRepository::open(&state).unwrap(), 16).unwrap();
@@ -522,7 +522,7 @@ fn body() -> Value {
     json!({"binding":"fixture", "generation":1, "id":"request_1", "lane":"work", "kind":"request", "payload":{"name":"小白"}})
 }
 fn setup() -> (tempfile::TempDir, Store, Service) {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let store = Store::start(Repository::open(&dir.path().join("state")).unwrap(), 16).unwrap();
     let app = App::new(
         store.clone(),
@@ -620,7 +620,7 @@ async fn unimplemented_capabilities_are_explicit() {
 async fn bounded_work_keeps_health_responsive() {
     // Holding the actual SQLite writer lock simulates a slow external filesystem.
     // The single Tokio thread must remain responsive while the dedicated DB thread waits.
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = dir.path().join("state");
     let repository = Repository::open(&state).unwrap();
     let store = Store::start(repository, 1).unwrap();
@@ -801,7 +801,7 @@ async fn fleet_views_detect_matches_ts_shape() {
 async fn fleet_views_capability_matches_ts_shape() {
     // The capability route reads real state through the domain store, so it
     // needs a domain-backed app (setup() is deliberately domain-less).
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = dir.path().join("state");
     let custody = Store::start(Repository::open(&state).unwrap(), 16).unwrap();
     let domain = DomainStore::start(DomainRepository::open(&state).unwrap(), 16).unwrap();

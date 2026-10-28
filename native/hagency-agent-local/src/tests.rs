@@ -878,3 +878,32 @@ fn legacy_unknown_hold_is_released_once_without_replaying_or_losing_context() {
         (25, 10)
     );
 }
+
+#[test]
+fn model_profile_checked_edit_is_atomic_scoped_and_survives_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("checked.db");
+    let mut ledger = Ledger::open(&path, OWNER).unwrap();
+    let empty = model_profile_digest(None).unwrap();
+    assert_eq!(empty, format!("{:x}", Sha256::digest(b"null")));
+    let first = ModelProfile { model:"fixture".into(), credential_ref:"keychain:codex:owner".into(), workspace_root:tmp.path().to_string_lossy().into(), reasoning_effort:"high".into(),web_search:true };
+    assert!(matches!(ledger.set_agent_model_profile_checked("@other:test","a1",&empty,&first),Err(Error::Unauthorized)));
+    ledger.set_agent_model_profile_checked(OWNER,"a1",&empty,&first).unwrap();
+    let first_digest = model_profile_digest(Some(&first)).unwrap();
+    assert_ne!(empty,first_digest);
+    let mut changed = first.clone();changed.web_search=false;
+    assert!(matches!(ledger.set_agent_model_profile_checked(OWNER,"a1",&empty,&changed),Err(Error::Conflict)));
+    assert_eq!(ledger.agent_model_profile(OWNER,"a1").unwrap(),Some(first.clone()));
+    let mut second_handle = Ledger::open(&path,OWNER).unwrap();
+    ledger.set_agent_model_profile_checked(OWNER,"a1",&first_digest,&changed).unwrap();
+    let mut stale = first.clone();stale.workspace_root.push_str("/stale");
+    assert!(matches!(second_handle.set_agent_model_profile_checked(OWNER,"a1",&first_digest,&stale),Err(Error::Conflict)));
+    let digest = model_profile_digest(Some(&changed)).unwrap();
+    let mut invalid=changed.clone();invalid.credential_ref="secret-token".into();
+    assert!(ledger.set_agent_model_profile_checked(OWNER,"a1",&digest,&invalid).is_err());
+    ledger.db.execute_batch("CREATE TRIGGER reject_model BEFORE UPDATE ON model_profiles BEGIN SELECT RAISE(ABORT,'fixture'); END;").unwrap();
+    assert!(ledger.set_agent_model_profile_checked(OWNER,"a1",&digest,&first).is_err());
+    assert_eq!(ledger.agent_model_profile(OWNER,"a1").unwrap(),Some(changed.clone()));
+    drop(ledger);drop(second_handle);
+    assert_eq!(Ledger::open(&path,OWNER).unwrap().agent_model_profile(OWNER,"a1").unwrap(),Some(changed));
+}

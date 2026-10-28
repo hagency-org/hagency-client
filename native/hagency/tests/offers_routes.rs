@@ -51,7 +51,7 @@ fn delete(path: String) -> salvo::test::RequestBuilder {
 /// `updatedBy` key.
 #[tokio::test]
 async fn offers_route_lists_every_role_with_ts_default() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let service = app(&dir.path().join("state")).await;
     let mut response = get("/api/native/v1/offers".into()).send(&*service).await;
     assert_eq!(response.status_code, Some(StatusCode::OK));
@@ -76,7 +76,7 @@ async fn offers_route_lists_every_role_with_ts_default() {
 /// camelCase, the caps are echoed back, and an unknown role is a 400.
 #[tokio::test]
 async fn offers_route_put_and_read_back_camel_case() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let service = app(&dir.path().join("state")).await;
     let mut response = put("/api/native/v1/offers/coding".into())
         .json(&json!({"count":3,"budgetCapPerEngagement":400000,"rateCap":20000,"published":true}))
@@ -116,7 +116,7 @@ async fn offers_route_put_and_read_back_camel_case() {
 /// second DELETE is 404.
 #[tokio::test]
 async fn whitelist_route_round_trip() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let service = app(&dir.path().join("state")).await;
     let mut added = post("/api/native/v1/whitelist".into())
         .json(&json!({"projectRoomId":"!room:example.test","displayName":"My Project"}))
@@ -167,7 +167,7 @@ async fn whitelist_route_round_trip() {
 /// 404 when absent; a resource with a live definition is a 409.
 #[tokio::test]
 async fn delete_routes_guards() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let service = app(&dir.path().join("state")).await;
     let seat = delete("/api/native/v1/seats/seat_none".into())
         .send(&*service)

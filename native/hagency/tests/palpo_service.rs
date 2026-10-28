@@ -64,7 +64,7 @@ async fn native_palpo_service_cancel_custody() {
 mod owner;
 #[test]
 fn native_owner_palpo_client_is_not_a_fleet_publisher_or_appservice() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let bundle = owner::assets(root.path());
     for name in [
         "palpo-transport.json",

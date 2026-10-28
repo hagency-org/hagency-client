@@ -342,16 +342,21 @@ fn fake(mode: &str, marker: &Path) -> io::Result<()> {
     let request = read(stdin.as_mut().unwrap(), marker)?;
     method(&request, "thread/start")?;
     let params = &request["params"];
-    if params["approvalPolicy"] != "on-request"
+    let unrestricted = matches!(mode, "policy-unrestricted" | "policy-unrestricted-approval");
+    let read_only = mode == "policy-readonly";
+    let policy = if unrestricted { "never" } else { "on-request" };
+    let sandbox = if read_only { "read-only" } else if unrestricted { "danger-full-access" } else { "workspace-write" };
+    let sandbox_type = if read_only { "readOnly" } else if unrestricted { "dangerFullAccess" } else { "workspaceWrite" };
+    if params["approvalPolicy"] != policy
         || params["approvalsReviewer"] != "user"
-        || params["sandbox"] != "workspace-write"
+        || params["sandbox"] != sandbox
     {
         return Err(io::Error::other("fixture policy mismatch"));
     }
     result(
         &request,
         json!({ "thread": { "id": "owned-thread", "cwd": params["cwd"], "status": { "type": "idle" }, "turns": [] },
-        "cwd": params["cwd"], "model": params["model"], "modelProvider": "offline", "approvalPolicy": "on-request", "approvalsReviewer": "user", "sandbox": { "type": "workspaceWrite" } }),
+        "cwd": params["cwd"], "model": params["model"], "modelProvider": "offline", "approvalPolicy": policy, "approvalsReviewer": "user", "sandbox": { "type": sandbox_type } }),
     )?;
     if mode == "blocked" {
         #[cfg(windows)]
@@ -367,7 +372,9 @@ fn fake(mode: &str, marker: &Path) -> io::Result<()> {
     let request = read(stdin.as_mut().unwrap(), marker)?;
     method(&request, "turn/start")?;
     if request["params"]["threadId"] != "owned-thread"
-        || request["params"]["sandboxPolicy"]["networkAccess"] != false
+        || request["params"]["approvalPolicy"] != policy
+        || request["params"]["sandboxPolicy"]["type"] != sandbox_type
+        || (!unrestricted && request["params"]["sandboxPolicy"]["networkAccess"] != false)
     {
         return Err(io::Error::other("fixture turn mismatch"));
     }
@@ -395,7 +402,7 @@ fn fake(mode: &str, marker: &Path) -> io::Result<()> {
     {
         return Ok(());
     }
-    if mode == "approval" {
+    if matches!(mode, "approval" | "policy-unrestricted-approval") {
         send(
             json!({"id":"approval","method":"item/commandExecution/requestApproval","params":{"threadId":"owned-thread","turnId":"owned-turn","itemId":"command","command":"fixture","cwd":std::env::current_dir()?.to_string_lossy()}}),
         )?;
@@ -499,23 +506,30 @@ fn main() -> io::Result<()> {
                 )?,
             )?;
             let mode = std::env::var("HAGENCY_OFFLINE_MODE").map_err(io::Error::other)?;
-            if mode == "account" {
+            if matches!(mode.as_str(), "account" | "account-unrestricted" | "account-readonly") {
                 let home = std::env::var_os("HOME").ok_or(io::ErrorKind::InvalidInput)?;
                 let codex = std::env::var_os("CODEX_HOME").ok_or(io::ErrorKind::InvalidInput)?;
-                if home != codex
-                    || std::env::var_os("OPENAI_API_KEY").is_some()
+                #[cfg(target_os = "macos")]
+                if Path::new(&home) != hagency_platform::owner_home()? {
+                    return Err(io::ErrorKind::InvalidInput.into());
+                }
+                #[cfg(not(target_os = "macos"))]
+                if home != codex {
+                    return Err(io::ErrorKind::InvalidInput.into());
+                }
+                if std::env::var_os("OPENAI_API_KEY").is_some()
                     || std::env::var_os("CODEX_API_KEY").is_some()
                 {
                     return Err(io::ErrorKind::InvalidInput.into());
                 }
-                let marker = fs::read_to_string(Path::new(&home).join("fixture-account-marker"))?;
+                let marker = fs::read_to_string(Path::new(&codex).join("fixture-account-marker"))?;
                 if marker != "selected-A" {
                     return Err(io::ErrorKind::InvalidInput.into());
                 }
                 fs::write(
                     "account-observed.json",
                     serde_json::to_vec(
-                        &json!({"marker":marker,"same_home":true,"ambient_key":false}),
+                        &json!({"marker":marker,"same_home":home==codex,"ambient_key":false}),
                     )?,
                 )?;
             }
@@ -538,7 +552,11 @@ fn main() -> io::Result<()> {
                 )?;
             }
             fake(
-                if matches!(mode.as_str(), "account" | "local-account") {
+                if mode == "account-unrestricted" {
+                    "policy-unrestricted"
+                } else if mode == "account-readonly" {
+                    "policy-readonly"
+                } else if matches!(mode.as_str(), "account" | "local-account") {
                     "normal"
                 } else {
                     &mode

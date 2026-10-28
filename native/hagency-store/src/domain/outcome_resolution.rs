@@ -1,4 +1,5 @@
 //! Explicit operator decisions over original stopped-owner evidence.
+mod management;
 use super::{DomainRepository, execution, serialize};
 use crate::Error;
 use hagency_core::{
@@ -209,34 +210,9 @@ impl DomainRepository {
         let tx = self
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let now = time()?;
-        clock(now)?;
-        let expires = now
-            .checked_add(ttl_ms)
-            .filter(|n| *n <= JSON_SAFE_MAX)
-            .ok_or(Error::Capacity)?;
-        let d = bound(&tx, engagement, id)?;
-        let snapshot = snapshot(&tx, id, &d)?;
-        tx.execute(
-            "DELETE FROM outcome_inspections WHERE consumed_at IS NULL AND expires_at<=?1",
-            [now],
-        )?;
-        let (total, per_dispatch): (u64, u64) = tx.query_row(
-            "SELECT COUNT(*),COALESCE(SUM(dispatch_id=?1),0) FROM outcome_inspections",
-            [id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )?;
-        if total >= 40_000 || per_dispatch >= 16 {
-            return Err(Error::Capacity);
-        }
-        let inspection = secret()?;
-        let token = secret()?;
-        tx.execute("INSERT INTO outcome_inspections(id,dispatch_id,fence,receipt_digest,snapshot_digest,token_hash,created_at,expires_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
-            params![inspection,id,snapshot.fence,snapshot.receipt,snapshot.digest,canonical::digest(&json!(token))?,now,expires])?;
+        let result = begin_inspection_in_transaction(&tx, engagement, id, ttl_ms, time()?)?;
         tx.commit()?;
-        Ok(
-            json!({"inspectionId":inspection,"inspectionToken":token,"expiresAt":expires,"snapshot":snapshot.value}),
-        )
+        Ok(result)
     }
 
     pub fn resolve_stopped_dispatch(
@@ -258,139 +234,208 @@ impl DomainRepository {
         let tx = self
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let now = time()?;
-        clock(now)?;
-        let d = bound(&tx, engagement, &input.original)?;
-        let prior: Option<(String, String)> = tx
-            .query_row(
-                "SELECT request_digest,response FROM outcome_resolutions WHERE request_id=?1",
-                [&input.request_id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()?;
-        if let Some((digest, response)) = prior {
-            return if digest == request_digest {
-                Ok(serde_json::from_str(&response)?)
-            } else {
-                Err(Error::Conflict)
-            };
-        }
-        let resolved: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM outcome_resolutions WHERE dispatch_id=?1)",
-            [&input.original],
-            |r| r.get(0),
+        let request = Resolution {
+            original: &input.original,
+            request_id: &input.request_id,
+            inspection_id: &input.inspection_id,
+            action: input.action,
+            operator_note: &input.operator_note,
+            replacement: input.replacement.as_ref(),
+        };
+        let result = resolve_in_transaction(
+            &tx,
+            engagement,
+            &request,
+            &request_digest,
+            time()?,
+            |hash| execution::matches_secret(hash, &input.inspection_token),
         )?;
-        if resolved {
-            return Err(Error::Conflict);
-        }
-        let row:Option<(u64,String,String,String,u64,Option<u64>)>=tx.query_row(
+        tx.commit()?;
+        Ok(result)
+    }
+}
+
+fn begin_inspection_in_transaction(
+    tx: &rusqlite::Transaction<'_>,
+    engagement: &str,
+    id: &str,
+    ttl_ms: u64,
+    now: u64,
+) -> Result<Value, Error> {
+    clock(now)?;
+    let expires = now
+        .checked_add(ttl_ms)
+        .filter(|n| *n <= JSON_SAFE_MAX)
+        .ok_or(Error::Capacity)?;
+    let d = bound(tx, engagement, id)?;
+    let snapshot = snapshot(tx, id, &d)?;
+    tx.execute(
+        "DELETE FROM outcome_inspections WHERE consumed_at IS NULL AND expires_at<=?1",
+        [now],
+    )?;
+    let (total, per_dispatch): (u64, u64) = tx.query_row(
+        "SELECT COUNT(*),COALESCE(SUM(dispatch_id=?1),0) FROM outcome_inspections",
+        [id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    if total >= 40_000 || per_dispatch >= 16 {
+        return Err(Error::Capacity);
+    }
+    let inspection = secret()?;
+    let token = secret()?;
+    tx.execute("INSERT INTO outcome_inspections(id,dispatch_id,fence,receipt_digest,snapshot_digest,token_hash,created_at,expires_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![inspection,id,snapshot.fence,snapshot.receipt,snapshot.digest,canonical::digest(&json!(token))?,now,expires])?;
+    Ok(
+        json!({"inspectionId":inspection,"inspectionToken":token,"expiresAt":expires,"snapshot":snapshot.value}),
+    )
+}
+
+/// Fields shared by the authenticated console and the native reviewed command.
+/// Inspection secrets remain in the console adapter, outside the domain effect.
+struct Resolution<'a> {
+    original: &'a str,
+    request_id: &'a str,
+    inspection_id: &'a str,
+    action: OutcomeAction,
+    operator_note: &'a str,
+    replacement: Option<&'a DispatchInput>,
+}
+
+fn resolve_in_transaction(
+    tx: &rusqlite::Transaction<'_>,
+    engagement: &str,
+    input: &Resolution<'_>,
+    request_digest: &str,
+    now: u64,
+    verify_inspection: impl FnOnce(&str) -> Result<bool, Error>,
+) -> Result<Value, Error> {
+    clock(now)?;
+    let d = bound(tx, engagement, input.original)?;
+    let prior: Option<(String, String)> = tx
+        .query_row(
+            "SELECT request_digest,response FROM outcome_resolutions WHERE request_id=?1",
+            [&input.request_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    if let Some((digest, response)) = prior {
+        return if digest == request_digest {
+            Ok(serde_json::from_str(&response)?)
+        } else {
+            Err(Error::Conflict)
+        };
+    }
+    let resolved: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM outcome_resolutions WHERE dispatch_id=?1)",
+        [input.original],
+        |r| r.get(0),
+    )?;
+    if resolved {
+        return Err(Error::Conflict);
+    }
+    let row:Option<(u64,String,String,String,u64,Option<u64>)>=tx.query_row(
             "SELECT fence,receipt_digest,snapshot_digest,token_hash,expires_at,consumed_at FROM outcome_inspections WHERE id=?1 AND dispatch_id=?2",
             params![input.inspection_id,input.original],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).optional()?;
-        let (fence, receipt, digest, hash, expires, consumed) = row.ok_or(Error::State)?;
-        if consumed.is_some()
-            || now >= expires
-            || !execution::matches_secret(&hash, &input.inspection_token)?
-        {
+    let (fence, receipt, digest, hash, expires, consumed) = row.ok_or(Error::State)?;
+    if consumed.is_some() || now >= expires || !verify_inspection(&hash)? {
+        return Err(Error::State);
+    }
+    let current = snapshot(tx, input.original, &d)?;
+    if current.fence != fence || current.receipt != receipt || current.digest != digest {
+        return Err(Error::Conflict);
+    }
+    let action = serde_json::to_value(input.action)?
+        .as_str()
+        .ok_or(Error::State)?
+        .to_owned();
+    let evidence = serialize(
+        &json!({"profile":"operator-outcome-resolution-v1","requestId":input.request_id,"inspectionId":input.inspection_id,"receiptDigest":receipt,"action":action,"operatorNote":input.operator_note}),
+    )?;
+    if let Some(next) = &input.replacement {
+        execution::recover_dispatch_in_transaction(
+            tx,
+            Some(engagement),
+            input.original,
+            next,
+            &evidence,
+            now,
+            Some((fence, &receipt)),
+            "resolve_stopped_dispatch",
+        )?;
+        let mut task = execution::task(tx, d.task_id.as_deref().ok_or(Error::State)?)?;
+        task.status = TaskState::InProgress;
+        task.waiting_reason = None;
+        task.waiting_until = None;
+        task.updated_at = now;
+        execution::save_task(tx, &task, "operator_continue")?;
+    } else {
+        if super::graphs::is_graph_task(tx, d.task_id.as_deref())? {
             return Err(Error::State);
         }
-        let current = snapshot(&tx, &input.original, &d)?;
-        if current.fence != fence || current.receipt != receipt || current.digest != digest {
-            return Err(Error::Conflict);
-        }
-        let action = serde_json::to_value(input.action)?
-            .as_str()
-            .ok_or(Error::State)?
-            .to_owned();
-        let evidence = serialize(
-            &json!({"profile":"operator-outcome-resolution-v1","requestId":input.request_id,"inspectionId":input.inspection_id,"receiptDigest":receipt,"action":action,"operatorNote":input.operator_note}),
-        )?;
-        if let Some(next) = &input.replacement {
-            execution::recover_dispatch_in_transaction(
-                &tx,
-                Some(engagement),
-                &input.original,
-                next,
-                &evidence,
-                now,
-                Some((fence, &receipt)),
-                "resolve_stopped_dispatch",
-            )?;
-            let mut task = execution::task(&tx, d.task_id.as_deref().ok_or(Error::State)?)?;
-            task.status = TaskState::InProgress;
-            task.waiting_reason = None;
-            task.waiting_until = None;
-            task.updated_at = now;
-            execution::save_task(&tx, &task, "operator_continue")?;
-        } else {
-            if super::graphs::is_graph_task(&tx, d.task_id.as_deref())? {
-                return Err(Error::State);
-            }
-            // A run the host LOST — restart or lease expiry (`execution.rs::lose`)
-            // — has no `dispatch_stops` row by design (that no-row shape is what
-            // `recover_dispatch`/ADR-148 owns; `lose` must not fabricate proof
-            // the host never had). The operator's settlement IS the stop, so
-            // record it as one: same table, same kernel, same effect as the
-            // proven case (ADR-162 clears the quarantine through it). Without
-            // the row the dispatch would settle but stay in
-            // `unresolved_dispatches`, which still counts as live occupancy at
-            // claim (`execution.rs:935`) — the slot would leak forever.
-            tx.execute(
+        // A run the host LOST — restart or lease expiry (`execution.rs::lose`)
+        // — has no `dispatch_stops` row by design (that no-row shape is what
+        // `recover_dispatch`/ADR-148 owns; `lose` must not fabricate proof
+        // the host never had). The operator's settlement IS the stop, so
+        // record it as one: same table, same kernel, same effect as the
+        // proven case (ADR-162 clears the quarantine through it). Without
+        // the row the dispatch would settle but stay in
+        // `unresolved_dispatches`, which still counts as live occupancy at
+        // claim (`execution.rs:935`) — the slot would leak forever.
+        tx.execute(
                 "INSERT OR IGNORE INTO dispatch_stops(dispatch_id,fence,reason,created_at) VALUES(?1,?2,'runner_lost',?3)",
                 params![input.original, fence, now],
             )?;
-            super::conversation_lifecycle::settle_stop_in_transaction(
-                &tx,
-                &input.original,
-                fence,
-                &evidence,
-                now,
-                false,
-            )?;
-            tx.execute("UPDATE runner_dispatches SET state='superseded' WHERE session_id=?1 AND state='queued'",[&d.session_id])?;
-            let mut task = execution::task(&tx, d.task_id.as_deref().ok_or(Error::State)?)?;
-            task.updated_at = now;
-            task.waiting_until = None;
-            let kind = match input.action {
-                OutcomeAction::AcceptCompleted => {
-                    task.status = TaskState::Done;
-                    task.completed_at = Some(now);
-                    task.waiting_reason = None;
-                    task.execution_epoch = task
-                        .execution_epoch
-                        .checked_add(1)
-                        .filter(|n| *n <= JSON_SAFE_MAX)
-                        .ok_or(Error::Capacity)?;
-                    "operator_accept_completed"
-                }
-                OutcomeAction::KeepBlocked => {
-                    task.status = TaskState::Blocked;
-                    task.waiting_reason =
-                        Some("operator inspected runner outcome; task remains blocked".into());
-                    "operator_keep_blocked"
-                }
-                OutcomeAction::Continue => return Err(Error::State),
-            };
-            execution::save_task(&tx, &task, kind)?;
-            // ADR-182 decision 3: the settlement is the operator's resolution
-            // of this dispatch; the continuation branch clears through the
-            // recovery kernel above.
-            super::agent_fences::clear_fences_for_dispatch(
-                &tx,
-                &input.original,
-                "resolve_stopped_dispatch",
-                now,
-            )?;
-        }
-        let response = json!({"requestId":input.request_id,"original":input.original,"action":action,
-            "replacement":input.replacement.as_ref().map(|r|r.id.as_str()),"resolvedAt":now,
-            "task":execution::task(&tx,d.task_id.as_deref().ok_or(Error::State)?)?});
-        tx.execute(
-            "UPDATE outcome_inspections SET consumed_at=?2 WHERE id=?1 AND consumed_at IS NULL",
-            params![input.inspection_id, now],
+        super::conversation_lifecycle::settle_stop_in_transaction(
+            tx,
+            input.original,
+            fence,
+            &evidence,
+            now,
+            false,
         )?;
-        tx.execute("INSERT INTO outcome_resolutions(request_id,dispatch_id,inspection_id,request_digest,action,response,resolved_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",
-            params![input.request_id,input.original,input.inspection_id,request_digest,action,serialize(&response)?,now])?;
-        tx.commit()?;
-        Ok(response)
+        tx.execute("UPDATE runner_dispatches SET state='superseded' WHERE session_id=?1 AND state='queued'",[&d.session_id])?;
+        let mut task = execution::task(tx, d.task_id.as_deref().ok_or(Error::State)?)?;
+        task.updated_at = now;
+        task.waiting_until = None;
+        let kind = match input.action {
+            OutcomeAction::AcceptCompleted => {
+                task.status = TaskState::Done;
+                task.completed_at = Some(now);
+                task.waiting_reason = None;
+                task.execution_epoch = task
+                    .execution_epoch
+                    .checked_add(1)
+                    .filter(|n| *n <= JSON_SAFE_MAX)
+                    .ok_or(Error::Capacity)?;
+                "operator_accept_completed"
+            }
+            OutcomeAction::KeepBlocked => {
+                task.status = TaskState::Blocked;
+                task.waiting_reason =
+                    Some("operator inspected runner outcome; task remains blocked".into());
+                "operator_keep_blocked"
+            }
+            OutcomeAction::Continue => return Err(Error::State),
+        };
+        execution::save_task(tx, &task, kind)?;
+        // ADR-182 decision 3: the settlement is the operator's resolution
+        // of this dispatch; the continuation branch clears through the
+        // recovery kernel above.
+        super::agent_fences::clear_fences_for_dispatch(
+            tx,
+            input.original,
+            "resolve_stopped_dispatch",
+            now,
+        )?;
     }
+    let response = json!({"requestId":input.request_id,"original":input.original,"action":action,
+            "replacement":input.replacement.as_ref().map(|r|r.id.as_str()),"resolvedAt":now,
+            "task":execution::task(tx,d.task_id.as_deref().ok_or(Error::State)?)?});
+    tx.execute(
+        "UPDATE outcome_inspections SET consumed_at=?2 WHERE id=?1 AND consumed_at IS NULL",
+        params![input.inspection_id, now],
+    )?;
+    tx.execute("INSERT INTO outcome_resolutions(request_id,dispatch_id,inspection_id,request_digest,action,response,resolved_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            params![input.request_id,input.original,input.inspection_id,request_digest,action,serialize(&response)?,now])?;
+    Ok(response)
 }

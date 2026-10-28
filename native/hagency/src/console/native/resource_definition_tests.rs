@@ -1,0 +1,276 @@
+use super::*;
+use crate::console::native::reconciliation_sources::tests::Fixture;
+use crate::console::native::{ManagementPackage, SourceQuiescenceRequest};
+use hagency_store::owner_resources::{OwnerResourceRegistry, VerifiedProviderAccount};
+use std::time::{Duration, Instant};
+fn package(instance: u64) -> ManagementPackage {
+    ManagementPackage {
+        digest: "a".repeat(64),
+        instance,
+        account_epoch: 1,
+        permissions: vec![
+            Permission::ReadResources,
+            Permission::PrepareSourceQuiescence,
+            Permission::ReadResourceTemplates,
+            Permission::ManageResourceTemplates,
+            Permission::ReadIntents,
+            Permission::AcknowledgeIntents,
+        ],
+    }
+}
+#[test]
+fn native_template_original_ids_restart_and_no_approval_side_effect() {
+    let result = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "console::native::resource_definitions::tests::native_template_process_child",
+            "--exact",
+            "--nocapture",
+        ])
+        .env("HAGENCY_TEMPLATE_FIXTURE", "1")
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{} {}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+#[tokio::test]
+async fn native_template_process_child() {
+    if std::env::var("HAGENCY_TEMPLATE_FIXTURE").as_deref() != Ok("1") {
+        return;
+    }
+    let f = Fixture::new().await;
+    let (mut domain, path, resource) = f.domain();
+    domain
+        .put_seat(&hagency_core::project::Seat {
+            id: resource.seat_id.clone(),
+            declaration: None,
+        })
+        .unwrap();
+    drop(domain);
+    // Reconstruct an original schema83 source, preserving WAL custody exactly
+    // like DomainRepository. The archive worker deliberately requires the
+    // existing WAL sidecars and never manufactures missing recovery evidence.
+    let source = rusqlite::Connection::open(path.join("domain.sqlite3")).unwrap();
+    source
+        .set_db_config(
+            rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+            true,
+        )
+        .unwrap();
+    source.execute_batch("DROP TABLE IF EXISTS owner_operator_graph_recipients; DROP TABLE IF EXISTS owner_operator_graph_outbox; DROP TABLE IF EXISTS owner_operator_graph_commands; DROP TABLE IF EXISTS owner_operator_graphs; DROP TABLE IF EXISTS owner_operator_graph_archive_chunks; DROP TABLE IF EXISTS owner_operator_graph_archives; DROP TABLE IF EXISTS owned_dispatch_execution_policies; DROP TABLE IF EXISTS approval_binding_incarnations; DROP TRIGGER IF EXISTS owner_resource_provenance_immutable;DROP TRIGGER IF EXISTS owner_resource_provenance_retained;DROP TABLE IF EXISTS owner_resource_provenance;DROP TABLE IF EXISTS owner_namespace_enrollments;DROP TABLE IF EXISTS owner_resource_namespaces;DROP TABLE IF EXISTS management_account_profiles;DROP TABLE IF EXISTS owner_shared_budget_demand_decisions;DROP TABLE IF EXISTS owner_shared_budget_work_refusals;DROP TABLE IF EXISTS owner_shared_budget_start_intents;DROP TABLE IF EXISTS owner_managed_budget_deltas;DROP TABLE IF EXISTS owner_managed_budget_commands;DROP TABLE IF EXISTS owner_operator_task_transfer_comments;DROP TABLE IF EXISTS owner_operator_task_transfer_tasks;DROP TABLE IF EXISTS owner_shared_context_call_pins;DROP TABLE IF EXISTS owner_shared_reply_deliveries;DROP TABLE IF EXISTS owner_shared_contexts;DROP TABLE IF EXISTS owner_shared_input_modes;DROP TABLE IF EXISTS owner_shared_stop_receipts;DROP TABLE IF EXISTS owner_shared_stop_intents;DROP TABLE IF EXISTS owner_shared_demand_bindings;DROP TABLE IF EXISTS owner_shared_demand_decisions;DROP TABLE IF EXISTS owner_shared_demands;DROP TABLE IF EXISTS owner_shared_demand_controls;DROP TABLE owner_operator_task_comments;DROP TABLE owner_operator_tasks;DROP TABLE owner_operator_task_histories;PRAGMA user_version=83;").unwrap();
+    drop(source);
+    let (personal, _) = f.personal();
+    drop(personal);
+    let registry =
+        OwnerResourceRegistry::isolated_for_tests(&f.temp.path().join("canonical")).unwrap();
+    let mut request = SourceQuiescenceRequest::new(
+        &f.owner,
+        package(1),
+        registry.clone(),
+        Instant::now() + Duration::from_secs(50),
+        || true,
+    )
+    .unwrap();
+    request.lease_root =
+        Some(hagency_platform::legacy_writer::test_support::initialize_process_root().unwrap());
+    let work = f.owner.prepare_source_quiescence(request).await.unwrap();
+    let sources = work.close_and_drain().await.unwrap();
+    let provider = || {
+        VerifiedProviderAccount::new(
+            "codex",
+            "https://provider.test",
+            "synthetic-template-owner",
+            Instant::now() + Duration::from_secs(30),
+        )
+        .unwrap()
+    };
+    let transfer = sources
+        .prepare_resource_adoption("templates_original".into(), provider(), 700)
+        .await
+        .unwrap();
+    assert_eq!(transfer.advance(provider()).await.unwrap().phase, "active");
+    transfer.drain_journal().await.unwrap();
+    drop(transfer);
+    drop(sources);
+    drop(work);
+    let f = f
+        .restart_adopted(registry.clone(), "templates_original".into())
+        .await;
+    let manager = f.owner.management(package(2)).await.unwrap();
+
+    let page = manager
+        .resource_templates(resource.id(), None)
+        .await
+        .unwrap();
+    let input = TemplateCreateInput {
+        resource_id: resource.id(),
+        expected_revision: page.revision,
+        name: "native_helper".into(),
+        role: page.roles[0].clone(),
+        enabled: true,
+    };
+    let prepared = manager.prepare_template_create(input).await.unwrap();
+    assert!(prepared.command_id.starts_with("templatecmd_"));
+    assert!(prepared.definition_id.starts_with("rad_"));
+    assert!(
+        manager
+            .resource_templates(resource.id(), None)
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    let saved = manager.saved_commands().await.unwrap();
+    assert_eq!(saved.len(), 1);
+    let original: ResourceTemplateCommand = serde_json::from_value(saved[0].input.clone()).unwrap();
+    let (context, session) = manager.authorized().await.unwrap();
+    // Crash boundary: canonical definition and receipt commit, intent reply lost.
+    let committed = session
+        .apply_resource_template(&context, original)
+        .await
+        .unwrap();
+    assert!(
+        manager
+            .review_template_command(prepared.command_id.clone())
+            .await
+            .unwrap()
+            .result
+            .is_none()
+    );
+    manager.retire();
+    assert!(
+        manager
+            .apply_saved_template(prepared.command_id.clone())
+            .await
+            .is_err()
+    );
+    drop(session);
+    drop(manager);
+    let f = f
+        .restart_adopted(registry.clone(), "templates_original".into())
+        .await;
+    let manager = f.owner.management(package(3)).await.unwrap();
+    assert_eq!(
+        manager
+            .apply_saved_template(prepared.command_id.clone())
+            .await
+            .unwrap(),
+        committed
+    );
+    let detail = manager
+        .resource_template(resource.id(), prepared.definition_id.clone())
+        .await
+        .unwrap();
+    let edit = manager
+        .prepare_template_update(TemplateUpdateInput {
+            resource_id: resource.id(),
+            id: prepared.definition_id.clone(),
+            expected_revision: detail.revision,
+            name: "renamed_helper".into(),
+            role: detail.definition.role.clone(),
+            enabled: false,
+        })
+        .await
+        .unwrap();
+    let edited = manager
+        .apply_saved_template(edit.command_id.clone())
+        .await
+        .unwrap();
+    assert!(!edited.deleted);
+    assert_eq!(
+        manager
+            .apply_saved_template(prepared.command_id.clone())
+            .await
+            .unwrap(),
+        committed
+    );
+    assert_eq!(
+        manager
+            .resource_template(resource.id(), prepared.definition_id.clone())
+            .await
+            .unwrap()
+            .definition
+            .name,
+        "renamed_helper"
+    );
+    manager
+        .acknowledge_command(prepared.command_id.clone())
+        .await
+        .unwrap();
+    manager
+        .acknowledge_command(edit.command_id.clone())
+        .await
+        .unwrap();
+    let detail = manager
+        .resource_template(resource.id(), prepared.definition_id.clone())
+        .await
+        .unwrap();
+    let delete = manager
+        .prepare_template_delete(TemplateDeleteInput {
+            resource_id: resource.id(),
+            id: prepared.definition_id.clone(),
+            expected_revision: detail.revision,
+        })
+        .await
+        .unwrap();
+    assert_eq!(delete.change.name, "renamed_helper");
+    assert!(!delete.change.enabled);
+    let removed = manager
+        .apply_saved_template(delete.command_id.clone())
+        .await
+        .unwrap();
+    assert!(removed.deleted);
+    assert_eq!(removed.definition_id, prepared.definition_id);
+    assert_eq!(
+        manager
+            .apply_saved_template(delete.command_id.clone())
+            .await
+            .unwrap(),
+        removed
+    );
+    assert!(
+        manager
+            .resource_templates(resource.id(), None)
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    let review = manager
+        .review_template_command(delete.command_id)
+        .await
+        .unwrap();
+    assert_eq!(review.result, Some(removed));
+    let mut read_package = package(4);
+    read_package
+        .permissions
+        .retain(|p| *p != Permission::ManageResourceTemplates);
+    let read = f.owner.management(read_package).await.unwrap();
+    assert!(
+        !read
+            .resource_templates(resource.id(), None)
+            .await
+            .unwrap()
+            .can_create
+    );
+    let inspect = rusqlite::Connection::open_with_flags(
+        f.temp.path().join("canonical/domain.sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    for table in ["owner_managed_agents", "engagements", "effects"] {
+        assert_eq!(
+            inspect
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r
+                    .get::<_, u64>(0))
+                .unwrap(),
+            0
+        );
+    }
+    drop(inspect);
+    read.retire();
+    manager.retire();
+}

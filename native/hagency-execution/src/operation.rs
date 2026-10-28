@@ -1520,6 +1520,12 @@ async fn execute(
     }
     checkpoint(cancel, until)?;
     let approval_may_write = !settings.is_read_only();
+    if settings.is_unrestricted() {
+        // The owner chose no per-tool approval for this captured dispatch.
+        // Keep process custody, but do not manufacture a restricted approval
+        // context. The ordinary drive refuses unexpected approval requests.
+        report.approvals = None;
+    }
     if let Some(live) = &mut report.live {
         live.possible();
     }
@@ -1564,11 +1570,12 @@ async fn execute(
         )
         .await?;
     } else {
-        report
-            .owner
-            .as_mut()
-            .ok_or(Failure::SpawnFailed)?
+        let owner = report.owner.as_mut().ok_or(Failure::SpawnFailed)?;
+        owner
             .consume_warm_idle(io_limits, limits.response_ms, ceiling)
+            .map_err(|_| Failure::Protocol)?;
+        owner
+            .bind_dispatch_policy(&settings)
             .map_err(|_| Failure::Protocol)?;
     }
     // The actual child owner is retained before initialize or any startup await.

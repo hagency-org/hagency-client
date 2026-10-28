@@ -39,7 +39,7 @@ fn request(url: &str) -> IssueSideRegistrationRequest {
 }
 
 fn repo() -> (tempfile::TempDir, DomainRepository) {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&dir.path().join("state")).unwrap();
     db.register(&registration()).unwrap();
     (dir, db)

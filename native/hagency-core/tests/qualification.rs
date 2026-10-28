@@ -5,6 +5,124 @@ use hagency_core::{
 use serde_json::{Value, json};
 
 #[test]
+fn current_codex_models_preserve_role_floors_and_family() {
+    for name in ["gpt-6.1-sol", "gpt-6-astra"] {
+        for (effort, tier, allowed) in [
+            ("low", Tier::Lightweight, vec!["documentation"]),
+            (
+                "medium",
+                Tier::Medium,
+                vec!["coding", "testing", "integration", "documentation"],
+            ),
+            (
+                "high",
+                Tier::Strong,
+                vec![
+                    "architect",
+                    "review",
+                    "coding",
+                    "testing",
+                    "integration",
+                    "documentation",
+                ],
+            ),
+            (
+                "xhigh",
+                Tier::Strong,
+                vec![
+                    "architect",
+                    "review",
+                    "coding",
+                    "testing",
+                    "integration",
+                    "documentation",
+                ],
+            ),
+            (
+                "max",
+                Tier::Strong,
+                vec![
+                    "architect",
+                    "review",
+                    "coding",
+                    "testing",
+                    "integration",
+                    "documentation",
+                ],
+            ),
+        ] {
+            let profile = ModelProfile {
+                framework: "codex".into(),
+                model: name.into(),
+                provider: Some("openai".into()),
+                reasoning: Some(effort.into()),
+            };
+            assert_eq!(
+                qualification::model(&profile),
+                (Some(tier), Some("gpt")),
+                "{name}/{effort}"
+            );
+            assert_eq!(
+                qualification::roles()
+                    .filter(|role| qualification::qualifies(&profile, role, None))
+                    .collect::<Vec<_>>(),
+                allowed
+            );
+        }
+    }
+}
+
+#[test]
+fn current_codex_policy_does_not_infer_models_efforts_or_providers() {
+    let base = ModelProfile {
+        framework: "codex".into(),
+        model: "gpt-6.1-sol".into(),
+        provider: Some("openai".into()),
+        reasoning: Some("medium".into()),
+    };
+    for name in ["gpt-6.1-sol", "gpt-6-astra"] {
+        for effort in [
+            None,
+            Some(""),
+            Some("none"),
+            Some("minimal"),
+            Some("ultra"),
+            Some("HIGH"),
+        ] {
+            assert_eq!(
+                qualification::model(&ModelProfile {
+                    model: name.into(),
+                    reasoning: effort.map(str::to_owned),
+                    ..base.clone()
+                }),
+                (None, None)
+            );
+        }
+    }
+    for profile in [
+        ModelProfile {
+            model: "gpt-6.1-sol-unreviewed".into(),
+            ..base.clone()
+        },
+        ModelProfile {
+            model: "gpt-future".into(),
+            ..base.clone()
+        },
+        ModelProfile {
+            framework: "other".into(),
+            ..base.clone()
+        },
+        ModelProfile {
+            provider: Some("other".into()),
+            ..base
+        },
+    ] {
+        assert_eq!(qualification::model(&profile), (None, None));
+        assert!(!qualification::roles().any(|role| qualification::qualifies(&profile, role, None)));
+    }
+}
+
+#[test]
 fn qualification_matches_javascript() {
     let fixtures: Value =
         serde_json::from_str(include_str!("../../fixtures/qualification.json")).unwrap();

@@ -3,7 +3,18 @@
 use hagency_platform::SupervisedReport;
 use std::io;
 
+mod managed;
+mod shared_text;
+pub use shared_text::{
+    SHARED_WEB_INSTRUCTIONS, SHARED_WEB_INSTRUCTIONS_FILE, shared_text_policy,
+    SHARED_TEXT_INSTRUCTIONS, SHARED_TEXT_INSTRUCTIONS_FILE, SharedTextActivityControl,
+    SharedTextEvent, SharedTextProcessObservation, SharedTextProcessSource,
+};
 mod session;
+pub use managed::{
+    MANAGED_DISABLED_FEATURES, MANAGED_INSTRUCTIONS, MANAGED_INSTRUCTIONS_FILE,
+    ManagedPolicyOverrides, ManagedProcessObservation, ManagedProcessSource, ManagedProcessState,
+};
 pub use session::OwnedSession;
 mod octos;
 pub use octos::OwnedOctosSession;
@@ -32,3 +43,5 @@ pub enum StartError {
         cleanup: Cleanup,
     },
 }
+
+pub use shared_text::{SHARED_TOOLS_INSTRUCTIONS,SHARED_TOOLS_INSTRUCTIONS_FILE,shared_execution_policy};

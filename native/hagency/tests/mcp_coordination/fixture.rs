@@ -43,7 +43,7 @@ pub struct Fixture {
 }
 impl Fixture {
     pub async fn new() -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let state = root.path().join("state");
         let custody = Store::start(Repository::open(&state).unwrap(), 32).unwrap();
         let mut db = DomainRepository::open(&state).unwrap();

@@ -38,9 +38,11 @@ fn console_error() -> Error {
 struct State {
     path: PathBuf,
     _lock: std::fs::File,
+    directory: std::fs::File,
 }
 fn allowed_entry(name: &str) -> bool {
-    matches!(name,MARKER|LOCK|"server-login.json"|"server-login-revocations.json"|"server-login-profiles.json"|"owned-agent-owners"|"owner-console.sock")
+    matches!(name,MARKER|LOCK|"server-login.json"|"server-login-sdk-resume.json"|"server-login-revocations.json"|"server-login-profiles.json"|"owned-agent-owners"|"owner-console.sock")
+        || (cfg!(feature = "resource-adoption") && name == "adopted-management-initializer-v1.json")
         // Interrupted private JSON replacement files are never opened/imported.
         || (name.len()==21 && name.starts_with('.') && name.ends_with(".tmp") && name.as_bytes()[1..17].iter().all(|b|b.is_ascii_hexdigit()))
 }
@@ -81,11 +83,41 @@ fn prepare(path: &Path) -> Result<State, Error> {
         hagency_store::private::replace(&path.join(MARKER), MARKER_BYTES)
             .map_err(|_| Error::State)?;
     }
-    Ok(State { path, _lock: lock })
+    let directory = cap_std::fs::Dir::open_ambient_dir(&path, cap_std::ambient_authority())
+        .map_err(|_| Error::State)?
+        .into_std_file();
+    Ok(State {
+        path,
+        _lock: lock,
+        directory,
+    })
 }
 /// Initializes only the new format, and never imports old SQLite or credentials.
 pub fn initialize(path: &Path) -> Result<PathBuf, Error> {
     Ok(prepare(path)?.path)
+}
+/// A reduction-only native operation on an already initialized, exclusively
+/// owned root. Does not construct a console, database, listener or new root.
+pub(crate) fn with_existing_state<T>(
+    path: &Path,
+    action: impl FnOnce(&Path) -> T,
+) -> Result<Option<T>, Error> {
+    if !path.is_absolute() {
+        return Err(Error::State);
+    }
+    match std::fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(Error::State),
+        Ok(m) if !m.is_dir() || m.file_type().is_symlink() => return Err(Error::State),
+        Ok(_) => (),
+    }
+    if hagency_store::private::read_secret(&path.join(MARKER)).map_err(|_| Error::State)?
+        != MARKER_BYTES
+    {
+        return Err(Error::State);
+    }
+    let state = prepare(path)?;
+    Ok(Some(action(&state.path)))
 }
 #[derive(Clone)]
 pub struct OwnerHost {
@@ -125,16 +157,49 @@ impl OwnerHost {
         if !address.ip().is_loopback() || address.port() == 0 {
             return Err(Error::Address);
         }
+        Self::native_with_authority(state, address.to_string())
+    }
+    /// The embedding application's Matrix SDK owns authentication. This host
+    /// has no socket or browser callback. Its reserved authority is used only
+    /// by the in-process request adapter and can never be passed to `serve`.
+    pub(crate) fn open_embedded(state: &Path) -> Result<Self, Error> {
+        Self::native_with_authority(state, "hagency-native.invalid".into())
+    }
+    fn native_with_authority(state: &Path, authority: String) -> Result<Self, Error> {
         let state = prepare(state)?;
         let console = Console::native_with_state(&state.path).map_err(|_| console_error())?;
         Ok(Self {
             console,
-            authority: address.to_string(),
+            authority,
             state: Arc::new(state),
         })
     }
     pub fn state_directory(&self) -> &Path {
         &self.state.path
+    }
+    /// Retaining this host is root-lock custody only while the physical root
+    /// and lock path still identify the original private handles.
+    pub(crate) fn check_state_lock(&self) -> Result<(), Error> {
+        use cap_fs_ext::DirExt;
+        let parent = cap_std::fs::Dir::open_ambient_dir(
+            self.state.path.parent().ok_or(Error::State)?,
+            cap_std::ambient_authority(),
+        )
+        .map_err(|_| Error::State)?;
+        let current = parent
+            .open_dir_nofollow(self.state.path.file_name().ok_or(Error::State)?)
+            .map_err(|_| Error::State)?
+            .into_std_file();
+        let lock = hagency_store::private::open(&self.state.path.join(LOCK), false)
+            .map_err(|_| Error::State)?;
+        if !hagency_platform::same_directory(&self.state.directory, &current)
+            .map_err(|_| Error::State)?
+            || !hagency_platform::same_file(&self.state._lock, &lock).map_err(|_| Error::State)?
+        {
+            return Err(Error::State);
+        }
+        hagency_store::private::check_handle(&current).map_err(|_| Error::State)?;
+        hagency_store::private::check_handle(&lock).map_err(|_| Error::State)
     }
     pub fn router(self) -> Router {
         Router::new()
@@ -325,7 +390,7 @@ async fn health(res: &mut Response) {
 mod tests {
     use super::*;
     fn temporary() -> tempfile::TempDir {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

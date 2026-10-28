@@ -9,7 +9,7 @@ use serde_json::json;
 /// internal invariant.
 #[test]
 fn native_operator_task_lifecycle_matches_retained_store() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&root.path().join("state")).unwrap();
 
     // createTask: the defaults are p2/task/`created`, and the id is the
@@ -280,7 +280,7 @@ fn native_operator_task_lifecycle_matches_retained_store() {
 /// the way the retained JSON-backed map holds it between saves.
 #[test]
 fn native_operator_task_blocked_metadata_is_durable() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("state");
     let id = {
         let mut db = DomainRepository::open(&state).unwrap();

@@ -14,7 +14,7 @@ fn open_raw(dir: &tempfile::TempDir) -> rusqlite::Connection {
 /// withheld, so neither MXID nor room id can reach the read.
 #[test]
 fn project_sides_list_read_joins_registrations_to_projects() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&dir.path().join("state")).unwrap();
     db.register(&registration()).unwrap();
     // No engagement yet: the side exists (the registration row is the
@@ -54,7 +54,7 @@ fn project_sides_list_read_joins_registrations_to_projects() {
 /// `Error::Schema`, never as a silent value.
 #[test]
 fn project_sides_projection_omits_credential_bytes() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&dir.path().join("state")).unwrap();
     db.register(&registration()).unwrap();
     let pool = resource("preset", "seat", 1000);
@@ -99,7 +99,7 @@ fn project_sides_projection_omits_credential_bytes() {
 /// with rows inserted out of order.
 #[test]
 fn project_sides_orders_projects_by_id_within_a_side() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&dir.path().join("state")).unwrap();
     db.register(&registration()).unwrap();
     let raw = open_raw(&dir);
@@ -128,7 +128,7 @@ fn project_sides_orders_projects_by_id_within_a_side() {
 /// bound `register()` enforces.
 #[test]
 fn project_sides_registered_is_computed_and_projects_are_capped() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&dir.path().join("state")).unwrap();
     db.register(&registration()).unwrap();
     let raw = open_raw(&dir);

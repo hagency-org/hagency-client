@@ -38,7 +38,7 @@ fn setup_with_parent(
     Vec<String>,
     RunnerCapability,
 ) {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&root.path().join("state")).unwrap();
     db.register(&registration()).unwrap();
     let pool = resource("pool", "seat", 1000);

@@ -23,7 +23,7 @@ struct Book {
 /// `documentation`, which is the native analogue of the TS seed's
 /// `claude-agent`.
 fn open() -> Book {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&root.path().join("state")).unwrap();
     db.register(&registration()).unwrap();
     db.put_resource(&resource("oracle_pool", "oracle_seat", 1000))

@@ -84,7 +84,7 @@ fn thread_cwd(requests: &Path) -> String {
 
 #[tokio::test]
 async fn native_worktree_two_threads_distinct_worktrees() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
 
     // The agent's own workspace root. TS resolves the worktree repository from
     // the agent workdir (backend-v2.js:2057 `agent.workdir || agent.homeDir`),

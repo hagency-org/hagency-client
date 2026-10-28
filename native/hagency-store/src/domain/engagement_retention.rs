@@ -55,6 +55,11 @@ fn bounded(value: u64) -> Result<u64, Error> {
 /// id, so `rowid IN (SELECT id ...)` silently deleted nothing).
 const CASCADE: &[(&str, &str, &str)] = &[
     (
+        "owned_dispatch_execution_policies",
+        "dispatch_id",
+        "SELECT d.id FROM runner_dispatches d JOIN runner_sessions s ON s.id=d.session_id JOIN engagement_prune_batch b ON b.engagement_id=s.engagement_id",
+    ),
+    (
         "runner_outputs",
         "dispatch_id",
         "SELECT d.id FROM runner_dispatches d JOIN runner_sessions s ON s.id=d.session_id JOIN engagement_prune_batch b ON b.engagement_id=s.engagement_id",
@@ -351,7 +356,9 @@ impl DomainRepository {
     /// `Immediate` transaction; candidates are terminal engagements past the
     /// `rowid` window with no custody pin (P1–P7); the whole reachable set
     /// goes child-first in the same transaction. A deferred engagement is
-    /// `remaining > 0`, never a work refusal.
+    /// `remaining > 0`, never a work refusal. A coordinator agent is never a
+    /// candidate: the coordinator ledger keeps its row, and its hold reads the
+    /// agent's usage, so deleting that usage would release spent tokens.
     pub fn sweep_engagements(
         &mut self,
         now: u64,
@@ -401,6 +408,8 @@ impl DomainRepository {
                         JOIN approval_contexts c ON c.id=o.context_id \
                         WHERE c.engagement_id=e.id \
                         AND o.state IN ('pending','decided','applying','uncertain')) \
+                     AND NOT EXISTS (SELECT 1 FROM coordinator_agents a \
+                        WHERE a.agent_id=e.id) \
                      ORDER BY e.rowid ASC LIMIT ?2",
                 )?;
                 statement

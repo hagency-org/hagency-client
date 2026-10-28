@@ -3,7 +3,7 @@ use hagency_store::{DomainRepository, DomainStore, Error, ShutdownOutcome};
 #[tokio::test]
 async fn native_domain_shutdown_success() {
     for observed in [false, true] {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let state = root.path().join("state");
         let store = DomainStore::start(DomainRepository::open(&state).unwrap(), 1).unwrap();
         assert!(matches!(DomainRepository::open(&state), Err(Error::Locked)));

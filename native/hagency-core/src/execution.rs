@@ -4,16 +4,25 @@ mod profile;
 pub use paths::PathFlavor;
 
 use crate::{InvalidInput, canonical};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 const MAX_FIELD_UNITS: usize = 8192;
 const MAX_METADATA_BYTES: usize = 64 * 1024;
 const MAX_DESCRIPTION_UNITS: usize = 12_000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExecutionPolicy {
     pub yolo: bool,
+}
+impl ExecutionPolicy {
+    pub fn validate_for(self, framework: &str) -> Result<(), InvalidInput> {
+        if self.yolo && framework != "codex" {
+            return Err(InvalidInput("invalid execution policy"));
+        }
+        Ok(())
+    }
 }
 pub fn normalize_policy(
     value: Option<&Value>,
@@ -52,7 +61,20 @@ pub enum ScopeKind {
     ExactCommand,
     NetworkHost,
     PermissionProfile,
+    /// One Claude Code tool call: its tool name and exact input (ADR-192).
+    ExactToolCall,
 }
+/// The approval method of a Claude Code `can_use_tool` request (ADR-192). Its
+/// params carry the session as `threadId`, the dispatch's one prompt as
+/// `turnId` and the control request as `itemId`, beside `toolName`, an
+/// optional `toolUseId` and the tool's `input`.
+pub const CLAUDE_TOOL_METHOD: &str = "claude/canUseTool";
+/// The approval method of an Octos `approval/requested` (ADR-193 decision 4).
+/// Its params carry the session as `threadId`, the dispatch's turn as `turnId`
+/// and the approval as `itemId`, beside the `toolName`, the turn Octos raised
+/// it in (`octosTurnId`), its `title` and `body`, and for a shell command, when
+/// Octos types it, the `command` line and its `cwd`.
+pub const OCTOS_APPROVAL_METHOD: &str = "octos/approval";
 #[derive(Serialize)]
 pub struct Scope {
     pub kind: ScopeKind,
@@ -213,6 +235,66 @@ pub fn derive(request: HostRequest<'_>) -> Option<Authorization> {
                 ScopeKind::PermissionProfile,
                 json!({"cwd":cwd,"permissions":permissions}),
                 description,
+            )
+        }
+        CLAUDE_TOOL_METHOD => {
+            // A grant matches the same tool with the same canonical input only.
+            // Nothing is read from the input's meaning: no command prefix, no
+            // path or working directory is widened into the scope.
+            if !keys_within(
+                p,
+                &[
+                    "threadId",
+                    "turnId",
+                    "itemId",
+                    "toolName",
+                    "toolUseId",
+                    "input",
+                ],
+            ) {
+                return None;
+            }
+            let tool = text(p.get("toolName")?)?;
+            let input = p.get("input").filter(|v| v.is_object())?;
+            let input = canonical::encode_payload(input).ok()?;
+            (
+                ScopeKind::ExactToolCall,
+                json!({"tool":tool,"input":input}),
+                format!("Exact tool call:\nTool: {tool}\nInput: {input}"),
+            )
+        }
+        OCTOS_APPROVAL_METHOD => {
+            // A shell command derives the same exact-command scope as a Codex
+            // command, from its typed command line and working directory.
+            // Octos runs commands through `shell` and its Codex-style aliases
+            // `bash` and `exec_command`, one family in its own tool registry.
+            // Without the typed command and directory, or for any other tool,
+            // there is no reusable scope: approve once or deny only.
+            if !keys_within(
+                p,
+                &[
+                    "threadId",
+                    "turnId",
+                    "itemId",
+                    "toolName",
+                    "octosTurnId",
+                    "title",
+                    "body",
+                    "command",
+                    "cwd",
+                ],
+            ) || !matches!(
+                p.get("toolName")?.as_str()?,
+                "shell" | "bash" | "exec_command"
+            ) {
+                return None;
+            }
+            let command = text(p.get("command")?)?;
+            let cwd = request.path_flavor.normalize(text(p.get("cwd")?)?)?;
+            (
+                ScopeKind::ExactCommand,
+                json!({"command":command,"cwd":cwd,"additionalPermissions":null}),
+                format!("Exact command:\n{command}\nWorking directory: {cwd}"),
             )
         }
         _ => return None,

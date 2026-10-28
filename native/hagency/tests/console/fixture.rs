@@ -195,7 +195,7 @@ pub struct Fixture {
 }
 impl Fixture {
     pub fn new(address: SocketAddr, built: Option<&Path>) -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let asset_dir = root.path().join("assets");
         if built.is_none() {
             assets(&asset_dir);
@@ -204,6 +204,10 @@ impl Fixture {
         // Select its actual host path; production correctly refuses that alias.
         let actual_assets = built.unwrap_or(&asset_dir).canonicalize().unwrap();
         let state = root.path().join("state");
+        // Production provisions the state directory before loading Console.
+        // The SDK resume journal binds its scope to that directory's canonical
+        // path even when it contains no records yet.
+        hagency_store::private::directory(&state).unwrap();
         // #47: production serves graphs from `<state>/task_graphs.json`; the
         // fixture mirrors that so the routes reach a real document home.
         let console = Console::load_with_state(&actual_assets, Some(&state)).unwrap();

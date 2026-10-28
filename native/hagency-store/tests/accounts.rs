@@ -24,7 +24,7 @@ fn enroll(db: &mut DomainRepository, choice: &AccountChoice) -> hagency_core::pr
 }
 #[test]
 fn native_account_preparation() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("state");
     let mut db = DomainRepository::open(&state).unwrap();
     assert!(db.reserve_account("subscription-only").is_err());
@@ -80,7 +80,7 @@ fn native_account_preparation() {
 }
 #[test]
 fn native_account_association() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("state");
     let mut db = DomainRepository::open(&state).unwrap();
     let choice = prepared(&mut db);
@@ -180,7 +180,7 @@ fn native_account_association() {
 }
 #[test]
 fn native_account_retirement() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("state");
     let mut db = DomainRepository::open(&state).unwrap();
     let choice = prepared(&mut db);
@@ -259,7 +259,7 @@ fn native_account_retirement() {
 /// 'active', and retire lands 'retired' while unpublishing bound resources.
 #[tokio::test]
 async fn native_console_account_wrappers_mirror_the_store() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("state");
     let mut db = DomainRepository::open(&state).unwrap();
     let seed_choice = prepared(&mut db);
@@ -335,7 +335,7 @@ fn login_observed(
 
 #[test]
 fn native_account_login_readiness() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("state");
     let mut db = DomainRepository::open(&state).unwrap();
     let choice = prepared(&mut db);
@@ -380,7 +380,7 @@ fn native_account_login_readiness() {
 
 #[test]
 fn native_account_login_interrupted_is_uncertain() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("state");
     let mut db = DomainRepository::open(&state).unwrap();
     let choice = prepared(&mut db);
@@ -426,7 +426,7 @@ fn native_account_login_interrupted_is_uncertain() {
 
 #[test]
 fn native_account_readiness_expires_to_unknown() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("state");
     let mut db = DomainRepository::open(&state).unwrap();
     let choice = prepared(&mut db);
@@ -461,7 +461,7 @@ fn native_account_readiness_expires_to_unknown() {
 
 #[test]
 fn native_account_login_records_no_credential_byte() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("state");
     let mut db = DomainRepository::open(&state).unwrap();
     let choice = prepared(&mut db);
@@ -545,7 +545,7 @@ fn native_account_readiness_matches_retained_detect() {
     for vector in vectors {
         let retained = vector["retained"].as_str().unwrap();
         let expected: &str = vector["native"]["mode"].as_str().unwrap();
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let state = root.path().join("state");
         let mut db = DomainRepository::open(&state).unwrap();
         let choice = prepared(&mut db);
@@ -633,7 +633,7 @@ fn assert_no_credential_byte(sql: &rusqlite::Connection, table: &str) {
 
 #[test]
 fn native_account_retire_logs_out_and_audits() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("state");
     let mut db = DomainRepository::open(&state).unwrap();
     let choice = prepared(&mut db);
@@ -681,7 +681,7 @@ fn native_account_retire_logs_out_and_audits() {
 
 #[test]
 fn native_account_retire_logout_failure_is_unknown() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("state");
     let mut db = DomainRepository::open(&state).unwrap();
     let choice = prepared(&mut db);

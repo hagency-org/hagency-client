@@ -13,7 +13,7 @@ fn binding(id: &str, engagement: &str) -> SessionBinding {
     }
 }
 fn setup() -> (tempfile::TempDir, DomainRepository, Vec<String>) {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&root.path().join("state")).unwrap();
     db.register(&registration()).unwrap();
     let pool = resource("pool", "seat", 1000);
@@ -166,7 +166,7 @@ async fn native_message_identity_and_scope() {
     // Model an older native schema with conflicting host-created session IDs.
     // Its migration must fail atomically instead of silently selecting an owner.
     remove_graph_schema(&inspect);
-    inspect.execute_batch("ALTER TABLE runner_sessions DROP COLUMN model_override; ALTER TABLE runner_sessions DROP COLUMN mode_override; DROP VIEW unresolved_dispatches; DROP TABLE dispatch_stops; DROP TABLE conversation_operations; ALTER TABLE internal_conversations DROP COLUMN revision; DROP VIEW current_recovery_reports; DROP TABLE dispatch_recovery_reports; DROP VIEW task_dispatch_input_ready; DROP VIEW live_peer_inputs; DROP TABLE peer_dispatch_inputs; DROP TABLE peer_session_inputs; DROP TABLE peer_messages; DROP TABLE internal_participants; DROP TABLE internal_conversations; DROP VIEW task_followup_ready; DROP TABLE task_notices; DROP TABLE task_input_receipts; DROP TABLE task_inputs; DROP TABLE task_intents; DROP INDEX canonical_runner_session; DROP TABLE dispatch_inputs; DROP TABLE session_inputs; DROP TABLE admitted_messages; DROP TABLE IF EXISTS agent_lifecycle; ALTER TABLE decisions DROP COLUMN kind; ALTER TABLE decisions DROP COLUMN at; DROP TABLE IF EXISTS quota_holds; DROP TABLE IF EXISTS owner_anchors; DROP TABLE IF EXISTS joined_rooms; ALTER TABLE engagements DROP COLUMN allocated_tokens; PRAGMA user_version=3; INSERT INTO runner_sessions(id,engagement_id,binding) SELECT 'duplicate_old',engagement_id,json_set(binding,'$.id','duplicate_old') FROM runner_sessions WHERE id='a';").unwrap();
+    inspect.execute_batch("ALTER TABLE runner_sessions DROP COLUMN model_override; ALTER TABLE runner_sessions DROP COLUMN mode_override; DROP VIEW unresolved_dispatches; DROP TABLE dispatch_stops; DROP TABLE conversation_operations; ALTER TABLE internal_conversations DROP COLUMN revision; DROP VIEW current_recovery_reports; DROP TABLE dispatch_recovery_reports; DROP VIEW task_dispatch_input_ready; DROP VIEW live_peer_inputs; DROP TABLE peer_dispatch_inputs; DROP TABLE peer_session_inputs; DROP TABLE peer_messages; DROP TABLE internal_participants; DROP TABLE internal_conversations; DROP VIEW task_followup_ready; DROP TABLE task_notices; DROP TABLE task_input_receipts; DROP TABLE task_inputs; DROP TABLE task_intents; DROP INDEX canonical_runner_session; DROP TABLE dispatch_inputs; DROP TABLE session_inputs; DROP TABLE admitted_messages; DROP TABLE IF EXISTS agent_lifecycle; ALTER TABLE decisions DROP COLUMN kind; ALTER TABLE decisions DROP COLUMN at; DROP TABLE IF EXISTS quota_holds; DROP TABLE IF EXISTS owner_anchors; DROP TABLE IF EXISTS joined_rooms; ALTER TABLE engagements DROP COLUMN allocated_tokens; DROP TABLE IF EXISTS owner_shared_tool_policies;PRAGMA user_version=3; INSERT INTO runner_sessions(id,engagement_id,binding) SELECT 'duplicate_old',engagement_id,json_set(binding,'$.id','duplicate_old') FROM runner_sessions WHERE id='a';").unwrap();
     drop(inspect);
     assert!(DomainRepository::open(&root.path().join("state")).is_err());
     let inspect = sql(&root);

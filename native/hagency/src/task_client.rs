@@ -337,7 +337,7 @@ mod retained_tests {
     use std::io::{Seek, Write};
     #[test]
     fn native_task_client_retained_context() {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let directory = root.path().join("contexts");
         private::directory(&directory).unwrap();
         let directory = directory.canonicalize().unwrap();

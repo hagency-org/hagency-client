@@ -382,7 +382,7 @@ fn native_upload_settlement_process() {
         });
         return;
     }
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     child(root.path(), "write");
     child(root.path(), "settle");
     child(root.path(), "replay");

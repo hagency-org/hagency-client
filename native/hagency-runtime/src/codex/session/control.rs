@@ -6,8 +6,10 @@ use std::{collections::BTreeMap, future::Future, pin::Pin};
 const MAX_CALLBACKS: usize = 16;
 
 /// Explicit finite maintenance for owner interaction, not an execution renewal.
-/// Both fields are milliseconds. Their sum must fit the ORIGINAL transport
-/// lifetime; the response reserve must cover its existing write timeout.
+/// Both fields are milliseconds. Their sum fits the original transport lifetime
+/// unless a live shared activity lease is attached. That lease must still be
+/// renewed independently; this wait never extends it. The response reserve must
+/// cover the existing write timeout.
 #[derive(Clone, Copy, Debug)]
 pub struct ApprovalControlPolicy {
     pub owner_wait_ms: u64,

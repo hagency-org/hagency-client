@@ -1,5 +1,19 @@
 use hagency_core::custody::{Delivery, MAX_DELIVERY_BYTES};
 use hagency_store::{DomainStore, Error, Store};
+/// Explicit process-fixed resource authority for isolated native-host fixtures.
+/// Not compiled into production/default builds; never uses the OS-owner root.
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub mod test_support {
+    pub fn initialize_resource_authority_at(
+        root: &std::path::Path,
+    ) -> Result<(), hagency_platform::legacy_writer::Error> {
+        hagency_platform::legacy_writer::test_support::initialize(root)
+    }
+    pub fn initialize_resource_authority() -> Result<(), hagency_platform::legacy_writer::Error> {
+        hagency_platform::legacy_writer::test_support::initialize_process_root().map(|_| ())
+    }
+}
 mod alerts;
 pub mod bootstrap;
 pub mod bot_commands;
@@ -10,6 +24,7 @@ pub mod inspect;
 pub mod mcp;
 pub mod native_owner;
 mod operator;
+mod operator_graphs;
 pub mod operator_cli;
 pub mod ops;
 pub mod owner_host;

@@ -109,7 +109,7 @@ impl Default for Fixture {
 
 impl Fixture {
     pub fn new() -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let mut db = DomainRepository::open(&root.path().join("domain")).unwrap();
         db.register(&domain::registration()).unwrap();
         let pool = domain::resource("pool", "seat", 1000);

@@ -91,6 +91,11 @@ fn seed_children(sql: &Connection, engagement: &str, index: usize) {
     )
     .unwrap();
     sql.execute(
+        "INSERT INTO owned_dispatch_execution_policies(dispatch_id,engagement_id,yolo,captured_at) VALUES(?1,?2,1,1)",
+        rusqlite::params![format!("dispatch_{suffix}"), engagement],
+    )
+    .unwrap();
+    sql.execute(
         "INSERT INTO task_operation_receipts(dispatch_id,call_id,digest,response) \
          VALUES(?1,'call_one','d','{}')",
         [format!("dispatch_{suffix}")],
@@ -168,7 +173,7 @@ fn seed_children(sql: &Connection, engagement: &str, index: usize) {
 
 impl Fixture {
     fn new() -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let mut db = DomainRepository::open(&root.path().join("state")).unwrap();
         db.register(&registration()).unwrap();
         let resource = resource("preset", "seat", 1000);
@@ -294,6 +299,7 @@ fn native_engagement_prune_keeps_a_terminal_engagement_with_live_custody() {
         2,
         "live custody keeps the engagement"
     );
+    assert_eq!(count(&sql, "owned_dispatch_execution_policies"), 1);
     assert_eq!(
         sql.query_row(
             "SELECT COUNT(*) FROM runner_dispatches WHERE id='dispatch_90'",
@@ -317,6 +323,7 @@ fn native_engagement_prune_removes_an_owned_completion_with_its_cascade() {
     f.db.sweep_engagements(2000, 0, 10).unwrap();
     let sql = f.sql();
     for (table, clause) in [
+        ("owned_dispatch_execution_policies", "dispatch_id='dispatch_1'"),
         ("owned_task_completions", "id='completion_1'"),
         ("task_operation_receipts", "dispatch_id='dispatch_1'"),
         ("final_replies", "id='reply_1'"),
@@ -524,5 +531,78 @@ fn native_engagement_prune_readmits_a_pruned_id() {
         .unwrap(),
         0,
         "spend is forgiven at re-admission"
+    );
+}
+
+/// Scenario: a coordinator agent stays with its ledger. Its hold reads the
+/// agent's usage (`held` = max(retained, spend)), so retention keeps the
+/// engagement and every usage row instead of deleting the usage and then
+/// failing to delete the engagement; other terminal engagements still go.
+#[test]
+fn native_engagement_prune_keeps_a_coordinator_agent_and_its_usage() {
+    let mut f = Fixture::new();
+    let sql = f.sql();
+    seed_terminal(&sql, &f, "en_coordinated", "revoked");
+    seed_children(&sql, "en_coordinated", 7);
+    seed_terminal(&sql, &f, "en_plain", "revoked");
+    seed_children(&sql, "en_plain", 8);
+    sql.execute(
+        "INSERT INTO coordinator_engagements(id,authority) VALUES(?1,'{}')",
+        [&f.fleet],
+    )
+    .unwrap();
+    sql.execute(
+        "INSERT INTO coordinator_resources(id,engagement_id,resource_id,preset_id,seat_id,revision,\
+         allocated_tokens,period,period_key,managers) \
+         VALUES('grant_one',?1,?2,'preset','seat',1,500,'monthly','2026-10','[]')",
+        rusqlite::params![f.fleet, f.resource_id],
+    )
+    .unwrap();
+    sql.execute(
+        "INSERT INTO coordinator_agents(agent_id,resource_allocation_id,allocated_tokens,\
+         retained_tokens,command_id,decision) \
+         VALUES('en_coordinated','grant_one',200,200,'approve_coordinated','{}')",
+        [],
+    )
+    .unwrap();
+    let rows = |sql: &Connection, table: &str, id: &str| -> i64 {
+        sql.query_row(
+            &format!("SELECT COUNT(*) FROM {table} WHERE engagement_id=?1"),
+            [id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    let periods = rows(&sql, "usage_periods", "en_coordinated");
+    let sources = rows(&sql, "usage_sources", "en_coordinated");
+    assert!(periods > 0 && sources > 0, "the fixture seeds usage");
+    drop(sql);
+    // ceiling 0: both are outside the kept window.
+    let outcome = f.db.sweep_engagements(2000, 0, 10).unwrap();
+    let sql = f.sql();
+    assert_eq!(
+        rows(&sql, "usage_periods", "en_coordinated"),
+        periods,
+        "the usage behind the ledger hold stays"
+    );
+    assert_eq!(rows(&sql, "usage_sources", "en_coordinated"), sources);
+    assert_eq!(
+        sql.query_row(
+            "SELECT COUNT(*) FROM engagements WHERE id='en_coordinated'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(outcome.pruned, 1, "the other terminal engagement is pruned");
+    assert_eq!(
+        sql.query_row(
+            "SELECT COUNT(*) FROM engagements WHERE id='en_plain'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
     );
 }

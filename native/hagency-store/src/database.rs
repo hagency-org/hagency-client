@@ -53,6 +53,12 @@ pub(crate) fn open(directory: &Path, definition: Schema) -> Result<Database, Err
         }
     }
     let mut db = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+    // Even a rejected foreign/archive file must not be checkpointed or lose
+    // its WAL companions when this connection drops during validation.
+    db.set_db_config(
+        rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+        true,
+    )?;
     db.busy_timeout(Duration::from_millis(100))?;
     let version = if new {
         0
@@ -111,10 +117,6 @@ pub(crate) fn open(directory: &Path, definition: Schema) -> Result<Database, Err
     // are replayed by the next open, which already admits leftover -wal, -shm
     // and -journal files above. Every commit is synced under synchronous=FULL,
     // so no committed data depends on the close-time checkpoint.
-    db.set_db_config(
-        rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
-        true,
-    )?;
     db.pragma_update(None, "journal_mode", "WAL")?;
     db.pragma_update(None, "synchronous", "FULL")?;
     db.pragma_update(None, "foreign_keys", "ON")?;

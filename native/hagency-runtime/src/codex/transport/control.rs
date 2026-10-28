@@ -25,7 +25,7 @@ impl<R, W, E> Driver<R, W, E> {
             && reserve_ms >= self.limits.write_timeout_ms
             && owner_ms.checked_add(reserve_ms).is_some_and(|total| {
                 total <= MAX_REQUEST_MS
-                    && Instant::now() + Duration::from_millis(total) <= self.lifetime
+                    && (if self.shared_activity.is_some() {self.has_live_shared_activity()} else {Instant::now() + Duration::from_millis(total) <= self.lifetime})
             })
     }
     pub(in crate::codex) fn approval_deadlines(
@@ -40,7 +40,7 @@ impl<R, W, E> Driver<R, W, E> {
             .ok_or(Error::Closed)?;
         let owner = self.origin + Duration::from_millis(admitted + owner_ms);
         let response = owner + Duration::from_millis(reserve_ms);
-        if owner <= Instant::now() || response > self.lifetime {
+        if owner <= Instant::now() || (if self.shared_activity.is_some() {!self.has_live_shared_activity()} else {response > self.lifetime}) {
             return Err(Error::Timeout);
         }
         Ok((owner, response))
@@ -219,4 +219,21 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> Driver<R
         }
         self.check(deadline)
     }
+}
+
+#[cfg(test)]
+mod shared_wait_tests {
+ use super::*;
+ #[test] fn human_wait_never_extends_or_revives_the_activity_lease(){
+  let mut driver=Driver::new((),(),(),Limits{write_timeout_ms:1000,event_wait_ms:30_000,lifetime_ms:30_000}).unwrap();
+  assert!(!driver.control_policy_fits(120_000,5000));
+  let live=std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));let gate=live.clone();let deadline=Instant::now()+Duration::from_secs(20);
+  driver.attach_shared_activity(std::sync::Arc::new(move||gate.load(std::sync::atomic::Ordering::Acquire).then_some(deadline))).unwrap();
+  assert!(driver.control_policy_fits(120_000,5000));
+  assert_eq!(driver.effective_lifetime(),deadline);
+  assert!(!driver.control_policy_fits(MAX_REQUEST_MS,5000));
+  live.store(false,std::sync::atomic::Ordering::Release);
+  assert!(!driver.control_policy_fits(1000,1000));
+  assert!(driver.check(Instant::now()+Duration::from_secs(120)).is_err());
+ }
 }

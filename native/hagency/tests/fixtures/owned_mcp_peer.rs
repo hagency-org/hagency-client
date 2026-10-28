@@ -729,19 +729,26 @@ fn fake() -> io::Result<()> {
         receipt("warm-thread", json!({"pid":std::process::id()}))?;
     }
     let params = &thread["params"];
-    if params["approvalPolicy"] != "on-request"
-        || params["sandbox"] != "workspace-write"
+    let read_only = Path::new("owned-mcp.readonly-policy").is_file();
+    let unrestricted = !read_only && Path::new("owned-mcp.unrestricted-policy").is_file();
+    let policy = if unrestricted { "never" } else { "on-request" };
+    let sandbox = if read_only { "read-only" } else if unrestricted { "danger-full-access" } else { "workspace-write" };
+    let sandbox_type = if read_only { "readOnly" } else if unrestricted { "dangerFullAccess" } else { "workspaceWrite" };
+    if params["approvalPolicy"] != policy
+        || params["sandbox"] != sandbox
         || params["approvalsReviewer"] != "user"
     {
         return Err(invalid());
     }
     send(
         &mut output,
-        json!({"id":thread["id"],"result":{"thread":{"id":"owned-thread","cwd":params["cwd"],"status":{"type":"idle"},"turns":[]},"cwd":params["cwd"],"model":params["model"],"modelProvider":"offline","approvalPolicy":"on-request","approvalsReviewer":"user","sandbox":{"type":"workspaceWrite"}}}),
+        json!({"id":thread["id"],"result":{"thread":{"id":"owned-thread","cwd":params["cwd"],"status":{"type":"idle"},"turns":[]},"cwd":params["cwd"],"model":params["model"],"modelProvider":"offline","approvalPolicy":policy,"approvalsReviewer":"user","sandbox":{"type":sandbox_type}}}),
     )?;
     let turn = request(&mut input, "turn/start", &mut log)?;
     if turn["params"]["threadId"] != "owned-thread"
-        || turn["params"]["sandboxPolicy"]["networkAccess"] != false
+        || turn["params"]["approvalPolicy"] != policy
+        || turn["params"]["sandboxPolicy"]["type"] != sandbox_type
+        || (!unrestricted && turn["params"]["sandboxPolicy"]["networkAccess"] != false)
     {
         return Err(invalid());
     }

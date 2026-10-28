@@ -204,7 +204,7 @@ impl Profile {
                 "include_environment_context=false",
             ])
             .env_clear()
-            .env("HOME", &self.home)
+            .env("HOME", hagency_platform::codex_process_home(&self.home)?)
             .env("CODEX_HOME", &self.codex_home)
             .current_dir(&self.cwd)
             .stdin(std::process::Stdio::piped())
@@ -392,7 +392,7 @@ pub async fn sealed_shared_overrides(
         Ok(overrides)
     }
     .await;
-    let _ = probe.stop().await;
+    probe.stop().await?;
     result
 }
 pub fn verify_shared_configuration(c: &Value, home: &std::path::Path) -> Result<()> {

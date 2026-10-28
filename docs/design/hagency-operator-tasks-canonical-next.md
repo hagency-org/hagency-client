@@ -1,0 +1,27 @@
+# Retained Tasks and Board: canonical storage dependency
+
+The post-22 read checkpoint covers the original MGT-089, MGT-091, MGT-097 and MGT-098 reads only. It reads an authenticated profile's already-bound legacy DomainStore. It does not complete Tasks parity for adopted profiles. MGT-090/092–096 writes remain unported to the mini app. Shared-agent work history and canonical runner tasks are different objects.
+
+## Evidence and current boundary
+
+- Original native semantics: `native/hagency-store/src/domain/operator_tasks.rs`; original JS `lib/task-store.js` at `4a8a8ac25e43e645345fc25987261e0d7a644fcd`. IDs, five statuses, timestamps, assignee text, parent IDs, labels and comment order are retained. Original names in task records are historical text, not verified Matrix identities.
+- Current adoption: `domain/owner_resources/adoption/inventory.rs::collect` rejects every nonempty domain table except identity, seats, resources and private management custody. Thus populated `operator_tasks` or `operator_task_comments` blocks the current transfer. The focused `operator_history_is_not_silently_discarded_by_existing_resource_adoption` regression proves the task case.
+- `adoption.rs::Plan` version 1 records the exact inventory/profile and `archives.rs::Manifest` binds its digest. The current Tasks read must not turn an absent task table/projection into evidence of an empty personal history. It returns `task_history_not_migrated` for adopted backing, without reading the archive.
+- The original Board groups registered project IDs and active legacy engagement names, then counts tasks by assignee text. It does not establish a task's authoritative project or execution state. Unavailable health, filesystem, binding and activity columns remain explicitly unavailable.
+
+## Proposed next source slice (not implemented here)
+
+1. Add canonical tables keyed by **full profile digest plus original task ID**: task fields, comments with original ordinal, and an immutable task-import receipt. Never reuse the registry's unscoped legacy `operator_tasks` table. Imported creator/comment author strings remain marked historical; preserve every original field and timestamp.
+2. Produce a non-deserializable task snapshot from the exact already-owned source connection while the source writers are stopped and physical custody is retained. Include source schema, profile/owner, task count, ordered task/comment digests and original task IDs in a new reviewed transfer version. Bounded chunks and a digest manifest may handle large histories; a partial scan, unknown schema, duplicate/colliding ID, invalid relation or changed source refuses activation. No caller path/SQL/author input and no archived database opener.
+3. Commit all task rows and an exact original transfer receipt into inactive canonical storage before activating the transferred profile. Replays compare the original immutable manifest; a lost reply cannot import again or replace a task. Source fencing, cancellation and postcommit authority loss keep the original recovery identity. Old version-1 plan bytes/digests remain unchanged. Populated task history cannot be added to the old resource-only allowlist without this proof.
+4. For an already-active version-1 adoption, permit an explicitly versioned empty-history initialization only after a native canonical read proves the exact active original plan and the known version-1 source contract that excluded nonempty task tables. Unknown/future versions or missing original provenance remain unavailable. This must not reopen the archive or claim to have imported rows. Test this separately from populated-history transfer.
+5. Board migration needs its own **descriptive** original project/assignee snapshot; copying engagement execution authority is forbidden. Preserve original project IDs/names and assignee associations for historical lanes. Do not replace them with unrelated central project IDs. A current live central board is a separate contract, not an inferred upgrade of the imported snapshot.
+6. Route the existing typed task reads through canonical adopted backing only after its task-import/empty-history receipt is verified under the current profile. Keep the existing legacy read path for installations not yet transferred.
+
+## Later task writers
+
+Original console writers accept raw JSON and free-form authors and have no management command receipt or task CAS. They cannot be directly exposed to a script. Add closed Create/Edit/Delete/Accept/Transition/Comment commands with native-generated original command identity, authenticated current author for new content, task revision CAS and immutable replay receipts. Preserve the original legal status transitions and original records; a CAS conflict must refresh, never overwrite or retry with new IDs automatically. No task edit dispatches agent work.
+
+Required regression cases: full field/comment/order equality; same task ID in different profiles; missing or changed source; interrupted snapshot/fence/import/restart; duplicate manifest and conflicting replay; old plan byte preservation; retirement while queued/after commit; no archived source open; current account/package denial; task-only transfer leaves resource/provider/seat/grants and worker custody unchanged.
+
+Actual mini-app UI acceptance and the canonical task transfer are pending. This note is a dependency proposal, not an implementation or migration-complete claim.

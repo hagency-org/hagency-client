@@ -22,7 +22,10 @@
       "claude model ids: the Claude 5 family (opus-5, sonnet-5, haiku-4-5, fable-5)",
       "gpt-5.6-sol: observed in the codex CLI's own session banner, codex-cli 0.146.0",
       "framework ids and their model/provider flags: lib/frameworks/*.json",
-      "provider + model + reasoning are real fields: backend-v2.js:713 normalizeRuntimeProfileRole"
+      "provider + model + reasoning are real fields: backend-v2.js:713 normalizeRuntimeProfileRole",
+      "octos zai-coding / glm-5.3-flash: an Octos profile's primary family_id and model_id as Octos 2.0.3-rc.13 stores them (config.llm.primary); medium is the tier proposed for the operator's confirmation (ADR-193 slice 4)",
+      "gpt-6.1-sol and gpt-6-astra: returned by the authenticated Codex account model catalog on 2026-10-19; supported efforts checked against https://developers.openai.com/api/docs/models/gpt-6.1-sol and https://developers.openai.com/api/docs/models/gpt-6-astra.",
+      "Current Codex role tiers are Hagency policy, not provider quality guarantees: retain low -> lightweight, medium -> medium, and high/xhigh/max -> strong. Enrollment intersects this enumeration with the selected account live catalog; old profiles and defaults are unchanged."
     ],
     "unverified": [
       "Octos and Hermes model strings below are the provider FAMILIES the operator named, not",
@@ -45,7 +48,7 @@
       "displayName": "Reviewer",
       "defaultTier": "strong",
       "crossFamily": true,
-      "note": "lib/matrix-agent.js:26 — 'Cross-model review = staff review from two different model families at strong.' A reviewer SHOULD come from a different family than the author, so this role is the one where a provider offering only one family cannot fill both sides alone."
+      "note": "lib/matrix-agent.js:26 \u2014 'Cross-model review = staff review from two different model families at strong.' A reviewer SHOULD come from a different family than the author, so this role is the one where a provider offering only one family cannot fill both sides alone."
     },
     "coding": {
       "displayName": "Software Engineer",
@@ -67,7 +70,7 @@
   "$acceptsComment": [
     "A combination qualifies for a role if its tier rank is >= the role's defaultTier rank.",
     "Subsumption is inherited from matrix-agent.js, so `strong` entries also fill `medium` and",
-    "`lightweight` roles — a contributor lending only Opus can serve every role, and pays Opus",
+    "`lightweight` roles \u2014 a contributor lending only Opus can serve every role, and pays Opus",
     "rates to write documentation. That trade-off belongs to the contributor, so the console",
     "shows it rather than preventing it."
   ],
@@ -85,6 +88,48 @@
         "model": "gpt-5.6-sol",
         "family": "gpt",
         "reasoning": "high"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-6.1-sol",
+        "family": "gpt",
+        "reasoning": "high"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-6.1-sol",
+        "family": "gpt",
+        "reasoning": "xhigh"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-6.1-sol",
+        "family": "gpt",
+        "reasoning": "max"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-6-astra",
+        "family": "gpt",
+        "reasoning": "high"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-6-astra",
+        "family": "gpt",
+        "reasoning": "xhigh"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-6-astra",
+        "family": "gpt",
+        "reasoning": "max"
       },
       {
         "framework": "octos",
@@ -126,10 +171,30 @@
         "reasoning": "medium"
       },
       {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-6.1-sol",
+        "family": "gpt",
+        "reasoning": "medium"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-6-astra",
+        "family": "gpt",
+        "reasoning": "medium"
+      },
+      {
         "framework": "octos",
         "provider": "google",
         "model": "gemini",
         "family": "gemini"
+      },
+      {
+        "framework": "octos",
+        "provider": "zai-coding",
+        "model": "glm-5.3-flash",
+        "family": "glm"
       }
     ],
     "lightweight": [
@@ -149,6 +214,20 @@
         "framework": "codex",
         "provider": "openai",
         "model": "gpt-5.6-sol",
+        "family": "gpt",
+        "reasoning": "low"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-6.1-sol",
+        "family": "gpt",
+        "reasoning": "low"
+      },
+      {
+        "framework": "codex",
+        "provider": "openai",
+        "model": "gpt-6-astra",
         "family": "gpt",
         "reasoning": "low"
       }
@@ -180,13 +259,13 @@
   ],
   "$budgetComment": [
     "Per-agent capacity budget: the ceiling is attached to the AGENT, whose model is fixed by",
-    "its runtimeProfile — e.g. one Claude Code agent on Opus, 5,000,000 tokens per month.",
+    "its runtimeProfile \u2014 e.g. one Claude Code agent on Opus, 5,000,000 tokens per month.",
     "",
     "Consequence the console must show: an engagement draws on one agent's ceiling, so two",
     "projects wanting an architect served by the same Opus agent SHARE that 5M. Over-commitment",
     "is therefore per agent, not against a global pool.",
     "",
-    "NEITHER FIELD IS ENFORCED TODAY. There is no token accounting anywhere in this repo — every",
+    "NEITHER FIELD IS ENFORCED TODAY. There is no token accounting anywhere in this repo \u2014 every",
     "`usage`/`budget` match in lib/ and backend-v2.js is a CLI help string. Until that exists a",
     "ceiling is a declaration of intent, and the console must label it as one."
   ],

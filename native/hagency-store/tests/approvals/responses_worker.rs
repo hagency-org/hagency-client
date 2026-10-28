@@ -49,7 +49,7 @@ async fn native_approval_response_caller_loss() {
         "late_begin_ack",
         "write_receipt_loss",
     ] {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let (mut db, cap, id) = setup(root.path());
         let sql = rusqlite::Connection::open(root.path().join("state/domain.sqlite3")).unwrap();
         let original = if mode == "consume_ack" {
@@ -212,7 +212,7 @@ async fn native_approval_response_caller_loss() {
 
 #[tokio::test]
 async fn native_approval_response_clock() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let (mut db, cap, id) = setup(root.path());
     let inspect = rusqlite::Connection::open(root.path().join("state/domain.sqlite3")).unwrap();
     inspect.busy_timeout(Duration::ZERO).unwrap();
@@ -260,7 +260,8 @@ async fn native_approval_response_clock() {
         // attempt whose window held, and one must hold.
         let mut measured = false;
         for _attempt in 0..8 {
-            let root = tempfile::tempdir().unwrap();
+            let root =
+                hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
             let (mut db, cap, id) = setup(root.path());
             let grant = db
                 .authorize_approval_response(&cap, &id, writer_time().unwrap())
@@ -329,7 +330,7 @@ async fn native_approval_response_clock() {
 /// execution crate's two branches are proven in its own suite.
 #[tokio::test]
 async fn native_domain_acceptance_reply_timeout_reconciles() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let (mut db, cap, id) = setup(root.path());
     let grant = db
         .authorize_approval_response(&cap, &id, writer_time().unwrap())

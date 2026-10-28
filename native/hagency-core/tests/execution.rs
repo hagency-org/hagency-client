@@ -172,3 +172,144 @@ fn native_execution_paths() {
         PathFlavor::Windows.normalize("c:/a")
     );
 }
+
+/// A Claude Code permission request (ADR-192): the reusable scope is the tool
+/// name and its exact canonical input. The session, prompt and control
+/// request IDs are binding data, never part of the key, and no field of the
+/// input is widened (no command prefix, no path normalization).
+#[test]
+fn native_execution_claude_exact_tool_call() {
+    let original = json!({"agentId":"agent-one","workspace":"/work/小白","taskId":"task-one","mayWrite":true,
+        "method":hagency_core::execution::CLAUDE_TOOL_METHOD,
+        "params":{"threadId":"session-one","turnId":"prompt","itemId":"request-one","toolName":"Bash",
+            "toolUseId":"toolu-one","input":{"command":"npm test","description":"Run tests"}}});
+    let exact = scope(&original).unwrap();
+    assert_eq!(exact.scope.kind, ScopeKind::ExactToolCall);
+    assert_eq!(
+        exact.scope.description,
+        "Exact tool call:\nTool: Bash\nInput: {\"command\":\"npm test\",\"description\":\"Run tests\"}"
+    );
+    // Key order in the input is not part of the scope.
+    let mut reordered = original.clone();
+    reordered["params"]["input"] = json!({"description":"Run tests","command":"npm test"});
+    assert_eq!(scope(&reordered).unwrap().scope.key, exact.scope.key);
+    // Binding data never reaches the key.
+    let mut rebound = original.clone();
+    rebound["params"]["threadId"] = json!("session-two");
+    rebound["params"]["itemId"] = json!("request-two");
+    rebound["params"]["toolUseId"] = json!("toolu-two");
+    assert_eq!(scope(&rebound).unwrap().scope.key, exact.scope.key);
+    // Every input field, the tool and the workspace are.
+    for (pointer, value) in [
+        ("/params/input/command", json!("npm test -- --all")),
+        ("/params/input/description", json!("Run the suite")),
+        ("/params/toolName", json!("Write")),
+        ("/workspace", json!("/work/other")),
+        ("/mayWrite", json!(false)),
+    ] {
+        let mut changed = original.clone();
+        *changed.pointer_mut(pointer).unwrap() = value;
+        assert_ne!(
+            scope(&changed).unwrap().scope.key,
+            exact.scope.key,
+            "{pointer}"
+        );
+    }
+    // Unknown fields, a missing or non-object input, and an unbounded tool
+    // name have no reusable scope; that is never an allow.
+    for (pointer, value) in [
+        ("/params/extra", json!(true)),
+        ("/params/input", json!("npm test")),
+        ("/params/toolName", json!("")),
+        ("/params/toolName", json!("x".repeat(8193))),
+    ] {
+        let mut changed = original.clone();
+        changed["params"][pointer.trim_start_matches("/params/")] = value;
+        assert!(scope(&changed).is_none(), "{pointer}");
+    }
+    let mut missing = original.clone();
+    missing["params"].as_object_mut().unwrap().remove("input");
+    assert!(scope(&missing).is_none());
+    let mut large = original.clone();
+    large["params"]["input"]["command"] = json!("y".repeat(8000));
+    large["params"]["input"]["description"] = json!("z".repeat(8000));
+    assert!(scope(&large).is_none());
+}
+
+/// An Octos approval (ADR-193 decision 4): a shell command derives the same
+/// exact-command scope a Codex command does, from its command line and
+/// working directory. The session, turn and approval IDs are binding data,
+/// never part of the key; any other kind has no reusable scope.
+#[test]
+fn native_execution_octos_shell_scope() {
+    let original = json!({"agentId":"agent-one","workspace":"/work/小白","taskId":"task-one","mayWrite":true,
+        "method":hagency_core::execution::OCTOS_APPROVAL_METHOD,
+        "params":{"threadId":"session-one","turnId":"turn-one","itemId":"approval-one",
+            "toolName":"shell","octosTurnId":"turn-one","title":"Run a command","body":"rm -rf build",
+            "command":"rm -rf build","cwd":"/work/小白"}});
+    let exact = scope(&original).unwrap();
+    assert_eq!(exact.scope.kind, ScopeKind::ExactCommand);
+    assert_eq!(
+        exact.scope.description,
+        "Exact command:\nrm -rf build\nWorking directory: /work/小白"
+    );
+    // The same command in the same place is the same scope as for Codex.
+    let codex = json!({"agentId":"agent-one","workspace":"/work/小白","taskId":"task-one","mayWrite":true,
+        "method":"item/commandExecution/requestApproval",
+        "params":{"threadId":"thread","turnId":"turn","itemId":"item","command":"rm -rf build","cwd":"/work/小白"}});
+    assert_eq!(scope(&codex).unwrap().scope.key, exact.scope.key);
+    // Binding data and wording never reach the key.
+    let mut rebound = original.clone();
+    for (key, value) in [
+        ("threadId", "session-two"),
+        ("itemId", "approval-two"),
+        ("octosTurnId", "turn-two"),
+        ("title", "Another title"),
+        ("body", "Another body"),
+    ] {
+        rebound["params"][key] = json!(value);
+    }
+    assert_eq!(scope(&rebound).unwrap().scope.key, exact.scope.key);
+    // Octos's Codex-style aliases of its shell tool are the same family.
+    for tool in ["bash", "exec_command"] {
+        let mut alias = original.clone();
+        alias["params"]["toolName"] = json!(tool);
+        assert_eq!(scope(&alias).unwrap().scope.key, exact.scope.key, "{tool}");
+    }
+    // As Octos sends them today, an alias carries no typed command or
+    // directory, only its title and body: approve once or deny.
+    let mut untyped = original.clone();
+    untyped["params"]["toolName"] = json!("bash");
+    untyped["params"]["body"] = json!("Run command: rm -rf build");
+    for key in ["command", "cwd"] {
+        untyped["params"].as_object_mut().unwrap().remove(key);
+    }
+    assert!(scope(&untyped).is_none());
+    // The command, its directory and the workspace are.
+    for (pointer, value) in [
+        ("/params/command", json!("rm -rf build/out")),
+        ("/params/cwd", json!("/work/小白/build")),
+        ("/workspace", json!("/work/other")),
+    ] {
+        let mut changed = original.clone();
+        *changed.pointer_mut(pointer).unwrap() = value;
+        assert_ne!(
+            scope(&changed).unwrap().scope.key,
+            exact.scope.key,
+            "{pointer}"
+        );
+    }
+    // Another tool, an unknown field, or a missing command has none.
+    for (key, value) in [
+        ("toolName", json!("browser")),
+        ("extra", json!(true)),
+        ("command", json!("")),
+    ] {
+        let mut changed = original.clone();
+        changed["params"][key] = value;
+        assert!(scope(&changed).is_none(), "{key}");
+    }
+    let mut missing = original.clone();
+    missing["params"].as_object_mut().unwrap().remove("cwd");
+    assert!(scope(&missing).is_none());
+}

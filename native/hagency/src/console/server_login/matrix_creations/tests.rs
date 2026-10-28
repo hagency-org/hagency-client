@@ -1,5 +1,5 @@
 use super::*;
-fn input(kind: Kind) -> Input {
+pub(super) fn input(kind: Kind) -> Input {
     Input {
         command_id: "command-1".into(),
         kind: kind.clone(),
@@ -8,7 +8,7 @@ fn input(kind: Kind) -> Input {
         space_id: (kind == Kind::Room).then(|| "!space:example.test".into()),
     }
 }
-fn command() -> Command {
+pub(super) fn command() -> Command {
     Command {
         input: input(Kind::Room),
         origin: "https://example.test/".into(),
@@ -20,7 +20,7 @@ fn command() -> Command {
         last_error: None,
     }
 }
-fn state(c: &Command) -> Value {
+pub(super) fn state(c: &Command) -> Value {
     json!([
      {"type":"m.room.create","state_key":"","sender":c.owner,"content":{"creator":c.owner}},
      {"type":MARKER,"state_key":"","sender":c.owner,"content":{"commandId":c.input.command_id,"owner":c.owner,"kind":c.input.kind,"projectId":c.input.project_id,"spaceId":c.input.space_id}},
@@ -197,8 +197,14 @@ async fn matrix_calls_use_only_current_oauth_grant_and_fail_closed_after_expiry(
             .is_err()
     );
 }
-async fn fixture(
+pub(super) async fn fixture(
     steps: Vec<(&'static str, Value, Option<Value>)>,
+) -> (ServerLogin, tokio::task::JoinHandle<()>) {
+    fixture_with_hook(steps, |_| {}).await
+}
+pub(super) async fn fixture_with_hook(
+    steps: Vec<(&'static str, Value, Option<Value>)>,
+    hook: impl Fn(&str) + Send + 'static,
 ) -> (ServerLogin, tokio::task::JoinHandle<()>) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -228,7 +234,7 @@ async fn fixture(
                     .unwrap(),
                 expected
             );
-            let owner = expected.contains("/hagency/api/v1/");
+            let owner = expected.contains("/hagency/api/v1/") && !expected.ends_with("/discovery");
             assert!(headers.to_ascii_lowercase().contains(if owner {
                 "authorization: bearer owner-session"
             } else {
@@ -254,6 +260,7 @@ async fn fixture(
                     expected
                 );
             }
+            hook(expected);
             let body = response.to_string();
             stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",body.len(),body).as_bytes()).await.unwrap();
         }
@@ -301,7 +308,7 @@ async fn links_then_adopts_with_separate_credentials_and_never_overwrites_confli
  ("POST /hagency/api/v1/projects/prj_1/rooms/adopt",json!({"roomId":"!room:example.test"}),Some(json!({"roomId":"!room:example.test"}))),
  ]).await;
     let mut command = c.clone();
-    continue_known(&login, "cookie", &mut command)
+    continue_known(&login, "cookie", &mut command, None)
         .await
         .unwrap();
     assert_eq!(command.phase, "complete");
@@ -333,7 +340,7 @@ async fn links_then_adopts_with_separate_credentials_and_never_overwrites_confli
         ),
     ])
     .await;
-    continue_known(&login, "cookie", &mut command)
+    continue_known(&login, "cookie", &mut command, None)
         .await
         .unwrap();
     tokio::time::timeout(Duration::from_secs(5), task)
@@ -346,7 +353,7 @@ async fn links_then_adopts_with_separate_credentials_and_never_overwrites_confli
  ("GET /_matrix/client/v3/rooms/!space:example.test/state",json!([{"type":"m.space.child","state_key":"!room:example.test","content":{"via":["other.test"],"suggested":true}}]),None),
  ]).await;
     assert_eq!(
-        continue_known(&login, "cookie", &mut command)
+        continue_known(&login, "cookie", &mut command, None)
             .await
             .unwrap_err()
             .code,

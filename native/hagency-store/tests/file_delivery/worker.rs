@@ -171,7 +171,7 @@ async fn ready(
 }
 #[tokio::test]
 async fn native_file_delivery_worker_lost_and_queued() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let (db, cap) = fixture(root.path());
     let store = DomainStore::start(db, 8).unwrap();
     let (done, wait) = oneshot::channel();
@@ -248,7 +248,8 @@ async fn native_file_delivery_worker_lost_and_queued() {
     drop(db);
     for lock in [false, true] {
         for attempt in 0..5 {
-            let root = tempfile::tempdir().unwrap();
+            let root =
+                hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
             let (db, cap) = fixture(root.path());
             let store = DomainStore::start(db, 8).unwrap();
             let (id, claim) = ready(&store, &cap).await;
@@ -331,7 +332,7 @@ async fn native_file_delivery_worker_lost_and_queued() {
 
 #[tokio::test]
 async fn native_file_publication_content_writer() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let (db, cap) = fixture(root.path());
     let store = DomainStore::start(db, 8).unwrap();
     let (id, claim) = ready(&store, &cap).await;

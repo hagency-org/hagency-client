@@ -1487,7 +1487,7 @@ async fn native_owned_agents_user_scope_local_policy_privacy_and_lifecycle() {
             .status_code,
         Some(StatusCode::BAD_REQUEST)
     );
-    let workspace = tempfile::tempdir().unwrap();
+    let workspace = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let model = json!({"profile":{"model":"gpt-5.4","credential_ref":"keychain:codex:owner","workspace_root":workspace.path().to_str().unwrap()}});
     let model_path = "/console/api/owned-agents/agt_fixture/agent-model-profile";
     assert_eq!(
@@ -2030,7 +2030,7 @@ async fn real_owner_host_creates_space_room_adopts_discovers_and_creates_agent()
         .build()
         .unwrap();
     let mut browser_cookie = String::new(); // Browser starts unauthenticated; prompt=login performs one Pasion sign-in.
-    let state = tempfile::tempdir().unwrap();
+    let state = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let assets = std::env::var_os("HAGENCY_NATIVE_CONSOLE_ASSETS").expect("owner assets path");
     let host = hagency::owner_host::OwnerHost::open(
         &state.path().join("state"),
@@ -2639,7 +2639,7 @@ async fn native_owner_space_candidates_use_own_oauth_and_paginate_partial_failur
     let server = tokio::spawn(async move {
         Server::new(acceptor).serve(handler).await;
     });
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let assets = owner_cli::assets(root.path());
     let host = hagency::owner_host::OwnerHost::open(
         &root.path().join("state"),
@@ -2827,7 +2827,7 @@ async fn native_in_process_facade_pins_matrix_account_without_exposing_credentia
     });
 
     use hagency::native_owner::{Command, NativeOwner};
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let native = NativeOwner::open(
         &root.path().join("native"),
         &fake.origin,
@@ -2895,6 +2895,37 @@ async fn native_in_process_facade_pins_matrix_account_without_exposing_credentia
             .as_array()
             .unwrap()
             .is_empty()
+    );
+    // Typed native entrypoints share the journal service and bypass TestClient.
+    assert!(
+        native
+            .matrix_creations()
+            .await
+            .unwrap()
+            .creations
+            .is_empty()
+    );
+    assert_eq!(
+        native
+            .matrix_creation_status("absent-command".into())
+            .await
+            .unwrap_err()
+            .code,
+        "creation_command_not_found"
+    );
+    assert_eq!(
+        native
+            .matrix_creation_start(hagency::native_owner::MatrixCreationInput {
+                command_id: "invalid-command".into(),
+                kind: hagency::native_owner::MatrixCreationKind::Space,
+                name: "x".repeat(129),
+                project_id: None,
+                space_id: None,
+            })
+            .await
+            .unwrap_err()
+            .code,
+        "invalid_arguments"
     );
     let candidates = native
         .execute(Command::SpaceCandidates { cursor: None })

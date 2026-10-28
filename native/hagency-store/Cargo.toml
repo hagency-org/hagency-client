@@ -6,6 +6,14 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+shared-budget-execution = ["agent-budget", "shared-context", "shared-intake"]
+agent-budget = []
+shared-context = ["hagency-runtime/shared-context"]
+shared-intake = []
+test-support = ["hagency-platform/test-support"]
+resource-adoption = ["hagency-platform/resource-adoption"]
+
 [dependencies]
 hagency-platform.workspace = true
 sha2.workspace = true
@@ -13,6 +21,8 @@ hmac.workspace = true
 cap-std.workspace = true
 cap-fs-ext.workspace = true
 hagency-core.workspace = true
+hagency-runtime.workspace = true
+palpo-hagency-contract = { git = "https://github.com/palpo-im/palpo.git", rev = "d1cea837b0e559f7a26091874ec52687d279dbe3", version = "0.4.0" }
 hagency-metering.workspace = true
 time.workspace = true
 serde.workspace = true
@@ -20,7 +30,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 getrandom.workspace = true
-rusqlite = { workspace = true, features = ["bundled", "trace"] }
+rusqlite = { workspace = true, features = ["bundled", "trace", "fallible_uint", "hooks"] }
 # Board #113: a skipped `!` line must say WHY it was skipped. The live
 # regression left no trace at all, so the operator could not tell a dropped
 # command from a command nobody had yet admitted.
@@ -30,6 +40,8 @@ tracing.workspace = true
 rustix = { workspace = true, features = ["process"] }
 
 [dev-dependencies]
+hagency-agent-local = { path = "../hagency-agent-local" }
+hagency-platform = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true
 
 [target.'cfg(windows)'.dependencies]

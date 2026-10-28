@@ -41,7 +41,7 @@ fn review_available(db: &DomainRepository, fleet: &str) -> bool {
 }
 #[test]
 fn domain_qualification_and_cross_family() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&root.path().join("state")).unwrap();
     let reg = registration();
     db.register(&reg).unwrap();

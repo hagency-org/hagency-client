@@ -24,7 +24,7 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let state = root.path().join("state");
         let custody = Store::start(Repository::open(&state).unwrap(), 16).unwrap();
         let mut db = DomainRepository::open(&state).unwrap();

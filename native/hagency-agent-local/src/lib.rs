@@ -4,6 +4,7 @@
 //! a retry which can charge again requires a fresh call ID under the original requester.
 pub mod codex;
 pub mod inbox;
+pub mod reconciliation;
 #[cfg(unix)]
 pub mod room_files;
 pub mod runtime;
@@ -27,6 +28,8 @@ pub enum Error {
     Denied,
     #[error("provider execution outcome is unknown")]
     Unknown,
+    #[error("installation resource ownership unavailable")]
+    Installation(#[from] hagency_platform::legacy_writer::Error),
     #[error("idempotency or revision conflict")]
     Conflict,
     #[error(transparent)]
@@ -232,6 +235,7 @@ pub enum Layer {
 pub struct Ledger {
     db: Connection,
     owner: String,
+    _legacy_writer: hagency_platform::legacy_writer::LegacyWriterAdmission,
 }
 impl Ledger {
     /// Open only the new schema. Identity must come from the local authenticated session.
@@ -240,6 +244,10 @@ impl Ledger {
         if !owner.starts_with('@') || !owner.contains(':') {
             return Err(Error::Invalid("owner Matrix ID"));
         }
+        #[cfg(test)]
+        hagency_platform::legacy_writer::test_support::initialize_process_root()?;
+        let legacy_writer =
+            hagency_platform::legacy_writer::LegacyWriterAdmission::acquire_for_legacy_startup()?;
         let db = Connection::open(path)?;
         db.busy_timeout(std::time::Duration::from_secs(5))?;
         // Serialize the decision as well as DDL: a waiter must see the schema
@@ -283,6 +291,7 @@ impl Ledger {
         Ok(Self {
             db,
             owner: owner.into(),
+            _legacy_writer: legacy_writer,
         })
     }
     /// Bind fresh local data permanently to the authenticated server/issuer/sub/MXID
@@ -756,39 +765,39 @@ impl Ledger {
         key(agent)?;
         self.write_model_profile(agent, profile)
     }
-    fn write_model_profile(&mut self, agent: &str, profile: &ModelProfile) -> Result<()> {
-        if !profile.reasoning_effort.is_empty()
-            && ![
-                "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
-            ]
-            .contains(&profile.reasoning_effort.as_str())
+    /// Compare the complete private model/workspace snapshot under the writer lock.
+    /// A stale editor cannot overwrite a later provider or workspace choice.
+    pub fn set_agent_model_profile_checked(
+        &mut self,
+        owner: &str,
+        agent: &str,
+        expected_digest: &str,
+        profile: &ModelProfile,
+    ) -> Result<()> {
+        self.owner(owner)?;
+        key(agent)?;
+        if expected_digest.len() != 64
+            || !expected_digest
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
         {
-            return Err(Error::Invalid("reasoning effort"));
+            return Err(Error::Invalid("model digest"));
         }
-        for value in [
-            &profile.model,
-            &profile.credential_ref,
-            &profile.workspace_root,
-        ] {
-            key(value)?;
+        validate_model_profile(profile)?;
+        let tx = self
+            .db
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = read_model_profile_on(&tx, agent)?;
+        if model_profile_digest(current.as_ref())? != expected_digest {
+            return Err(Error::Conflict);
         }
-        if !(profile.credential_ref.starts_with("keychain:")
-            || runtime::managed_reference(&profile.credential_ref).is_some()
-            || profile
-                .credential_ref
-                .strip_prefix("codex-managed:shared-home:")
-                .is_some_and(|hash| {
-                    hash.len() == 64
-                        && hash
-                            .bytes()
-                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-                }))
-            || !Path::new(&profile.workspace_root).is_absolute()
-        {
-            return Err(Error::Invalid("local credential reference or workspace"));
-        }
-        self.db.execute("INSERT INTO model_profiles (agent,model,credential_ref,workspace_root,reasoning_effort,web_search) VALUES (?,?,?,?,?,?) ON CONFLICT(agent) DO UPDATE SET model=excluded.model,credential_ref=excluded.credential_ref,workspace_root=excluded.workspace_root,reasoning_effort=excluded.reasoning_effort,web_search=excluded.web_search",(agent,&profile.model,&profile.credential_ref,&profile.workspace_root,&profile.reasoning_effort,profile.web_search))?;
+        write_model_profile_on(&tx, agent, profile)?;
+        tx.commit()?;
         Ok(())
+    }
+    fn write_model_profile(&mut self, agent: &str, profile: &ModelProfile) -> Result<()> {
+        validate_model_profile(profile)?;
+        write_model_profile_on(&self.db, agent, profile)
     }
     pub fn model_profile(&self, scope: &Scope) -> Result<Option<ModelProfile>> {
         verify(&self.db, scope)?;
@@ -800,22 +809,7 @@ impl Ledger {
         self.read_model_profile(agent)
     }
     fn read_model_profile(&self, agent: &str) -> Result<Option<ModelProfile>> {
-        Ok(self
-            .db
-            .query_row(
-                "SELECT model,credential_ref,workspace_root,reasoning_effort,web_search FROM model_profiles WHERE agent=?",
-                [agent],
-                |r| {
-                    Ok(ModelProfile {
-                        model: r.get(0)?,
-                        credential_ref: r.get(1)?,
-                        workspace_root: r.get(2)?,
-                        reasoning_effort: r.get(3)?,
-                        web_search: r.get(4)?,
-                    })
-                },
-            )
-            .optional()?)
+        read_model_profile_on(&self.db, agent)
     }
     pub fn context_session(&self, scope: &Scope) -> Result<Option<String>> {
         verify(&self.db, scope)?;
@@ -1224,3 +1218,65 @@ fn policy(db: &Connection, k: &str, _index: usize) -> Result<Policy> {
 }
 #[cfg(test)]
 mod tests;
+
+/// Opaque native CAS digest; no credential reference or workspace is projected.
+pub fn model_profile_digest(profile: Option<&ModelProfile>) -> Result<String> {
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&profile)?)
+    ))
+}
+fn validate_model_profile(profile: &ModelProfile) -> Result<()> {
+    if !profile.reasoning_effort.is_empty()
+        && ![
+            "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+        ]
+        .contains(&profile.reasoning_effort.as_str())
+    {
+        return Err(Error::Invalid("reasoning effort"));
+    }
+    for value in [
+        &profile.model,
+        &profile.credential_ref,
+        &profile.workspace_root,
+    ] {
+        key(value)?;
+    }
+    if !(profile.credential_ref.starts_with("keychain:")
+        || runtime::managed_reference(&profile.credential_ref).is_some()
+        || profile
+            .credential_ref
+            .strip_prefix("codex-managed:shared-home:")
+            .is_some_and(|hash| {
+                hash.len() == 64
+                    && hash
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            }))
+        || !Path::new(&profile.workspace_root).is_absolute()
+    {
+        return Err(Error::Invalid("local credential reference or workspace"));
+    }
+    Ok(())
+}
+fn write_model_profile_on(db: &Connection, agent: &str, profile: &ModelProfile) -> Result<()> {
+    db.execute("INSERT INTO model_profiles (agent,model,credential_ref,workspace_root,reasoning_effort,web_search) VALUES (?,?,?,?,?,?) ON CONFLICT(agent) DO UPDATE SET model=excluded.model,credential_ref=excluded.credential_ref,workspace_root=excluded.workspace_root,reasoning_effort=excluded.reasoning_effort,web_search=excluded.web_search",(agent,&profile.model,&profile.credential_ref,&profile.workspace_root,&profile.reasoning_effort,profile.web_search))?;
+    Ok(())
+}
+fn read_model_profile_on(db: &Connection, agent: &str) -> Result<Option<ModelProfile>> {
+    Ok(db
+            .query_row(
+                "SELECT model,credential_ref,workspace_root,reasoning_effort,web_search FROM model_profiles WHERE agent=?",
+                [agent],
+                |r| {
+                    Ok(ModelProfile {
+                        model: r.get(0)?,
+                        credential_ref: r.get(1)?,
+                        workspace_root: r.get(2)?,
+                        reasoning_effort: r.get(3)?,
+                        web_search: r.get(4)?,
+                    })
+                },
+            )
+            .optional()?)
+}

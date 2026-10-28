@@ -21,6 +21,8 @@ pub const OWNER_WAIT_EXPIRED_REASON: &str = "owner wait expired without an answe
 pub(super) mod card;
 pub(super) mod owned;
 pub(super) mod responses;
+mod management;
+mod tool_management;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Binding {
@@ -328,7 +330,31 @@ impl DomainRepository {
                 &input.engagement_id,
                 10_000,
             )?;
-            tx.execute("INSERT INTO approval_bindings(engagement_id,server_name,room_id,room_generation,incarnation) VALUES(?1,?2,?3,?4,1) ON CONFLICT(engagement_id) DO UPDATE SET server_name=excluded.server_name,room_id=excluded.room_id,room_generation=excluded.room_generation,incarnation=approval_bindings.incarnation+1 WHERE approval_bindings.room_id<>excluded.room_id OR approval_bindings.server_name<>excluded.server_name OR approval_bindings.room_generation<>excluded.room_generation",params![input.engagement_id,reg.server_name,room,input.generation])?;
+            let previous: Option<(String, String, u64)> = tx.query_row(
+                "SELECT server_name,room_id,room_generation FROM approval_bindings WHERE engagement_id=?1",
+                [&input.engagement_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            ).optional()?;
+            let changed = previous.as_ref().is_none_or(|(server, id, generation)| {
+                server != &reg.server_name || id != &room || *generation != input.generation
+            });
+            if changed {
+                let last: u64 = tx.query_row(
+                    "SELECT incarnation FROM approval_binding_incarnations WHERE engagement_id=?1",
+                    [&input.engagement_id], |r| r.get(0),
+                ).optional()?.unwrap_or(0);
+                let next = last.checked_add(1)
+                    .filter(|n| *n <= hagency_core::JSON_SAFE_MAX)
+                    .ok_or(Error::Capacity)?;
+                tx.execute(
+                    "INSERT INTO approval_binding_incarnations(engagement_id,incarnation) VALUES(?1,?2) ON CONFLICT(engagement_id) DO UPDATE SET incarnation=excluded.incarnation",
+                    params![input.engagement_id, next],
+                )?;
+                tx.execute(
+                    "INSERT INTO approval_bindings(engagement_id,server_name,room_id,room_generation,incarnation) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(engagement_id) DO UPDATE SET server_name=excluded.server_name,room_id=excluded.room_id,room_generation=excluded.room_generation,incarnation=excluded.incarnation",
+                    params![input.engagement_id,reg.server_name,room,input.generation,next],
+                )?;
+            }
         }
         tx.commit()?;
         Ok(())
@@ -1004,7 +1030,13 @@ impl DomainRepository {
             .map(|r| {
                 let (id, kind, mode, revoked) = r?;
                 let kind: String = serde_json::from_str(&kind)?;
-                if !["exact_command", "network_host", "permission_profile"].contains(&kind.as_str())
+                if ![
+                    "exact_command",
+                    "network_host",
+                    "permission_profile",
+                    "exact_tool_call",
+                ]
+                .contains(&kind.as_str())
                 {
                     return Err(Error::State);
                 }

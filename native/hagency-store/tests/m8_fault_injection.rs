@@ -24,7 +24,7 @@ fn delivery(id: &str, payload: serde_json::Value) -> Delivery {
 
 #[test]
 fn native_store_fails_closed_on_disk_full() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("state");
 
     // Establish the schema and one baseline row so the page count is stable,

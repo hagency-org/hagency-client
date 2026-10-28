@@ -1,12 +1,172 @@
 //! Token-free native commands routed through the existing authenticated service.
+pub(super) mod allocation_transport;
+mod managed_agent_matrix_transport;
+mod managed_agent_transport;
+mod managed_agent_settlement_transport;
+pub use managed_agent_settlement_transport::{AgentSettlementProgress, AgentSettlementTransport};
+#[cfg(feature="agent-budget")]
+mod managed_agent_budget_transport;
+#[cfg(feature="agent-budget")]
+pub use managed_agent_budget_transport::{AgentBudgetProgress, AgentBudgetTransport};
+mod managed_runtime;
+mod managed_runtime_transport;
+mod shared_execution;
+mod shutdown;
+pub use managed_agent_matrix_transport::{ManagedAgentMatrixTransport, ManagedMatrixProgress};
+pub use managed_agent_transport::{ManagedAgentProgress, ManagedAgentTransport};
+pub use managed_runtime_transport::{ManagedRuntimeProgress, ManagedRuntimeTransport};
+pub use shared_execution::{
+    SharedSuccessorAssessment, SharedSuccessorBudgetReview, SharedSuccessorBlockReason, SharedSuccessorDescription,
+    PreparedSharedSuccessor, SharedDemandPoll, SharedDemandProgress, SharedDemandResume,
+    SharedDemandStopReceipt, SharedDemandStopResume, SharedExecutionProgress,
+    SharedExecutionTransport, SharedSuccessorPage, SharedSuccessorResume, SharedSuccessorReview,
+    SharedSuccessorSummary, SharedWorkRecoveryProgress,
+};
 mod configuration;
+mod owner_grant;
+pub use allocation_transport::{AllocationProgress, AllocationTransport, ResourceGrantView};
+pub use owner_grant::{
+    OwnerGrantAccess, OwnerGrantChoices, OwnerGrantClosure, OwnerGrantIntents, OwnerGrantProgress,
+    OwnerGrantCancellationReview, OwnerGrantCancellationResult,
+    OwnerGrantPublicationProgress, OwnerGrantPublicationResult, OwnerGrantPublicationReview,
+    OwnerGrantPublicationState, OwnerGrantReview, OwnerGrantReviewContext, OwnerGrantReviewResult,
+    OwnerGrantState, OwnerGrantSummary,
+};
+mod matrix_creations;
+pub(super) mod project_setup;
+pub use matrix_creations::{
+    MatrixCreation, MatrixCreationEntry, MatrixCreationInput, MatrixCreationKind,
+    MatrixCreationList, MatrixCreationPhase, MatrixCreationReply, MatrixCreationResume,
+};
+pub use project_setup::{
+    AssignAdministrator, BeginSetup, EligibleSetupAllocation, FailedCommand, ProjectAdministrator,
+    ProjectReadiness, ProjectSetup, ProjectSetupTransport, RebaseSetup, SetupBinding,
+    SetupCandidates, SetupProgress, StageProgress,
+};
+mod personal_agent_settings;
+pub use personal_agent_settings::PersonalAgentQuery;
+mod personal_agent_observation;
+pub use personal_agent_observation::ObservePersonalSettings;
+mod personal_agent_policy;
+pub use personal_agent_policy::SavePersonalPolicy;
+mod personal_agent_model;
+pub use personal_agent_model::{SavePersonalModel, PreparePersonalWorkspace, PersonalModelView, PersonalModelChoice, PersonalModelChoices, PersonalModelSummary, PersonalModelReview};
+mod personal_agent_rules;
+pub use personal_agent_rules::PersonalRulesReview;
+mod management;
+mod resource_definitions;
+pub use resource_definitions::PreparedResourceTemplate;
+pub use hagency_store::management::{TemplateCreateInput,TemplateUpdateInput,TemplateDeleteInput,ResourceTemplatePage,ResourceTemplateDetail,ResourceTemplateResult};
+mod operator_task_commands;
+#[cfg(feature = "resource-adoption")]
+mod operator_graph_commands;
+#[cfg(feature = "resource-adoption")]
+mod operator_graph_reads;
+#[cfg(feature = "resource-adoption")]
+mod operator_graph_recipients;
+#[cfg(feature = "resource-adoption")]
+pub use operator_graph_recipients::{OperatorGraphRecipientOptionsQuery, OperatorGraphRecipientObserve, OperatorGraphBindRecipient};
+#[cfg(feature = "resource-adoption")]
+pub use operator_graph_commands::{OperatorGraphCreate,OperatorGraphUpdate,OperatorGraphCancel,OperatorGraphNodeDraft,OperatorGraphPatchDraft,PreparedOperatorGraph,OperatorGraphResult};
+#[cfg(feature = "resource-adoption")]
+pub use crate::operator_graphs::current::{OperatorGraphQuery,OperatorGraphDetailQuery,OperatorGraphNodeQuery,OperatorGraphPage,OperatorGraphSummary,OperatorGraphDetail,OperatorGraphNode,OperatorGraphNodeSummary};
+pub use operator_task_commands::PreparedOperatorTask;
+pub use hagency_store::management::{TaskField,CreateOperatorTask,EditOperatorTask,OperatorTaskVersion,TransitionOperatorTask,CommentOperatorTask,OperatorTaskChange,OperatorTaskResult};
+mod management_intents;
+pub(super) mod management_server;
+#[cfg(feature = "resource-adoption")]
+mod graph_history;
+#[cfg(feature = "resource-adoption")]
+pub use graph_history::GraphHistoryArchives;
+#[cfg(feature = "resource-adoption")]
+pub use crate::operator_graphs::reader::{GraphHistoryQuery, GraphHistoryDetailQuery, GraphHistoryNodeQuery, GraphHistorySummary, GraphHistoryPage, GraphHistoryDetail, GraphHistoryNode, GraphHistoryNodeSummary};
+#[cfg(feature = "resource-adoption")]
+pub use crate::operator_graphs::canonical::{OperatorGraphJournal, OperatorGraphChange, OperatorGraphNodeInput, OperatorGraphNodePatch, OperatorGraphSnapshot};
+mod operator_tasks;
+pub use management_server::agent_status::{
+    AgentAssignmentStatus, AgentExecutionStatus, AgentMembershipStatus, AgentRuntimeStatus,
+    AgentStage, AgentStatus,
+};
+pub use management_server::agents::{
+    AGENT_ADMISSION_FEATURE, AgentDefinition, AgentRequest, AgentRequestContext, AgentRequestInput,
+    AgentRequestReadiness,
+};
+#[cfg(feature = "resource-adoption")]
+mod adoption_handoff;
+mod provider;
+mod provider_identity;
+mod reconciliation;
+mod reconciliation_sources;
+#[cfg(feature = "resource-adoption")]
+mod resource_activation;
+mod source_quiescence;
+#[cfg(feature = "resource-adoption")]
+pub use adoption_handoff::{
+    AdoptedAllocationExecutor, AdoptedManagementSelection, AdoptedSharedExecutor,
+};
+pub use reconciliation_sources::{
+    SourceCensus, SourceInspectionRequest, SourceObservation, SourceObservationStatus,
+    SourceRootObservation,
+};
+#[cfg(all(feature = "resource-adoption", any(test, feature = "test-support")))]
+pub use resource_activation::initialize_resource_activation_fixture;
+#[cfg(feature = "resource-adoption")]
+pub use resource_activation::{
+    ResourceActivationContext, ResourceActivationResource, ResourceActivationReview,
+    DeviceSetupKind, DeviceSetupReview, EmptyDeviceActivationReview,
+};
+#[cfg(feature = "resource-adoption")]
+pub use source_quiescence::{EmptyDeviceReview, EmptyDeviceSource, NativeEmptyDeviceInitialization, NativeResourceAdoption};
+#[cfg(feature = "resource-adoption")]
+pub use source_quiescence::{NativeOperatorGraphInventory, OperatorGraphHistorySummary, OperatorGraphInventoryReview};
+pub use source_quiescence::{
+    QuiescedSources, SourceQuiescence, SourceQuiescenceRequest, SourceQuiescenceStatus,
+};
+#[cfg(test)]
+mod initialization_tests;
+mod resource_name;
+mod resource_edit;
+pub use resource_edit::LocalResourceEditReview;
+mod resource_create;
+pub use resource_create::ResourceConfigurationReview;
+pub use hagency_store::{ProfileChange, CeilingChange};
+mod resource_alerts;
+mod approval_bindings;
+mod tool_approvals;
+mod execution_policy;
+pub use hagency_store::management::{ExecutionPolicyListQuery, AgentExecutionPolicyPage, ExecutionPolicyQuery, ExecutionPolicyValue, PolicyApplication, AgentExecutionPolicy, EditExecutionPolicy};
+pub use hagency_store::management::{ToolApprovalQuery, ToolApprovalLookup, ToolApproval, ToolApprovalSubject, ToolApprovalSnapshot, ToolApprovalPage, ToolGrantQuery, ToolGrantMode, ToolRuleDetails, ToolGrant, ToolGrantPage, RevokeToolGrant, RevokedToolGrant};
+pub use hagency_store::management::{ResourceApprovalBinding, ResourceApprovalBindingPage, ResourceApprovalBindingQuery, RetireResourceApprovalBinding, RetiredResourceApprovalBinding};
+mod alert_observer;
+pub use hagency_store::management::{ResourceAlert, ResourceAlertPage, ResourceAlertQuery, ResourceAlertDetail, ResourceAlertDetailQuery, ResourceAlertNote, TriageResourceAlert};
+mod account_preparation;
+mod account_retirement;
+mod account_login;
+mod account_models;
+mod account_enrollment;
+pub use hagency_store::owner_resources::NamespaceEnrollment;
+pub use account_login::AccountLoginAuthorization;
+mod resource_onboarding;
 use super::*;
 use crate::owner_host::OwnerHost;
+pub use hagency_store::management::{
+    ConfigureResource, EnrollResource, Permission as ManagementPermission, PublishResource,
+    AccountInventory, AccountInventoryQuery, AccountSummary, PrepareAccount, AccountPreparation, RetireAccount, AccountRetirement,
+    AccountLoginRequest, AccountLoginStatus, AccountModelQuery,
+    RenameResource, EditLocalResource, CreateResourceConfiguration, ResourceDetail, ResourceDetailQuery, ResourceNameResult, ResourcePage,
+    ResourceQuery,
+};
+pub use hagency_store::management::{
+    OperatorBoardQuery, OperatorTaskDetailQuery, OperatorTaskQuery,
+};
+pub use hagency_store::{ResourceConfigurationResult, ResourcePublicationResult};
+pub use management::{ManagementPackage, NativeManagement};
+pub use management_server::{AgentRunMode, ManagementCommand};
+pub use resource_onboarding::ManagementRuntime;
 use salvo::test::{ResponseExt, TestClient};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
-    net::SocketAddr,
     path::Path,
     sync::{Arc, Mutex as StdMutex, Weak},
 };
@@ -42,6 +202,17 @@ pub(in crate::console) fn sdk_source_failure(error: NativeError) -> &'static str
     }
 }
 pub trait MatrixTokenSource: Send + Sync {
+    /// Trusted host provenance from a new explicit SDK sign-in. Restored SDK
+    /// sessions return false; this cannot resurrect issued runtime custody.
+    fn permits_explicit_reenrollment(&self) -> bool {
+        false
+    }
+    /// Atomically consume the exact new-sign-in permission. The trusted host
+    /// must keep this separate from account validity and return true at most
+    /// once for that OAuth success. A read-only permission flag is insufficient.
+    fn consume_explicit_reenrollment(&self) -> bool {
+        false
+    }
     /// Return the current SDK token, checking its account epoch before and after
     /// awaiting. Implementations must not call this native service recursively.
     fn access_token(
@@ -476,22 +647,11 @@ fn request(command: Command) -> Result<(&'static str, String, Option<Value>), Na
             body = Some(json!({"roomId":room_id}));
             ("POST", format!("{root}/owner-projects/{project_id}/rooms"))
         }
-        Command::CreateMatrix { input } => {
-            body = Some(input);
-            ("POST", format!("{root}/matrix-creations"))
-        }
-        Command::Creations => ("GET", format!("{root}/matrix-creations")),
-        Command::Creation { id } => {
-            key(&id)?;
-            ("GET", format!("{root}/matrix-creations/{id}"))
-        }
-        Command::ResumeCreation { id, room_id } => {
-            key(&id)?;
-            if let Some(r) = &room_id {
-                segment(r)?;
-            }
-            body = Some(json!({"roomId":room_id}));
-            ("POST", format!("{root}/matrix-creations/{id}/resume"))
+        Command::CreateMatrix { .. }
+        | Command::Creations
+        | Command::Creation { .. }
+        | Command::ResumeCreation { .. } => {
+            return Err(failure(500, "native_operation_requires_direct_dispatch"));
         }
         Command::Agents => ("GET", format!("{root}/owned-agents")),
         Command::CreateAgent { input } => {
@@ -639,8 +799,10 @@ fn request(command: Command) -> Result<(&'static str, String, Option<Value>), Na
 }
 struct Inner {
     host: OwnerHost,
+    #[cfg(feature = "resource-adoption")]
+    adoption_recovery: std::sync::OnceLock<String>,
     service: salvo::Service,
-    address: SocketAddr,
+    address: String,
     expected_origin: String,
     expected_owner: String,
     cookie: Mutex<String>,
@@ -648,12 +810,21 @@ struct Inner {
     calls: Mutex<()>,
     matrix_sync: Mutex<()>,
     configuration_stopped: std::sync::atomic::AtomicBool,
-    configuration_tasks: StdMutex<Vec<tokio::task::JoinHandle<()>>>,
+    configuration_tasks: StdMutex<Vec<super::lifecycle::RetainedTask>>,
+    configuration_custody: super::lifecycle::TaskCustody,
     callback_task: StdMutex<Option<tokio::task::JoinHandle<()>>>,
     matrix_source: StdMutex<Option<Arc<dyn MatrixTokenSource>>>,
+    management: management::Registry,
+    account_logins: account_login::Manager,
+    managed_runtime: managed_runtime::Manager,
+    shared_execution: shared_execution::Manager,
 }
 impl Drop for Inner {
     fn drop(&mut self) {
+        self.account_logins.close();
+        self.shared_execution.close();
+        self.managed_runtime.close();
+        self.management.retire();
         self.host.console.retire();
         if let Ok(tasks) = self.configuration_tasks.get_mut() {
             for task in tasks.drain(..) {
@@ -668,18 +839,100 @@ impl Drop for Inner {
     }
 }
 /// A native owner service. Neither credentials nor its private local grants are
-/// returned in command responses. Only the OAuth callback listens on loopback.
+/// returned in command responses. SDK-authenticated hosts open no listener;
+/// standalone browser authentication listens only for its OAuth callback.
 #[derive(Clone)]
 pub struct NativeOwner(Arc<Inner>);
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LoginMode {
+    Browser,
+    MatrixSdk,
+}
+enum MatrixStartup {
+    Configuration,
+    #[cfg(feature = "resource-adoption")]
+    Recovery {
+        registry: hagency_store::owner_resources::OwnerResourceRegistry,
+        migration_id: String,
+    },
+    #[cfg(feature = "resource-adoption")]
+    Adopted {
+        registry: hagency_store::owner_resources::OwnerResourceRegistry,
+        migration_id: String,
+    },
+}
 impl NativeOwner {
+    fn require_regular_mode(&self) -> Result<(), NativeError> {
+        #[cfg(feature = "resource-adoption")]
+        if self.0.adoption_recovery.get().is_some() {
+            return Err(failure(403, "source_adoption_recovery_only"));
+        }
+        Ok(())
+    }
+    /// Original selected migration recovery only. This authenticates using the
+    /// SDK and preserves synchronous host retirement, but starts no legacy
+    /// configuration worker and exposes no normal owner command authority.
+    #[cfg(feature = "resource-adoption")]
+    #[allow(clippy::too_many_arguments)]
+    pub async fn open_for_resource_adoption_with_matrix_guarded(
+        state: &Path,
+        origin: &str,
+        owner: &str,
+        source: Arc<dyn MatrixTokenSource>,
+        registry: hagency_store::owner_resources::OwnerResourceRegistry,
+        migration_id: String,
+        guard: impl FnOnce(&NativeOwner) -> Result<(), NativeError> + Send,
+    ) -> Result<Self, NativeError> {
+        key(&migration_id)?;
+        Self::open_matrix_authorized(
+            state,
+            origin,
+            owner,
+            source,
+            guard,
+            MatrixStartup::Recovery {
+                registry,
+                migration_id,
+            },
+        )
+        .await
+    }
+    /// Reopen only an activated original adoption. Resource reads use canonical
+    /// ACLs; private commands retain their original archive. Legacy execution
+    /// and definition mutations remain unavailable in this bounded adapter.
+    #[cfg(feature = "resource-adoption")]
+    #[allow(clippy::too_many_arguments)]
+    pub async fn open_adopted_management_with_matrix_guarded(
+        state: &Path,
+        origin: &str,
+        owner: &str,
+        source: Arc<dyn MatrixTokenSource>,
+        registry: hagency_store::owner_resources::OwnerResourceRegistry,
+        migration_id: String,
+        guard: impl FnOnce(&NativeOwner) -> Result<(), NativeError> + Send,
+    ) -> Result<Self, NativeError> {
+        key(&migration_id)?;
+        Self::open_matrix_authorized(
+            state,
+            origin,
+            owner,
+            source,
+            guard,
+            MatrixStartup::Adopted {
+                registry,
+                migration_id,
+            },
+        )
+        .await
+    }
     pub async fn open(state: &Path, origin: &str, owner: &str) -> Result<Self, NativeError> {
-        Self::open_inner(state, origin, owner, true).await
+        Self::open_inner(state, origin, owner, LoginMode::Browser).await
     }
     async fn open_inner(
         state: &Path,
         origin: &str,
         owner: &str,
-        start_worker: bool,
+        login_mode: LoginMode,
     ) -> Result<Self, NativeError> {
         let origin = server_login::origin(origin)
             .map_err(|e| failure(400, e))?
@@ -687,15 +940,25 @@ impl NativeOwner {
         if !owner.starts_with('@') || !owner.contains(':') || owner.len() > 255 {
             return Err(failure(400, "invalid_owner_identity"));
         }
-        let acceptor = salvo::conn::TcpListener::new("127.0.0.1:0")
-            .try_bind()
-            .await
-            .map_err(|_| failure(503, "native_callback_unavailable"))?;
-        let address = acceptor
-            .local_addr()
-            .map_err(|_| failure(503, "native_callback_unavailable"))?;
-        let host = OwnerHost::open_native(state, address)
-            .map_err(|_| failure(409, "native_owner_state_unavailable"))?;
+        // SDK mode must not create another login endpoint. The temporary
+        // callback belongs only to standalone browser authorization.
+        let (host, acceptor) = if login_mode == LoginMode::Browser {
+            let acceptor = salvo::conn::TcpListener::new("127.0.0.1:0")
+                .try_bind()
+                .await
+                .map_err(|_| failure(503, "native_callback_unavailable"))?;
+            let address = acceptor
+                .local_addr()
+                .map_err(|_| failure(503, "native_callback_unavailable"))?;
+            let host = OwnerHost::open_native(state, address)
+                .map_err(|_| failure(409, "native_owner_state_unavailable"))?;
+            (host, Some(acceptor))
+        } else {
+            let host = OwnerHost::open_embedded(state)
+                .map_err(|_| failure(409, "native_owner_state_unavailable"))?;
+            (host, None)
+        };
+        let address = host.authority.clone();
         *host
             .console
             .0
@@ -732,6 +995,8 @@ impl NativeOwner {
             .ok_or(failure(503, "native_access_unavailable"))?;
         let native = Self(Arc::new(Inner {
             host,
+            #[cfg(feature = "resource-adoption")]
+            adoption_recovery: std::sync::OnceLock::new(),
             service,
             address,
             expected_origin: origin,
@@ -742,30 +1007,83 @@ impl NativeOwner {
             matrix_sync: Mutex::new(()),
             configuration_stopped: std::sync::atomic::AtomicBool::new(false),
             configuration_tasks: StdMutex::new(Vec::new()),
+            configuration_custody: Default::default(),
+            account_logins: Default::default(),
             callback_task: StdMutex::new(None),
             matrix_source: StdMutex::new(None),
+            management: management::Registry::default(),
+            managed_runtime: managed_runtime::Manager::default(),
+            shared_execution: shared_execution::Manager::default(),
         }));
-        let router = Router::new()
-            .hoop(Callback(Arc::downgrade(&native.0)))
-            .push(Router::with_path("console/server-login/callback").get(callback));
-        let task = tokio::spawn(async move {
-            salvo::Server::new(acceptor).serve(router).await;
-        });
-        *native.0.callback_task.lock().unwrap() = Some(task);
+        if let Some(acceptor) = acceptor {
+            let router = Router::new()
+                .hoop(Callback(Arc::downgrade(&native.0)))
+                .push(Router::with_path("console/server-login/callback").get(callback));
+            let task = tokio::spawn(async move {
+                salvo::Server::new(acceptor).serve(router).await;
+            });
+            *native.0.callback_task.lock().unwrap() = Some(task);
+        }
         // Consume any bootstrap response without exposing a grant to the caller.
         let _ = grant.take_json::<Value>().await;
-        if start_worker {
+        if login_mode == LoginMode::Browser {
             configuration::start(&native);
         }
         Ok(native)
     }
+    /// Compatibility constructor for hosts without an account-transition owner
+    /// slot. Transition-capable hosts must use `open_with_matrix_guarded`.
     pub async fn open_with_matrix(
         state: &Path,
         origin: &str,
         owner: &str,
         source: Arc<dyn MatrixTokenSource>,
     ) -> Result<Self, NativeError> {
-        let native = Self::open_inner(state, origin, owner, false).await?;
+        Self::open_with_matrix_guarded(state, origin, owner, source, |_| Ok(())).await
+    }
+    /// Transition-capable hosts must register this owner in their synchronous
+    /// retirement boundary before SDK authorization or background work starts.
+    /// The guard is native-only, invoked once, and must not block or perform IO.
+    pub async fn open_with_matrix_guarded(
+        state: &Path,
+        origin: &str,
+        owner: &str,
+        source: Arc<dyn MatrixTokenSource>,
+        guard: impl FnOnce(&NativeOwner) -> Result<(), NativeError> + Send,
+    ) -> Result<Self, NativeError> {
+        Self::open_matrix_authorized(
+            state,
+            origin,
+            owner,
+            source,
+            guard,
+            MatrixStartup::Configuration,
+        )
+        .await
+    }
+    async fn open_matrix_authorized(
+        state: &Path,
+        origin: &str,
+        owner: &str,
+        source: Arc<dyn MatrixTokenSource>,
+        guard: impl FnOnce(&NativeOwner) -> Result<(), NativeError> + Send,
+        startup: MatrixStartup,
+    ) -> Result<Self, NativeError> {
+        let native = Self::open_inner(state, origin, owner, LoginMode::MatrixSdk).await?;
+        #[cfg(feature = "resource-adoption")]
+        if let MatrixStartup::Recovery { migration_id, .. }
+        | MatrixStartup::Adopted { migration_id, .. } = &startup
+        {
+            native
+                .0
+                .adoption_recovery
+                .set(migration_id.clone())
+                .map_err(|_| failure(409, "source_adoption_scope_changed"))?;
+        }
+        if let Err(error) = guard(&native) {
+            let _ = native.suspend().await;
+            return Err(error);
+        }
         *native
             .0
             .matrix_source
@@ -787,11 +1105,60 @@ impl NativeOwner {
         {
             Ok(cookie) => {
                 *native.0.cookie.lock().await = format!("hagency_console={cookie}");
-                configuration::start(&native);
+                if native
+                    .0
+                    .configuration_stopped
+                    .load(std::sync::atomic::Ordering::Acquire)
+                {
+                    let _ = native.suspend().await;
+                    return Err(failure(401, "matrix_account_changed"));
+                }
+                match startup {
+                    MatrixStartup::Configuration => configuration::start(&native),
+                    #[cfg(feature = "resource-adoption")]
+                    MatrixStartup::Recovery {
+                        registry,
+                        migration_id,
+                    } => {
+                        if let Err(error) = native
+                            .validate_adoption_recovery(&registry, &migration_id)
+                            .await
+                        {
+                            let _ = native.suspend().await;
+                            return Err(error);
+                        }
+                    }
+                    #[cfg(feature = "resource-adoption")]
+                    MatrixStartup::Adopted {
+                        registry,
+                        migration_id,
+                    } => {
+                        if let Err(error) = native
+                            .initialize_adopted_management(&registry, &migration_id)
+                            .await
+                        {
+                            let _ = native.suspend().await;
+                            return Err(error);
+                        }
+                    }
+                }
+                if native
+                    .0
+                    .configuration_stopped
+                    .load(std::sync::atomic::Ordering::Acquire)
+                {
+                    let _ = native.suspend().await;
+                    return Err(failure(401, "matrix_account_changed"));
+                }
+                #[cfg(feature = "resource-adoption")]
+                let observe = native.0.adoption_recovery.get().is_none() || native.0.management.adopted_ready().await;
+                #[cfg(not(feature = "resource-adoption"))]
+                let observe = true;
+                if observe { alert_observer::start(&native); }
                 Ok(native)
             }
             Err(e) => {
-                native.shutdown().await;
+                let _ = native.suspend().await;
                 Err(failure(
                     if e.ends_with("unavailable") { 503 } else { 401 },
                     e,
@@ -800,6 +1167,17 @@ impl NativeOwner {
         }
     }
     async fn sync_matrix(&self) -> Result<(), NativeError> {
+        self.require_regular_mode()?;
+        self.sync_matrix_source().await
+    }
+    async fn sync_management_matrix(&self) -> Result<(), NativeError> {
+        #[cfg(feature = "resource-adoption")]
+        if self.0.adoption_recovery.get().is_some() && !self.0.management.adopted_ready().await {
+            return Err(failure(403, "source_adoption_recovery_only"));
+        }
+        self.sync_matrix_source().await
+    }
+    async fn sync_matrix_source(&self) -> Result<(), NativeError> {
         let _guard = self.0.matrix_sync.lock().await;
         let source = self
             .0
@@ -853,6 +1231,10 @@ impl NativeOwner {
     pub(in crate::console) fn test_console(&self) -> &super::Console {
         &self.0.host.console
     }
+    #[cfg(test)]
+    pub(in crate::console) fn has_callback_listener(&self) -> bool {
+        self.0.callback_task.lock().unwrap().is_some()
+    }
     pub async fn identity(&self) -> Result<Identity, NativeError> {
         let d = self
             .0
@@ -872,6 +1254,10 @@ impl NativeOwner {
         })
     }
     pub fn retire(&self) {
+        self.0.account_logins.close();
+        self.0.shared_execution.close();
+        self.0.managed_runtime.close();
+        self.0.management.retire();
         self.0.host.console.retire();
         self.0
             .configuration_stopped
@@ -885,36 +1271,11 @@ impl NativeOwner {
             }
         }
     }
-    pub async fn shutdown(&self) {
-        // Fence capabilities synchronously before any awaited cleanup, including
-        // a late OAuth exchange or an in-flight runtime/provider launch.
-        self.retire();
-        let tasks = self
-            .0
-            .configuration_tasks
-            .lock()
-            .map(|mut tasks| std::mem::take(&mut *tasks))
-            .unwrap_or_default();
-        for task in tasks {
-            if tokio::task::try_id() != Some(task.id()) {
-                let _ = task.await;
-            }
-        }
-        self.0.host.console.0.authority.revoke_all().ok();
-        let login = &self.0.host.console.0.server_login;
-        login.revoke_native_all().await;
-        self.0.host.console.stop_owned_runtimes().await;
-        self.0.host.console.stop_owner_provider().await;
-        login.flush_native_revocations().await;
-        self.retire();
-        if let Some(task) = self.0.callback_task.lock().unwrap().take() {
-            task.abort();
-        }
-    }
     /// Recover only explicitly enabled bindings from this exact owner's current
     /// assigned device. Each request re-enters the normal start controller; no
     /// lease, tool permission or unknown model execution is replayed here.
     pub async fn restore_runtime_intents(&self) -> Result<Value, NativeError> {
+        self.require_regular_mode()?;
         let intents = {
             let _guard = self.0.calls.lock().await;
             self.sync_matrix().await?;
@@ -961,6 +1322,7 @@ impl NativeOwner {
         Ok(json!({"recoveries":results}))
     }
     pub async fn execute(&self, command: Command) -> Result<Value, NativeError> {
+        self.require_regular_mode()?;
         if configuration::is_wrapper(&command) {
             return configuration::remote(self, command).await;
         }
@@ -975,7 +1337,7 @@ impl NativeOwner {
             .map_err(|_| failure(503, "native_state_unavailable"))?
             .is_some();
         if matrix_managed && matches!(command, Command::Logout) {
-            self.shutdown().await;
+            self.shutdown_checked().await?;
             return Ok(
                 json!({"state":"signed_out","deviceAuthorized":false,"transportOnline":false}),
             );
@@ -1041,26 +1403,42 @@ impl NativeOwner {
         if !matrix_managed && !matches!(command, Command::LoginStatus | Command::Logout) {
             self.identity().await?;
         }
-        let (method, path, body) = request(command)?;
+        let is_logout = matches!(command, Command::Logout);
         let cookie = self.0.cookie.lock().await.clone();
-        let mut response = self.call(method, &path, body, &cookie).await;
-        if let Some(cookie) = response
-            .headers()
-            .get_all("set-cookie")
-            .iter()
-            .find_map(|v| {
-                v.to_str()
-                    .ok()
-                    .filter(|s| s.starts_with("hagency_console="))
-                    .map(|s| s.split(';').next().unwrap().to_owned())
-            })
-        {
-            *self.0.cookie.lock().await = cookie;
-        }
-        let result = read_response(&mut response).await;
+        let result = if let Some(action) = matrix_creations::action(&command)? {
+            self.creation_locked(&cookie, action)
+                .await
+                .and_then(|reply| {
+                    serde_json::to_value(reply).map_err(|_| failure(503, "invalid_native_response"))
+                })
+        } else if let Some((runtime, operation)) = provider::operation(&command)? {
+            let raw = cookie
+                .strip_prefix("hagency_console=")
+                .ok_or(failure(401, "owner_authorization_required"))?;
+            owner_provider::invoke(&self.0.host.console, raw, runtime, operation)
+                .await
+                .map_err(|error| failure(error.status, error.code))
+        } else {
+            let (method, path, body) = request(command)?;
+            let mut response = self.call(method, &path, body, &cookie).await;
+            if let Some(cookie) = response
+                .headers()
+                .get_all("set-cookie")
+                .iter()
+                .find_map(|v| {
+                    v.to_str()
+                        .ok()
+                        .filter(|s| s.starts_with("hagency_console="))
+                        .map(|s| s.split(';').next().unwrap().to_owned())
+                })
+            {
+                *self.0.cookie.lock().await = cookie;
+            }
+            read_response(&mut response).await
+        };
         if matrix_managed {
             // Logout is allowed to finish without needing a live SDK token.
-            if path != "/console/server-login/logout" {
+            if !is_logout {
                 let cookie = self.0.cookie.lock().await.clone();
                 let raw = cookie
                     .strip_prefix("hagency_console=")
@@ -1081,7 +1459,9 @@ impl NativeOwner {
                             "Matrix authorization temporarily unavailable; preserving recovery state"
                         );
                     } else {
-                        self.shutdown().await;
+                        // A source/account transition retires local execution;
+                        // only explicit logout withdraws the saved session.
+                        let _ = self.suspend().await;
                     }
                     return Err(failure(
                         if code.ends_with("unavailable") {
@@ -1373,11 +1753,12 @@ mod tests {
     }
     #[tokio::test]
     async fn native_host_needs_no_web_assets_and_restart_never_restores_remote_authority() {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let state = root.path().join("state");
         let owner = NativeOwner::open(&state, "https://example.test/", "@owner:example.test")
             .await
             .unwrap();
+        assert!(owner.has_callback_listener());
         assert_eq!(
             owner.execute(Command::Projects).await.unwrap_err().code,
             "owner_authorization_required"
@@ -1535,3 +1916,20 @@ mod owner_scope_command_tests {
         );
     }
 }
+
+mod workspaces;
+pub use hagency_store::management::{WorkspaceListQuery, WorkspaceQuery, WorkspaceReleaseBlock, WorkspaceStatus, WorkspacePage, ClearWorkspaceDirty, WorkspaceRelease};
+
+mod stopped;
+pub use hagency_store::management::{StoppedListQuery, StoppedQuery, StoppedAttempt, StoppedPage, StoppedInventoryEntry, StoppedInspection, ReviewStopped, StoppedReview, StoppedDecision, ResolveStopped, StoppedResolution};
+
+mod web_catalog;
+pub use web_catalog::PreparedWebCatalog;
+pub use hagency_store::management::{WebCatalogQuery, WebCatalogPrepare, WebCatalogChange, WebCatalogView, WebOfferPage, WebTrustPage, WebCatalogResult};
+mod web_overview;
+pub use web_overview::{WebOverviewQuery, WebAccountCapacityQuery, WebTerminalQuery, WebAlertsQuery, WebAlertsPage};
+mod web_connections;
+pub use web_connections::{WebConnectionProbeInput, WebConnectionProbe, WebConnectionEdit, WebConnectionReview, WebConnectionReviewSummary, NativeConnectionRegistration};
+pub use hagency_store::management::{WebConnection, WebConnectionPage, WebConnectionResult};
+
+pub use management_server::pools::PoolAgentInput;

@@ -568,7 +568,7 @@ mod tests {
 
     #[test]
     fn owner_grants_do_not_become_persistent_sdk_credentials() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let authority = Authority::persistent(dir.path());
         let ticket = authority.issue_owner_ticket().unwrap();
         let cookie = authority.exchange(&ticket).unwrap();
@@ -589,7 +589,7 @@ mod tests {
     /// reloaded from the state directory; only a new link or logout ends them.
     #[test]
     fn native_console_logins_survive_a_restart() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let first = Authority::persistent(dir.path());
         let ticket = first.issue().unwrap();
         let cookie = first.exchange(&ticket).unwrap();

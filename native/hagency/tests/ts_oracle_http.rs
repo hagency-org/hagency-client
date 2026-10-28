@@ -20,7 +20,7 @@ const BASE: &str = "http://127.0.0.1:13300";
 
 /// A writer-backed service with no domain, exactly `tests/http.rs`'s shape.
 fn setup() -> (tempfile::TempDir, Store, Service) {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let store = Store::start(Repository::open(&dir.path().join("state")).unwrap(), 16).unwrap();
     let app = App::new(
         store.clone(),

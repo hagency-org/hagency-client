@@ -1,10 +1,15 @@
 //! Dedicated owner provider onboarding. Codex owns OAuth tokens in its OS
 //! keyring; this host only exposes a login URL and verified account status.
+mod drain;
+mod trust_config;
+pub(in crate::console) mod managed;
 pub(crate) mod external;
+pub(super) mod identity;
 use super::{
-    Console, body, console, cookie, current, owned_agents::ledger_path, recheck,
+    Console, body, console, cookie, current, owned_agents::journal_profile_directory, recheck,
     server_login::OwnerOperation,
 };
+use crate::console::lifecycle::TaskCustody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -45,8 +50,8 @@ fn private_directory(path: &Path) -> Result<PathBuf, ProviderError> {
 /// neither reads credentials nor treats the locator as proof of login.
 pub(crate) fn credential_reference(home: &Path) -> Result<String, ProviderError> {
     private_directory(home)?;
-    if std::fs::symlink_metadata(home.join("auth.json")).is_ok()
-        || std::fs::symlink_metadata(home.join("config.toml")).is_ok()
+    if !matches!(std::fs::symlink_metadata(home.join("auth.json")), Err(e) if e.kind()==std::io::ErrorKind::NotFound)
+        || !trust_config::accepted(home)
     {
         return Err(failure(409, "provider_file_credentials_or_config_rejected"));
     }
@@ -120,11 +125,11 @@ pub(crate) fn paths(
     subject: &str,
     owner: &str,
 ) -> Result<ProviderPaths, ProviderError> {
-    let ledger = ledger_path(root, origin, issuer, subject, owner)
-        .map_err(|_| failure(503, "provider_directory_unavailable"))?;
-    let directory = ledger
-        .parent()
-        .ok_or(failure(503, "provider_directory_unavailable"))?
+    // Provider metadata lives in the authenticated private namespace. Looking
+    // it up must not open a personal budget ledger, which may be durably fenced
+    // after canonical resource adoption. Personal execution opens its own ledger.
+    let directory = journal_profile_directory(root, origin, issuer, subject, owner)
+        .map_err(|_| failure(503, "provider_directory_unavailable"))?
         .canonicalize()
         .map_err(|_| failure(503, "provider_directory_unavailable"))?;
     let home = private_directory(&directory.join("provider-home"))?;
@@ -276,7 +281,7 @@ fn rpc_rejection(value: &Value) -> ProviderError {
     failure(502, code)
 }
 struct Process {
-    child: Child,
+    child: drain::TrackedChild,
     input: ChildStdin,
     output: BufReader<ChildStdout>,
     next: u64,
@@ -286,8 +291,35 @@ struct Process {
     reference: String,
 }
 impl Process {
+    #[cfg(test)]
     async fn spawn(paths: &ProviderPaths, executable: &Path) -> Result<Self, ProviderError> {
+        Self::spawn_inner(paths, executable, false, &TaskCustody::default()).await
+    }
+    #[cfg(test)]
+    async fn spawn_identity(
+        paths: &ProviderPaths,
+        executable: &Path,
+    ) -> Result<Self, ProviderError> {
+        Self::spawn_inner(paths, executable, true, &TaskCustody::default()).await
+    }
+    async fn spawn_inner(
+        paths: &ProviderPaths,
+        executable: &Path,
+        identity: bool,
+        tasks: &TaskCustody,
+    ) -> Result<Self, ProviderError> {
+        tasks.check_open().map_err(|_| failure(409, "provider_closing"))?;
+        // These checks cannot start a child. A missing resolved executable or
+        // rejected namespace must not poison later shutdown as an unknown
+        // process lifetime. Keep checked custody around the shared probe and
+        // actual spawn, whose cancellation/errors can require cleanup evidence.
+        if executable.is_absolute() && !executable.is_file() {
+            return Err(failure(503, "codex_provider_unavailable"));
+        }
         selected_reference(&paths.codex_home, paths.shared)?;
+        let creation = tasks
+            .checked()
+            .map_err(|_| failure(409, "provider_closing"))?;
         let shared_overrides = if paths.shared {
             hagency_agent_local::codex::sealed_shared_overrides(
                 executable,
@@ -329,13 +361,21 @@ impl Process {
                 "include_environment_context=false",
             ])
             .env_clear()
-            .env("HOME", &paths.home)
+            .env("HOME", hagency_platform::codex_process_home(&paths.home).map_err(|_| failure(503, "provider_os_home_unavailable"))?)
             .env("CODEX_HOME", &paths.codex_home)
             .current_dir(&paths.home)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .kill_on_drop(true);
+        if identity {
+            command.args([
+                "-c",
+                "model_provider=\"openai\"",
+                "-c",
+                "chatgpt_base_url=\"https://chatgpt.com/backend-api\"",
+            ]);
+        }
         if paths.shared {
             for value in hagency_agent_local::codex::shared_base_overrides(&paths.home)
                 .map_err(|_| failure(409, "local_codex_configuration_unsupported"))?
@@ -381,9 +421,11 @@ impl Process {
         ] {
             command.arg("--disable").arg(feature);
         }
-        let mut child = command
+        let child = command
             .spawn()
             .map_err(|_| failure(503, "codex_provider_unavailable"))?;
+        let mut child = drain::TrackedChild::new(child, tasks);
+        creation.complete();
         let input = child
             .stdin
             .take()
@@ -406,10 +448,15 @@ impl Process {
         };
         p.rpc("initialize",json!({"clientInfo":{"name":"hagency-client","title":"Hagency Client","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":false}})).await?;
         p.write(json!({"method":"initialized"})).await?;
-        if paths.shared {
+        if paths.shared || identity {
             let c = p.rpc("config/read", json!({"includeLayers":false})).await?;
-            hagency_agent_local::codex::verify_shared_configuration(&c["config"], &paths.home)
-                .map_err(|_| failure(409, "local_codex_configuration_unsupported"))?;
+            if paths.shared {
+                hagency_agent_local::codex::verify_shared_configuration(&c["config"], &paths.home)
+                    .map_err(|_| failure(409, "local_codex_configuration_unsupported"))?;
+            }
+            if identity {
+                identity::configuration(&c["config"])?;
+            }
         }
         Ok(p)
     }
@@ -611,6 +658,7 @@ struct Entry {
 }
 #[derive(Default, Clone)]
 pub(super) struct OwnerProvider {
+    tasks: TaskCustody,
     entries: Arc<Mutex<BTreeMap<String, Arc<Entry>>>>,
 }
 #[derive(Clone)]
@@ -631,6 +679,10 @@ impl OwnerProvider {
         cookie: &str,
         operation: Operation,
     ) -> Result<ProviderStatus, ProviderError> {
+        let _activity = self
+            .tasks
+            .enter()
+            .map_err(|_| failure(409, "provider_closing"))?;
         let reply = console
             .owner_api(cookie, OwnerOperation::Agents)
             .await
@@ -685,7 +737,8 @@ impl OwnerProvider {
                     credential_ref: selected_reference(&home, true)?,
                     shared: true,
                 };
-                let mut p = Process::spawn(&candidate, &executable()?).await?;
+                let mut p =
+                    Process::spawn_inner(&candidate, &executable()?, false, &self.tasks).await?;
                 let checked = p.status(&candidate).await;
                 let _ = p.child.kill().await;
                 let checked = checked?;
@@ -804,7 +857,11 @@ impl OwnerProvider {
             if let Some(entry) = entries.get(&key) {
                 entry.clone()
             } else {
-                let mut process = Process::spawn(&paths, &executable()?).await?;
+                self.tasks
+                    .check_open()
+                    .map_err(|_| failure(409, "provider_closing"))?;
+                let mut process =
+                    Process::spawn_inner(&paths, &executable()?, false, &self.tasks).await?;
                 if device.bearer().is_err() {
                     let _ = process.child.kill().await;
                     return Err(failure(401, "owner_authorization_required"));
@@ -884,14 +941,63 @@ impl OwnerProvider {
         }
     }
     pub async fn stop_all(&self) {
-        let entries = std::mem::take(&mut *self.entries.lock().await);
+        let mut entries = self.entries.lock().await;
         for entry in entries.values() {
             let mut process = entry.process.lock().await;
             let _ = process.cancel().await;
-            let _ = process.child.kill().await;
+            if process.child.kill().await.is_err() {
+                self.tasks.unknown();
+            }
         }
+        entries.clear();
     }
 }
+/// Typed provider entry shared by the browser adapter and embedded owner.
+/// Browser-origin checks belong to the HTTP adapter; finite owner/device
+/// authorization and response custody apply identically to both callers.
+pub(super) async fn invoke(
+    console: &Console,
+    cookie: &str,
+    runtime: Option<&str>,
+    operation: Operation,
+) -> Result<Value, ProviderError> {
+    let session = console
+        .0
+        .authority
+        .authenticate(cookie)
+        .map_err(|_| failure(401, "sign_in_required"))?;
+    console
+        .0
+        .server_login
+        .validate(cookie)
+        .await
+        .map_err(|error| {
+            if matches!(error, super::Error::Unavailable) {
+                failure(503, "server_unavailable")
+            } else {
+                failure(401, "owner_authorization_required")
+            }
+        })?;
+    let result = if let Some(runtime) = runtime {
+        external::call(console, cookie, runtime, operation).await
+    } else {
+        console
+            .0
+            .owner_provider
+            .call(console, cookie, operation)
+            .await
+            .and_then(|status| {
+                serde_json::to_value(status).map_err(|_| failure(503, "provider_unavailable"))
+            })
+    };
+    console
+        .0
+        .authority
+        .check(&session)
+        .map_err(|_| failure(401, "sign_in_required"))?;
+    result
+}
+
 pub(super) fn router() -> Router {
     Router::with_path("owner-provider")
         .goal(dispatch)
@@ -934,28 +1040,14 @@ async fn dispatch(req: &mut Request, depot: &Depot, res: &mut Response) {
             return Err(failure(400, "invalid_arguments"));
         }
         let console = console(depot).map_err(|_| failure(503, "local_state_unavailable"))?;
-        let value = if let Some(runtime) = req.param::<String>("runtime") {
-            external::call(
-                console,
-                cookie(req).map_err(|_| failure(401, "sign_in_required"))?,
-                &runtime,
-                operation,
-            )
-            .await?
-        } else {
-            serde_json::to_value(
-                console
-                    .0
-                    .owner_provider
-                    .call(
-                        console,
-                        cookie(req).map_err(|_| failure(401, "sign_in_required"))?,
-                        operation,
-                    )
-                    .await?,
-            )
-            .map_err(|_| failure(503, "provider_unavailable"))?
-        };
+        let runtime = req.param::<String>("runtime");
+        let value = invoke(
+            console,
+            cookie(req).map_err(|_| failure(401, "sign_in_required"))?,
+            runtime.as_deref(),
+            operation,
+        )
+        .await?;
         recheck(depot).map_err(|_| failure(401, "sign_in_required"))?;
         Ok(value)
     }
@@ -1014,7 +1106,7 @@ mod tests {
     }
     #[test]
     fn prepared_workspaces_are_private_canonical_agent_and_full_owner_scoped() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap().join("state");
         let a = paths(
             &root,
@@ -1055,7 +1147,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "uses installed Codex only in a new empty private home; model catalog, no login or inference"]
     async fn installed_provider_model_catalog_without_login_or_inference() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap().join("state");
         let paths = paths(
             &root,
@@ -1121,7 +1213,7 @@ mod tests {
     use super::*;
     #[test]
     fn dedicated_provider_paths_are_private_canonical_and_owner_scoped() {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let root = root.path().canonicalize().unwrap().join("state");
         let first = paths(
             &root,
@@ -1187,7 +1279,7 @@ mod tests {
     #[tokio::test]
     async fn multi_profile_switch_stops_pending_provider_children_without_deleting_account_homes() {
         use std::os::unix::fs::PermissionsExt;
-        let temp = tempfile::tempdir().unwrap();
+        let temp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap();
         let exe = root.join("fake-codex");
         std::fs::write(&exe,r#"#!/usr/bin/env python3
@@ -1239,7 +1331,7 @@ for line in sys.stdin:
     }
     #[tokio::test]
     async fn onboarding_managed_keyring_login_status_and_logout_never_execute_turns() {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let directory = root.path().canonicalize().unwrap();
         let paths = paths(
             &directory.join("state"),
@@ -1252,7 +1344,7 @@ for line in sys.stdin:
         let executable = directory.join("fake-codex");
         std::fs::write(&executable,r#"#!/usr/bin/env python3
 import json,os,sys,pathlib
-home=pathlib.Path(os.environ['HOME']); marker=home/'signed-in'
+home=pathlib.Path.cwd(); marker=home/'signed-in'
 (home/'process-metadata.json').write_text(json.dumps({'home':os.environ['HOME'],'codex_home':os.environ['CODEX_HOME'],'args':sys.argv[1:],'keys':list(os.environ.keys())}))
 for line in sys.stdin:
  req=json.loads(line); method=req.get('method'); rid=req.get('id')
@@ -1294,7 +1386,7 @@ for line in sys.stdin:
             &std::fs::read(paths.home.join("process-metadata.json")).unwrap(),
         )
         .unwrap();
-        assert_eq!(metadata["home"], paths.home.to_string_lossy().as_ref());
+        assert_eq!(metadata["home"], hagency_platform::codex_process_home(&paths.home).unwrap().to_string_lossy().as_ref());
         assert_eq!(
             metadata["codex_home"],
             paths.codex_home.to_string_lossy().as_ref()
@@ -1332,7 +1424,7 @@ for line in sys.stdin:
     #[tokio::test]
     #[ignore = "requires installed Codex 0.160 and OS keyring; no login or inference"]
     async fn installed_codex_reads_only_its_dedicated_empty_owner_keyring() {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let root = root.path().canonicalize().unwrap().join("state");
         let paths = paths(
             &root,

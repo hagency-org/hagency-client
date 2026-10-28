@@ -223,6 +223,19 @@ impl ApprovalRequest {
     /// A host wire primitive, not a verdict setter. Callers must first consume
     /// durable approval authority; the coordinator owns that sequence. These
     /// are exact once/decline responses, never session or policy amendments.
+    /// Native session scope only: never persists a rule to later Codex threads.
+    pub fn session_response(&self) -> Result<ApprovalResponse, Error> {
+        let result=match &self.kind {
+            Kind::Command => {
+                if present(&self.params,"availableDecisions").is_some_and(|v| !v.as_array().is_some_and(|a|a.contains(&json!("acceptForSession")))) {return Err(Error::Policy);}
+                json!({"decision":"acceptForSession"})
+            },
+            Kind::File=>json!({"decision":"acceptForSession"}),
+            Kind::Permissions(profile)=>json!({"permissions":profile,"scope":"session"}),
+            Kind::Mcp(_)=>return Err(Error::Policy),
+        };
+        Ok(ApprovalResponse{request:self.clone(),result,allow:true})
+    }
     pub fn response(&self, allow: bool) -> ApprovalResponse {
         let result = match &self.kind {
             Kind::Command | Kind::File => {
@@ -383,6 +396,8 @@ mod tests {
         let mut p = params();
         p["networkApprovalContext"] = json!({"host":"example.test","protocol":"https"});
         let network = parse(p).unwrap();
+        assert_eq!(network.session_response().unwrap().result,json!({"decision":"acceptForSession"}));
+        let mut no_session=params();no_session["availableDecisions"]=json!(["accept","decline"]);assert!(parse(no_session).unwrap().session_response().is_err());
         assert_eq!(network.response(true).result, json!({"decision":"accept"}));
         let mut p = params();
         p["reason"] = json!("x".repeat(MAX_APPROVAL_BYTES));
@@ -396,6 +411,7 @@ mod tests {
         .unwrap();
         assert_ne!(request.id(), file.id());
         assert_eq!(file.response(true).result, json!({"decision":"accept"}));
+        assert_eq!(file.session_response().unwrap().result,json!({"decision":"acceptForSession"}));
         // A grant-root request reaches the owner too. Accepting it accepts this
         // one change; the adapter has no session-wide answer to give.
         let mut p = common.clone();
@@ -420,6 +436,7 @@ mod tests {
             permission.response(false).result,
             json!({"permissions":{},"scope":"turn"})
         );
+        assert_eq!(permission.session_response().unwrap().result,json!({"permissions":p["permissions"],"scope":"session"}));
         for bad in [
             json!({"extra":true}),
             json!({"network":{"enabled":true,"host":"fake"}}),

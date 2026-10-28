@@ -176,6 +176,11 @@ fn capture(
 /// Capture `state` into a new private directory `out`. Refuses an existing
 /// `out` so a snapshot can never silently replace an earlier one.
 pub fn snapshot(state: &Path, out: &Path, now: u64) -> Result<Manifest, Error> {
+    #[cfg(test)]
+    hagency_platform::legacy_writer::test_support::initialize_process_root()?;
+    let _legacy_writer =
+        hagency_platform::legacy_writer::LegacyWriterAdmission::acquire_for_legacy_startup()?;
+
     private::directory(state)?;
     if out.exists() {
         return Err(Error::Invalid(hagency_core::InvalidInput(
@@ -217,6 +222,11 @@ pub fn verify(from: &Path) -> Result<Manifest, Error> {
 /// Restore `from` into an empty `state`. The empty-directory rule is `init`'s
 /// (`main.rs:217`): existing state is never imported or overwritten.
 pub fn restore(state: &Path, from: &Path) -> Result<Manifest, Error> {
+    #[cfg(test)]
+    hagency_platform::legacy_writer::test_support::initialize_process_root()?;
+    let _legacy_writer =
+        hagency_platform::legacy_writer::LegacyWriterAdmission::acquire_for_legacy_startup()?;
+
     let manifest = verify(from)?;
     if state.exists() {
         let mut entries = fs::read_dir(state).map_err(|_| Error::Private)?;

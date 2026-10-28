@@ -30,6 +30,7 @@ http.workspace = true
 ruma = { workspace = true, features = ["client-api-c", "events"] }
 
 [dev-dependencies]
+hagency-platform = { workspace = true, features = ["test-support"] }
 tokio = { workspace = true, features = ["process", "test-util"] }
 hagency-files.workspace = true
 cap-std.workspace = true

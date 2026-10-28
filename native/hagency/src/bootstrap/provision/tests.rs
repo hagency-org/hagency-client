@@ -163,7 +163,7 @@ async fn exercise_bindings(
 
 #[tokio::test]
 async fn native_adopt_project_inbox() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("state");
     private::directory(&state).unwrap();
     for _ in 0..2 {
@@ -194,7 +194,7 @@ async fn native_adopt_project_inbox() {
             2
         );
     }
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("state");
     private::directory(&state).unwrap();
     let mut document = input();
@@ -211,7 +211,7 @@ async fn native_adopt_project_inbox() {
 #[tokio::test]
 async fn native_adopt_project_inbox_refusals() {
     for missing in ["@worker:example.test", "@owner:example.test"] {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let state = root.path().join("state");
         private::directory(&state).unwrap();
         assert!(matches!(
@@ -221,7 +221,7 @@ async fn native_adopt_project_inbox_refusals() {
         assert!(!state.join("domain.sqlite3").exists());
     }
     for case in ["session", "workspace", "generation", "path", "room"] {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let state = root.path().join("state");
         private::directory(&state).unwrap();
         let mut fake = common::Fake::start(true).await;
@@ -249,7 +249,7 @@ async fn native_adopt_project_inbox_refusals() {
         fake.no_request().await;
         fake.close().await;
     }
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("state");
     private::directory(&state).unwrap();
     exercise(&state, input(), None).await.unwrap();
@@ -310,7 +310,7 @@ async fn native_adopt_matrix_chunked_bound() {
 /// behaviour integ already had, pinned beside the legacy fall-back.
 #[tokio::test]
 async fn native_adopt_room_bound_by_the_ts_event() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("state");
     private::directory(&state).unwrap();
     let receipt = exercise(&state, input(), None).await.unwrap();
@@ -322,7 +322,7 @@ async fn native_adopt_room_bound_by_the_ts_event() {
 /// build wrote — adopts after the upgrade instead of failing `Error::Authority`.
 #[tokio::test]
 async fn native_adopt_room_bound_by_the_legacy_event() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("state");
     private::directory(&state).unwrap();
     let fleet = common::domain::registration().fleet_id;
@@ -342,7 +342,7 @@ async fn native_adopt_room_bound_by_the_legacy_event() {
 /// was the one carried.
 #[tokio::test]
 async fn native_adopt_prefers_the_ts_binding_when_both_are_present() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("state");
     private::directory(&state).unwrap();
     let fleet = common::domain::registration().fleet_id;
@@ -363,7 +363,7 @@ async fn native_adopt_prefers_the_ts_binding_when_both_are_present() {
 /// `verify_request` fleet/project gate.
 #[tokio::test]
 async fn native_adopt_refuses_a_foreign_fleet_legacy_binding() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("state");
     private::directory(&state).unwrap();
     let foreign = format!("hf_{}", "b".repeat(32));

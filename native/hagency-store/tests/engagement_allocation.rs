@@ -6,7 +6,7 @@ use hagency_core::project::EngagementState;
 use hagency_store::{DomainRepository, Error};
 
 fn setup(ceiling: u64) -> (tempfile::TempDir, DomainRepository) {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&dir.path().join("state")).unwrap();
     db.register(&registration()).unwrap();
     db.put_resource(&resource("alloc_pool", "alloc_seat", ceiling))
@@ -198,7 +198,8 @@ mod quota {
         /// One agent approved for `allocated` of its 100-token request, its
         /// transport and Group room observed, and a verified thread session.
         pub fn new(allocated: u64) -> Self {
-            let root = tempfile::tempdir().unwrap();
+            let root =
+                hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
             let mut db = DomainRepository::open(&root.path().join("state")).unwrap();
             db.register(&registration()).unwrap();
             let pool = resource("pool", "seat", 1000);

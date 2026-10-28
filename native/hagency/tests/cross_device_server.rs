@@ -105,7 +105,7 @@ fn no_secrets(value: &Value) {
 #[ignore = "requires isolated embedded Server and private two-grant fixture"]
 async fn controller_without_local_tools() {
     let (path, value) = fixture();
-    let state = tempfile::tempdir().unwrap();
+    let state = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let b = owner(&value, "b", &state.path().join("state")).await;
     let agent = value["agentId"].as_str().unwrap();
     let generation = value["agentGeneration"].as_i64().unwrap();
@@ -309,7 +309,8 @@ async fn controller_without_local_tools() {
 async fn real_two_device_configuration() {
     use std::os::unix::fs::PermissionsExt;
     if std::env::var_os("HAGENCY_CROSS_DEVICE_EXECUTOR").is_none() {
-        let providers = tempfile::tempdir().unwrap();
+        let providers =
+            hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let binary = providers.path().join("fixture-claude");
         let claude_home = providers.path().join("claude-fixture");
         std::fs::create_dir(&claude_home).unwrap();
@@ -344,7 +345,7 @@ async fn real_two_device_configuration() {
         return;
     }
     let (path, mut value) = fixture();
-    let state = tempfile::tempdir().unwrap();
+    let state = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let workspace = state.path().join("workspace-a");
     std::fs::create_dir(&workspace).unwrap();
     let a_state = state.path().join("state");

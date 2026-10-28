@@ -27,7 +27,7 @@ impl Domain {
         Self::with_thread(None)
     }
     fn with_thread(thread: Option<&str>) -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let mut db = DomainRepository::open(&root.path().join("domain")).unwrap();
         db.register(&common::domain::registration()).unwrap();
         let pool = common::domain::resource("pool", "seat", 1000);
@@ -190,7 +190,7 @@ impl Domain {
     }
 }
 fn media() -> hagency_media::Encrypted {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     std::fs::write(root.path().join("source"), b"actual bounded source").unwrap();
     let dir =
         cap_std::fs::Dir::open_ambient_dir(root.path(), cap_std::ambient_authority()).unwrap();

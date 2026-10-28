@@ -168,7 +168,7 @@ async fn native_account_host_consumer() {
                     .unwrap();
             assert_eq!(
                 observed,
-                json!({"marker":"selected-A","same_home":true,"ambient_key":false})
+                json!({"marker":"selected-A","same_home":!cfg!(target_os="macos"),"ambient_key":false})
             );
             let Cleanup::Observed(cleanup) = report.cleanup else {
                 panic!("cleanup remains unknown")

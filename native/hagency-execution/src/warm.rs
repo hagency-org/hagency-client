@@ -293,7 +293,6 @@ impl Binding {
             return Err(Failure::Admission);
         };
         if dispatch.engagement_id() != self.scope.engagement_id()
-            || !workspace.exclusive
             || workspace.id != self.workspace_id
             || canonical::transport_digest(&serde_json::json!(dispatch.resource()))
                 .map_err(|_| Failure::Admission)?

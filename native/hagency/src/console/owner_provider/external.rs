@@ -1,7 +1,7 @@
 //! Owner-scoped binding to provider-managed local Claude/Octos accounts.
 //! Reads only public model/profile metadata; never imports account secrets.
 use super::{Operation, ProviderError, ProviderPaths, failure, private_directory};
-use crate::console::{Console, owned_agents::ledger_path, server_login::OwnerOperation};
+use crate::console::{Console, owned_agents::journal_profile_directory, server_login::OwnerOperation};
 use hagency_agent_local::runtime::{Kind, managed_reference};
 use serde_json::{Value, json};
 
@@ -135,13 +135,9 @@ fn directory(
     subject: &str,
     owner: &str,
 ) -> Result<PathBuf, ProviderError> {
-    let ledger = ledger_path(root, origin, issuer, subject, owner)
+    let directory = journal_profile_directory(root, origin, issuer, subject, owner)
         .map_err(|_| failure(503, "provider_directory_unavailable"))?;
-    private_directory(
-        ledger
-            .parent()
-            .ok_or(failure(503, "provider_directory_unavailable"))?,
-    )
+    private_directory(&directory)
 }
 fn consent_path(directory: &Path, kind: Kind) -> PathBuf {
     directory.join(format!("{}-connection.json", kind.name()))
@@ -261,6 +257,10 @@ pub(crate) async fn call(
     runtime: &str,
     operation: Operation,
 ) -> Result<Value, ProviderError> {
+    let tasks = &console.0.owner_provider.tasks;
+    let _activity = tasks
+        .enter()
+        .map_err(|_| failure(409, "provider_closing"))?;
     let kind = Kind::parse(runtime)
         .filter(|k| *k != Kind::Codex)
         .ok_or(failure(400, "invalid_arguments"))?;
@@ -346,9 +346,16 @@ pub(crate) async fn call(
         _ => unreachable!(),
     };
     let signed_in = match kind {
-        Kind::Claude => hagency_agent_local::runtime::claude_account(&binary, &home, &folder)
-            .await
-            .map_err(|_| failure(503, "claude_account_unavailable"))?,
+        Kind::Claude => {
+            let observation = tasks
+                .checked()
+                .map_err(|_| failure(409, "provider_closing"))?;
+            let result = hagency_agent_local::runtime::claude_account(&binary, &home, &folder)
+                .await
+                .map_err(|_| failure(503, "claude_account_unavailable"))?;
+            observation.complete();
+            result
+        }
         Kind::Octos => !models.is_empty(),
         _ => false,
     };
@@ -401,7 +408,7 @@ mod tests {
     use super::*;
     #[test]
     fn packaged_octos_launchers_resolve_to_native_binary() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         std::fs::create_dir(temp.path().join("bin")).unwrap();
         std::fs::create_dir(temp.path().join("vendor")).unwrap();
         let wrapper = temp.path().join("bin/octos.js");
@@ -413,7 +420,7 @@ mod tests {
     }
     #[test]
     fn profile_catalog_keeps_public_metadata_and_distinct_profile_references() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let folder = temp.path().join("profiles");
         std::fs::create_dir(&folder).unwrap();
         for id in ["coding", "review"] {

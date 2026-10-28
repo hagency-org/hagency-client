@@ -1,3 +1,11 @@
+#[path = "approvals/workspaces.rs"]
+mod workspaces;
+#[path = "approvals/execution_policy.rs"]
+mod execution_policy;
+#[path = "approvals/rebinding.rs"]
+mod rebinding;
+#[path = "approvals/tool_management.rs"]
+mod tool_management;
 #[path = "approvals/card.rs"]
 mod card;
 #[path = "approvals/clock.rs"]
@@ -33,7 +41,7 @@ impl Fixture {
         Self::configured(write, now, lease_ms, true)
     }
     fn configured(write: bool, now: u64, lease_ms: u64, bind: bool) -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let mut db = DomainRepository::open(&root.path().join("state")).unwrap();
         db.register(&registration()).unwrap();
         let pool = resource("pool", "seat", 1000);
@@ -1050,13 +1058,13 @@ fn native_owner_approval_recovery_persistent_grant() {
 }
 #[test]
 fn native_owner_approval_recovery_schema12() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let directory = temp.path().join("state");
     let db = DomainRepository::open(&directory).unwrap();
     drop(db);
     let sql = rusqlite::Connection::open(directory.join("domain.sqlite3")).unwrap();
     remove_approval_schema(&sql);
-    sql.execute_batch("ALTER TABLE runner_sessions DROP COLUMN model_override; ALTER TABLE runner_sessions DROP COLUMN mode_override; DROP TABLE IF EXISTS agent_lifecycle; ALTER TABLE decisions DROP COLUMN kind; ALTER TABLE decisions DROP COLUMN at; DROP TABLE IF EXISTS quota_holds; DROP TABLE IF EXISTS owner_anchors; DROP TABLE IF EXISTS joined_rooms; ALTER TABLE engagements DROP COLUMN allocated_tokens; PRAGMA user_version=12;").unwrap();
+    sql.execute_batch("ALTER TABLE runner_sessions DROP COLUMN model_override; ALTER TABLE runner_sessions DROP COLUMN mode_override; DROP TABLE IF EXISTS agent_lifecycle; ALTER TABLE decisions DROP COLUMN kind; ALTER TABLE decisions DROP COLUMN at; DROP TABLE IF EXISTS quota_holds; DROP TABLE IF EXISTS owner_anchors; DROP TABLE IF EXISTS joined_rooms; ALTER TABLE engagements DROP COLUMN allocated_tokens; DROP TABLE IF EXISTS owner_shared_tool_policies;PRAGMA user_version=12;").unwrap();
     for _ in 0..2 {
         let db = DomainRepository::open(&directory).unwrap();
         assert_eq!(

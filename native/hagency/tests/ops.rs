@@ -47,7 +47,7 @@ fn initialize(state: &Path) {
 
 #[test]
 fn native_ops_offline_owner_snapshot_preserves_unknown_and_private_state() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("state");
     initialize(&state);
     release_state::seed_owned_state(&state);
@@ -97,7 +97,7 @@ fn native_ops_offline_owner_snapshot_preserves_unknown_and_private_state() {
 }
 #[test]
 fn native_ops_offline_snapshot_refuses_clobber() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("state");
     initialize(&state);
     let marker = owner::marker(&state);
@@ -111,7 +111,7 @@ fn native_ops_offline_snapshot_refuses_clobber() {
 }
 #[test]
 fn native_ops_retired_commands_cannot_mint_or_rotate_credentials() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("state");
     initialize(&state);
     let marker = owner::marker(&state);

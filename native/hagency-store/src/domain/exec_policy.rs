@@ -14,6 +14,8 @@
 //!   IS the engagement, so the policy is keyed by engagement and a missing row
 //!   is TS's default `{ yolo: false }` (backend-v2.js:10867 reads
 //!   `agent.executionPolicy?.yolo === true`).
+mod management;
+mod workspaces;
 use super::DomainRepository;
 use crate::Error;
 use hagency_core::{execution::normalize_policy, project::identifier, tasks::clock};
@@ -148,11 +150,7 @@ impl DomainRepository {
         let tx = self
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute(
-            "INSERT INTO agent_execution_policies(engagement_id,yolo,updated_at) VALUES(?1,?2,?3) \
-             ON CONFLICT(engagement_id) DO UPDATE SET yolo=?2, updated_at=?3",
-            params![engagement, policy.yolo, now],
-        )?;
+        write_policy(&tx, engagement, policy.yolo, now)?;
         tx.commit()?;
         Ok(policy.yolo)
     }
@@ -168,4 +166,71 @@ impl DomainRepository {
         }
         Ok(())
     }
+}
+
+
+/// The policy of an already started attempt is immutable. Leased attempts
+/// without a snapshot read the current owner setting and compare it at start.
+/// Original attempts without this table's row preserve their legacy mode/hash.
+pub(super) fn dispatch_policy(
+    db: &rusqlite::Connection,
+    dispatch: &str,
+    engagement: &str,
+    state: &str,
+    framework: &str,
+) -> Result<Option<hagency_core::execution::ExecutionPolicy>, Error> {
+    let saved: Option<(String, bool)> = db.query_row(
+        "SELECT engagement_id,yolo FROM owned_dispatch_execution_policies WHERE dispatch_id=?1",
+        [dispatch], |row| Ok((row.get(0)?,row.get(1)?)),
+    ).optional()?;
+    let yolo = if let Some((owner, value)) = saved {
+        if owner != engagement { return Err(Error::Schema); }
+        value
+    } else if state == "leased" {
+        db.query_row("SELECT yolo FROM agent_execution_policies WHERE engagement_id=?1", [engagement], |row| row.get(0)).optional()?.unwrap_or(false)
+    } else {
+        return Ok(None);
+    };
+    Ok(Some(normalize_policy(Some(&json!({"yolo":yolo})), framework).map_err(Error::Invalid)?))
+}
+
+pub(super) fn capture_dispatch_policy(
+    db: &rusqlite::Connection,
+    dispatch: &str,
+    engagement: &str,
+    policy: hagency_core::execution::ExecutionPolicy,
+    now: u64,
+) -> Result<(), Error> {
+    db.execute("INSERT INTO owned_dispatch_execution_policies(dispatch_id,engagement_id,yolo,captured_at) VALUES(?1,?2,?3,?4) ON CONFLICT(dispatch_id) DO NOTHING", params![dispatch,engagement,policy.yolo,now])?;
+    let retained: (String,bool) = db.query_row("SELECT engagement_id,yolo FROM owned_dispatch_execution_policies WHERE dispatch_id=?1", [dispatch], |row| Ok((row.get(0)?,row.get(1)?)))?;
+    if retained != (engagement.to_owned(),policy.yolo) {return Err(Error::RunnerAuthority);}
+    Ok(())
+}
+
+fn write_policy(db: &rusqlite::Connection, engagement: &str, yolo: bool, now: u64) -> Result<(), Error> {
+    clock(now)?;
+    db.execute(
+        "INSERT INTO agent_execution_policies(engagement_id,yolo,updated_at) VALUES(?1,?2,?3) ON CONFLICT(engagement_id) DO UPDATE SET yolo=?2, updated_at=?3",
+        params![engagement, yolo, now],
+    )?;
+    Ok(())
+}
+
+/// Only the first successful provision transition calls this. Existing choices,
+/// including an explicit standard mode, win over the current resource default.
+/// An older completed effect returns its original receipt before reaching here.
+pub(super) fn inherit_resource_policy(
+    db: &rusqlite::Connection,
+    engagement: &str,
+    resource_id: &str,
+) -> Result<(), Error> {
+    let resource = super::read_resource(db, resource_id)?;
+    if let Some(policy) = super::web_catalog::future_policy(db, resource_id)?.or(resource.execution_policy) {
+        policy.validate_for(&resource.framework)?;
+        db.execute(
+            "INSERT INTO agent_execution_policies(engagement_id,yolo,updated_at) VALUES(?1,?2,?3) ON CONFLICT(engagement_id) DO NOTHING",
+            params![engagement, policy.yolo, super::graphs::now_ms()?],
+        )?;
+    }
+    Ok(())
 }

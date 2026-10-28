@@ -7,7 +7,7 @@ pub(super) struct ServiceEntry {
     pin: DevicePin,
     gate: Arc<Mutex<()>>,
     cancel: watch::Sender<bool>,
-    task: tokio::task::JoinHandle<()>,
+    task: RetainedTask,
     health: watch::Receiver<ServiceHealth>,
 }
 #[derive(Clone, Default, Serialize)]
@@ -208,6 +208,7 @@ impl OwnedRuntime {
         console: Console,
         mut config: StartConfig,
     ) -> Result<serde_json::Value, RuntimeError> {
+        let _activity = self.tasks.enter().map_err(|_| RuntimeError::Stopped)?;
         let device = console.authorized_device().await.map_err(device_error)?;
         device.bearer().map_err(|_| RuntimeError::Authorization)?;
         let pin = DevicePin::from(&device);
@@ -273,6 +274,7 @@ impl OwnedRuntime {
         }
         let key = identity(&device, &config.agent_id);
         let mut services = self.services.lock().await;
+        self.tasks.check_open().map_err(|_| RuntimeError::Stopped)?;
         device.bearer().map_err(|_| RuntimeError::Authorization)?;
         verify_recovery_intent(&console, &device, &config)?;
         if services
@@ -426,6 +428,7 @@ impl OwnedRuntime {
                 .cancel_agent_entry(&host, &task_pin, &intent.agent_id)
                 .await;
         });
+        let task = self.tasks.track(task);
         services.insert(
             key,
             ServiceEntry {
@@ -599,40 +602,55 @@ impl OwnedRuntime {
         if &DevicePin::from(&device) != pin {
             return Err(RuntimeError::Authorization);
         }
-        let mut entries = self.entries.lock().await;
+        let entries = self.entries.lock().await;
         if entries
             .get(&identity(&device, agent))
             .is_some_and(|entry| &entry.device != pin)
         {
             return Err(RuntimeError::Authorization);
         }
-        let entry = entries.remove(&identity(&device, agent));
-        if let Some(entry) = &entry {
+        let key = identity(&device, agent);
+        let task = entries.get(&key).map(|entry| {
             entry.cancel.send_replace(true);
-        }
+            entry.task.clone()
+        });
         drop(entries);
-        if let Some(entry) = entry {
-            let _ = entry.task.await;
+        if let Some(task) = task {
+            let result = task.join().await;
+            let mut entries = self.entries.lock().await;
+            if entries
+                .get(&key)
+                .is_some_and(|entry| entry.task.same(&task))
+            {
+                entries.remove(&key);
+            }
+            if result.is_err() {
+                return Err(RuntimeError::Stopped);
+            }
         }
         Ok(())
     }
     pub(super) async fn drain_services(&self, pin: Option<&DevicePin>) {
-        let mut services = self.services.lock().await;
-        let keys: Vec<_> = services
+        let pending: Vec<_> = self
+            .services
+            .lock()
+            .await
             .iter()
             .filter(|(_, entry)| pin.is_none_or(|pin| pin == &entry.pin))
-            .map(|(key, _)| key.clone())
+            .map(|(key, entry)| {
+                entry.cancel.send_replace(true);
+                (key.clone(), entry.task.clone())
+            })
             .collect();
-        let removed: Vec<_> = keys
-            .into_iter()
-            .filter_map(|key| services.remove(&key))
-            .collect();
-        for entry in &removed {
-            entry.cancel.send_replace(true);
-        }
-        drop(services);
-        for entry in removed {
-            let _ = entry.task.await;
+        for (key, task) in pending {
+            let _ = task.join().await;
+            let mut services = self.services.lock().await;
+            if services
+                .get(&key)
+                .is_some_and(|entry| entry.task.same(&task))
+            {
+                services.remove(&key);
+            }
         }
     }
 }
@@ -641,7 +659,7 @@ mod tests {
     use super::*;
     #[test]
     fn preferences_are_owner_and_device_scoped_without_execution_consent() {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let path = root.path().join("agent-service-options.json");
         save_options(
             &path,
@@ -709,7 +727,7 @@ mod tests {
     }
     #[test]
     fn stop_removes_all_room_recovery_and_invalidates_watcher_consent() {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let path = root.path().join("runtime-intents.json");
         let intended = |agent: &str, binding: &str| RuntimeIntent {
             agent_id: agent.into(),
@@ -799,7 +817,7 @@ mod configuration_busy_tests {
                 pin: DevicePin::from(&device),
                 gate: Arc::new(Mutex::new(())),
                 cancel,
-                task,
+                task: manager.tasks.track(task),
                 health,
             },
         );

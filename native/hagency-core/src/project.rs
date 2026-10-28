@@ -77,7 +77,10 @@ pub struct AgentDefinition {
     /// backend-v2.js:2994): `workspaceMode` is `worktree` or `shared`
     /// (normalize, backend-v2.js:512), `worktreesDir` the agent's own
     /// worktrees root, `worktreeBootstrap` its bootstrap argv (backend-v2.js:516).
-    /// All optional/absent for existing records, which stay `shared`.
+    /// TS kept them on an agent record its operator wrote. Here they arrive in
+    /// a requester's event, and they name a folder the host creates and a
+    /// command it runs outside any sandbox, so a request carrying any of them
+    /// is refused (`verify_request`). Kept only so a stored request still reads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -86,6 +89,13 @@ pub struct AgentDefinition {
     pub worktree_bootstrap: Vec<String>,
 }
 impl AgentDefinition {
+    /// Whether this definition names a workspace mode, worktrees folder or
+    /// bootstrap command: the machine owner's settings, never a requester's.
+    pub fn carries_workspace_settings(&self) -> bool {
+        self.workspace_mode.is_some()
+            || self.worktrees_dir.is_some()
+            || !self.worktree_bootstrap.is_empty()
+    }
     pub fn validate(&self) -> Result<(), InvalidInput> {
         let suffix = self
             .resource_id
@@ -142,6 +152,14 @@ pub struct Resource {
     pub model: String,
     pub provider: Option<String>,
     pub reasoning: Option<String>,
+    /// The user's Octos profile an `octos` resource runs: its primary model is
+    /// the resource's model (ADR-193 decision 7). No other framework names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub octos_profile: Option<String>,
+    /// Inherited once when a new agent is provisioned. Absence keeps the
+    /// original serialized resource and its existing revision byte-compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_policy: Option<crate::execution::ExecutionPolicy>,
     #[serde(default)]
     pub roles: Vec<String>,
     pub ceiling: Option<Ceiling>,
@@ -156,6 +174,9 @@ impl Resource {
         identifier(&self.preset_id, 128)?;
         identifier(&self.seat_id, 128)?;
         identifier(&self.framework, 64)?;
+        if let Some(policy) = self.execution_policy {
+            policy.validate_for(&self.framework)?;
+        }
         if self.model.is_empty()
             || self.model.len() > 256
             || self.model.chars().any(char::is_control)
@@ -170,6 +191,17 @@ impl Resource {
             if field.len() > 128 || field.chars().any(char::is_control) {
                 return Err(InvalidInput("invalid model profile"));
             }
+        }
+        if let Some(profile) = &self.octos_profile
+            && (self.framework != "octos"
+                || profile.is_empty()
+                || profile.len() > 64
+                || profile.starts_with('-')
+                || !profile
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'))
+        {
+            return Err(InvalidInput("invalid Octos profile"));
         }
         Ok(())
     }
@@ -192,6 +224,7 @@ impl Resource {
     }
     pub fn provisionable(&self) -> bool {
         matches!(self.framework.as_str(), "claude" | "codex")
+            || (self.framework == "octos" && self.octos_profile.is_some())
     }
     pub fn eligible_roles(&self) -> Vec<String> {
         crate::qualification::roles()

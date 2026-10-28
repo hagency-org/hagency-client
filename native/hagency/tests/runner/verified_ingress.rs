@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 #[tokio::test]
 async fn native_runner_http_verified_ingress() {
     for direct in [false, true] {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let state = root.path().join("state");
         let custody = Store::start(Repository::open(&state).unwrap(), 16).unwrap();
         let mut db = DomainRepository::open(&state).unwrap();

@@ -103,6 +103,9 @@ async fn fixture() -> (String, Arc<StdMutex<State>>, tokio::task::JoinHandle<()>
                         "/hagency/api/v1/devices" => {
                             json!({"deviceId":"dev_a","token":"b".repeat(64),"generation":1,"validUntilMs":until})
                         }
+                        "/hagency/api/v1/devices/current" => {
+                            json!({"userId":"uid","mxid":"@owner:test","subject":"sub","clientId":"fixture-client","issuer":format!("{base}auth/"),"deviceId":"dev_a","generation":1,"validUntilMs":until})
+                        }
                         "/hagency/api/v1/sessions/current/renew" => json!({"validUntilMs":until}),
                         "/hagency/api/v1/sessions/current" => json!({}),
                         "/hagency/api/v1/agents" => {
@@ -173,9 +176,48 @@ async fn open(root: &Path, base: &str) -> NativeOwner {
     native
 }
 #[tokio::test]
+async fn idle_configuration_journal_does_not_create_open_or_migrate_personal_database() {
+    let (base, state, server) = fixture().await;
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
+    let a = open(&root.path().join("state"), &base).await;
+    let identity = pin(&a).await.unwrap();
+    let path = journal(&a, &identity).unwrap();
+    let profile = path.parent().unwrap().parent().unwrap();
+    let database = profile.join("agent-local.sqlite");
+    assert!(!database.exists());
+    tick(&a).await.unwrap();
+    assert!(!database.exists());
+    assert!(load(&path).unwrap().is_none());
+    // Polling an idle executor has no authority to inspect or repair this file.
+    hagency_store::private::write_new(&database, b"unrelated old database bytes").unwrap();
+    let marker = std::fs::read(profile.join("profile-identity.json")).unwrap();
+    tick(&a).await.unwrap();
+    assert_eq!(
+        std::fs::read(&database).unwrap(),
+        b"unrelated old database bytes"
+    );
+    assert_eq!(
+        std::fs::read(profile.join("profile-identity.json")).unwrap(),
+        marker
+    );
+    assert!(!profile.join("agent-local.sqlite-wal").exists());
+    assert!(!profile.join("agent-local.sqlite-shm").exists());
+    state.lock().unwrap().old_server = true;
+    assert_eq!(
+        tick(&a).await.unwrap_err().code,
+        "configuration_unsupported"
+    );
+    assert_eq!(
+        std::fs::read(&database).unwrap(),
+        b"unrelated old database bytes"
+    );
+    a.shutdown().await;
+    server.abort();
+}
+#[tokio::test]
 async fn worker_tcp_loss_reopen_retries_original_never_reapplies_and_old_server_refuses() {
     let (base, state, server) = fixture().await;
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let a = open(&root.path().join("state"), &base).await;
     state.lock().unwrap().work = Some(
         json!({"id":"cfg_a","agentId":"agent_a","agentGeneration":1,"executionDeviceId":"dev_a","deviceGeneration":1,"operation":"prepare_workspace","input":{},"state":"pending","createdAtMs":now(),"expiresAtMs":now()+60000,"claimedAtMs":null,"completedAtMs":null,"result":null,"errorCode":null}),
@@ -190,7 +232,7 @@ async fn worker_tcp_loss_reopen_retries_original_never_reapplies_and_old_server_
     assert!(Path::new(&workspace).is_dir());
     assert_eq!(state.lock().unwrap().polls, 1);
     assert_eq!(state.lock().unwrap().completions.len(), 1);
-    a.shutdown().await;
+    a.suspend().await.unwrap();
     drop(a);
     let a = open(&root.path().join("state"), &base).await;
     tick(&a).await.unwrap();
@@ -225,7 +267,7 @@ async fn worker_tcp_loss_reopen_retries_original_never_reapplies_and_old_server_
 #[tokio::test]
 async fn configuration_heartbeat_remains_online_while_local_dispatch_lock_is_busy() {
     let (base, state, server) = fixture().await;
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let a = NativeOwner::open_with_matrix(
         &root.path().join("state"),
         &base,

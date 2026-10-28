@@ -493,7 +493,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn direct_journal_dangling_symlink_is_not_a_fresh_creation() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let path = dir.path().join("journal.json");
         std::os::unix::fs::symlink(dir.path().join("absent"), &path).unwrap();
         assert!(load(&path).is_err());

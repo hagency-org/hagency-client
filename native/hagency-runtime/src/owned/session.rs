@@ -23,6 +23,8 @@ pub struct OwnedSession {
     session: Session,
     owner: SupervisedProcess,
     cleanup: Cleanup,
+    pub(super) managed_source: super::managed::ManagedProcessSource,
+    pub(super) text_source: super::shared_text::SharedTextProcessSource,
     /// Diagnostics build only (ADR-182 pin): every stop verdict of this
     /// session reads `Unknown`, as a tree the guardian could not prove gone
     /// would, however many times the host asks. No production build has it.
@@ -30,6 +32,10 @@ pub struct OwnedSession {
     unproven: bool,
 }
 impl OwnedSession {
+    pub fn shared_workspace(&self) -> &Path {Path::new(self.session.settings().cwd())}
+    pub(super) fn shared_settings_match(&self, mode: Option<&str>) -> bool {
+        self.session.settings().shared_mode_matches(mode)
+    }
     pub fn spawn(
         guardian: &Path,
         launch: &Launch,
@@ -82,6 +88,8 @@ impl OwnedSession {
                     session,
                     owner,
                     cleanup: Cleanup::Pending,
+                    managed_source: super::managed::ManagedProcessSource::new(),
+                    text_source: super::shared_text::SharedTextProcessSource::new(),
                     #[cfg(feature = "test-diagnostics")]
                     unproven: false,
                 })
@@ -101,7 +109,14 @@ impl OwnedSession {
     pub fn phase(&self) -> Phase {
         self.session.phase()
     }
+    pub fn bind_dispatch_policy(&mut self, settings: &Settings) -> Result<(), session::Error> {
+        self.managed_source.retire();
+        self.text_source.retire();
+        self.session.bind_dispatch_policy(settings)
+    }
     pub fn bind_task_mcp(&mut self, helper: session::TaskMcp) -> Result<(), session::Error> {
+        self.managed_source.retire();
+        self.text_source.retire();
         self.session.bind_task_mcp(helper)
     }
     pub fn reserve_warm_idle(&mut self) -> Result<(), session::Error> {
@@ -236,6 +251,8 @@ impl OwnedSession {
     /// Stop through the retained owner. A false whole_tree_stopped or an IO
     /// error stays explicit; neither result frees a domain lease or task.
     pub fn stop(&mut self) -> Cleanup {
+        self.managed_source.retire();
+        self.text_source.retire();
         self.session.close();
         if !matches!(self.cleanup, Cleanup::Observed(report) if report.scope.whole_tree_stopped) {
             self.cleanup = observe_stop(&mut self.owner);
@@ -321,15 +338,81 @@ impl OwnedSession {
         let result = operation.runner.session.initialize().await;
         operation.finish(result)
     }
+    pub(super) async fn qualification_read(
+        &mut self,
+        read: session::QualificationRead,
+    ) -> Result<serde_json::Value, session::Error> {
+        let operation = Operation::new(self)?;
+        let result = operation.runner.session.qualification_read(read).await;
+        operation.finish(result)
+    }
     pub async fn start_thread(&mut self) -> Result<String, session::Error> {
+        self.managed_source.retire();
+        self.text_source.retire();
         let operation = Operation::new(self)?;
         let result = operation.runner.session.start_thread().await;
         operation.finish(result)
     }
     pub async fn start_turn(&mut self, input: String) -> Result<String, session::Error> {
+        self.managed_source.retire();
+        self.text_source.retire();
         let operation = Operation::new(self)?;
         let result = operation.runner.session.start_turn(input).await;
         operation.finish(result)
+    }
+    /// One thread and one plain-text turn on a separately qualified text process.
+    pub async fn start_shared_text_thread(&mut self) -> Result<String, session::Error> {
+        self.text_source.begin_thread()?;
+        self.managed_source.retire();
+        let operation = Operation::new(self)?;
+        let result = operation.runner.session.start_thread().await;
+        operation.finish(result)
+    }
+    pub async fn start_shared_text_turn(
+        &mut self,
+        input: String,
+    ) -> Result<String, session::Error> {
+        if input.is_empty() || input.len() > 4096 {
+            return Err(session::Error::Policy);
+        }
+        self.text_source.begin_turn(&input)?;
+        self.managed_source.retire();
+        let operation = Operation::new(self)?;
+        let result = operation.runner.session.start_turn(input).await;
+        operation.finish(result)
+    }
+    /// Separately versioned bounded input. Plain request limits and immutable
+    /// process policy remain unchanged; the caller must own exact call custody.
+    pub async fn start_shared_context_turn(
+        &mut self,
+        input: String,
+        expected_digest: &str,
+    ) -> Result<String, session::Error> {
+        use sha2::{Digest, Sha256};
+        if !cfg!(feature = "shared-context")
+            || input.is_empty()
+            || input.len() > 64 * 1024
+            || format!("{:x}", Sha256::digest(input.as_bytes())) != expected_digest
+        {
+            return Err(session::Error::Policy);
+        }
+        self.text_source.begin_turn(&input)?;
+        self.managed_source.retire();
+        let operation = Operation::new(self)?;
+        let result = operation.runner.session.start_turn(input).await;
+        operation.finish(result)
+    }
+    pub(super) fn renew_shared_transport(
+        &mut self,
+        until: tokio::time::Instant,
+    ) -> Result<(), session::Error> {
+        self.session.renew_shared_activity(until)
+    }
+    pub(super) fn attach_shared_transport_activity(
+        &mut self,
+        clock: std::sync::Arc<dyn Fn() -> Option<tokio::time::Instant> + Send + Sync>,
+    ) -> Result<(), session::Error> {
+        self.session.attach_shared_activity(clock)
     }
     pub async fn interrupt(&mut self) -> Result<InterruptDisposition, session::Error> {
         let operation = Operation::new(self)?;
@@ -403,7 +486,9 @@ impl<'a> Operation<'a> {
         })
     }
     fn finish<T>(mut self, result: Result<T, session::Error>) -> Result<T, session::Error> {
-        if result.is_err() || self.runner.phase() == Phase::Ended {
+        if result.is_err()
+            || (self.runner.phase() == Phase::Ended && !self.runner.text_source.has_live_activity())
+        {
             self.runner.stop();
         }
         self.finished = true;

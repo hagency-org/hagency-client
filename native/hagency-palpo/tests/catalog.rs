@@ -32,7 +32,7 @@ struct Context {
 impl Context {
     async fn new(endpoint: &str) -> Self {
         let (custody_dir, store) = store();
-        let domain_dir = tempfile::tempdir().unwrap();
+        let domain_dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let domain = DomainStore::start(
             DomainRepository::open(&domain_dir.path().join("private")).unwrap(),
             32,

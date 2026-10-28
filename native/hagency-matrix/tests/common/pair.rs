@@ -28,7 +28,7 @@ impl PairFixture {
     /// DELIVERY room only — never an approval room — and each engagement
     /// owns one direct room for its DMs with the owner.
     pub fn new_pair() -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let mut db = DomainRepository::open(&root.path().join("domain")).unwrap();
         db.register(&domain::registration()).unwrap();
         let pool_a = domain::resource("pool-a", "seat-a", 1000);

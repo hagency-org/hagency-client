@@ -14,6 +14,7 @@ mod engagements;
 mod exec_policy;
 mod graphs;
 mod invites;
+mod lifecycle;
 mod matrix_diag;
 pub(crate) mod native;
 mod offer_book;
@@ -112,7 +113,7 @@ impl Console {
             },
             requests: Arc::new(Semaphore::new(8)),
             graphs: match state_dir {
-                Some(dir) => Some(graphs::GraphStore::open(dir)?),
+                Some(dir) => Some(graphs::GraphStore::open(dir).map_err(|_| Error::Unavailable)?),
                 None => None,
             },
         }));

@@ -332,7 +332,7 @@ async fn native_matrix_transport_rooms_unsafe_shared_state_retires_other_agent_r
     use hagency_core::replies::*;
     use hagency_store::{DomainRepository, DomainStore, EffectOutcome};
     use std::collections::BTreeSet;
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&root.path().join("domain")).unwrap();
     db.register(&domain::registration()).unwrap();
     let pool = domain::resource("pool", "seat", 1000);

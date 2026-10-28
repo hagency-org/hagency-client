@@ -1340,7 +1340,20 @@ pub(super) mod tests {
         Operation,
         hagency_execution::WorkspaceRegistration,
     ) {
-        let prepared = named_fixture(f, "https://127.0.0.1:1/", name).await;
+        workspace_operation_with_limit(f, name, 5_000).await
+    }
+
+    async fn workspace_operation_with_limit(
+        f: &test_common::Fixture,
+        name: &str,
+        operation_ms: u64,
+    ) -> (
+        RunnerCapability,
+        Operation,
+        hagency_execution::WorkspaceRegistration,
+    ) {
+        let mut prepared = named_fixture(f, "https://127.0.0.1:1/", name).await;
+        prepared.limits.operation_ms = operation_ms;
         std::fs::write(
             f.root.path().join(format!("work_{name}/same.txt")),
             name.as_bytes(),
@@ -1469,8 +1482,11 @@ pub(super) mod tests {
         let access = WorkspaceAccess::new();
         let mut held = Vec::new();
         for index in 0..17 {
+            // Registry capacity is independent of the five-second operation
+            // deadline used by single-operation fixtures. Keep all seventeen
+            // real registrations alive while their SQLite setup is serialized.
             let (cap, operation, registration) =
-                workspace_operation(&f, &format!("capacity_{index}")).await;
+                workspace_operation_with_limit(&f, &format!("capacity_{index}"), 60_000).await;
             let (binding, ack) = registration.into_parts();
             let result = access.register(cap.clone(), binding).await;
             if index < 16 {

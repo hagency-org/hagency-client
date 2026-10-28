@@ -146,7 +146,7 @@ async fn native_console_rail_pages_are_shipped_and_served() {
     }
 
     // --- the service's half: the real binary serves each of them ---
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("state");
     let empty_path = root.path().join("empty-path");
     std::fs::create_dir(&empty_path).unwrap();

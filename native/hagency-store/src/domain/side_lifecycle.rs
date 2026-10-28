@@ -96,6 +96,14 @@ pub struct Credential {
     pub representative_token: Option<String>,
 }
 
+impl Credential {
+    /// Shared validation for trusted native project-connection maintenance.
+    /// The returned value contains secrets and must remain outside script DTOs.
+    pub fn from_web_configuration(value: &Value) -> Result<Self, Error> {
+        credential(value)
+    }
+}
+
 /// Validate a credential value and return it normalized (TS `credential()`).
 /// The return value is a secret.
 fn credential(value: &Value) -> Result<Credential, Error> {

@@ -216,6 +216,7 @@ pub struct OwnedDispatchScope {
     input: DispatchInput,
     task: Task,
     resource: Resource,
+    execution_policy: Option<hagency_core::execution::ExecutionPolicy>,
     pub(super) account: Option<super::accounts::Association>,
     fingerprint: String,
     engagement_id: String,
@@ -225,9 +226,10 @@ pub struct OwnedDispatchScope {
     /// engagement workspace. Already covered by the fingerprint via `session`.
     thread_root: Option<String>,
     /// Per-agent workspace settings (board #78; the TS agent record,
-    /// backend-v2.js:2994, consumed at backend-v2.js:2057-2075), projected from
-    /// the engagement. `workspace_mode` normalizes to `worktree` or `shared`
-    /// (backend-v2.js:512); the repository is this agent's own workspace root.
+    /// backend-v2.js:2994, consumed at backend-v2.js:2057-2075).
+    /// `workspace_mode` is `worktree` or `shared` (backend-v2.js:512); the
+    /// repository is this agent's own workspace root. They are the machine
+    /// owner's to set: until that setting exists, every dispatch is `shared`.
     workspace_mode: String,
     worktrees_dir: Option<String>,
     worktree_bootstrap: Vec<String>,
@@ -241,6 +243,7 @@ impl OwnedDispatchScope {
             &self.input,
             &self.task,
             &self.resource,
+            &self.execution_policy,
             &self.account,
             &self.fingerprint,
             &self.engagement_id,
@@ -273,6 +276,9 @@ impl OwnedDispatchScope {
     }
     pub fn resource(&self) -> &Resource {
         &self.resource
+    }
+    pub fn execution_policy(&self) -> hagency_core::execution::ExecutionPolicy {
+        self.execution_policy.unwrap_or(hagency_core::execution::ExecutionPolicy { yolo:false })
     }
     pub fn fingerprint(&self) -> &str {
         &self.fingerprint
@@ -437,22 +443,30 @@ fn project_dispatch(
     // Task status/heartbeat may change through authorized canonical operations;
     // its identity and execution epoch must remain fixed for this attempt.
     let account = super::accounts::association(db, &resource)?;
-    let fingerprint = canonical::payload_digest(&json!({
+    let execution_policy = super::exec_policy::dispatch_policy(db, id, &engagement.id, &dispatch.state, &resource.framework)?;
+    let mut identity = json!({
         "input":input,"task_id":task.id,"task_epoch":completed_epoch.unwrap_or(task.execution_epoch),
         "session":session,"engagement":engagement.id,"generation":generation,
         "resource":resource,"runtime_name":engagement.runtime_name,"account":account,
-    }))?;
+    });
+    if let Some(policy) = execution_policy { identity["executionPolicy"] = json!(policy); }
+    let fingerprint = canonical::payload_digest(&identity)?;
     Ok(OwnedDispatchScope {
         input,
         task,
         resource,
+        execution_policy,
         account,
         fingerprint,
         engagement_id: engagement.id,
         thread_root,
-        workspace_mode: engagement.workspace_mode,
-        worktrees_dir: engagement.worktrees_dir,
-        worktree_bootstrap: engagement.worktree_bootstrap,
+        // Every stored workspace setting came from a request (board #78),
+        // which can no longer carry one: an agent admitted before that keeps
+        // the shared workspace, and no folder or bootstrap of its requester's
+        // reaches the host.
+        workspace_mode: "shared".into(),
+        worktrees_dir: None,
+        worktree_bootstrap: Vec::new(),
         started: None,
     })
 }
@@ -524,6 +538,7 @@ impl DomainRepository {
             tx.commit()?;
             return Err(Error::State);
         }
+        super::exec_policy::capture_dispatch_policy(&tx, &cap.dispatch_id, before.engagement_id(), before.execution_policy(), now)?;
         execution::start_in_transaction(&tx, cap, now)?;
         let mut started = scope(&tx, cap, now, &["started"])?;
         if started.fingerprint != expected {

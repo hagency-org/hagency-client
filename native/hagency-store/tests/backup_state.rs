@@ -19,7 +19,7 @@ fn initialized_state(root: &std::path::Path) -> std::path::PathBuf {
 
 #[test]
 fn native_backup_captures_an_initialized_state() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = initialized_state(root.path());
     // The real store leaves its lock files and both databases behind.
     assert!(state.join("domain.sqlite3").is_file());

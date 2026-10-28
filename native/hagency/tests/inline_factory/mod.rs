@@ -145,7 +145,7 @@ impl Fixture {
         // An already-managed project and unrelated external bootstrap agent.
         // ONLY that external agent uses fixture activation. The target factory
         // never receives seeded agent/effect/session/current/approval rows.
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let mut repository =
             hagency_store::DomainRepository::open(&root.path().join("domain")).unwrap();
         repository.register(&reg()).unwrap();
@@ -1087,7 +1087,7 @@ async fn join_owner(endpoint: String) {
 
 #[test]
 fn sdk_fixture_executable_snapshot_survives_shared_output_replacement() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let source = root.path().join("standalone-sdk-fixture");
     fs::write(&source, b"original SDK transport snapshot").unwrap();
     let tool = sdk_tool(root.path(), &source);

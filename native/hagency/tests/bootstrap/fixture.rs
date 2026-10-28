@@ -76,7 +76,7 @@ impl Fixture {
         managed: bool,
         workspace: Option<(PathBuf, Vec<String>)>,
     ) -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let state_dir = root.path().join("state");
         // Historical SDK-only fixture. Never call the production Init CLI.
         private::directory(&state_dir).unwrap();

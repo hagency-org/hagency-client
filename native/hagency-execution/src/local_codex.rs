@@ -159,7 +159,7 @@ impl LocalCodex {
         }) {
             return Err(Failure::Admission);
         }
-        environment.insert("HOME".into(), self.home.path.clone().into_os_string());
+        environment.insert("HOME".into(), hagency_platform::codex_process_home(&self.home.path).map_err(|_| Failure::Admission)?.into_os_string());
         environment.insert(
             "CODEX_HOME".into(),
             self.codex.path.clone().into_os_string(),
@@ -212,7 +212,7 @@ mod tests {
         binding.apply(&mut environment).unwrap();
         assert_eq!(
             environment.get(&OsString::from("HOME")),
-            Some(&home.clone().into_os_string())
+            Some(&hagency_platform::codex_process_home(&home).unwrap().into_os_string())
         );
         assert_eq!(
             environment.get(&OsString::from("CODEX_HOME")),

@@ -18,6 +18,7 @@ reqwest = { workspace = true, features = ["rustls-tls-webpki-roots"] }
 time = { workspace = true, features = ["parsing", "std"] }
 
 [dev-dependencies]
+hagency-platform = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true
 rusqlite = { workspace = true, features = ["bundled"] }
 tokio-rustls = { workspace = true, features = ["ring", "tls12"] }

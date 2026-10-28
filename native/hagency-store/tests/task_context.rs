@@ -34,7 +34,7 @@ struct Fixture {
 }
 impl Fixture {
     async fn new(start: bool) -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let work = root.path().join("workspace");
         let contexts = root.path().join("contexts");
         private::directory(&work).unwrap();

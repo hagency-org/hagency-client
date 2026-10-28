@@ -47,6 +47,9 @@ fn settings(read_only: bool) -> Settings {
     if read_only { value.read_only() } else { value }
 }
 fn fixture(read_only: bool) -> (Session, Peer) {
+    fixture_settings(settings(read_only))
+}
+fn fixture_settings(configuration: Settings) -> (Session, Peer) {
     let (stdin, peer_in) = tokio::io::duplex(131072);
     let (stdout, peer_out) = tokio::io::duplex(131072);
     let (stderr, peer_err) = tokio::io::duplex(1024);
@@ -55,7 +58,7 @@ fn fixture(read_only: bool) -> (Session, Peer) {
             stdout,
             stdin,
             stderr,
-            settings(read_only),
+            configuration,
             Limits {
                 write_timeout_ms: 500,
                 event_wait_ms: 1000,
@@ -1615,4 +1618,182 @@ async fn native_codex_approval_shapes_all_reach_the_owner() {
         .await,
         Err(Error::Malformed)
     ));
+}
+
+#[tokio::test]
+async fn native_execution_policy_wire_preserves_read_only_and_checks_echo() {
+    for (read_only, yolo) in [(false, false), (false, true), (true, false), (true, true)] {
+        let configuration = settings(read_only).with_execution_policy(yolo);
+        assert_eq!(configuration.is_unrestricted(), yolo && !read_only);
+        let (mut session, mut peer) = fixture_settings(configuration);
+        initialize(&mut session, &mut peer).await;
+        let mut observed = thread_result(read_only);
+        if yolo && !read_only {
+            observed["approvalPolicy"] = json!("never");
+            observed["sandbox"] = json!({"type":"dangerFullAccess"});
+        }
+        let (opened, request) = tokio::join!(
+            session.start_thread(),
+            exchange(&mut peer, observed, vec![])
+        );
+        assert_eq!(opened.unwrap(), "thread-one");
+        let expected_policy = if yolo && !read_only {
+            "never"
+        } else {
+            "on-request"
+        };
+        assert_eq!(request["params"]["approvalPolicy"], expected_policy);
+        assert_eq!(
+            request["params"]["sandbox"],
+            if read_only {
+                "read-only"
+            } else if yolo {
+                "danger-full-access"
+            } else {
+                "workspace-write"
+            }
+        );
+        let (started, turn_request) = tokio::join!(
+            session.start_turn("inspect".into()),
+            exchange(&mut peer, json!({"turn":turn("inProgress")}), vec![])
+        );
+        assert_eq!(started.unwrap(), "turn-one");
+        assert_eq!(turn_request["params"]["approvalPolicy"], expected_policy);
+        assert_eq!(
+            turn_request["params"]["sandboxPolicy"]["type"],
+            if read_only {
+                "readOnly"
+            } else if yolo {
+                "dangerFullAccess"
+            } else {
+                "workspaceWrite"
+            }
+        );
+    }
+    for yolo in [false, true] {
+        let (mut session, mut peer) = fixture_settings(settings(false).with_execution_policy(yolo));
+        initialize(&mut session, &mut peer).await;
+        let mut wrong = thread_result(false);
+        if !yolo {
+            wrong["approvalPolicy"] = json!("never");
+            wrong["sandbox"] = json!({"type":"dangerFullAccess"});
+        }
+        let (result, _) = tokio::join!(session.start_thread(), exchange(&mut peer, wrong, vec![]));
+        assert_eq!(result.err(), Some(Error::Policy));
+    }
+}
+
+#[tokio::test]
+async fn native_execution_policy_binds_only_before_thread_with_same_identity() {
+    let (mut session, mut peer) = fixture(false);
+    let target = settings(false).with_execution_policy(true);
+    assert_eq!(
+        session.bind_dispatch_policy(&target).err(),
+        Some(Error::State)
+    );
+    initialize(&mut session, &mut peer).await;
+    let other = Settings::new(cwd().into(), "other-model".into(), "medium".into())
+        .unwrap()
+        .with_execution_policy(true);
+    assert_eq!(
+        session.bind_dispatch_policy(&other).err(),
+        Some(Error::Scope)
+    );
+    assert!(!session.settings().is_unrestricted());
+    session.bind_dispatch_policy(&target).unwrap();
+    assert!(session.settings().is_unrestricted());
+    let mut observed = thread_result(false);
+    observed["approvalPolicy"] = json!("never");
+    observed["sandbox"] = json!({"type":"dangerFullAccess"});
+    let (opened, request) = tokio::join!(
+        session.start_thread(),
+        exchange(&mut peer, observed, vec![])
+    );
+    assert!(opened.is_ok());
+    assert_eq!(request["params"]["approvalPolicy"], "never");
+    assert_eq!(
+        session.bind_dispatch_policy(&settings(false)).err(),
+        Some(Error::State)
+    );
+    assert!(session.settings().is_unrestricted());
+}
+
+#[tokio::test]
+async fn native_execution_policy_consumed_warm_process_resumes_with_current_mode() {
+    for read_only in [false, true] {
+        let (mut session, mut peer) = fixture(false);
+        session.reserve_warm_idle().unwrap();
+        initialize(&mut session, &mut peer).await;
+        session
+            .enter_warm_idle(tokio::time::Instant::now() + Duration::from_secs(20))
+            .unwrap();
+        let current = settings(read_only).with_execution_policy(true);
+        assert_eq!(
+            session.bind_dispatch_policy(&current).err(),
+            Some(Error::State)
+        );
+        session
+            .consume_warm_idle(
+                Limits {
+                    write_timeout_ms: 500,
+                    event_wait_ms: 1000,
+                    lifetime_ms: 5000,
+                },
+                1000,
+                tokio::time::Instant::now() + Duration::from_secs(5),
+            )
+            .unwrap();
+        session.bind_dispatch_policy(&current).unwrap();
+        let mut observed = thread_result(read_only);
+        if !read_only {
+            observed["approvalPolicy"] = json!("never");
+            observed["sandbox"] = json!({"type":"dangerFullAccess"});
+        }
+        let (resumed, request) = tokio::join!(
+            session.resume_thread(ResumeThreadId::new("thread-one".into()).unwrap()),
+            exchange(&mut peer, observed, vec![])
+        );
+        assert_eq!(resumed.unwrap(), "thread-one");
+        assert_eq!(request["params"]["threadId"], "thread-one");
+        assert_eq!(request["params"]["excludeTurns"], true);
+        assert_eq!(
+            request["params"]["approvalPolicy"],
+            if read_only { "on-request" } else { "never" }
+        );
+        assert_eq!(
+            request["params"]["sandbox"],
+            if read_only {
+                "read-only"
+            } else {
+                "danger-full-access"
+            }
+        );
+        assert_eq!(
+            session.bind_dispatch_policy(&settings(false)).err(),
+            Some(Error::State)
+        );
+    }
+}
+
+#[tokio::test]
+async fn metadata_qualification_reads_accept_each_policy_only_before_thread_start() {
+    use hagency_runtime::codex::session::QualificationRead;
+    for mode in ["read_only", "standard", "yolo"] {
+        let configuration=match mode {"read_only"=>settings(true),"yolo"=>settings(false).with_execution_policy(true),_=>settings(false)};
+        let (mut session,mut peer)=fixture_settings(configuration);
+        assert_eq!(session.qualification_read(QualificationRead::Configuration).await,Err(Error::Policy));
+        initialize(&mut session,&mut peer).await;
+        for (read_kind,method) in [(QualificationRead::Configuration,"config/read"),(QualificationRead::Account,"account/read"),(QualificationRead::QuotaAccount,"account/rateLimits/read")] {
+            let (result,request)=tokio::join!(session.qualification_read(read_kind),exchange(&mut peer,json!({"metadata":true}),vec![]));
+            assert_eq!(request["method"],method);
+            assert_eq!(result.unwrap(),json!({"metadata":true}));
+        }
+        // No inspection requested a thread or turn. A started thread cannot
+        // reuse this metadata-only path under any execution policy.
+        let mut response=thread_result(mode=="read_only");
+        if mode=="yolo" {response["approvalPolicy"]=json!("never");response["sandbox"]=json!({"type":"dangerFullAccess"});}
+        let (result,request)=tokio::join!(session.start_thread(),exchange(&mut peer,response,vec![]));
+        assert_eq!(request["method"],"thread/start");result.unwrap();
+        assert_eq!(session.qualification_read(QualificationRead::Configuration).await,Err(Error::Policy));
+    }
 }

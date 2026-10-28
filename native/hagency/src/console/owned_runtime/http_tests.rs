@@ -94,6 +94,10 @@ impl WireState {
                     json!({"token":"b".repeat(64),"deviceId":"device-a","generation":self.device_generation,"validUntilMs":wall_ms()+30_000}),
                 )
             }
+            "/hagency/api/v1/devices/current" => (
+                200,
+                json!({"userId":"uid","mxid":OWNER,"subject":"sub","clientId":"sdk-client","issuer":format!("{origin}auth/"),"deviceId":"device-a","generation":generation,"validUntilMs":wall_ms()+30_000}),
+            ),
             "/hagency/api/v1/sessions/current/renew" => {
                 (200, json!({"validUntilMs":wall_ms()+30_000}))
             }
@@ -448,7 +452,7 @@ async fn fixture_with_processing_failure(unknown: bool, budget: u64, processing_
         Budget, Layer, Limit, ModelProfile, Period, Policy, RequestPolicy, ToolPolicy,
     };
     let (origin, state, server) = server(unknown, processing_failure).await;
-    let temp = tempfile::tempdir().unwrap();
+    let temp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();
     let native =
         NativeOwner::open_with_matrix(&root.join("state"), &origin, OWNER, Arc::new(Source))
@@ -693,7 +697,7 @@ async fn typed_http_processing_404_or_timeout_preserves_completed_reply_and_char
 async fn typed_http_runtime_intent_recovery_rechecks_scope_and_explicit_stop_survives_fresh_manager()
  {
     let (origin, state, server) = server(false, 0).await;
-    let temp = tempfile::tempdir().unwrap();
+    let temp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let native = NativeOwner::open_with_matrix(
         &temp.path().canonicalize().unwrap().join("state"),
         &origin,
@@ -791,7 +795,7 @@ async fn typed_http_runtime_intent_recovery_rechecks_scope_and_explicit_stop_sur
 // mutate the parent test suite's environment or touch an installed Codex login.
 #[test]
 fn typed_http_runtime_intent_positive_restore_uses_isolated_fake_provider() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();
     let script = root.join("fake-provider");
     let marker = root.join("model-turns");
@@ -827,7 +831,7 @@ async fn typed_http_runtime_intent_positive_restore_child() {
         wire.restore_scope = true;
         wire.no_messages = true;
     }
-    let temp = tempfile::tempdir().unwrap();
+    let temp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap().join("state");
     let native = NativeOwner::open_with_matrix(&root, &origin, OWNER, Arc::new(Source))
         .await
@@ -903,10 +907,10 @@ async fn typed_http_runtime_intent_positive_restore_child() {
     })
     .await
     .unwrap();
-    native.shutdown().await;
+    native.suspend().await.unwrap();
     drop(native);
-    // The next grant keeps the installation/device ID but increments generation.
-    // Until natural expiry, the old generation's lease is a precise 409 conflict.
+    // Normal restart preserves the exact device generation. A temporary central
+    // lease conflict still uses the existing bounded retry, without model work.
     state.lock().unwrap().restart_busy_remaining = 2;
     let restarted = NativeOwner::open_with_matrix(&root, &origin, OWNER, Arc::new(Source))
         .await
@@ -922,7 +926,7 @@ async fn typed_http_runtime_intent_positive_restore_child() {
     .unwrap();
     assert!(state.lock().unwrap().events.is_empty());
     assert_eq!(state.lock().unwrap().restart_busy_remaining, 0);
-    assert_eq!(state.lock().unwrap().device_generation, 2);
+    assert_eq!(state.lock().unwrap().device_generation, 1);
     assert!(
         state
             .lock()
@@ -964,7 +968,7 @@ async fn typed_http_runtime_intent_positive_restore_child() {
         .stop_agent_service(restarted.test_console(), "agent-a")
         .await
         .unwrap();
-    restarted.shutdown().await;
+    restarted.suspend().await.unwrap();
     drop(restarted);
     let stopped = NativeOwner::open_with_matrix(&root, &origin, OWNER, Arc::new(Source))
         .await
@@ -1080,7 +1084,7 @@ async fn typed_http_runtime_intent_positive_restore_child() {
     wait_binding(&stopped, "binding-b", true).await;
     // Restart recovers one owner/device-pinned Agent intent, rather than
     // independently replaying every Room snapshot that discovery published.
-    stopped.shutdown().await;
+    stopped.suspend().await.unwrap();
     drop(stopped);
     let stopped = NativeOwner::open_with_matrix(&root, &origin, OWNER, Arc::new(Source))
         .await
@@ -1132,7 +1136,7 @@ async fn typed_http_runtime_intent_positive_restore_child() {
     assert_eq!(status["service"]["reservation"], 15000);
     assert_eq!(status["service"]["effort"], "low");
     // Preferences survive a fresh host, but never represent execution consent.
-    stopped.shutdown().await;
+    stopped.suspend().await.unwrap();
     drop(stopped);
     let stopped = NativeOwner::open_with_matrix(&root, &origin, OWNER, Arc::new(Source))
         .await
@@ -1251,7 +1255,7 @@ async fn typed_http_runtime_intent_positive_restore_child() {
 async fn heartbeat_retries_transport_failure_but_never_extends_unconfirmed_lease() {
     for recover in [true, false] {
         let (origin, state, server) = server(false, 0).await;
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let native = NativeOwner::open_with_matrix(
             &root.path().join("state"),
             &origin,

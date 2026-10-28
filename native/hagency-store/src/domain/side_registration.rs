@@ -222,6 +222,20 @@ struct GeneratedRegistration {
     exclusive: bool,
 }
 
+impl IssueSideRegistrationRequest {
+    /// Generate the existing registration format without touching legacy files
+    /// or global side records. The caller owns private credential custody.
+    pub fn private_web_registration(&self) -> Result<(super::Credential, String), Error> {
+        let generated = GeneratedRegistration::new(self, &self.side)?;
+        let value: serde_json::Value = serde_json::from_str(&credential_row(&generated))?;
+        let credential = super::Credential::from_web_configuration(&value)?;
+        // JSON string quoting is also valid YAML and preserves regex escapes.
+        let quote = |s: &str| serde_json::to_string(s).expect("string serialization");
+        let yaml = format!("# Hagency appservice registration. Keep this file private.\nid: {}\nurl: {}\nas_token: {}\nhs_token: {}\nsender_localpart: {}\nrate_limited: false\nnamespaces:\n  users:\n    - exclusive: {}\n      regex: {}\n  aliases: []\n  rooms: []\n", quote(&generated.id), quote(&generated.url), quote(&generated.as_token), quote(&generated.hs_token), quote(&generated.sender_localpart), generated.exclusive, quote(&generated.namespace));
+        Ok((credential, yaml))
+    }
+}
+
 fn random_token_hex() -> Result<String, Error> {
     // TS: randomBytes(32).toString('hex') — 32 bytes, 64 hex characters.
     let mut bytes = [0u8; 32];

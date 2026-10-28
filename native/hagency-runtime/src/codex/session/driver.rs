@@ -113,6 +113,23 @@ impl<R, W, E> SessionDriver<R, W, E> {
     fn acknowledgement_ms(&self) -> u64 {
         ACKNOWLEDGEMENT_MS.min(self.lifetime_ms)
     }
+    /// Bind this dispatch's permissions before any thread is started or resumed.
+    /// A consumed warm process is still in Ready; active threads cannot change.
+    /// Cwd/model/effort and the retained task helper remain the same identities.
+    pub fn bind_dispatch_policy(&mut self, settings: &Settings) -> Result<(), Error> {
+        if self.phase() != Phase::Ready || self.wire.is_warm_idle() {
+            return Err(Error::State);
+        }
+        if self.settings.cwd != settings.cwd
+            || self.settings.model != settings.model
+            || self.settings.effort != settings.effort
+        {
+            return Err(Error::Scope);
+        }
+        self.settings.read_only = settings.read_only;
+        self.settings.unrestricted = settings.unrestricted;
+        Ok(())
+    }
     /// One fixed Host helper after initialize, never general reconfiguration.
     pub fn bind_task_mcp(&mut self, helper: super::TaskMcp) -> Result<(), Error> {
         if self.phase() != Phase::Ready
@@ -131,11 +148,24 @@ impl<R, W, E> SessionDriver<R, W, E> {
         }
         self.wire.reserve_warm_idle().map_err(Error::Transport)
     }
+    pub(crate) fn renew_shared_activity(&mut self, until: Instant) -> Result<(), Error> {
+        self.wire
+            .renew_shared_activity(until)
+            .map_err(Error::Transport)
+    }
     pub fn enter_warm_idle(&mut self, until: Instant) -> Result<(), Error> {
         if self.phase() != Phase::Ready || self.settings.task_mcp.is_some() {
             return Err(Error::State);
         }
         self.wire.enter_warm_idle(until).map_err(Error::Transport)
+    }
+    pub(crate) fn attach_shared_activity(
+        &mut self,
+        clock: std::sync::Arc<dyn Fn() -> Option<Instant> + Send + Sync>,
+    ) -> Result<(), Error> {
+        self.wire
+            .attach_shared_activity(clock)
+            .map_err(Error::Transport)
     }
     pub fn consume_warm_idle(
         &mut self,
@@ -426,6 +456,37 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> SessionD
         Ok(())
     }
 
+    /// Three fixed reads only. No caller method, parameters, thread or prompt.
+    /// Startup server requests invalidate qualification even when rejected.
+    pub async fn qualification_read(
+        &mut self,
+        read: super::QualificationRead,
+    ) -> Result<Value, Error> {
+        // These closed metadata reads run before any thread/model turn. Tool
+        // sessions must inspect their configuration and account too; their
+        // execution policy is verified separately on the same actual process.
+        if self.phase() != Phase::Ready
+            || self.settings.task_mcp.is_some()
+            || self.last_server_request.is_some()
+        {
+            return Err(Error::Policy);
+        }
+        let operation = Operation {
+            session: self,
+            finished: false,
+        };
+        let (method, params) = read.request();
+        let result = operation
+            .session
+            .call_bounded(method, params, operation.session.response_timeout_ms)
+            .await;
+        let result = if operation.session.last_server_request.is_some() {
+            Err(Error::UnsupportedRequest)
+        } else {
+            result
+        };
+        operation.finish(result)
+    }
     pub async fn start_thread(&mut self) -> Result<String, Error> {
         self.open_thread(None).await
     }
@@ -761,7 +822,11 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> SessionD
         }
         if self.phase() == Phase::Ended {
             self.drain_terminal().await?;
-            self.wire.close();
+            // Shared text remains one-shot (the codec stays Ended), but its
+            // actual process must remain owned until the central reply settles.
+            if !self.wire.has_live_shared_activity() {
+                self.wire.close();
+            }
         }
         self.observation_kind = if method == "thread/tokenUsage/updated" {
             super::ObservationKind::Usage(super::usage::project(&params))

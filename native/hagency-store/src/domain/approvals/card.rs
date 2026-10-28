@@ -80,7 +80,59 @@ impl DomainRepository {
             None
         };
         actions.push(json!({"id":"deny","label":"Deny","style":"danger"}));
-        let preview = serde_json::to_string(&request.params)?;
+        // The card names the agent's framework (ADR-192, ADR-193). A Claude
+        // request shows its tool and input, as the retained TS card did; an
+        // Octos request its tool and what Octos says it does; a Codex request
+        // shows its method and params, unchanged.
+        let claude = request.method == policy::CLAUDE_TOOL_METHOD;
+        let octos = request.method == policy::OCTOS_APPROVAL_METHOD;
+        let runtime = if claude {
+            "claude"
+        } else if octos {
+            "octos"
+        } else {
+            "codex"
+        };
+        let tool = if claude || octos {
+            request.params["toolName"]
+                .as_str()
+                .filter(|tool| !tool.is_empty())
+                .ok_or(Error::Schema)?
+        } else {
+            request.method.as_str()
+        };
+        let preview = if claude {
+            serde_json::to_string(&request.params["input"])?
+        } else if octos {
+            // What Octos says the request does, as lines a person reads: its
+            // title, its body, then the typed command and directory if any.
+            let text = |key: &str| {
+                request.params[key]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+            };
+            let mut lines: Vec<String> = ["title", "body"]
+                .into_iter()
+                .filter_map(|key| text(key).map(str::to_owned))
+                .collect();
+            if let Some(command) = text("command") {
+                lines.push(format!("Command: {command}"));
+            }
+            if let Some(cwd) = text("cwd") {
+                lines.push(format!("Working directory: {cwd}"));
+            }
+            // A request with no reusable scope has no stored description:
+            // Octos's own title names it.
+            if description.is_empty()
+                && let Some(title) = text("title")
+            {
+                description = title.to_owned();
+            }
+            lines.join("\n")
+        } else {
+            serde_json::to_string(&request.params)?
+        };
         // The retained v1 client expects a nonempty display string. Preserve
         // the actual JSON-RPC type separately; neither field is authority.
         let upstream_display = match &request.upstream {
@@ -93,8 +145,8 @@ impl DomainRepository {
             "project":target.authority.project_id,
             "project_room_id":target.authority.project_room_id,
             "request_id":target.request_id,"input_digest":target.request_digest,
-            "upstream_request_id":upstream_display,"upstream_rpc_id":request.upstream,"runtime":"codex",
-            "tool_name":request.method,"description":description,
+            "upstream_request_id":upstream_display,"upstream_rpc_id":request.upstream,"runtime":runtime,
+            "tool_name":tool,"description":description,
             "input_preview":preview,"expires_at":owner_expires_at,"actions":actions
         });
         if let Some(scope) = scope {
@@ -105,10 +157,11 @@ impl DomainRepository {
         )
         .map_err(|_| Error::RunnerAuthority)?;
         let body = format!(
-            "Approval required for {}\nProject: {}\nRuntime: codex\nTool: {}\nDescription: {}\nInput: {}\nExpires: {}\nChoose an approval button for the scope shown above. Text replies are not approval.",
+            "Approval required for {}\nProject: {}\nRuntime: {}\nTool: {}\nDescription: {}\nInput: {}\nExpires: {}\nChoose an approval button for the scope shown above. Text replies are not approval.",
             target.authority.agent_name,
             target.authority.project_id,
-            request.method,
+            runtime,
+            tool,
             description,
             preview,
             expires

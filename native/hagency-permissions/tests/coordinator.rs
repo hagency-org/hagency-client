@@ -117,7 +117,7 @@ async fn send(output: &mut DuplexStream, value: Value) {
 impl Prepared {
     fn new(write: bool) -> Pin<Box<dyn std::future::Future<Output = Self>>> {
         Box::pin(async move {
-            let root = tempfile::tempdir().unwrap();
+            let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
             let mut db = DomainRepository::open(&root.path().join("state")).unwrap();
             db.register(&registration()).unwrap();
             let pool = resource();

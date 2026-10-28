@@ -28,7 +28,7 @@ fn rows(dir: &tempfile::TempDir) -> Vec<(String, u64)> {
 /// generation is refused with the stored row unchanged.
 #[tokio::test]
 async fn native_registration_facade_idempotent_and_stale_refused() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let db = DomainRepository::open(&dir.path().join("state")).unwrap();
     let store = DomainStore::start(db, 16).unwrap();
     let reg = registration();
@@ -50,7 +50,7 @@ async fn native_registration_facade_idempotent_and_stale_refused() {
 /// same transaction; the previous row is replaced, not duplicated.
 #[tokio::test]
 async fn native_registration_facade_generation_advance_reconciles() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let db = DomainRepository::open(&dir.path().join("state")).unwrap();
     let store = DomainStore::start(db, 16).unwrap();
     let reg = registration();
@@ -76,7 +76,7 @@ async fn native_registration_facade_generation_advance_reconciles() {
 /// Scenario: an invalid registration is refused before any write.
 #[tokio::test]
 async fn native_registration_facade_refuses_an_invalid_record() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let db = DomainRepository::open(&dir.path().join("state")).unwrap();
     let store = DomainStore::start(db, 16).unwrap();
     // Malformed fleet id.

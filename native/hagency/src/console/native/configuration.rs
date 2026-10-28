@@ -66,6 +66,9 @@ fn operation(command: Command, agent: &str) -> Result<(&'static str, Value), Nat
             validate_input(op, &input)?;
             Ok((op, input))
         }
+        Command::ExecutionEnvironment { agent_id } if agent_id == agent => {
+            Ok(("environment", json!({})))
+        }
         Command::PrepareAgentWorkspace { agent_id } if agent_id == agent => {
             Ok(("prepare_workspace", json!({})))
         }
@@ -101,6 +104,8 @@ fn exact(v: &Value, keys: &[&str]) -> Result<(), NativeError> {
 #[serde(deny_unknown_fields)]
 struct ModelInput {
     profile: ModelProfile,
+    #[serde(default,rename="expectedProfileDigest")]
+    expected_profile_digest:Option<String>,
 }
 fn model_profile_shape(value: &Value) -> Result<(), NativeError> {
     if value.get("web_search").is_some() {
@@ -138,7 +143,8 @@ fn validate_input(op: &str, input: &Value) -> Result<(), NativeError> {
             exact(input, &[]).is_ok()
         }
         "save_agent_model" => {
-            exact(input, &["profile"]).is_ok()
+            (exact(input, &["profile"]).is_ok() || (exact(input,&["profile","expectedProfileDigest"]).is_ok()
+                && input["expectedProfileDigest"].as_str().is_some_and(|v|v.len()==64&&v.bytes().all(|b|b.is_ascii_digit()||(b'a'..=b'f').contains(&b)))))
                 && model_profile_shape(&input["profile"]).is_ok()
                 && serde_json::from_value::<ModelInput>(input.clone()).is_ok()
         }
@@ -168,7 +174,7 @@ pub(super) fn is_wrapper(c: &Command) -> bool {
             | Command::AgentConfiguration { .. }
     )
 }
-async fn pin(native: &NativeOwner) -> Result<DeviceIdentity, NativeError> {
+pub(super) async fn pin(native: &NativeOwner) -> Result<DeviceIdentity, NativeError> {
     native.sync_matrix().await?;
     native.identity().await?;
     native
@@ -202,6 +208,11 @@ async fn api(
         .map_err(|e| failure(503, e.code()))?;
     if !metadata.capabilities.iter().any(|c| c == CAPABILITY) {
         return Err(failure(409, "configuration_unsupported"));
+    }
+    // Discovery awaits the network. Recheck the exact SDK/device authority
+    // before sending a configuration effect under the captured credential.
+    if self::pin(native).await? != *pin {
+        return Err(failure(401, "configuration_authority_changed"));
     }
     let url = reqwest::Url::parse(&pin.origin)
         .map_err(|_| invalid())?
@@ -296,7 +307,17 @@ fn work(value: &Value) -> Result<Work, NativeError> {
     Ok(w)
 }
 pub(super) async fn remote(native: &NativeOwner, command: Command) -> Result<Value, NativeError> {
+    remote_pinned(native, command, None).await
+}
+pub(super) async fn remote_pinned(
+    native: &NativeOwner,
+    command: Command,
+    expected: Option<&DeviceIdentity>,
+) -> Result<Value, NativeError> {
     let original = pin(native).await?;
+    if expected.is_some_and(|expected| expected != &original) {
+        return Err(failure(409, "personal_policy_original_device_required"));
+    }
     let (agent, generation, key_value, op, input) = match command {
         Command::AgentConfigurationStatus { agent_id } => {
             key(&agent_id)?;
@@ -752,6 +773,9 @@ async fn apply(
             }
             let input: ModelInput = serde_json::from_value(w.input.clone())
                 .map_err(|_| failure(400, "invalid_arguments"))?;
+            if let Some(expected)=&input.expected_profile_digest {
+                if expected.len()!=64 {return Err(failure(400,"invalid_arguments"));}
+            }
             let runtime = hagency_agent_local::runtime::kind(&input.profile.credential_ref).name();
             let catalog = provider(native, runtime, ProviderAction::Models).await?;
             if catalog["authenticated"] != true
@@ -851,13 +875,15 @@ fn journal(native: &NativeOwner, pin: &DeviceIdentity) -> Result<PathBuf, Native
         .server_login
         .state_directory()
         .ok_or_else(unavailable)?;
-    let ledger =
-        owned_agents::ledger_path(&root, &pin.origin, &pin.issuer, &pin.subject, &pin.owner)
-            .map_err(|_| unavailable())?;
-    let dir = ledger
-        .parent()
-        .ok_or_else(unavailable)?
-        .join("device-configuration");
+    let profile = owned_agents::journal_profile_directory(
+        &root,
+        &pin.origin,
+        &pin.issuer,
+        &pin.subject,
+        &pin.owner,
+    )
+    .map_err(|_| unavailable())?;
+    let dir = profile.join("device-configuration");
     hagency_store::private::directory(&dir).map_err(|_| unavailable())?;
     Ok(dir.join(format!("{}.json", pin.id)))
 }
@@ -1093,12 +1119,10 @@ pub(super) fn start(native: &NativeOwner) {
             tokio::time::sleep(Duration::from_secs(3)).await;
         }
     });
-    native
-        .0
-        .configuration_tasks
-        .lock()
-        .unwrap()
-        .extend([worker, heartbeat]);
+    native.0.configuration_tasks.lock().unwrap().extend([
+        native.0.configuration_custody.track_cancellable(worker),
+        native.0.configuration_custody.track_cancellable(heartbeat),
+    ]);
 }
 
 #[cfg(test)]
@@ -1136,8 +1160,21 @@ mod tests {
         assert!(validate_provider(&secret).is_err());
     }
     #[test]
+    fn personal_model_digest_protocol_preserves_legacy_and_rejects_ambiguous_shapes() {
+        let old=json!({"profile":{"model":"fixture","credential_ref":"keychain:codex:owner","workspace_root":"/workspace","reasoning_effort":"high","web_search":true}});
+        validate_input("save_agent_model",&old).unwrap();
+        let mut checked=old.clone();checked["expectedProfileDigest"]=json!("a".repeat(64));
+        validate_input("save_agent_model",&checked).unwrap();
+        for bad in [Value::Null,json!(1),json!("A".repeat(64)),json!("a".repeat(63))] {
+            checked["expectedProfileDigest"]=bad;
+            assert!(validate_input("save_agent_model",&checked).is_err());
+        }
+        let mut wrong=old;wrong["expected_profile_digest"]=json!("a".repeat(64));
+        assert!(validate_input("save_agent_model",&wrong).is_err());
+    }
+    #[test]
     fn applying_receipt_survives_restart_without_manufacturing_completion() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let path = dir.path().join("original.json");
         let pin = DeviceIdentity {
             origin: "http://127.0.0.1/".into(),

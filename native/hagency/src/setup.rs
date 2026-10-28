@@ -291,7 +291,7 @@ mod tests {
 
     #[test]
     fn npm_launcher_script_resolves_to_the_native_binary() {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let package = root.path().join("lib/node_modules/@openai/codex");
         std::fs::create_dir_all(package.join("bin")).unwrap();
         std::fs::write(package.join("bin/codex.js"), "#!/usr/bin/env node\n").unwrap();
@@ -305,7 +305,7 @@ mod tests {
 
     #[test]
     fn a_native_binary_is_used_as_given() {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let binary = root.path().join("codex");
         std::fs::write(&binary, b"\xcf\xfa\xed\xfe native").unwrap();
         assert_eq!(
@@ -316,7 +316,7 @@ mod tests {
 
     #[test]
     fn a_changed_codex_binary_makes_the_runtime_stale() {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let binary = root.path().join("codex");
         std::fs::write(&binary, b"version one").unwrap();
         let digest = sha256_file(&binary).unwrap();
@@ -335,7 +335,7 @@ mod tests {
 
     #[test]
     fn a_script_with_nothing_beside_it_is_refused_by_name() {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let script = root.path().join("codex");
         std::fs::write(&script, "#!/bin/sh\n").unwrap();
         let error = codex_executable(Some(&script)).unwrap_err();

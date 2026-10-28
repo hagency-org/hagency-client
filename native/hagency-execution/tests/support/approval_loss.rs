@@ -187,7 +187,7 @@ async fn native_owned_approval_caller_loss() {
         Fault::SpawnPanic,
         Fault::WritePanic,
     ] {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let work = root.path().join("work");
         hagency_store::private::directory(&work).unwrap();
         let work = work.canonicalize().unwrap();
@@ -306,7 +306,7 @@ async fn choose(domain: &DomainStore, id: String) {
 async fn native_owned_approval_barriers_pending_receipt() {
     use std::sync::{Arc, atomic::Ordering};
     for fault in [Fault::BeginGate, Fault::RecheckGate] {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let work = root.path().join("work");
         hagency_store::private::directory(&work).unwrap();
         let work = work.canonicalize().unwrap();
@@ -425,7 +425,7 @@ async fn native_owned_approval_barriers_pending_receipt() {
 #[tokio::test]
 async fn native_owned_approval_usage_successful_control() {
     use std::sync::{Arc, atomic::Ordering};
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let work = root.path().join("work");
     hagency_store::private::directory(&work).unwrap();
     let work = work.canonicalize().unwrap();
@@ -497,7 +497,7 @@ async fn failed_usage_receipt(gate: &crate::approval::Gate) {
 #[tokio::test]
 async fn native_owned_approval_usage_unknown_slot() {
     use std::sync::{Arc, atomic::Ordering};
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let work = root.path().join("work");
     hagency_store::private::directory(&work).unwrap();
     let work = work.canonicalize().unwrap();
@@ -560,7 +560,7 @@ async fn native_owned_approval_usage_unknown_slot() {
 /// continue along the successful path, with no second frame and no double write.
 #[tokio::test]
 async fn native_owned_approval_acceptance_reconcile_accepted() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let work = root.path().join("work");
     hagency_store::private::directory(&work).unwrap();
     let work = work.canonicalize().unwrap();
@@ -675,7 +675,7 @@ async fn native_owned_approval_acceptance_reconcile_accepted() {
 #[tokio::test]
 async fn native_owned_approval_acceptance_reconcile_unrecorded() {
     use std::sync::{Arc, atomic::Ordering};
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let work = root.path().join("work");
     hagency_store::private::directory(&work).unwrap();
     let work = work.canonicalize().unwrap();
@@ -837,7 +837,7 @@ fn markers_present(work: &std::path::Path) -> String {
 #[tokio::test]
 async fn native_owned_approval_in_flight_resolution_takes_the_quiet_path() {
     use std::sync::{Arc, atomic::Ordering};
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let work = root.path().join("work");
     hagency_store::private::directory(&work).unwrap();
     let work = work.canonicalize().unwrap();
@@ -970,7 +970,7 @@ async fn native_owned_approval_in_flight_resolution_takes_the_quiet_path() {
 /// cancels with the exact variant, and nothing reaches the wire.
 #[tokio::test]
 async fn native_owned_approval_resolution_before_admission_cancels() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let work = root.path().join("work");
     hagency_store::private::directory(&work).unwrap();
     let work = work.canonicalize().unwrap();
@@ -1011,7 +1011,7 @@ async fn native_owned_approval_resolution_before_admission_cancels() {
 /// probe itself fails if one arrives.
 #[tokio::test]
 async fn native_owned_approval_no_second_frame_after_resolution() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let work = root.path().join("work");
     hagency_store::private::directory(&work).unwrap();
     let work = work.canonicalize().unwrap();
@@ -1067,7 +1067,7 @@ async fn native_owned_approval_no_second_frame_after_resolution() {
 #[tokio::test]
 async fn native_owned_approval_receipt_before_resolution() {
     use std::sync::{Arc, atomic::Ordering};
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let work = root.path().join("work");
     hagency_store::private::directory(&work).unwrap();
     let work = work.canonicalize().unwrap();
@@ -1171,7 +1171,7 @@ async fn native_owned_approval_receipt_before_resolution() {
 #[tokio::test]
 async fn native_owned_approval_resolved_before_first_byte() {
     use std::sync::{Arc, atomic::Ordering};
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let work = root.path().join("work");
     hagency_store::private::directory(&work).unwrap();
     let work = work.canonicalize().unwrap();
@@ -1286,7 +1286,7 @@ async fn native_owned_approval_resolved_before_first_byte() {
 #[tokio::test]
 async fn native_owned_approval_peer_gone_before_first_byte() {
     use std::sync::{Arc, atomic::Ordering};
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let work = root.path().join("work");
     hagency_store::private::directory(&work).unwrap();
     let work = work.canonicalize().unwrap();
@@ -1403,7 +1403,7 @@ async fn native_owned_approval_peer_gone_before_first_byte() {
 #[tokio::test]
 async fn native_owned_approval_turn_end_untransmitted() {
     use std::sync::{Arc, atomic::Ordering};
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let work = root.path().join("work");
     hagency_store::private::directory(&work).unwrap();
     let work = work.canonicalize().unwrap();
@@ -1539,7 +1539,7 @@ async fn native_owned_approval_turn_end_untransmitted() {
 /// `SettlementUnknown`, never `Completed`.
 #[tokio::test]
 async fn native_owned_approval_turn_end_midwrite_uncertain() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let work = root.path().join("work");
     hagency_store::private::directory(&work).unwrap();
     let work = work.canonicalize().unwrap();
@@ -1617,7 +1617,7 @@ async fn native_owned_approval_turn_end_midwrite_uncertain() {
 /// product's own write, not the fixture's.
 #[tokio::test]
 async fn native_owned_approval_expiry_deny_uncertain_sends_nothing() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let work = root.path().join("work");
     hagency_store::private::directory(&work).unwrap();
     let work = work.canonicalize().unwrap();

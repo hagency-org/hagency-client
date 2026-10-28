@@ -290,7 +290,7 @@ mod tests {
     use super::*;
     #[test]
     fn status_confirmation_preserves_pending_and_never_overwrites_resumed_result() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let original = prepare(
             temp.path(),
             "agent.create",
@@ -319,7 +319,7 @@ mod tests {
     }
     #[test]
     fn restart_preserves_intent_and_rejects_new_key_or_changed_payload() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let input = json!({"displayName":"Agent","idempotencyKey":"original"});
         let first = prepare(temp.path(), "agent.create", None, input.clone()).unwrap();
         assert_eq!(

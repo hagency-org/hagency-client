@@ -70,7 +70,7 @@ impl Fixture {
     /// The peers.rs three-agent shape: a, b in one project, c in another;
     /// the creator dispatch on session "a" is started and owns every send.
     fn new(tag: &str) -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let mut db = DomainRepository::open(&root.path().join("state")).unwrap();
         db.register(&registration()).unwrap();
         let pool = resource("pool", "seat", 1000);
@@ -834,12 +834,13 @@ fn native_retained_peer_corpus_migration_replays_after_rewind() {
     drop(f.db);
     {
         let sql = Connection::open(state.join("domain.sqlite3")).unwrap();
+        common::remove_coordinator_schema(&sql);
         // 032's ADD COLUMN is not replay-idempotent: the rewind replays it
         // over a receipts table that already carries the column, so strip it
         // first (the 025 replay posture; cf. updated_at in file_delivery.rs).
         sql.execute_batch("ALTER TABLE runner_sessions DROP COLUMN model_override; ALTER TABLE runner_sessions DROP COLUMN mode_override; ALTER TABLE approval_verdict_receipts DROP COLUMN denial_reason; ALTER TABLE runner_attempts DROP COLUMN park_reason; ALTER TABLE dispatch_inputs DROP COLUMN addressed; DROP TABLE IF EXISTS dispatch_conversation_reads; ALTER TABLE runner_attempts DROP COLUMN started_at; ALTER TABLE runner_attempts DROP COLUMN parked_at; ALTER TABLE runner_attempts DROP COLUMN last_renew_at; ALTER TABLE runner_attempts DROP COLUMN settled_at; ALTER TABLE runner_attempts DROP COLUMN terminal_reason; DROP TABLE IF EXISTS runner_attempt_events; DROP TABLE IF EXISTS agent_fences; DROP TABLE IF EXISTS avatar_requests; DROP TABLE IF EXISTS agent_tombstones; DROP TABLE IF EXISTS delivery_events; DROP TABLE IF EXISTS operator_messages; DROP TABLE IF EXISTS dispatch_activity_events; DROP TABLE IF EXISTS dispatch_activity;  DROP TABLE IF EXISTS pending_invites;  DROP TABLE IF EXISTS ceiling_alert_notes; DROP TABLE IF EXISTS side_registrations; DROP VIEW IF EXISTS current_command_notices; DROP TABLE IF EXISTS command_notice_inspections; DROP TABLE IF EXISTS command_notices; ALTER TABLE final_replies DROP COLUMN incidental; DROP TABLE IF EXISTS operator_tasks; DROP TABLE IF EXISTS operator_task_comments; DROP TABLE IF EXISTS room_trust;")
              .unwrap();
-        sql.execute_batch("DROP TABLE IF EXISTS agent_lifecycle; DROP TABLE IF EXISTS side_records; DROP TABLE IF EXISTS side_projects;  ALTER TABLE decisions DROP COLUMN kind; ALTER TABLE decisions DROP COLUMN at; DROP TABLE IF EXISTS reminders; DROP TABLE IF EXISTS room_trust;  DROP TABLE IF EXISTS quota_holds; DROP TABLE IF EXISTS owner_anchors; DROP TABLE IF EXISTS joined_rooms; ALTER TABLE engagements DROP COLUMN allocated_tokens; PRAGMA user_version=26;").unwrap();
+        sql.execute_batch("DROP TABLE IF EXISTS agent_lifecycle; DROP TABLE IF EXISTS side_records; DROP TABLE IF EXISTS side_projects;  ALTER TABLE decisions DROP COLUMN kind; ALTER TABLE decisions DROP COLUMN at; DROP TABLE IF EXISTS reminders; DROP TABLE IF EXISTS room_trust;  DROP TABLE IF EXISTS quota_holds; DROP TABLE IF EXISTS owner_anchors; DROP TABLE IF EXISTS joined_rooms; ALTER TABLE engagements DROP COLUMN allocated_tokens; DROP TABLE IF EXISTS owner_shared_tool_policies;PRAGMA user_version=26;").unwrap();
     }
     // The double open: the second run is at head 38 and replays nothing.
     for _ in 0..2 {
@@ -919,12 +920,13 @@ fn native_retained_peer_corpus_migration_head_is_current() {
             .unwrap();
         sql.execute_batch(include_str!("../src/migrations/024-ceiling-alerts.sql"))
             .unwrap();
+        common::remove_coordinator_schema(&sql);
         // 032's ADD COLUMN is not replay-idempotent: the rewind replays it
         // over a receipts table that already carries the column, so strip it
         // first (the 025 replay posture; cf. updated_at in file_delivery.rs).
         sql.execute_batch("ALTER TABLE runner_sessions DROP COLUMN model_override; ALTER TABLE runner_sessions DROP COLUMN mode_override; ALTER TABLE approval_verdict_receipts DROP COLUMN denial_reason; ALTER TABLE runner_attempts DROP COLUMN park_reason; ALTER TABLE dispatch_inputs DROP COLUMN addressed; DROP TABLE IF EXISTS dispatch_conversation_reads; ALTER TABLE runner_attempts DROP COLUMN started_at; ALTER TABLE runner_attempts DROP COLUMN parked_at; ALTER TABLE runner_attempts DROP COLUMN last_renew_at; ALTER TABLE runner_attempts DROP COLUMN settled_at; ALTER TABLE runner_attempts DROP COLUMN terminal_reason; DROP TABLE IF EXISTS runner_attempt_events; DROP TABLE IF EXISTS agent_fences; DROP TABLE IF EXISTS avatar_requests; DROP TABLE IF EXISTS agent_tombstones; DROP TABLE IF EXISTS delivery_events; DROP TABLE IF EXISTS operator_messages; DROP TABLE IF EXISTS dispatch_activity_events; DROP TABLE IF EXISTS dispatch_activity;  DROP TABLE IF EXISTS pending_invites;  DROP TABLE IF EXISTS ceiling_alert_notes; DROP TABLE IF EXISTS side_registrations; DROP VIEW IF EXISTS current_command_notices; DROP TABLE IF EXISTS command_notice_inspections; DROP TABLE IF EXISTS command_notices; ALTER TABLE final_replies DROP COLUMN incidental; DROP TABLE IF EXISTS operator_tasks; DROP TABLE IF EXISTS operator_task_comments; DROP TABLE IF EXISTS room_trust;")
              .unwrap();
-        sql.execute_batch("DROP TABLE IF EXISTS agent_lifecycle; DROP TABLE IF EXISTS side_records; DROP TABLE IF EXISTS side_projects;  ALTER TABLE decisions DROP COLUMN kind; ALTER TABLE decisions DROP COLUMN at; DROP TABLE IF EXISTS reminders; DROP TABLE IF EXISTS room_trust;  DROP TABLE IF EXISTS quota_holds; DROP TABLE IF EXISTS owner_anchors; DROP TABLE IF EXISTS joined_rooms; ALTER TABLE engagements DROP COLUMN allocated_tokens; PRAGMA user_version=24;").unwrap();
+        sql.execute_batch("DROP TABLE IF EXISTS agent_lifecycle; DROP TABLE IF EXISTS side_records; DROP TABLE IF EXISTS side_projects;  ALTER TABLE decisions DROP COLUMN kind; ALTER TABLE decisions DROP COLUMN at; DROP TABLE IF EXISTS reminders; DROP TABLE IF EXISTS room_trust;  DROP TABLE IF EXISTS quota_holds; DROP TABLE IF EXISTS owner_anchors; DROP TABLE IF EXISTS joined_rooms; ALTER TABLE engagements DROP COLUMN allocated_tokens; DROP TABLE IF EXISTS owner_shared_tool_policies;PRAGMA user_version=24;").unwrap();
     }
     for _ in 0..2 {
         let db = DomainRepository::open(&state).unwrap();

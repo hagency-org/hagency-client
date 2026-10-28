@@ -90,25 +90,30 @@ impl State {
         {
             return Err(Error::Scope);
         }
-        if string(result, "approvalPolicy")? != "on-request"
+        if string(result, "approvalPolicy")? != settings.approval_policy()
             || string(result, "approvalsReviewer")? != "user"
         {
             return Err(Error::Policy);
         }
         let sandbox = object(result, "sandbox")?;
+        let unrestricted = settings.is_unrestricted();
         let kind = if settings.read_only {
             "readOnly"
+        } else if unrestricted {
+            "dangerFullAccess"
         } else {
             "workspaceWrite"
         };
         if string(sandbox, "type")? != kind
-            || sandbox.get("networkAccess").is_some_and(|v| v != false)
+            || sandbox
+                .get("networkAccess")
+                .is_some_and(|v| v.as_bool() != Some(unrestricted))
         {
             return Err(Error::Policy);
         }
         if let Some(roots) = sandbox.get("writableRoots") {
             let roots = roots.as_array().ok_or(Error::Policy)?;
-            if (settings.read_only && !roots.is_empty())
+            if ((settings.read_only || unrestricted) && !roots.is_empty())
                 || roots
                     .iter()
                     .any(|root| root.as_str() != Some(settings.cwd.as_str()))

@@ -1,0 +1,212 @@
+//! Closed versioned context routes; descriptions never replace live activity.
+use super::*;
+use serde_json::{Value, json};
+pub(super) enum ContextAction {
+    Mode {
+        work: String,
+        input: SharedWorkEvidenceInput,
+    },
+    Freeze {
+        work: String,
+        input: SharedContextInput,
+    },
+    Recover {
+        work: String,
+        input: SharedContextRecoverInput,
+    },
+    Start {
+        work: String,
+        input: SharedContextStartInput,
+    },
+    Delivery {
+        work: String,
+        input: SharedWorkEvidenceInput,
+    },
+}
+impl ContextAction {
+    pub fn validate(&self) -> Result<(), NativeError> {
+        if !cfg!(feature = "shared-context") {
+            return Err(failure(409, "shared_context_disabled"));
+        }
+        let (work, work_digest) = match self {
+            Self::Mode { work, input } | Self::Delivery { work, input } => {
+                hash(&input.runtime_command_digest)?;
+                (work, &input.work_digest)
+            }
+            Self::Freeze { work, input } => {
+                input.authority.validate().map_err(store)?;
+                (work, &input.work_digest)
+            }
+            Self::Recover { work, input } => {
+                hash(&input.runtime_command_digest)?;
+                hash(&input.context_digest)?;
+                (work, &input.work_digest)
+            }
+            Self::Start { work, input } => {
+                input.authority.validate().map_err(store)?;
+                hash(&input.context_digest)?;
+                hash(&input.input_digest)?;
+                (work, &input.work_digest)
+            }
+        };
+        super::super::key(work)?;
+        hash(work_digest)
+    }
+    pub fn body(self) -> (String, Value) {
+        match self {
+            Self::Mode { work, input } => (format!("work/{work}/input-mode"), json!(input)),
+            Self::Freeze { work, input } => (format!("work/{work}/context"), json!(input)),
+            Self::Recover { work, input } => (format!("work/{work}/context/recover"), json!(input)),
+            Self::Start { work, input } => (format!("work/{work}/context/start"), json!(input)),
+            Self::Delivery { work, input } => (format!("work/{work}/reply/observe"), json!(input)),
+        }
+    }
+}
+impl From<ContextAction> for Action {
+    fn from(v: ContextAction) -> Self {
+        Self::Context(Box::new(v))
+    }
+}
+
+async fn paired(b: &Bound) -> Result<bool, NativeError> {
+    let d = b.demand_discovery().await?;
+    if d.capabilities.len() > 64 || d.capabilities.iter().any(|c| c.len() > 128) {
+        return Err(invalid());
+    }
+    Ok(d.capabilities
+        .iter()
+        .any(|c| c == SHARED_CONTEXT_CAPABILITY))
+}
+pub(super) async fn prepare(
+    b: &Bound,
+    r: &OwnerResourceRegistry,
+    a: VerifiedSharedActivity,
+    w: &SharedWorkItem,
+    authority: SharedActivityRef,
+    until: Instant,
+) -> Result<SharedPreparedInput, NativeError> {
+    if !paired(b).await? {
+        return r
+            .prepare_shared_legacy_input(a, w.clone())
+            .await
+            .map_err(store);
+    }
+    let mode: Timed<SharedWorkInputMode> = b
+        .upload(
+            ContextAction::Mode {
+                work: w.id.clone(),
+                input: SharedWorkEvidenceInput {
+                    work_digest: digest(w)?,
+                    runtime_command_digest: w.runtime_command_digest.clone(),
+                },
+            }
+            .into(),
+            until,
+        )
+        .await?;
+    mode.value.validate().map_err(store)?;
+    let mode = mode.value;
+    let context = if mode.mode == "thread_context_v1" {
+        let action = if let Some(hash) = &mode.context_digest {
+            ContextAction::Recover {
+                work: w.id.clone(),
+                input: SharedContextRecoverInput {
+                    work_digest: digest(w)?,
+                    runtime_command_digest: w.runtime_command_digest.clone(),
+                    context_digest: hash.clone(),
+                },
+            }
+        } else {
+            ContextAction::Freeze {
+                work: w.id.clone(),
+                input: SharedContextInput {
+                    authority,
+                    work_digest: digest(w)?,
+                },
+            }
+        };
+        let c: Timed<SharedContextRecord> = b.upload(action.into(), until).await?;
+        c.value.render_for(w).map_err(store)?;
+        Some(c.value)
+    } else {
+        None
+    };
+    r.prepare_shared_input(a, w.clone(), mode, context)
+        .await
+        .map_err(store)
+}
+pub(super) async fn start(
+    b: &Bound,
+    r: &OwnerResourceRegistry,
+    attempt: SharedStartAttempt,
+    w: &SharedWorkItem,
+    input: Option<&SharedPreparedInput>,
+    authority: SharedActivityRef,
+    until: Instant,
+) -> Result<SharedCallCustody, NativeError> {
+    if let Some(c) = input.and_then(SharedPreparedInput::context) {
+        let start: Timed<SharedContextStart> = b
+            .upload(
+                ContextAction::Start {
+                    work: w.id.clone(),
+                    input: SharedContextStartInput {
+                        authority,
+                        work_digest: digest(w)?,
+                        context_digest: c.context_digest.clone(),
+                        input_digest: c.input_digest.clone(),
+                    },
+                }
+                .into(),
+                until,
+            )
+            .await?;
+        r.issue_shared_context_call(attempt, start.value)
+            .await
+            .map_err(store)
+    } else {
+        let start: Timed<SharedWorkStart> = b
+            .upload(
+                Action::WorkStart(SharedWorkInput {
+                    authority,
+                    work_id: w.id.clone(),
+                    work_digest: digest(w)?,
+                }),
+                until,
+            )
+            .await?;
+        r.issue_shared_call(attempt, start.value)
+            .await
+            .map_err(store)
+    }
+}
+pub(super) async fn observe_delivery(
+    b: &Bound,
+    r: &OwnerResourceRegistry,
+    c: &SharedRuntimeCommand,
+    w: &SharedWorkItem,
+) -> Result<(), NativeError> {
+    if !cfg!(feature = "shared-context") || !paired(b).await? {
+        return Ok(());
+    }
+    let observed: Timed<SharedReplyObservation> = b
+        .request(
+            ContextAction::Delivery {
+                work: w.id.clone(),
+                input: SharedWorkEvidenceInput {
+                    work_digest: digest(w)?,
+                    runtime_command_digest: w.runtime_command_digest.clone(),
+                },
+            }
+            .into(),
+            false,
+        )
+        .await?;
+    observed.value.validate_for(w).map_err(store)?;
+    if let Some(record) = observed.value.delivery {
+        let a = b.cleanup(r, c).await?;
+        r.record_shared_reply_delivery(a, w.clone(), record)
+            .await
+            .map_err(store)?;
+    }
+    Ok(())
+}

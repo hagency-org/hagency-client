@@ -10,7 +10,7 @@ fn setup() -> (
     String,
     RunnerCapability,
 ) {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&root.path().join("state")).unwrap();
     db.register(&registration()).unwrap();
     let pool = resource("pool", "seat", 1000);
@@ -46,6 +46,117 @@ fn setup() -> (
 }
 fn sql(root: &tempfile::TempDir) -> rusqlite::Connection {
     rusqlite::Connection::open(root.path().join("state/domain.sqlite3")).unwrap()
+}
+
+fn policy_snapshot_count(root: &tempfile::TempDir) -> u64 {
+    sql(root)
+        .query_row("SELECT COUNT(*) FROM owned_dispatch_execution_policies", [], |r| r.get(0))
+        .unwrap()
+}
+
+#[test]
+fn native_owned_execution_policy_changed_before_start_requires_fresh_scope() {
+    let (root, mut db, engagement, cap) = setup();
+    let prepared = db.owned_dispatch_scope(&cap, 1002).unwrap();
+    assert!(!prepared.execution_policy().yolo);
+    db.set_execution_policy(&engagement, Some(&json!({"yolo": true})), 1003)
+        .unwrap();
+    assert!(matches!(
+        db.start_owned_dispatch(&cap, prepared.fingerprint(), 1004),
+        Err(Error::RunnerAuthority)
+    ));
+    assert_eq!(policy_snapshot_count(&root), 0);
+    assert_eq!(db.canonical_task("task").unwrap().status, TaskState::Created);
+    let current = db.owned_dispatch_scope(&cap, 1004).unwrap();
+    assert!(current.execution_policy().yolo);
+    assert_ne!(current.fingerprint(), prepared.fingerprint());
+    let started = db.start_owned_dispatch(&cap, current.fingerprint(), 1005).unwrap();
+    assert_eq!(started.fingerprint(), current.fingerprint());
+    assert!(started.execution_policy().yolo);
+    assert_eq!(policy_snapshot_count(&root), 1);
+}
+
+#[test]
+fn native_owned_execution_policy_survives_setting_change_and_offline_reopen() {
+    let (root, mut db, engagement, cap) = setup();
+    db.set_execution_policy(&engagement, Some(&json!({"yolo": true})), 1002)
+        .unwrap();
+    let prepared = db.owned_dispatch_scope(&cap, 1002).unwrap();
+    let started = db.start_owned_dispatch(&cap, prepared.fingerprint(), 1003).unwrap();
+    db.set_execution_policy(&engagement, Some(&json!({"yolo": false})), 1004)
+        .unwrap();
+    assert!(started.execution_policy().yolo);
+    db.check_owned_dispatch(&cap, started.fingerprint(), 1005).unwrap();
+    // Offline reopen preserves an in-flight attempt; runtime restart separately
+    // retains its normal crash recovery and must not revive this process.
+    drop(db);
+    let mut db = DomainRepository::open_for_migration(&root.path().join("state")).unwrap();
+    db.check_owned_dispatch(&cap, started.fingerprint(), 1006).unwrap();
+    let retained: (String, bool, u64) = sql(&root).query_row(
+        "SELECT engagement_id,yolo,captured_at FROM owned_dispatch_execution_policies WHERE dispatch_id='dispatch'",
+        [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    ).unwrap();
+    assert_eq!(retained, (engagement.clone(), true, 1003));
+    // A different task on the same agent takes the new owner setting.
+    db.register_session(&SessionBinding {
+        id: "next_session".into(), engagement_id: engagement,
+        room_id: "!project:example.test".into(), thread_root: Some("$next_thread".into()),
+    }).unwrap();
+    db.register_workspace("next_workspace").unwrap();
+    db.create_canonical_task("next_task", "next_session", "Next policy", 1006).unwrap();
+    db.enqueue_dispatch(&DispatchInput {
+        id: "next_dispatch".into(), session_id: "next_session".into(),
+        task_id: Some("next_task".into()),
+        resources: vec![ResourceLease { id: "next_workspace".into(), exclusive: true }],
+        payload: json!({"instruction":"Next policy"}),
+    }).unwrap();
+    let next_cap = db.claim_dispatch("next_runner", 1007, 1000, 2000, 8).unwrap().unwrap();
+    assert_eq!(next_cap.dispatch_id, "next_dispatch");
+    let next = db.owned_dispatch_scope(&next_cap, 1008).unwrap();
+    assert!(!next.execution_policy().yolo);
+    db.start_owned_dispatch(&next_cap, next.fingerprint(), 1009).unwrap();
+    assert_eq!(policy_snapshot_count(&root), 2);
+    db.check_owned_dispatch(&cap, started.fingerprint(), 1010).unwrap();
+    drop(db);
+    let db = DomainRepository::open(&root.path().join("state")).unwrap();
+    assert!(db.check_owned_dispatch(&cap, started.fingerprint(), 1011).is_err());
+    assert_eq!(policy_snapshot_count(&root), 2);
+}
+
+#[test]
+fn native_owned_execution_policy_capture_rolls_back_with_failed_start() {
+    let (root, mut db, engagement, cap) = setup();
+    db.set_execution_policy(&engagement, Some(&json!({"yolo": true})), 1002)
+        .unwrap();
+    let prepared = db.owned_dispatch_scope(&cap, 1002).unwrap();
+    sql(&root).execute_batch(
+        "CREATE TRIGGER reject_test_start BEFORE UPDATE OF state ON runner_dispatches \
+         WHEN NEW.state='started' BEGIN SELECT RAISE(ABORT,'test start failure'); END;",
+    ).unwrap();
+    assert!(db.start_owned_dispatch(&cap, prepared.fingerprint(), 1003).is_err());
+    assert_eq!(policy_snapshot_count(&root), 0);
+    assert_eq!(db.canonical_task("task").unwrap().status, TaskState::Created);
+    sql(&root).execute_batch("DROP TRIGGER reject_test_start").unwrap();
+    let started = db.start_owned_dispatch(&cap, prepared.fingerprint(), 1004).unwrap();
+    assert!(started.execution_policy().yolo);
+    assert_eq!(policy_snapshot_count(&root), 1);
+}
+
+#[test]
+fn native_owned_execution_policy_unstarted_retry_uses_current_setting() {
+    let (root, mut db, engagement, old_cap) = setup();
+    let old = db.owned_dispatch_scope(&old_cap, 1002).unwrap();
+    assert!(!old.execution_policy().yolo);
+    db.set_execution_policy(&engagement, Some(&json!({"yolo": true})), 2002).unwrap();
+    let cap = db.claim_dispatch("replacement", 2003, 1000, 2000, 1).unwrap().unwrap();
+    assert_eq!(cap.dispatch_id, old_cap.dispatch_id);
+    assert!(cap.fence > old_cap.fence);
+    assert!(db.start_owned_dispatch(&old_cap, old.fingerprint(), 2004).is_err());
+    assert_eq!(policy_snapshot_count(&root), 0);
+    let scope = db.owned_dispatch_scope(&cap, 2004).unwrap();
+    assert!(scope.execution_policy().yolo);
+    db.start_owned_dispatch(&cap, scope.fingerprint(), 2005).unwrap();
+    assert_eq!(policy_snapshot_count(&root), 1);
 }
 
 #[test]

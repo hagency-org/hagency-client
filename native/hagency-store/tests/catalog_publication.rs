@@ -57,7 +57,7 @@ fn activate(db: &mut DomainRepository, reg: &Registration, resource: &Resource, 
 
 #[test]
 fn native_catalog_snapshot_scope_and_roles() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&dir.path().join("domain")).unwrap();
     let reg = registration();
     db.register(&reg).unwrap();
@@ -137,7 +137,7 @@ fn native_catalog_snapshot_scope_and_roles() {
 
 #[test]
 fn native_catalog_snapshot_capacity() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&dir.path().join("domain")).unwrap();
     let reg = registration();
     db.register(&reg).unwrap();
@@ -190,7 +190,7 @@ fn native_catalog_snapshot_capacity() {
 /// policy tier counts nowhere and is never over-tier.
 #[test]
 fn catalogue_derived_keys_use_one_predicate_and_model_families() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let mut db = DomainRepository::open(&dir.path().join("state")).unwrap();
     db.put_resource(&resource("catalogue_gpt", "catalogue_seat", 1000))
         .unwrap();

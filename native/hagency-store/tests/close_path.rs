@@ -7,7 +7,7 @@ use hagency_store::DomainRepository;
 /// open replays the WAL to the same canonical state.
 #[test]
 fn native_store_close_leaves_wal_for_replay() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = dir.path().join("state");
     let mut db = DomainRepository::open(&state).unwrap();
     db.register(&registration()).unwrap();

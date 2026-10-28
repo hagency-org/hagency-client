@@ -571,7 +571,7 @@ async fn native_console_usage_counts_survive_an_unobserved_sibling_source() {
 /// same directory reached by its actual host path must still admit.
 #[tokio::test]
 async fn native_console_assets_refusal_names_field_and_fix() {
-    let root = tempfile::tempdir().unwrap();
+    let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
     let state = root.path().join("state");
     let binary = env!("CARGO_BIN_EXE_hagency");
     let init = std::process::Command::new(binary)

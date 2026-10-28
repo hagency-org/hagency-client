@@ -376,7 +376,7 @@ mod tests {
                 .await
                 .unwrap();
         });
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let error = crate::native_owner::NativeOwner::open_with_matrix(
             &root.path().join("state"),
             &origin,

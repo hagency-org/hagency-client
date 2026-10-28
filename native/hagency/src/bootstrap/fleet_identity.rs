@@ -615,7 +615,7 @@ mod tests {
         raw.replace("%40", "@").replace("%3A", ":")
     }
     fn state(homeserver: &str) -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         private::replace(
             &dir.path().join("palpo-appservice.json"),
             json!({"homeserver": homeserver, "as_token": "as-secret"})
@@ -689,7 +689,7 @@ mod tests {
     #[tokio::test]
     async fn native_fleet_identity_adopts_a_rig_token_without_a_second_device() {
         let (origin, logins) = homeserver(Arc::new(Mutex::new(false))).await;
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let state = root.path().join("native-state");
         let rig = root.path().join("coordinator");
         std::fs::create_dir_all(&state).unwrap();
