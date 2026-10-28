@@ -1,8 +1,17 @@
 //! Token-free native commands routed through the existing authenticated service.
 mod configuration;
+mod ledger;
+pub use ledger::LedgerAction;
+mod history;
 mod speech;
+mod usage;
 use super::*;
 use crate::owner_host::OwnerHost;
+pub use hagency_agent_local::recovery::{
+    Disposition as RecoveryDisposition, Input as RecoveryInput,
+};
+pub use hagency_agent_local::usage::{Group as UsageGroup, Query as UsageQuery};
+pub use history::HistoryAction;
 use salvo::test::{ResponseExt, TestClient};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -12,6 +21,7 @@ use std::{
     sync::{Arc, Mutex as StdMutex, Weak},
 };
 use tokio::sync::Mutex;
+pub use usage::UsageAction;
 
 /// The SDK remains the sole owner of OAuth refresh and revocation.
 pub struct MatrixAccessToken {
@@ -42,7 +52,26 @@ pub(in crate::console) fn sdk_source_failure(error: NativeError) -> &'static str
         _ => "matrix_authorization_required",
     }
 }
+/// One explicit owner message, armed once by the local recovery ledger.
+#[derive(Clone)]
+pub struct ContinuationMessage {
+    pub owner: String,
+    pub room: String,
+    pub thread: String,
+    pub agent_mxid: String,
+    pub transaction_id: String,
+    pub body: String,
+    pub require_encrypted: bool,
+}
 pub trait MatrixTokenSource: Send + Sync {
+    fn send_continuation(
+        &self,
+        _message: ContinuationMessage,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, NativeError>> + Send + '_>>
+    {
+        Box::pin(async { Err(failure(503, "continuation_transport_unavailable")) })
+    }
+
     /// Return the current SDK token, checking its account epoch before and after
     /// awaiting. Implementations must not call this native service recursively.
     fn access_token(
@@ -148,6 +177,15 @@ impl<'de> Deserialize<'de> for RoomCreationPolicy {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Command {
+    AgentHistory {
+        action: HistoryAction,
+    },
+    AgentUsage {
+        action: UsageAction,
+    },
+    Ledger {
+        action: LedgerAction,
+    },
     ProjectBoard {
         project_id: String,
         action: hagency_core::project_board::BoardAction,
@@ -374,7 +412,10 @@ fn request(command: Command) -> Result<(&'static str, String, Option<Value>), Na
     let (method, path) = match command {
         Command::AgentConfigurationStatus { .. }
         | Command::ExecutionEnvironment { .. }
-        | Command::AgentConfiguration { .. } => {
+        | Command::AgentConfiguration { .. }
+        | Command::Ledger { .. }
+        | Command::AgentUsage { .. }
+        | Command::AgentHistory { .. } => {
             return Err(failure(400, "configuration_operation_unsupported"));
         }
         Command::LoginStatus => ("GET", "/console/server-login".into()),
@@ -1150,6 +1191,24 @@ impl NativeOwner {
         if !matrix_managed && !matches!(command, Command::LoginStatus | Command::Logout) {
             self.identity().await?;
         }
+        if let Command::Ledger { action } = command {
+            self.check_matrix_source().await?;
+            let result = ledger::execute(self, action).await;
+            self.check_matrix_source().await?;
+            return result;
+        }
+        if let Command::AgentUsage { action } = command {
+            self.check_matrix_source().await?;
+            let result = usage::execute(self, action).await;
+            self.check_matrix_source().await?;
+            return result;
+        }
+        if let Command::AgentHistory { action } = command {
+            self.check_matrix_source().await?;
+            let result = history::execute(self, action).await;
+            self.check_matrix_source().await?;
+            return result;
+        }
         let (method, path, body) = request(command)?;
         let cookie = self.0.cookie.lock().await.clone();
         let mut response = self.call(method, &path, body, &cookie).await;
@@ -1167,43 +1226,53 @@ impl NativeOwner {
             *self.0.cookie.lock().await = cookie;
         }
         let result = read_response(&mut response).await;
-        if matrix_managed {
-            // Logout is allowed to finish without needing a live SDK token.
-            if path != "/console/server-login/logout" {
-                let cookie = self.0.cookie.lock().await.clone();
-                let raw = cookie
-                    .strip_prefix("hagency_console=")
-                    .ok_or(failure(401, "owner_authorization_required"))?;
-                if let Err(code) = self
-                    .0
-                    .host
-                    .console
-                    .0
-                    .server_login
-                    .check_matrix_source(raw)
-                    .await
-                {
-                    if code == "matrix_authorization_unavailable" {
-                        tracing::warn!(
-                            stage = "sdk_post_request",
-                            code,
-                            "Matrix authorization temporarily unavailable; preserving recovery state"
-                        );
-                    } else {
-                        self.shutdown().await;
-                    }
-                    return Err(failure(
-                        if code.ends_with("unavailable") {
-                            503
-                        } else {
-                            401
-                        },
-                        code,
-                    ));
-                }
-            }
+        if matrix_managed && path != "/console/server-login/logout" {
+            self.check_matrix_source().await?;
         }
         result
+    }
+    async fn check_matrix_source(&self) -> Result<(), NativeError> {
+        let managed = self
+            .0
+            .matrix_source
+            .lock()
+            .map_err(|_| failure(503, "native_state_unavailable"))?
+            .is_some();
+        if !managed {
+            return Ok(());
+        }
+        let cookie = self.0.cookie.lock().await.clone();
+        let raw = cookie
+            .strip_prefix("hagency_console=")
+            .ok_or_else(|| failure(401, "owner_authorization_required"))?;
+        if let Err(code) = self
+            .0
+            .host
+            .console
+            .0
+            .server_login
+            .check_matrix_source(raw)
+            .await
+        {
+            if code == "matrix_authorization_unavailable" {
+                tracing::warn!(
+                    stage = "sdk_post_request",
+                    code,
+                    "Matrix authorization temporarily unavailable; preserving recovery state"
+                );
+            } else {
+                self.shutdown().await;
+            }
+            return Err(failure(
+                if code.ends_with("unavailable") {
+                    503
+                } else {
+                    401
+                },
+                code,
+            ));
+        }
+        Ok(())
     }
     async fn call(&self, method: &str, path: &str, body: Option<Value>, cookie: &str) -> Response {
         let client = match method {

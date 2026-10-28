@@ -38,6 +38,115 @@ fn response(prepared: &Prepared, newly_started: bool) -> ServerStart {
     }
 }
 #[test]
+fn reply_and_audit_commit_atomically_without_inventing_tool_completion() {
+    use crate::audit::Phase;
+    let temp = tempfile::tempdir().unwrap();
+    let mut l = setup(&temp.path().join("local.db"));
+    received(&mut l);
+    let prepared = l.prepare_execution(OWNER, &event().id).unwrap();
+    l.confirm_execution_start(OWNER, &response(&prepared, true))
+        .unwrap()
+        .unwrap();
+    let mut ids = Vec::new();
+    for tool in ["model.request", "codex.command"] {
+        let p = crate::ToolProposal {
+            scope: event().scope(),
+            dispatch: event().id,
+            tool: tool.into(),
+            arguments: serde_json::json!({"command":"echo hello"}),
+            canonical_directory: "/workspace".into(),
+            risk: "high".into(),
+            policy_revision: [0; 3],
+            expires: 500,
+        };
+        let id = l.begin_approval_audit(OWNER, &p, 100).unwrap();
+        for (phase, at) in [
+            (Phase::OwnerAllowed, 101),
+            (Phase::Applying, 102),
+            (Phase::Submitted, 103),
+        ] {
+            l.record_approval_event(OWNER, &id, phase, at, &serde_json::json!({}))
+                .unwrap();
+        }
+        ids.push(id);
+    }
+    l.db.execute_batch("CREATE TRIGGER fail_audit BEFORE INSERT ON approval_audit_events WHEN NEW.phase='completed' BEGIN SELECT RAISE(ABORT,'injected storage failure'); END;").unwrap();
+    assert!(
+        l.persist_execution_reply(OWNER, &event().id, &prepared.execution_id, "original reply")
+            .is_err()
+    );
+    assert_eq!(
+        l.inbox_record(OWNER, &event().id).unwrap().state,
+        State::Running
+    );
+    assert!(
+        l.db.query_row(
+            "SELECT reply IS NULL FROM local_inbox WHERE id=?",
+            [event().id],
+            |r| r.get::<_, bool>(0)
+        )
+        .unwrap()
+    );
+    for id in &ids {
+        assert_eq!(l.approval_phase(OWNER, id).unwrap(), Phase::Submitted);
+    }
+    l.db.execute_batch("DROP TRIGGER fail_audit").unwrap();
+    l.persist_execution_reply(OWNER, &event().id, &prepared.execution_id, "original reply")
+        .unwrap();
+    assert_eq!(l.approval_phase(OWNER, &ids[0]).unwrap(), Phase::Completed);
+    assert_eq!(l.approval_phase(OWNER, &ids[1]).unwrap(), Phase::Unknown);
+    l.persist_execution_reply(OWNER, &event().id, &prepared.execution_id, "original reply")
+        .unwrap();
+    assert_eq!(
+        l.approval_record(OWNER, "agent-a", &ids[0])
+            .unwrap()
+            .events
+            .len(),
+        5
+    );
+}
+#[test]
+fn no_provider_notice_and_stopped_execution_cannot_complete_model_approval() {
+    use crate::audit::Phase;
+    for no_provider in [true, false] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut l = setup(&temp.path().join("local.db"));
+        received(&mut l);
+        let prepared = l.prepare_execution(OWNER, &event().id).unwrap();
+        l.confirm_execution_start(OWNER, &response(&prepared, true))
+            .unwrap()
+            .unwrap();
+        let p = crate::ToolProposal {
+            scope: event().scope(),
+            dispatch: event().id,
+            tool: "model.request".into(),
+            arguments: serde_json::json!({}),
+            canonical_directory: "/workspace".into(),
+            risk: "model_request".into(),
+            policy_revision: [0; 3],
+            expires: 500,
+        };
+        let id = l.begin_approval_audit(OWNER, &p, 100).unwrap();
+        for (phase, at) in [(Phase::OwnerAllowed, 101), (Phase::Applying, 102)] {
+            l.record_approval_event(OWNER, &id, phase, at, &serde_json::json!({}))
+                .unwrap();
+        }
+        if no_provider {
+            l.persist_no_provider_reply(
+                OWNER,
+                &event().id,
+                &prepared.execution_id,
+                "policy refused",
+            )
+            .unwrap();
+        } else {
+            l.finish_local_execution(OWNER, &event().id, &prepared.execution_id, Finish::Unknown)
+                .unwrap();
+        }
+        assert_eq!(l.approval_phase(OWNER, &id).unwrap(), Phase::Unknown);
+    }
+}
+#[test]
 fn persisted_receipt_survives_lost_ack_and_changed_body_is_a_conflict() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("local.db");

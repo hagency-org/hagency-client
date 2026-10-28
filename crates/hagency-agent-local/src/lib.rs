@@ -2,12 +2,16 @@
 //! A host must authenticate the owner, validate server binding records and enforce tool
 //! interception before using this library. Each call ID denotes ONE provider invocation:
 //! a retry which can charge again requires a fresh call ID under the original requester.
+pub mod audit;
+pub mod backup;
 pub mod codex;
 pub mod inbox;
 pub mod process_cleanup;
+pub mod recovery;
 #[cfg(unix)]
 pub mod room_files;
 pub mod runtime;
+pub mod usage;
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
@@ -287,6 +291,9 @@ impl Ledger {
             )?;
         }
         db.execute_batch("CREATE TABLE IF NOT EXISTS external_sessions (scope TEXT NOT NULL, profile TEXT NOT NULL, session TEXT NOT NULL, counters TEXT NOT NULL DEFAULT '', PRIMARY KEY(scope,profile))")?;
+        db.execute_batch(usage::SCHEMA)?;
+        db.execute_batch(audit::SCHEMA)?;
+        db.execute_batch(recovery::SCHEMA)?;
         db.execute_batch("COMMIT")?;
         db.pragma_update(None, "foreign_keys", true)?;
         Ok(Self {
@@ -638,6 +645,11 @@ impl Ledger {
                 json(&snapshots)?,
             ),
         )?;
+        tx.execute(
+            "INSERT INTO call_observations(call_id,started_at) VALUES (?,?)",
+            (call, now),
+        )?;
+        usage::observe_scope(&tx, scope, now)?;
         tx.commit()?;
         Ok(Reservation::New)
     }
@@ -1120,6 +1132,11 @@ fn settle_transaction(
     tx.execute(
         "UPDATE calls SET state='settled',usage=? WHERE id=?",
         (json(usage)?, call),
+    )?;
+    usage::observe_snapshots(
+        tx,
+        &serde_json::from_str::<Vec<Snapshot>>(&snapshots)?,
+        usage::now()?,
     )?;
 
     Ok(())

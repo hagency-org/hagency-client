@@ -346,3 +346,21 @@ retained. This is not a full project or two-agent qualification pass. Progress
 records exact task/dispatch and private evidence. Investigate retained runtime
 and guardian observations before another live attempt; no historical cause is
 asserted. Preserve older unknown owners20841/18059/83315 too.
+
+
+Current owner capability checkpoint (2026-10-27): A7 snapshot/recovery and A5 usage/alerts
+are implemented on codex/agent-capabilities, stacked on A1 PR9. A6 approval audit
+now records exact proposal/owner device/application/submission and observed tool
+outcomes; native owner history and real Codex 5/5 receipt evidence pass. A6 remains
+in progress: stopped-dispatch inspection, current file digests, explicit owner notes
+and continuation are next. A2/A4/A3 and manual/cross-platform gates remain open.
+See dev-vibe/owner-agent-capabilities-plan-2026-10-26.zh.md for current scope.
+
+
+Owner recovery checkpoint (2026-10-27): A6 now has native stopped-request/file
+inspection, original input archives, observed stop scope, owner dispositions and
+one-shot explicit continuation through the current Matrix SDK. Original unknown
+and charges remain. Agent113+3+8, engine252, App617, actual SDK local HTTP send and
+native OAuth/disk checks pass; manual/encrypted/cross-platform qualification remains
+open. Next implementation is A2 Agent file tools, followed by A4 encrypted Room
+execution/remote approvals and A3 collaboration. Full A2-A7 goal is still active.

@@ -3,6 +3,44 @@
 
 # Repository audit knowledge
 
+- **Stopped request recovery, 2026-10-27:** Keep a separate copy of unknown/failed
+  input before compacting inbox bodies. Workspace and observed stop scope bind
+  the original execution; programming continuation requires the original whole
+  tree stop record. Owner confirmation is separate evidence, never an execution
+  outcome rewrite. Reviews expire and rehash files; one new action consumes one
+  review. Commit send_possible before SDK IO; only its first caller gets send
+  custody. Same-ID retry/backup restore never rearm it. Continuation uses the
+  actual current owner in the original Room/thread, with a fresh normal request
+  and new accounting. Missing old input/workspace/stop evidence stays missing.
+
+- **Approval audit, 2026-10-27:** OwnerAllowed is a durable decision, Applying
+  precedes permission consumption, Submitted requires the actual provider write,
+  and Completed requires an exact tool receipt (or a persisted model.request reply).
+  Model text does not prove a command, file change or MCP effect. Terminal audit
+  events cannot restart; absent runtime/receipt stays unknown. History is local
+  owner/SDK/device scoped and cannot replay grants. Known older snapshots migrate
+  empty audit tables and retain original usage timestamps. A6 recovery actions
+  remain separate unfinished work.
+
+- **Usage reporting, 2026-10-27:** Provider call time is written with reserve in
+  call_observations; old receipts remain undated. Cache/reasoning are subsets of
+  input/output. no-provider-call-v1 rows are dedup witnesses, not provider calls.
+  Budget alerts bind scope/window/revision/threshold and retain observed balances
+  across acknowledgement; late usage uses the original accounting window.
+  Known pre-metadata owner snapshots migrate empty metadata tables on restore.
+  NativeOwner local commands must use the SDK source checks as well as device
+  proof checks; they do not enter the ordinary HTTP response path automatically.
+
+- **Owner ledger snapshots, 2026-10-26:** Current-schema snapshots live in
+  hagency-agent-local::backup and are independent of retired hagency-store
+  directory backups. Read-transaction SQLite backup/VACUUM captures WAL commits;
+  schema/identity/checksum validation precedes private publication. Restore uses
+  one IMMEDIATE transaction into a fresh exact-profile ledger, preserves all
+  records/holds/replies and refuses existing history. NativeOwner commands are
+  in-process only; stop all owner services first. Provider/Matrix login and
+  service intents are outside this artifact. Actual desktop/recovery-device and
+  cross-platform acceptance remain separate gates in the dev-vibe report.
+
 - **Project kanban scope review, 2026-10-23:** The proposed shared native board
   needs Server authority/storage/API and Client UI/typed calls. Cloud's existing
   database configuration, Server image selection and host/root-prefix routing

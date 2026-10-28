@@ -167,29 +167,118 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Session<R, W> {
                     .await;
             }
         };
-        let mut outcome = files.workspace.execute(ledger, &prepared, now());
-        if matches!(outcome, Err(FileError::NeedsOwner)) {
-            let (send, recv) = oneshot::channel();
-            if queue
-                .sender
-                .try_send(PendingApproval {
-                    proposal: prepared.proposal().clone(),
-                    decision: send,
-                })
-                .is_ok()
-                && matches!(
-                    tokio::time::timeout(Duration::from_secs(300), recv).await,
-                    Ok(Ok(true))
-                )
-                && files.gate.authorize(dispatch, execution).await
-                && ledger
-                    .approve_tool(owner, prepared.proposal(), now())
-                    .is_ok()
-            {
-                // execute consumes the exact permit; never consume it here.
-                outcome = files.workspace.execute(ledger, &prepared, now());
+        use crate::audit::Phase;
+        let audit_id = ledger.begin_approval_audit(owner, prepared.proposal(), now())?;
+        let mut authorized = false;
+        match ledger.tool_disposition(prepared.proposal(), now()) {
+            Ok(ToolPolicy::AllowWithRules { .. }) => {
+                ledger.record_approval_event(
+                    owner,
+                    &audit_id,
+                    Phase::PolicyAllowed,
+                    now(),
+                    &value!({}),
+                )?;
+                authorized = true;
+            }
+            Ok(ToolPolicy::AskOwner) => {
+                let (mut pending, decision) = pending_approval(prepared.proposal().clone());
+                pending.audit_id = Some(audit_id.clone());
+                let verdict = if queue.offer(pending) {
+                    tokio::time::timeout(Duration::from_secs(300), decision)
+                        .await
+                        .ok()
+                        .and_then(std::result::Result::ok)
+                } else {
+                    None
+                };
+                if verdict == Some(true) {
+                    ledger.record_approval_event(
+                        owner,
+                        &audit_id,
+                        Phase::OwnerAllowed,
+                        now(),
+                        &value!({"source":"host_queue"}),
+                    )?;
+                    authorized = files.gate.authorize(dispatch, execution).await
+                        && ledger
+                            .approve_tool(owner, prepared.proposal(), now())
+                            .is_ok();
+                } else if !ledger.approval_phase(owner, &audit_id)?.terminal() {
+                    ledger.record_approval_event(
+                        owner,
+                        &audit_id,
+                        if verdict == Some(false) {
+                            Phase::OwnerDenied
+                        } else {
+                            Phase::Expired
+                        },
+                        now(),
+                        &value!({}),
+                    )?;
+                }
+            }
+            _ => {
+                ledger.record_approval_event(
+                    owner,
+                    &audit_id,
+                    Phase::PolicyDenied,
+                    now(),
+                    &value!({}),
+                )?;
             }
         }
+        let outcome = if authorized {
+            ledger.record_approval_event(owner, &audit_id, Phase::Applying, now(), &value!({}))?;
+            let outcome = files.workspace.execute(ledger, &prepared, now());
+            let phase = match &outcome {
+                Ok(_) => Phase::Completed,
+                Err(FileError::Unknown) => Phase::Unknown,
+                Err(_) => Phase::Failed,
+            };
+            let detail = match &outcome {
+                Ok(crate::room_files::FileResult::Created {
+                    path,
+                    nonce,
+                    sha256,
+                    replayed,
+                }) => {
+                    value!({"hostCallId":call,"path":path,"nonce":nonce,"sha256":sha256,"replayed":replayed})
+                }
+                Ok(crate::room_files::FileResult::Read { sha256, .. }) => {
+                    value!({"hostCallId":call,"sha256":sha256})
+                }
+                Ok(crate::room_files::FileResult::List { entries }) => {
+                    value!({"hostCallId":call,"entries":entries.len()})
+                }
+                Err(FileError::Unknown) => {
+                    value!({"hostCallId":call,"reason":"filesystem_result_unknown"})
+                }
+                Err(FileError::NeedsOwner | FileError::Denied) => {
+                    value!({"hostCallId":call,"reason":"local_policy_denied"})
+                }
+                Err(FileError::Conflict) => {
+                    value!({"hostCallId":call,"reason":"file_exists_or_changed"})
+                }
+                Err(FileError::Capacity) => {
+                    value!({"hostCallId":call,"reason":"file_capacity_exceeded"})
+                }
+                Err(_) => value!({"hostCallId":call,"reason":"host_file_unavailable"}),
+            };
+            ledger.record_approval_event(owner, &audit_id, phase, now(), &detail)?;
+            outcome
+        } else {
+            if !ledger.approval_phase(owner, &audit_id)?.terminal() {
+                ledger.record_approval_event(
+                    owner,
+                    &audit_id,
+                    Phase::Expired,
+                    now(),
+                    &value!({"reason":"file_permission_not_applied"}),
+                )?;
+            }
+            Err(FileError::Denied)
+        };
         let result = match outcome {
             Ok(output) => {
                 value!({"success":true,"contentItems":[{"type":"inputText","text":serde_json::to_string(&output)?}]})
@@ -211,6 +300,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Session<R, W> {
 mod tests {
     use super::*;
     use crate::{Budget, Layer, Limit, Period, Policy, RequestPolicy};
+    use sha2::Digest;
     use std::sync::atomic::{AtomicBool, Ordering};
     struct Gate(Arc<AtomicBool>);
     impl HostToolGate for Gate {
@@ -529,6 +619,18 @@ mod tests {
             "room scoped"
         );
         assert!(ledger.context_session(&scope).unwrap().is_none());
+        let history = ledger
+            .approval_history("@alice:test", &scope.agent, None)
+            .unwrap();
+        assert_eq!(history.records.len(), 1);
+        assert_eq!(history.records[0].phase, crate::audit::Phase::Completed);
+        let audit = ledger
+            .approval_record("@alice:test", &scope.agent, &history.records[0].id)
+            .unwrap();
+        assert_eq!(
+            audit.events.last().unwrap().detail["sha256"],
+            format!("{:x}", sha2::Sha256::digest(b"room scoped"))
+        );
         approval.await.unwrap();
         peer.await.unwrap();
     }

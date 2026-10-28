@@ -161,6 +161,19 @@ pub struct Process {
     child: Option<codex::Child>,
 }
 impl Process {
+    /// Describes the successful stop contract, never a stop receipt by itself.
+    pub fn stop_scope(&self) -> &'static str {
+        match &self.session {
+            Session::Codex(_) => {
+                if matches!(&self.child, Some(codex::Child::Supervised { .. })) {
+                    "whole_tree"
+                } else {
+                    "leader"
+                }
+            }
+            Session::Claude { .. } | Session::Octos { .. } => "whole_tree",
+        }
+    }
     pub async fn stop(&mut self) -> Result<()> {
         match &mut self.session {
             Session::Codex(_) => {
@@ -695,10 +708,9 @@ async fn permission(
     arguments: Value,
     cwd: &Path,
     queue: &ApprovalQueue,
-) -> bool {
-    let Ok(versions) = ledger.policy_snapshot(scope) else {
-        return false;
-    };
+) -> Result<(bool, String)> {
+    use crate::audit::Phase;
+    let versions = ledger.policy_snapshot(scope)?;
     let proposal = ToolProposal {
         scope: scope.clone(),
         dispatch: dispatch.into(),
@@ -709,23 +721,71 @@ async fn permission(
         policy_revision: versions.map(|v| v.revision),
         expires: now() + 280,
     };
-    match ledger.tool_disposition(&proposal, now()) {
-        Ok(ToolPolicy::AllowWithRules { .. }) => ledger.authorize_tool(&proposal, now()).is_ok(),
+    let id = ledger.begin_approval_audit(owner, &proposal, now())?;
+    let allow = match ledger.tool_disposition(&proposal, now()) {
+        Ok(ToolPolicy::AllowWithRules { .. }) => {
+            ledger.record_approval_event(owner, &id, Phase::PolicyAllowed, now(), &json!({}))?;
+            ledger.record_approval_event(owner, &id, Phase::Applying, now(), &json!({}))?;
+            ledger.authorize_tool(&proposal, now()).is_ok()
+        }
         Ok(ToolPolicy::AskOwner) => {
-            let (pending, decision) = codex::pending_approval(proposal.clone());
-            queue.offer(pending)
-                && matches!(
-                    tokio::time::timeout(Duration::from_secs(280), decision).await,
-                    Ok(Ok(true))
-                )
-                && ledger
+            let (mut pending, decision) = codex::pending_approval(proposal.clone());
+            pending.audit_id = Some(id.clone());
+            let verdict = if queue.offer(pending) {
+                tokio::time::timeout(Duration::from_secs(280), decision)
+                    .await
+                    .ok()
+                    .and_then(std::result::Result::ok)
+            } else {
+                None
+            };
+            if verdict == Some(true) {
+                ledger.record_approval_event(
+                    owner,
+                    &id,
+                    Phase::OwnerAllowed,
+                    now(),
+                    &json!({"source":"host_queue"}),
+                )?;
+                ledger.record_approval_event(owner, &id, Phase::Applying, now(), &json!({}))?;
+                ledger
                     .approve_tool(owner, &proposal, now())
                     .and_then(|_| ledger.authorize_tool(&proposal, now()))
                     .is_ok()
+            } else {
+                if !ledger.approval_phase(owner, &id)?.terminal() {
+                    ledger.record_approval_event(
+                        owner,
+                        &id,
+                        if verdict == Some(false) {
+                            Phase::OwnerDenied
+                        } else {
+                            Phase::Expired
+                        },
+                        now(),
+                        &json!({}),
+                    )?;
+                }
+                false
+            }
         }
-        _ => false,
+        _ => {
+            ledger.record_approval_event(owner, &id, Phase::PolicyDenied, now(), &json!({}))?;
+            false
+        }
+    };
+    if !allow && !ledger.approval_phase(owner, &id)?.terminal() {
+        ledger.record_approval_event(
+            owner,
+            &id,
+            Phase::Expired,
+            now(),
+            &json!({"reason":"permission_not_applied"}),
+        )?;
     }
+    Ok((allow, id))
 }
+
 type TurnResult = (String, Usage, bool, usize, usize, bool);
 #[allow(clippy::too_many_arguments)]
 async fn run_claude(
@@ -785,46 +845,49 @@ async fn run_claude(
                 ..
             } => {
                 let directory = approval_directory(&profile.cwd, &input);
-                let decision = permission(
-                    ledger,
-                    owner,
-                    scope,
-                    dispatch,
-                    format!("claude.{tool_name}"),
-                    input,
-                    &directory,
-                    queue,
-                );
-                tokio::pin!(decision);
-                let allow = loop {
-                    match wire
-                        .next_or_control(decision.as_mut())
-                        .await
-                        .map_err(|_| Error::Protocol("Claude approval wait"))?
-                    {
-                        claude::session::ControlUpdate::Control(allow) => break Some(allow),
-                        claude::session::ControlUpdate::Message(message) => {
-                            let cancelled = matches!(&message,claude::Message::ControlCancel {request_id:id} if id==&request_id);
-                            let ended = matches!(
-                                &message,
-                                claude::Message::Event {
-                                    kind: claude::EventKind::Result,
-                                    ..
+                let grant = {
+                    let decision = permission(
+                        ledger,
+                        owner,
+                        scope,
+                        dispatch,
+                        format!("claude.{tool_name}"),
+                        input,
+                        &directory,
+                        queue,
+                    );
+                    tokio::pin!(decision);
+                    loop {
+                        match wire
+                            .next_or_control(decision.as_mut())
+                            .await
+                            .map_err(|_| Error::Protocol("Claude approval wait"))?
+                        {
+                            claude::session::ControlUpdate::Control(allow) => break Some(allow),
+                            claude::session::ControlUpdate::Message(message) => {
+                                let cancelled = matches!(&message,claude::Message::ControlCancel {request_id:id} if id==&request_id);
+                                let ended = matches!(
+                                    &message,
+                                    claude::Message::Event {
+                                        kind: claude::EventKind::Result,
+                                        ..
+                                    }
+                                );
+                                if buffered.len() >= 256 {
+                                    return Err(Error::Unknown);
                                 }
-                            );
-                            if buffered.len() >= 256 {
-                                return Err(Error::Unknown);
-                            }
-                            buffered.push_back((message, wire.last_observation().cloned()));
-                            if cancelled || ended {
-                                break None;
+                                buffered.push_back((message, wire.last_observation().cloned()));
+                                if cancelled || ended {
+                                    break None;
+                                }
                             }
                         }
                     }
                 };
-                let Some(allow) = allow else {
+                let Some(grant) = grant else {
                     continue;
                 };
+                let (allow, audit_id) = grant?;
                 let mut prepared = wire
                     .prepare_approval(
                         &request_id,
@@ -841,7 +904,18 @@ async fn run_claude(
                         .await
                         .map_err(|_| Error::Protocol("Claude approval write"))?
                     {
-                        claude::session::PreparedUpdate::WriteAccepted(_) => break,
+                        claude::session::PreparedUpdate::WriteAccepted(_) => {
+                            if allow {
+                                ledger.record_approval_event(
+                                    owner,
+                                    &audit_id,
+                                    crate::audit::Phase::Submitted,
+                                    now(),
+                                    &json!({"provider":"claude"}),
+                                )?;
+                            }
+                            break;
+                        }
                         claude::session::PreparedUpdate::Message(message) => {
                             if buffered.len() >= 256 {
                                 return Err(Error::Unknown);
@@ -982,40 +1056,43 @@ async fn run_octos(
                 ..
             } => {
                 let directory = approval_directory(&profile.cwd, &params);
-                let decision = permission(
-                    ledger,
-                    owner,
-                    scope,
-                    dispatch,
-                    "octos.approval".into(),
-                    params,
-                    &directory,
-                    queue,
-                );
-                tokio::pin!(decision);
-                let allow = loop {
-                    match wire
-                        .next_or_control(decision.as_mut())
-                        .await
-                        .map_err(|_| Error::Protocol("Octos approval wait"))?
-                    {
-                        octos::session::ControlUpdate::Control(allow) => break Some(allow),
-                        octos::session::ControlUpdate::Event(event) => {
-                            let cancelled = matches!(&event,octos::session::Event::ApprovalSettled {approval_id:id} if id==&approval_id);
-                            let ended = matches!(&event, octos::session::Event::Idle(_));
-                            if buffered.len() >= 256 {
-                                return Err(Error::Unknown);
-                            }
-                            buffered.push_back((event, wire.last_observation().cloned()));
-                            if cancelled || ended {
-                                break None;
+                let grant = {
+                    let decision = permission(
+                        ledger,
+                        owner,
+                        scope,
+                        dispatch,
+                        "octos.approval".into(),
+                        params,
+                        &directory,
+                        queue,
+                    );
+                    tokio::pin!(decision);
+                    loop {
+                        match wire
+                            .next_or_control(decision.as_mut())
+                            .await
+                            .map_err(|_| Error::Protocol("Octos approval wait"))?
+                        {
+                            octos::session::ControlUpdate::Control(allow) => break Some(allow),
+                            octos::session::ControlUpdate::Event(event) => {
+                                let cancelled = matches!(&event,octos::session::Event::ApprovalSettled {approval_id:id} if id==&approval_id);
+                                let ended = matches!(&event, octos::session::Event::Idle(_));
+                                if buffered.len() >= 256 {
+                                    return Err(Error::Unknown);
+                                }
+                                buffered.push_back((event, wire.last_observation().cloned()));
+                                if cancelled || ended {
+                                    break None;
+                                }
                             }
                         }
                     }
                 };
-                let Some(allow) = allow else {
+                let Some(grant) = grant else {
                     continue;
                 };
+                let (allow, audit_id) = grant?;
                 let mut prepared = wire
                     .prepare_approval(
                         &approval_id,
@@ -1032,7 +1109,18 @@ async fn run_octos(
                         .await
                         .map_err(|_| Error::Protocol("Octos approval write"))?
                     {
-                        octos::session::PreparedUpdate::WriteAccepted(_) => break,
+                        octos::session::PreparedUpdate::WriteAccepted(_) => {
+                            if allow {
+                                ledger.record_approval_event(
+                                    owner,
+                                    &audit_id,
+                                    crate::audit::Phase::Submitted,
+                                    now(),
+                                    &json!({"provider":"octos"}),
+                                )?;
+                            }
+                            break;
+                        }
                         octos::session::PreparedUpdate::Event(event) => {
                             if buffered.len() >= 256 {
                                 return Err(Error::Unknown);

@@ -7,6 +7,10 @@ use std::{collections::HashSet, time::Instant};
 use crate::sliding_sync::spawn_async_task;
 use super::board::ProjectBoardWidgetExt;
 use crate::shared::{feedback::{InlineNoticeWidgetExt,InlineNoticeWidgetRefExt}, popup_list::PopupKind};
+mod ledger;
+mod usage;
+mod history;
+mod recovery;
 
 #[derive(Clone, Debug)]
 pub enum HagencyAction {
@@ -41,6 +45,11 @@ enum Page {
 }
 #[derive(Clone, Copy, Debug)]
 enum Target {
+    Stopped,RecoveryReview,RecoveryDecision,
+    History,
+    HistoryDetail,
+    Usage,
+    Ledger,
     Journal,
     Projects,
     Rooms,
@@ -429,6 +438,23 @@ fn agent_empty_message(loaded: bool, loading: bool) -> &'static str {
 fn user_error(error: &str) -> &str {
     if let Some(message) = provider_error_message(error) { return message; }
     match error {
+        "recovery_stop_unconfirmed" => "No observed provider stop is recorded. Continuation is unavailable.",
+        "recovery_runtime_busy" => "Stop this Agent's services before inspecting or deciding a stopped request.",
+        "recovery_review_changed" => "The recovery review expired or the files changed. Inspect the original request and files again.",
+        "continuation_route_unavailable" => "The Agent or original Room binding is no longer available for continuation.",
+        "continuation_transport_unavailable" => "Continuation requires the current signed-in Matrix client.",
+        "invalid_history_query" => "The approval history selection is no longer valid. Refresh the Agent history.",
+        "owner_history_unavailable" => "Approval history could not be read from this device's ledger. Check local storage and retry.",
+        "invalid_usage_query" => "Select the scope and enter valid UTC dates (YYYY-MM-DD). Daily reports support up to 366 days; monthly reports support up to 10 years.",
+        "usage_report_unavailable" => "Usage could not be read from this device's ledger. Check local storage and retry.",
+        "ledger_runtime_busy" => "Stop all Agent services on this device before restoring the owner ledger.",
+        "ledger_restore_requires_empty_ledger" => "This device already has owner ledger records. Restore cannot overwrite usage or requests; use an empty ledger on a recovery device.",
+        "ledger_backup_changed" => "The backup changed after inspection. Check the backup again before restoring.",
+        "ledger_backup_owner_mismatch" => "This backup belongs to a different account or server profile.",
+        "ledger_backup_schema_unsupported" => "This backup uses an unsupported ledger schema. Use a compatible client version.",
+        "invalid_ledger_backup" => "The backup is damaged or incomplete. Choose a valid owner ledger backup.",
+        "invalid_backup_path" | "backup_destination_unavailable" => "Choose a readable backup or enter a new absolute export path. Existing files are never overwritten.",
+        "ledger_backup_unavailable" => "The ledger backup operation could not finish. Check available disk space and file permissions.",
         "invalid_agent_name" => "The Agent name must contain 1–64 characters and no control characters.",
         "invalid_arguments" => "The request contains invalid fields. Check the name and selected options; if they are valid, check that the client and server versions are compatible.",
         "idempotency_key_reused" => "This request identifier was already used with different settings. Refresh Agents and check the original request before creating again.",
@@ -597,11 +623,26 @@ script_mod! {
             loading_status := LoadingSpinner {visible: false width: 18 height: 18 draw_bg +: {color: mod.widgets.RINX_MUTED stroke_width: 2.0}}
             new_item := Primary {text: #(crate::i18n::tr("New Project")) i18n_text: "New Project"}
             refresh := Action {text: #(crate::i18n::tr("Refresh")) i18n_text: "Refresh"}
+            ledger_toggle := Action {visible: false text: #(crate::i18n::tr("Ledger backups")) i18n_text: "Ledger backups"}
         }
         owner := Text {visible: false}
         status_holder := InlineNotice {margin: Inset{right: 20}}
         login := Action {visible: false text: #(crate::i18n::tr("Sign in again")) i18n_text: "Sign in again"}
         lists_pane := View {width: Fill height: Fill margin: Inset{bottom: 16} flow: Down spacing: 8
+                ledger_panel := Section {visible: false width: Fill height: Fit flow: Down spacing: 8 margin: Inset{right: 20}
+                    Text {text: #(crate::i18n::tr("Owner ledger backup")) i18n_text: "Owner ledger backup" draw_text.text_style: theme.font_bold{font_size: mod.widgets.RINX_TITLE_SIZE}}
+                    Text {text: #(crate::i18n::tr("Includes Agent settings, usage, pending requests and saved replies on this device. Keep backups private. Provider and Matrix login files are excluded.")) i18n_text: "Includes Agent settings, usage, pending requests and saved replies on this device. Keep backups private. Provider and Matrix login files are excluded."}
+                    ledger_path := Input {empty_text: #(crate::i18n::tr("Full backup file path on this device"))}
+                    View {width: Fill height: Fit flow: Flow.Right{wrap: true} spacing: 8
+                        ledger_choose := Action {text: #(crate::i18n::tr("Choose backup")) i18n_text: "Choose backup"}
+                        ledger_export := Action {text: #(crate::i18n::tr("Export new backup")) i18n_text: "Export new backup"}
+                        ledger_inspect := Action {text: #(crate::i18n::tr("Check backup")) i18n_text: "Check backup"}
+                    }
+                    ledger_summary := Text {}
+                    Text {text: #(crate::i18n::tr("Stop all Agent services before restoring. Restore requires an empty local ledger and cannot overwrite recorded usage or requests. Restored services stay stopped.")) i18n_text: "Stop all Agent services before restoring. Restore requires an empty local ledger and cannot overwrite recorded usage or requests. Restored services stay stopped." draw_text.color: mod.widgets.RINX_MUTED}
+                    ledger_confirm := RinxCheckBox {text: #(crate::i18n::tr("Restore the checked backup into this owner's empty ledger")) i18n_text: "Restore the checked backup into this owner's empty ledger"}
+                    ledger_restore := Primary {text: #(crate::i18n::tr("Restore checked backup")) i18n_text: "Restore checked backup"}
+                }
                 agent_recovery := View {visible: false width: Fill height: Fit flow: Down margin: Inset{right: 20}
                     agent_request_list := FlatList {width: Fill height: Fit flow: Down spacing: 8
                         scroll_bars +: {show_scroll_x: false show_scroll_y: false}
@@ -730,11 +771,87 @@ script_mod! {
                     bind_agent := Primary {text: #(crate::i18n::tr("Bind selected existing Agent to Room")) i18n_text: "Bind selected existing Agent to Room"}
                 }
                 agent_detail := View {visible: false width: Fill height: Fit flow: Down spacing: 10
-                    View {width: Fill height: 40 spacing: 8
+                    View {width: Fill height: Fit flow: Flow.Right{wrap: true} spacing: 8
                         setup_tab := Action {text: #(crate::i18n::tr("Agent")) i18n_text: "Agent"}
                         model_tab := Action {text: #(crate::i18n::tr("Model & resources")) i18n_text: "Model & resources"}
                         policy_tab := Action {text: #(crate::i18n::tr("Limits")) i18n_text: "Limits"}
                         runtime_tab := Action {text: #(crate::i18n::tr("Service")) i18n_text: "Service"}
+                        usage_tab := Action {text: #(crate::i18n::tr("Usage & alerts")) i18n_text: "Usage & alerts"}
+                        recovery_tab := Action {text: #(crate::i18n::tr("Recovery")) i18n_text: "Recovery"}
+                        history_tab := Action {text: #(crate::i18n::tr("Approval history")) i18n_text: "Approval history"}
+                    }
+                    recovery_section := Section {visible: false width: Fill height: Fit flow: Down spacing: 8
+                        Text {text: #(crate::i18n::tr("Inspect a stopped request")) i18n_text: "Inspect a stopped request"}
+                        Text {text: #(crate::i18n::tr("Original unknown results stay unknown. Your notes are separate evidence. Continuing sends a new request as you to the original Room and thread; it does not replay the original execution.")) i18n_text: "Original unknown results stay unknown. Your notes are separate evidence. Continuing sends a new request as you to the original Room and thread; it does not replay the original execution."}
+                        recovery_records := Select {labels: [#(crate::i18n::tr("Select a stopped request"))]}
+                        View {width: Fill height: Fit flow: Flow.Right{wrap: true} spacing: 8
+                            recovery_refresh := Action {text: #(crate::i18n::tr("Newest records")) i18n_text: "Newest records"}
+                            recovery_older := Action {text: #(crate::i18n::tr("Older records")) i18n_text: "Older records"}
+                        }
+                        Text {text: #(crate::i18n::tr("Files to inspect, relative to the recorded workspace (one per line, up to 32 files)")) i18n_text: "Files to inspect, relative to the recorded workspace (one per line, up to 32 files)"}
+                        recovery_paths := Input {height: 86 is_multiline: true}
+                        recovery_inspect := Action {text: #(crate::i18n::tr("Inspect original request and current files")) i18n_text: "Inspect original request and current files"}
+                        recovery_details := Text {}
+                        recovery_copy := Action {text: #(crate::i18n::tr("Copy original input")) i18n_text: "Copy original input"}
+                        Text {text: #(crate::i18n::tr("Owner review note (required)")) i18n_text: "Owner review note (required)"}
+                        recovery_note := Input {height: 86 is_multiline: true}
+                        Text {text: #(crate::i18n::tr("New continuation instruction")) i18n_text: "New continuation instruction"}
+                        recovery_instruction := Input {height: 100 is_multiline: true}
+                        View {width: Fill height: Fit flow: Flow.Right{wrap: true} spacing: 8
+                            recovery_keep := Action {text: #(crate::i18n::tr("Keep blocked")) i18n_text: "Keep blocked"}
+                            recovery_accept := Action {text: #(crate::i18n::tr("Record owner confirmation")) i18n_text: "Record owner confirmation"}
+                            recovery_continue := Action {text: #(crate::i18n::tr("Review new continuation")) i18n_text: "Review new continuation"}
+                        }
+                        recovery_confirmation := View {visible: false width: Fill height: Fit flow: Down spacing: 8
+                            recovery_confirm_details := Text {}
+                            Text {text: #(crate::i18n::tr("Confirm this exact disposition. A continuation may incur new model usage when the Agent service runs. Missing delivery receipts remain unknown and are never resent by this action.")) i18n_text: "Confirm this exact disposition. A continuation may incur new model usage when the Agent service runs. Missing delivery receipts remain unknown and are never resent by this action."}
+                            View {width: Fill height: Fit flow: Flow.Right{wrap: true} spacing: 8
+                                recovery_confirm := Action {text: #(crate::i18n::tr("Confirm disposition")) i18n_text: "Confirm disposition"}
+                                recovery_cancel := Action {text: #(crate::i18n::tr("Cancel")) i18n_text: "Cancel"}
+                            }
+                        }
+                    }
+                    history_section := Section {visible: false width: Fill height: Fit flow: Down spacing: 8
+                        Text {text: #(crate::i18n::tr("Approval evidence on this device")) i18n_text: "Approval evidence on this device" draw_text.text_style: theme.font_bold{font_size: mod.widgets.RINX_TITLE_SIZE}}
+                        Text {text: #(crate::i18n::tr("A recorded owner decision is not proof of execution. Permission application, provider submission and matching tool receipts are shown separately. Missing receipts remain unknown; history never resubmits an approval.")) i18n_text: "A recorded owner decision is not proof of execution. Permission application, provider submission and matching tool receipts are shown separately. Missing receipts remain unknown; history never resubmits an approval." draw_text.color: mod.widgets.RINX_MUTED}
+                        history_records := Select {labels: [#(crate::i18n::tr("Select an approval record"))]}
+                        View {width: Fill height: Fit flow: Flow.Right{wrap: true} spacing: 8
+                            history_refresh := Action {text: #(crate::i18n::tr("Newest records")) i18n_text: "Newest records"}
+                            history_older := Action {text: #(crate::i18n::tr("Older records")) i18n_text: "Older records"}
+                        }
+                        history_details := Text {}
+                        history_proposal := Text {}
+                        Text {text: #(crate::i18n::tr("The proposal preview shows up to 16,384 characters. Copy the complete original proposal to inspect longer commands or file changes.")) i18n_text: "The proposal preview shows up to 16,384 characters. Copy the complete original proposal to inspect longer commands or file changes." draw_text.color: mod.widgets.RINX_MUTED}
+                        history_copy := Action {text: #(crate::i18n::tr("Copy complete proposal")) i18n_text: "Copy complete proposal"}
+                    }
+                    usage_section := View {visible: false width: Fill height: Fit flow: Down spacing: 10
+                        Section {width: Fill height: Fit flow: Down spacing: 8
+                            Text {text: #(crate::i18n::tr("Usage recorded on this device")) i18n_text: "Usage recorded on this device" draw_text.text_style: theme.font_bold{font_size: mod.widgets.RINX_TITLE_SIZE}}
+                            Text {text: #(crate::i18n::tr("UTC dates use the call start time. Cached input is included in input; reasoning is included in output. Older calls without a recorded time are listed separately.")) i18n_text: "UTC dates use the call start time. Cached input is included in input; reasoning is included in output. Older calls without a recorded time are listed separately." draw_text.color: mod.widgets.RINX_MUTED}
+                            usage_scope := Select {labels: [#(crate::i18n::tr("Entire Agent")) #(crate::i18n::tr("Selected Room")) #(crate::i18n::tr("Selected requester in Room"))]}
+                            usage_room_holder := View {visible: false width: Fill height: Fit usage_room := Select {labels: [#(crate::i18n::tr("Select a Room binding"))]}}
+                            usage_requester_holder := View {visible: false width: Fill height: Fit usage_requester := Input {empty_text: "@user:server"}}
+                            usage_group := Select {labels: [#(crate::i18n::tr("Daily")) #(crate::i18n::tr("Monthly"))]}
+                            Text {text: #(crate::i18n::tr("From UTC date, inclusive")) i18n_text: "From UTC date, inclusive"}
+                            usage_from := Input {empty_text: "YYYY-MM-DD"}
+                            Text {text: #(crate::i18n::tr("Until UTC date, exclusive")) i18n_text: "Until UTC date, exclusive"}
+                            usage_until := Input {empty_text: "YYYY-MM-DD"}
+                            usage_refresh := Action {text: #(crate::i18n::tr("Load usage report")) i18n_text: "Load usage report"}
+                            usage_totals := Text {}
+                            usage_undated := Text {draw_text.color: mod.widgets.RINX_MUTED}
+                            usage_rows := Text {}
+                        }
+                        Section {width: Fill height: Fit flow: Down spacing: 8
+                            Text {text: #(crate::i18n::tr("Budget alerts")) i18n_text: "Budget alerts" draw_text.text_style: theme.font_bold{font_size: mod.widgets.RINX_TITLE_SIZE}}
+                            Text {text: #(crate::i18n::tr("Alerts record when spent plus reserved tokens reach 80% or 100% of a configured budget. Acknowledging keeps usage and the original alert. Alerts include all dates in the selected scope.")) i18n_text: "Alerts record when spent plus reserved tokens reach 80% or 100% of a configured budget. Acknowledging keeps usage and the original alert. Alerts include all dates in the selected scope." draw_text.color: mod.widgets.RINX_MUTED}
+                            usage_alerts := Select {labels: [#(crate::i18n::tr("Select a budget alert"))]}
+                            usage_alert_details := Text {}
+                            usage_ack := Action {text: #(crate::i18n::tr("Acknowledge alert")) i18n_text: "Acknowledge alert"}
+                            View {width: Fill height: Fit flow: Flow.Right{wrap: true} spacing: 8
+                                usage_latest := Action {text: #(crate::i18n::tr("Newest alerts")) i18n_text: "Newest alerts"}
+                                usage_older := Action {text: #(crate::i18n::tr("Older alerts")) i18n_text: "Older alerts"}
+                            }
+                        }
                     }
                     configuration_notice := Text {visible: false draw_text.color: mod.widgets.RINX_MUTED}
                     configuration_refresh := Action {visible: false text: #(crate::i18n::tr("Refresh execution device environment")) i18n_text: "Refresh execution device environment"}
@@ -980,6 +1097,21 @@ pub struct HagencyPanel {
     view: View,
     #[rust]
     active: bool,
+    #[rust] ledger_open: bool,
+    #[rust] ledger_preview: Value,
+    #[rust] ledger_file: Option<robius_file_picker::LocalFile>,
+    #[rust] usage_report: Value,
+    #[rust] usage_agent: String,
+    #[rust] usage_cursor: Option<String>,
+    #[rust] history_page: Value,
+    #[rust] history_detail: Value,
+    #[rust] history_selected: String,
+    #[rust] history_cursor: Option<String>,
+    #[rust] stopped_page: Value,
+    #[rust] recovery_review: Value,
+    #[rust] recovery_selected: String,
+    #[rust] recovery_cursor: Option<String>,
+    #[rust] recovery_pending: Option<(String,RecoveryInput)>,
     #[rust]
     identity: String,
     #[rust]
@@ -1551,6 +1683,10 @@ impl HagencyPanel {
             ids!(web_search),
             ids!(programming),
             ids!(mcp_servers),
+            ids!(ledger_path), ids!(ledger_confirm), ids!(ledger_choose), ids!(ledger_toggle), ids!(ledger_export), ids!(ledger_inspect), ids!(ledger_restore),
+            ids!(usage_scope),ids!(usage_room),ids!(usage_requester),ids!(usage_group),ids!(usage_from),ids!(usage_until),ids!(usage_refresh),ids!(usage_alerts),ids!(usage_ack),ids!(usage_latest),ids!(usage_older),
+            ids!(history_records),ids!(history_refresh),ids!(history_older),ids!(history_copy),
+            ids!(recovery_copy),ids!(recovery_records),ids!(recovery_refresh),ids!(recovery_older),ids!(recovery_paths),ids!(recovery_inspect),ids!(recovery_note),ids!(recovery_instruction),ids!(recovery_keep),ids!(recovery_accept),ids!(recovery_continue),ids!(recovery_confirm),ids!(recovery_cancel),
         ] {
             self.view.widget(cx, id).set_disabled(cx, busy);
         }
@@ -2041,6 +2177,12 @@ impl HagencyPanel {
             .set_visible(cx, !detail);
         self.view.button(cx, ids!(refresh)).set_visible(cx, !detail);
         self.view.button(cx, ids!(back)).set_visible(cx, detail);
+        self.view.button(cx, ids!(ledger_toggle)).set_visible(cx, !detail && self.page == Page::Agents);
+        self.view.view(cx, ids!(ledger_panel)).set_visible(cx, !detail && self.page == Page::Agents && self.ledger_open);
+        self.render_ledger(cx);
+        self.render_usage_controls(cx);
+        self.render_history_controls(cx);
+        self.render_recovery_controls(cx);
         if self.page == Page::Projects && self.view.view(cx, ids!(project_form)).visible() {
             let title = self.view.label(cx, ids!(creation_heading)).text();
             self.view.label(cx, ids!(heading)).set_text(cx, &title);
@@ -2153,6 +2295,9 @@ impl HagencyPanel {
             ids!(policy_section),
             ids!(model_section),
             ids!(runtime_section),
+            ids!(usage_section),
+            ids!(history_section),
+            ids!(recovery_section),
         ] {
             self.view.view(cx, id).set_visible(cx, id == selected);
         }
@@ -2161,6 +2306,9 @@ impl HagencyPanel {
             (ids!(policy_tab), ids!(policy_section)),
             (ids!(model_tab), ids!(model_section)),
             (ids!(runtime_tab), ids!(runtime_section)),
+            (ids!(usage_tab), ids!(usage_section)),
+            (ids!(history_tab), ids!(history_section)),
+            (ids!(recovery_tab), ids!(recovery_section)),
         ] {
             let mut button = self.view.button(cx, tab);
             if section == selected {
@@ -2503,6 +2651,10 @@ impl HagencyPanel {
     }
     fn apply(&mut self, cx: &mut Cx, target: Target, value: &Value) {
         match target {
+            Target::Stopped|Target::RecoveryReview|Target::RecoveryDecision=>self.apply_recovery(cx,target,value),
+            Target::History|Target::HistoryDetail=>self.apply_history(cx,target,value),
+            Target::Usage => self.apply_usage(cx,value),
+            Target::Ledger => self.apply_ledger(cx, value),
             Target::Members => {
                 if !members_match(&self.members_room, value) {
                     return;
@@ -3369,6 +3521,9 @@ impl Widget for HagencyPanel {
             return;
         };
         for action in actions {
+            if let Some(done)=action.downcast_ref::<ledger::Selected>() {
+                self.accept_ledger_selection(cx,done);
+            }
             if let Some(done)=action.downcast_ref::<ConfigurationCompleted>()
                 && self.configuration_poll_request==Some(done.request) {
                 self.configuration_poll_request=None;
@@ -3501,6 +3656,10 @@ impl Widget for HagencyPanel {
         if self.busy {
             return;
         }
+        if self.ledger_actions(cx,actions) {return;}
+        if self.usage_actions(cx,actions) {return;}
+        if self.history_actions(cx,actions) {return;}
+        if self.recovery_actions(cx,actions) {return;}
         if self.view.inline_notice(cx,ids!(status_holder)).action_clicked(cx,actions) {
             self.list_page(cx);self.run(cx,Target::AgentJournal,Command::AgentCommands);return;
         }
@@ -4573,6 +4732,13 @@ impl HagencyPanelRef {
         panel.display_blocked=false;
         let identity = service.identity();
         if panel.identity != identity {
+            panel.stopped_page=Value::Null;panel.recovery_review=Value::Null;panel.recovery_selected.clear();panel.recovery_cursor=None;panel.recovery_pending=None;
+            panel.history_page=Value::Null;panel.history_detail=Value::Null;panel.history_selected.clear();panel.history_cursor=None;
+            panel.usage_report=Value::Null;panel.usage_agent.clear();panel.usage_cursor=None;
+            panel.ledger_open=false;panel.ledger_preview=Value::Null;panel.ledger_file=None;
+            panel.view.text_input(cx,ids!(ledger_path)).set_text(cx,"");
+            panel.view.label(cx,ids!(ledger_summary)).set_text(cx,"");
+            panel.view.check_box(cx,ids!(ledger_confirm)).set_active(cx,false,Animate::No);
             panel.model_saving=false;panel.clear_model_save_feedback(cx);
             panel.service_logs_open=false;panel.agent_service_state=Value::Null;
             panel.view.view(cx,ids!(service_logs_panel)).set_visible(cx,false);
