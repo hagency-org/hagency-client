@@ -14164,3 +14164,24 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 ## 2026-10-23 看板图片编辑
 
 实现剪贴板图片粘贴、描述/评论图片插入及原生内嵌预览、外部文件拖放处理、附件删除确认与失效引用占位。完整原生客户端验证了选择文件、剪贴板/截图 Cmd+V、保存重开、取消/删除；修复 NativeOwner 128 KiB 阻断截图及上传刷新滚动跳动。Finder 跨窗口拖放工具未产生系统 Drag/Drop 事件，实测待人工复核。验证和证据见 `dev-vibe/project-kanban-media-validation-2026-10-23.zh.md`。
+
+
+## 2026-10-26: Codex programming and upstream task list
+
+- Saved all eight upstream capability groups in dev-vibe/upstream-feature-absorption-tasks-2026-10-26.zh.md; implemented A1 on codex/codex-programming from freshly fetched main 42e59b9e in a managed worktree. Original source edits are preserved. No provisioned task-writer or root project.spec exists; no substitute control-plane state was created.
+- Added execution-device-local programming/MCP settings, native Codex shell/file/MCP approvals with current-execution checks, supervised process-tree cleanup, separate context/accounting identities, remote v1 configuration compatibility, UI and bilingual guidance. Existing chat/restricted file behavior remains covered.
+- Real installed Codex model edited existing file, executed native command and invoked explicit MCP; three exact byte results, 6/6 tool completions, owner fixture decisions and whole-tree stop pass. Full local agent 84+3+8 pass/3 existing ignored, engine250/7 existing ignored, app610/2 existing ignored, strict affected no-deps Clippy/format/i18n pass. See validation report for commands, logs and qualification limits. No Server or deployment changes.
+- Re-fetched origin/main after the operator's branch question: it remains42e59b9e, the clean codex/codex-programming branch's merge-base. PR9 Windows CI diagnosed a272-byte Direct process enum variant; boxed the retained handle without changing process custody. Full local Agent tests and strict all-targets no-deps Clippy/format pass. Remote Windows revalidation remains pending for the fix commit.
+
+
+## 2026-10-27: Original Windows caller-loss diagnostics
+
+- PR9 head732c99d5 passes the Windows build, Linux/macOS native and Intel App,
+  but the full Windows suite fails unchanged execution caller-loss at a closed
+  approval notice stream, before printing the injected fault or original report.
+  Its cause is unproven; the original failed run40349683033/log is retained.
+- Added failure-only test diagnostics from the same original operation: fault,
+  startup/runtime/cleanup/exit, approval custody and phase trace, bounded stderr.
+  Closed notice streams still fail; no retry or deadline/assertion relaxation.
+  Complete local execution42/42, strict all-targets no-deps Clippy and format pass.
+  Windows revalidation remains pending; this change does not claim a root fix.

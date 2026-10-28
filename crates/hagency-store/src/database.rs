@@ -17,6 +17,15 @@ pub(crate) struct Schema {
     pub verify: &'static [&'static str],
     pub migrations: &'static [(i32, &'static str)],
 }
+
+/// Called only after the writer's SQLite connection has closed. Closing one
+/// descriptor alone does not release a lock retained by a dup or a child still
+/// between fork and exec. A successful shutdown must release it explicitly.
+pub(crate) fn release_ownership(ownership: File) -> Result<(), Error> {
+    ownership.unlock()?;
+    Ok(())
+}
+
 pub(crate) fn open(directory: &Path, definition: Schema) -> Result<Database, Error> {
     let Schema {
         name: database_name,
@@ -36,7 +45,10 @@ pub(crate) fn open(directory: &Path, definition: Schema) -> Result<Database, Err
         }
         Err(e) => return Err(e),
     };
-    lock.try_lock().map_err(|_| Error::Locked)?;
+    lock.try_lock().map_err(|error| match error {
+        std::fs::TryLockError::WouldBlock => Error::Locked,
+        std::fs::TryLockError::Error(error) => Error::Io(error),
+    })?;
     let path = directory.join(database_name);
     let new = match private::open(&path, true) {
         Ok(_) => true,

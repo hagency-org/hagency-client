@@ -3,7 +3,7 @@
 use crate::codex::{
     self, ApprovalQueue, BudgetMode, Completed, Error, Profile, Result, TurnStatus,
 };
-use crate::process_cleanup::RetainedChild;
+
 use crate::{Ledger, Reservation, Scope, ToolPolicy, ToolProposal, Usage};
 use hagency_runtime::{claude, octos};
 use serde_json::{Value, json};
@@ -11,7 +11,6 @@ use std::{
     path::Path,
     time::{Duration, Instant},
 };
-use tokio::process::{ChildStdin, ChildStdout};
 
 type Claude = hagency_runtime::owned::OwnedClaudeSession;
 type Octos = hagency_runtime::owned::OwnedOctosSession;
@@ -159,16 +158,14 @@ pub fn validate(profile: &Profile, reference: &str) -> Result<()> {
 
 pub struct Process {
     pub session: Session,
-    child: Option<RetainedChild>,
+    child: Option<codex::Child>,
 }
 impl Process {
     pub async fn stop(&mut self) -> Result<()> {
         match &mut self.session {
             Session::Codex(_) => {
-                if let Some(child) = self.child.as_mut()
-                    && child.try_wait()?.is_none()
-                {
-                    child.kill().await?;
+                if let Some(child) = self.child.as_mut() {
+                    child.stop().await?;
                 }
             }
             Session::Claude { wire, .. } => require_stopped(wire.stop())?,
@@ -186,7 +183,7 @@ fn require_stopped(cleanup: hagency_runtime::owned::Cleanup) -> Result<()> {
     }
 }
 pub enum Session {
-    Codex(Box<codex::Session<ChildStdout, ChildStdin>>),
+    Codex(Box<codex::Session<codex::Reader, codex::Writer>>),
     Claude {
         wire: Box<Claude>,
         profile: Profile,
@@ -248,7 +245,14 @@ async fn spawn_inner(
     validate(profile, reference)?;
     let kind = kind(reference);
     if kind == Kind::Codex {
-        let process = profile.spawn().await?;
+        let path = guardian
+            .map(Path::to_path_buf)
+            .unwrap_or(std::env::current_exe()?);
+        let process = if profile.programming.enabled {
+            profile.spawn_with_guardian(&path).await?
+        } else {
+            profile.spawn().await?
+        };
         return Ok(Process {
             session: Session::Codex(Box::new(process.session)),
             child: Some(process.child),
@@ -477,6 +481,16 @@ impl Session {
             Self::Octos { .. } => {}
         }
         Ok(())
+    }
+    pub fn enable_programming(
+        &mut self,
+        gate: std::sync::Arc<dyn codex::ExecutionGate>,
+        execution: String,
+    ) -> Result<()> {
+        match self {
+            Self::Codex(session) => session.enable_programming(gate, execution),
+            _ => Err(Error::Profile("programming requires Codex")),
+        }
     }
     #[cfg(unix)]
     pub fn enable_host_files(

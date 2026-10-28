@@ -2368,5 +2368,11 @@
   "Release to add attachments": "释放鼠标，添加附件",
   "Release to insert images into this draft": "释放鼠标，将图片插入当前草稿",
   "Image uploaded, but could not be inserted. Please reopen the editor.": "图片已上传，但无法插入，请重新打开编辑器。",
-  "Attachment updated. Save or post your draft when ready.": "附件已更新。描述或评论草稿仍需保存或发布。"
+  "Attachment updated. Save or post your draft when ready.": "附件已更新。描述或评论草稿仍需保存或发布。",
+  "Enable Codex programming": "启用 Codex 编程执行",
+  "Run commands and edit existing files in this Agent's workspace. Rooms using this Agent share that workspace. Tool policies and exact owner approvals still apply.": "在此 Agent 的工作目录执行命令和修改已有文件。使用此 Agent 的 Room 共用该目录；工具策略和精确主人审批仍生效。",
+  "MCP servers (JSON)": "MCP 服务器（JSON）",
+  "Configure only servers this Agent may use. Stdio: transport, absolute command and args. HTTP: transport and URL. Personal Codex servers are not imported.": "仅配置允许此 Agent 使用的服务器。Stdio 填写 transport、绝对 command 和 args；HTTP 填写 transport 和 URL。不会导入个人 Codex 服务器。",
+  "MCP servers must be a JSON object.": "MCP 服务器必须是 JSON 对象。",
+  "Programming cannot inherit Codex execution rules. Use a separate Codex sign-in and a workspace without .codex/rules.": "编程模式不能继承 Codex 执行规则。请使用独立 Codex 登录，并选择不含 .codex/rules 的工作目录。"
 }

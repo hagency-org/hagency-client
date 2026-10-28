@@ -124,8 +124,7 @@ In **Service**, select an active private chat or Room binding. Wait for
 the saved local runtime profile and account check to finish. Estimated token accounting is used by default; set a positive per-request
 reservation and save a supported reasoning effort in Model & resources. Actual usage may exceed
 the estimate. Missing usage is recorded as zero and releases the reservation automatically; an uncertain execution is never replayed.
-Scoped host files are opt-in and currently limited to list/read/create; native
-shell and MCP execution are not exposed by this host.
+Scoped host files are opt-in and limited to list/read/create. Codex programming is a separate explicit mode described below.
 
 **Start responding** starts only that selected scope. **Stop responding** stops it; another
 running Room can stay active. Your owner private chat does not need mentions;
@@ -134,6 +133,10 @@ separate. In a collaboration Room, every message requires a real Matrix Agent @m
 Under Agent details → Advanced Room settings, select a Room and enable automatic thread follow-ups in **Room reply behavior**.
 After an @mention activates a thread, any member can follow up there without another mention. New threads still require @.
 The setting applies only to that Agent in that Room. A started model turn can receive the puppet's 👀 processing reaction.
+
+For native commands, existing-file edits and MCP, enable **Codex programming** in **Model & resources** on the execution device. Save and restart the Agent service. This uses the Agent workspace shared by its Rooms; it does not provide operating-system filesystem confidentiality between Rooms. Set all applicable Agent, Room and requester high-risk policies to ask the owner or allow exact tools/directories. Any deny still blocks the operation.
+
+The MCP JSON field accepts explicit servers, such as `{"docs":{"transport":"http","url":"https://example.test/mcp"}}` or `{"local":{"transport":"stdio","command":"/absolute/canonical/server","args":[]}}`. Personal Codex servers and hooks are not imported. These settings remain on the execution device and are excluded from the v1 remote model configuration transport.
 
 Pending request/tool approvals appear in the Service tab for the selected Room.
 While Service is open, approvals refresh automatically with an in-app notice for

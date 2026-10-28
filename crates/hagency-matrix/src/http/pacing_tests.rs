@@ -3,33 +3,27 @@ use crate::collector::fixtures as common;
 use serde_json::json;
 use std::time::Duration;
 
-async fn clients(
-    interval: u64,
-) -> (
-    common::Fixture,
-    common::Fake,
-    Http,
-    Http,
-    Arc<RequestPacing>,
-) {
+async fn clients(interval: u64) -> (common::Fake, Http, Http, Arc<RequestPacing>) {
     let fake = common::Fake::start(true).await;
-    let fixture = common::Fixture::new();
-    let mut config = fixture
-        .config(&fake.endpoint)
-        .with_root_pem(include_bytes!("../../tests/fixtures/ca.pem"))
-        .unwrap();
+    // HTTP cadence has no domain-store dependency. Preserve the two clients'
+    // shared pacing owner, real TLS roots, credentials and transport limits.
+    let mut limits = common::limits();
     let pacing =
         Arc::new(RequestPacing::new(&fake.endpoint, Duration::from_millis(interval)).unwrap());
-    config.limits.request_pacing = Some(pacing.clone());
-    let first = Http::new(&config).unwrap();
-    config.authorization = HeaderValue::from_static("Bearer synthetic-independent-pacing-token");
-    let second = Http::new(&config).unwrap();
-    (fixture, fake, first, second, pacing)
+    limits.request_pacing = Some(pacing.clone());
+    let endpoint = Url::parse(&fake.endpoint).unwrap();
+    let roots =
+        [reqwest::Certificate::from_pem(include_bytes!("../../tests/fixtures/ca.pem")).unwrap()];
+    let authorization = HeaderValue::from_str(&format!("Bearer {}", common::TOKEN)).unwrap();
+    let first = Http::for_host(&endpoint, Some(&authorization), &limits, &roots).unwrap();
+    let authorization = HeaderValue::from_static("Bearer synthetic-independent-pacing-token");
+    let second = Http::for_host(&endpoint, Some(&authorization), &limits, &roots).unwrap();
+    (fake, first, second, pacing)
 }
 
 #[tokio::test]
 async fn native_matrix_shared_request_pacing() {
-    let (fixture, mut fake, first, second, _pacing) = clients(60).await;
+    let (mut fake, first, second, _pacing) = clients(60).await;
     let cancel = CancellationToken::new();
     let started = Instant::now();
     let script = async {
@@ -89,13 +83,12 @@ async fn native_matrix_shared_request_pacing() {
     assert_eq!(put.unwrap().success().unwrap(), json!({"ok":true}));
     assert_eq!(fake.requests(), 4);
     fake.no_request().await;
-    fixture.store.shutdown().await.unwrap();
     fake.close().await;
 }
 
 #[tokio::test]
 async fn native_matrix_media_request_pacing() {
-    let (fixture, mut fake, first, second, pacing) = clients(80).await;
+    let (mut fake, first, second, pacing) = clients(80).await;
     let cancel = CancellationToken::new();
     let (prime, ()) = tokio::join!(first.request(&["prime"], None, &cancel), async {
         fake.next().await.json(200, json!({}));
@@ -129,13 +122,12 @@ async fn native_matrix_media_request_pacing() {
     );
     assert_eq!(download.unwrap(), b"data");
     assert_eq!(fake.requests(), 3);
-    fixture.store.shutdown().await.unwrap();
     fake.close().await;
 }
 
 #[tokio::test]
 async fn native_matrix_request_pacing_bounds() {
-    let (fixture, mut fake, first, mut second, pacing) = clients(1000).await;
+    let (mut fake, first, mut second, pacing) = clients(1000).await;
     let cancel = CancellationToken::new();
     for interval in [0, 9, 1001, u64::MAX] {
         assert!(matches!(
@@ -179,6 +171,5 @@ async fn native_matrix_request_pacing_bounds() {
     assert_eq!(*pacing.next.lock().await, original);
     assert_eq!(fake.requests(), 1);
     fake.no_request().await;
-    fixture.store.shutdown().await.unwrap();
     fake.close().await;
 }

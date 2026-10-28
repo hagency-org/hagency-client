@@ -3057,17 +3057,23 @@ impl DomainStore {
                         Job::Shutdown { reply, probe } => {
                             mark(&probe, Phase::WorkerPickedUp);
                             mark(&probe, Phase::DropStarted);
-                            if let Some(probe) = &probe {
-                                repository.drop_observed(probe);
+                            let result = if let Some(probe) = &probe {
+                                repository.drop_observed(probe)
                             } else {
-                                drop(repository);
-                            }
+                                repository.close()
+                            };
                             mark(&probe, Phase::DropFinished);
                             // The receiver drops before the reply resolves
                             // the caller: the closed word writer_open() reads
                             // (tx.is_closed()) is observable the moment
                             // shutdown() returns, never a tick late.
                             drop(rx);
+                            if let Err(error) = result {
+                                // Close the reply without a successful ACK. The
+                                // caller retains Unavailable/ReplyClosed.
+                                tracing::error!(%error, "domain ownership release failed; shutdown not acknowledged");
+                                return;
+                            }
                             mark(&probe, Phase::AcknowledgementStarted);
                             if reply.send(()).is_ok() {
                                 mark(&probe, Phase::AcknowledgementSent);

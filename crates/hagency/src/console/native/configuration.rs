@@ -722,7 +722,7 @@ async fn apply(
         binding_id: None,
         requester: None,
     };
-    let value = match w.operation.as_str() {
+    let mut value = match w.operation.as_str() {
         "environment" => {
             let mut providers = Vec::new();
             for runtime in ["codex", "claude", "octos"] {
@@ -773,11 +773,23 @@ async fn apply(
                 return Err(failure(409, "configuration_model_unavailable"));
             }
             fence(native, original, w, false).await?;
+            // Programming/MCP are execution-device-local settings. Existing v1
+            // configuration transport neither exports nor overwrites them.
+            let mut input = w.input.clone();
+            if hagency_agent_local::runtime::kind(
+                input["profile"]["credential_ref"].as_str().unwrap_or(""),
+            ) == Kind::Codex
+            {
+                let current = native.execute_locked(configuration()).await?;
+                if let Some(programming) = current["modelProfile"].get("programming") {
+                    input["profile"]["programming"] = programming.clone();
+                }
+            }
             native
                 .execute_locked(Command::Local {
                     agent_id: w.agent_id.clone(),
                     action: LocalAction::SaveAgentModel,
-                    input: Some(w.input.clone()),
+                    input: Some(input),
                     binding_id: None,
                     requester: None,
                 })
@@ -838,8 +850,17 @@ async fn apply(
         }
         _ => return Err(failure(400, "configuration_operation_unsupported")),
     };
+    strip_local_programming(&mut value);
     validate_result(&w.operation, &value, &w.agent_id)?;
     Ok(value)
+}
+fn strip_local_programming(value: &mut Value) {
+    if let Some(profile) = value.get_mut("modelProfile").and_then(Value::as_object_mut) {
+        profile.remove("programming");
+    }
+    if let Some(configuration) = value.get_mut("configuration") {
+        strip_local_programming(configuration);
+    }
 }
 fn journal(native: &NativeOwner, pin: &DeviceIdentity) -> Result<PathBuf, NativeError> {
     key(&pin.id)?;
@@ -1115,6 +1136,19 @@ pub(super) fn start(native: &NativeOwner) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn execution_device_programming_settings_are_not_exported_to_v1_configuration() {
+        let mut value = json!({"configuration":{"agentId":"agent","modelProfile":{"model":"m","credential_ref":"keychain:owned","workspace_root":"/workspace","reasoning_effort":"low","web_search":false,"programming":{"enabled":true,"mcp_servers":{"private":{"transport":"stdio","command":"/private/local-helper","args":[]}}}},"usage":{"spent":17}}});
+        strip_local_programming(&mut value);
+        assert!(
+            value["configuration"]["modelProfile"]
+                .get("programming")
+                .is_none()
+        );
+        model_profile_shape(&value["configuration"]["modelProfile"]).unwrap();
+        assert_eq!(value["configuration"]["usage"]["spent"], 17);
+        assert!(!value.to_string().contains("local-helper"));
+    }
     #[tokio::test]
     async fn update_fence_refuses_background_configuration_before_authorization_or_claim() {
         let root = tempfile::tempdir().unwrap();
