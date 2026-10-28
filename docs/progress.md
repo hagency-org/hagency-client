@@ -15075,3 +15075,11 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 ## 2026-10-28 — App CI 整体 job 预算
 
 #12 当前头42484608的App Intel job122486397191全部测试、Clippy、构建和静态检查均成功，最后在59m20s开始缓存上传，60分钟整体job上限将其取消；GitHub annotation明确 exceeded maximum execution time 1h0m0s。原attempt1保留，单job诊断补跑已触发。为避免依赖冷构建速度碰运气，#12 app-main的整体job预算从60改为有限90分钟，包含缓存和cleanup；原用例、断言、生产2s/25s/45s边界及执行次数完全不变。此为编译和收尾总预算，未放宽任何测试操作deadline。新头需重新通过实际CI。
+
+## 2026-10-28 — main 完整本地环境与资源一致性
+
+- 两仓库 fetch/快进到最新 main；Client b906dd68、Server773dfd7。本地一键工具按完整源码批次构建 Server、自有前端、固定 Pasion 前端和原生 Client，记录来源及全部文件 SHA-256；doctor 核对真实 HTTP 资源、WASM 与原生运行副本。新增安全 update / start --pull，拒绝错误分支和非快进覆盖。
+- 查明先前粉紫样式回退：我混用了10月12日镜像资源与较新后端，遗漏10月15日共享主题，并以 API 就绪代替 UI 资源验收。保留 main 的 /assets 设计，启动路径不再导入旧镜像或 loose resources。
+- 当前开放本机注册。关闭注册的说明通过 Server 管理的 Pasion 构建补丁实现；上游/Cargo 缓存未改。真实浏览器验证统一蓝色、明暗关闭状态和返回登录；真实注册、PKCE、Matrix、Project、看板读写及完整原生浏览器授权/回调/看板显示通过。
+- 重复启动保留PID；stop/start 和 restart --pull 后原生账号自动恢复、任务 version1 保留、五项密钥/凭据指纹不变。Python16、Rust工具8+4、严格Clippy/格式/Bash/diff通过。证据和范围见 Server dev-vibe/local-development-coherent-main-validation-2026-10-28.zh.md。该轮验收时服务留运行、尚未提交/推送，未调用模型。
+- 本 checkout 没有 provisioned task-writer；此记录仅为协调与验证证据，不替代 canonical task state。

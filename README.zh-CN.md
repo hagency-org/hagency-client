@@ -17,6 +17,12 @@ OAuth 回调保留，但该端口不提供管理页面或管理 API。
 
 ## 开发
 
+macOS 完整本地联调：在相邻的 Client / Server 仓库准备好依赖后执行
+`./tools/local-dev.sh start --pull`，更新两个 main 并启动 PostgreSQL、完整后端和原生客户端。
+所有前端和二进制按源码指纹构建、校验，使用 `./tools/local-dev.sh doctor` 复核运行资源。
+服务器地址为 `http://127.0.0.1:8088`；账号、日志、停止与重启见
+[一键本地开发指南](docs/local-development.zh-CN.md)。
+
 Windows 的构建产物、依赖缓存和临时文件必须留在 D 盘。包装脚本会设置并核对：
 
 ```powershell
