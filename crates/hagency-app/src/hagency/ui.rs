@@ -12,6 +12,7 @@ mod usage;
 mod history;
 mod file_history;
 mod recovery;
+mod crypto;
 
 #[derive(Clone, Debug)]
 pub enum HagencyAction {
@@ -86,6 +87,11 @@ enum Target {
     ListService,
     ServiceRoomChanged,
     ApprovalDecision,
+    RemoteApproval,
+    RemoteApprovalDecision,
+    RemoteInbox,
+    RemoteVerdict,
+    Crypto,
     Members,
     Changed,
     ProjectAdopted,
@@ -441,6 +447,12 @@ fn agent_empty_message(loaded: bool, loading: bool) -> &'static str {
 fn user_error(error: &str) -> &str {
     if let Some(message) = provider_error_message(error) { return message; }
     match error {
+        "remote_approval_waiting" => "Waiting for a verified decision.",
+        "remote_approval_incomplete" => "Decision history is incomplete. No approval was applied.",
+        "remote_approval_transport_unavailable" => "Remote approvals require the current Matrix client.",
+        "remote_approval_unavailable" | "remote_approval_unverified" => "This remote request could not be verified. Refresh its original request before deciding.",
+        "remote_approval_busy" => "Private approvals are busy. Wait for the original operations to finish.",
+        "remote_approval_expired" => "This approval request has expired.",
         "recovery_stop_unconfirmed" => "No observed provider stop is recorded. Continuation is unavailable.",
         "recovery_runtime_busy" => "Stop this Agent's services before inspecting or deciding a stopped request.",
         "recovery_review_changed" => "The recovery review expired or the files changed. Inspect the original request and files again.",
@@ -787,6 +799,25 @@ script_mod! {
                         recovery_tab := Action {text: #(crate::i18n::tr("Recovery")) i18n_text: "Recovery"}
                         files_tab := Action {text: #(crate::i18n::tr("File delivery")) i18n_text: "File delivery"}
                         history_tab := Action {text: #(crate::i18n::tr("Approval history")) i18n_text: "Approval history"}
+                        remote_review_tab := Action {text: #(crate::i18n::tr("Remote approvals")) i18n_text: "Remote approvals"}
+                    }
+                    remote_review_section := Section {visible: false width: Fill height: Fit flow: Down spacing: 8
+                        Text {text: #(crate::i18n::tr("Requests from your other devices")) i18n_text: "Requests from your other devices"}
+                        Text {text: #(crate::i18n::tr("Choose your private approval Room and review the complete original action. Your decision applies once; the execution device still checks the live task and policies.")) i18n_text: "Choose your private approval Room and review the complete original action. Your decision applies once; the execution device still checks the live task and policies." draw_text.color: mod.widgets.RINX_MUTED}
+                        remote_review_room := Select {labels: [#(crate::i18n::tr("Select a private approval Room"))]}
+                        View {width: Fill height: Fit flow: Flow.Right{wrap: true} spacing: 8
+                            remote_review_refresh := Action {text: #(crate::i18n::tr("Refresh requests")) i18n_text: "Refresh requests"}
+                            remote_review_older := Action {text: #(crate::i18n::tr("Older requests")) i18n_text: "Older requests"}
+                        }
+                        remote_review_requests := Select {labels: [#(crate::i18n::tr("Select a remote approval request"))]}
+                        remote_review_details := Text {}
+                        remote_review_copy := Action {text: #(crate::i18n::tr("Copy complete proposal")) i18n_text: "Copy complete proposal"}
+                        remote_review_status := Text {draw_text.color: mod.widgets.RINX_MUTED}
+                        View {width: Fill height: Fit flow: Flow.Right{wrap: true} spacing: 8
+                            remote_review_allow := Action {text: #(crate::i18n::tr("Approve exact request once")) i18n_text: "Approve exact request once"}
+                            remote_review_deny := Danger {text: #(crate::i18n::tr("Reject request")) i18n_text: "Reject request"}
+                            remote_review_receipt := Action {text: #(crate::i18n::tr("Refresh decision delivery")) i18n_text: "Refresh decision delivery"}
+                        }
                     }
                     recovery_section := Section {visible: false width: Fill height: Fit flow: Down spacing: 8
                         Text {text: #(crate::i18n::tr("Inspect a stopped request")) i18n_text: "Inspect a stopped request"}
@@ -1046,6 +1077,20 @@ script_mod! {
                         }
                         }
                         Section {width: Fill height: Fit flow: Down spacing: 8
+                            Text {text: #(crate::i18n::tr("Agent encryption identity")) i18n_text: "Agent encryption identity" draw_text.text_style: theme.font_bold{font_size: mod.widgets.RINX_TITLE_SIZE}}
+                            Text {text: #(crate::i18n::tr("Encrypted Agent tasks and files are not available yet.")) i18n_text: "Encrypted Agent tasks and files are not available yet." draw_text.color: mod.widgets.RINX_MUTED}
+                            crypto_status := Text {}
+                            crypto_identity := Text {}
+                            crypto_confirm := RinxCheckBox {text: #(crate::i18n::tr("I checked the complete master key and device fingerprints for this Agent.")) i18n_text: "I checked the complete master key and device fingerprints for this Agent."}
+                            View {width: Fill height: Fit flow: Flow.Right{wrap: true} spacing: 8
+                                crypto_refresh := Action {text: #(crate::i18n::tr("Refresh identity")) i18n_text: "Refresh identity"}
+                                crypto_prepare := Action {text: #(crate::i18n::tr("Initialize identity")) i18n_text: "Initialize identity"}
+                                crypto_stop := Action {text: #(crate::i18n::tr("Stop identity session")) i18n_text: "Stop identity session"}
+                                crypto_copy := Action {text: #(crate::i18n::tr("Copy public identity")) i18n_text: "Copy public identity"}
+                                crypto_verify := Action {text: #(crate::i18n::tr("Verify exact Agent identity")) i18n_text: "Verify exact Agent identity"}
+                            }
+                        }
+                        Section {width: Fill height: Fit flow: Down spacing: 8
                             Text {text: #(crate::i18n::tr("Connected Rooms")) i18n_text: "Connected Rooms" draw_text.text_style: theme.font_bold{font_size: mod.widgets.RINX_TITLE_SIZE}}
                             Text {text: #(crate::i18n::tr("Pause only where needed. Requests in a paused Room receive a notice.")) i18n_text: "Pause only where needed. Requests in a paused Room receive a notice." draw_text.color: mod.widgets.RINX_MUTED}
                             service_rooms := PortalList {width: Fill height: 260
@@ -1076,6 +1121,13 @@ script_mod! {
                             approve := Action {text: #(crate::i18n::tr("Approve exact request once")) i18n_text: "Approve exact request once"}
                             reject := Danger {text: #(crate::i18n::tr("Reject request")) i18n_text: "Reject request"}
                         }
+                        Text {text: #(crate::i18n::tr("Remote approval")) i18n_text: "Remote approval" draw_text.text_style: theme.font_bold{font_size: mod.widgets.RINX_HEADING_SIZE}}
+                        Text {text: #(crate::i18n::tr("Use an encrypted Room containing only you. Only your verified devices receive the request key.")) i18n_text: "Use an encrypted Room containing only you. Only your verified devices receive the request key." draw_text.color: mod.widgets.RINX_MUTED}
+                        remote_approval_room := Select {labels: [#(crate::i18n::tr("Select a private approval Room"))]}
+                        remote_approval_publish := Action {text: #(crate::i18n::tr("Publish privately")) i18n_text: "Publish privately"}
+                        remote_approval_refresh := Action {text: #(crate::i18n::tr("Refresh private approval status")) i18n_text: "Refresh private approval status"}
+                        remote_approval_details := Text {draw_text.color: mod.widgets.RINX_MUTED}
+                        remote_approval_observe := Action {text: #(crate::i18n::tr("Read verified decision")) i18n_text: "Read verified decision"}
                         }
                     }
                     room_controls := Section {width: Fill height: Fit flow: Down spacing: 8
@@ -1255,6 +1307,13 @@ pub struct HagencyPanel {
     #[rust] approval_poll: Option<u64>,
     #[rust] approval_started: Option<Instant>,
     #[rust] approval_notices: Notices,
+    #[rust] remote_approval: Value,
+    #[rust] agent_crypto: Value,
+    #[rust] remote_approval_rooms: Vec<Value>,
+    #[rust] remote_review_rooms: Vec<Value>,
+    #[rust] remote_review_requests: Vec<Value>,
+    #[rust] remote_review_next: Option<String>,
+    #[rust] remote_review_cursors: HashSet<String>,
     #[rust] approval_checked: bool,
     #[rust] approval_blocked: HashSet<String>,
     #[rust] read_timer: Timer,
@@ -1272,16 +1331,70 @@ impl HagencyPanel {
         cx.stop_timer(self.approval_timer);
         self.view.label(cx,ids!(approval_count)).set_text(cx,"");
         self.view.label(cx,ids!(approval_feedback)).set_text(cx,"");
+        self.remote_approval=Value::Null;
+        self.view.label(cx,ids!(remote_approval_details)).set_text(cx,"");
+        self.remote_approval_rooms.clear();
+        self.labels(cx,ids!(remote_approval_room),"Select a private approval Room",&self.remote_approval_rooms,"name");
     }
     fn approval_view_open(&self,cx:&mut Cx)->bool {
         self.active && self.page==Page::Agents && self.view.view(cx,ids!(agent_detail)).visible()
             && self.view.view(cx,ids!(runtime_section)).visible()
+    }
+    fn clear_remote_reviews(&mut self,cx:&mut Cx) {
+        self.remote_review_requests.clear();self.remote_review_rooms.clear();self.remote_review_next=None;self.remote_review_cursors.clear();
+        self.labels(cx,ids!(remote_review_room),"Select a private approval Room",&[],"name");
+        self.render_remote_reviews(cx);
+    }
+    fn render_remote_reviews(&self,cx:&mut Cx) {
+        let selected=self.selected(cx,ids!(remote_review_requests),&self.remote_review_requests).map(|v|string(&v,"requestEventId").to_owned());
+        self.view.drop_down(cx,ids!(remote_review_requests)).set_labels(cx,std::iter::once(crate::i18n::tr("Select a remote approval request").to_owned()).chain(self.remote_review_requests.iter().map(|r|format!("{} · {}",string(&r["request"]["proposal"],"tool"),string(&r["request"]["proposal"]["scope"],"requester")))).collect());
+        let index=selected.and_then(|id|self.remote_review_requests.iter().position(|r|string(r,"requestEventId")==id)).map_or(0,|i|i+1);
+        self.view.drop_down(cx,ids!(remote_review_requests)).set_selected_item(cx,index);
+        let row=self.selected(cx,ids!(remote_review_requests),&self.remote_review_requests);
+        let details=row.as_ref().map(|r|super::approvals::details(&json!({"proposalId":r["request"]["approvalId"],"argsDigest":r["request"]["proposalDigest"],"proposal":r["request"]["proposal"]}),super::approvals::now())).unwrap_or_else(||crate::i18n::tr("Select a remote approval request").into());
+        self.view.label(cx,ids!(remote_review_details)).set_text(cx,&details);
+        let status=row.as_ref().map(|r|match r["publication"]["phase"].as_str() {Some("sent")=>"Decision delivered. Execution is not yet confirmed.",Some(_)=>"Decision delivery is unconfirmed. Refresh its original status; do not send again.",None if r["request"]["proposal"]["expires"].as_i64().is_none_or(|t|t<=super::approvals::now())=>"This approval request has expired.",None=>"Review the exact action before deciding."}).unwrap_or("");
+        self.view.label(cx,ids!(remote_review_status)).set_text(cx,crate::i18n::tr(status));
+    }
+    fn refresh_remote_review_rooms(&mut self,cx:&mut Cx) {
+        if !Service::for_current().is_ok_and(|s|s.identity()==self.identity) {return;}
+        let selected=self.selected(cx,ids!(remote_review_room),&self.remote_review_rooms).map(|r|string(&r,"id").to_owned());
+        self.remote_review_rooms=crate::sliding_sync::get_client().map(|client|client.joined_rooms().into_iter().filter(|r|!r.is_space() && r.encryption_state().is_encrypted() && r.joined_members_count()==1 && r.invited_members_count()==0).take(128).map(|r|json!({"id":r.room_id().as_str(),"name":r.cached_display_name().map(|n|n.to_string()).or_else(||r.name()).unwrap_or_else(||r.room_id().to_string())})).collect()).unwrap_or_default();
+        self.labels(cx,ids!(remote_review_room),"Select a private approval Room",&self.remote_review_rooms,"name");
+        let index=selected.and_then(|id|self.remote_review_rooms.iter().position(|r|string(r,"id")==id)).map(|i|i+1).unwrap_or_else(||usize::from(self.remote_review_rooms.len()==1));
+        self.view.drop_down(cx,ids!(remote_review_room)).set_selected_item(cx,index);
+    }
+    fn load_remote_reviews(&mut self,cx:&mut Cx,older:bool) {
+        let Some(agent)=self.agent(cx) else {return;};
+        let Some(room)=self.selected(cx,ids!(remote_review_room),&self.remote_review_rooms) else {return;};
+        let cursor=if older {let Some(c)=self.remote_review_next.clone() else {return;};if !self.remote_review_cursors.insert(c.clone()) {return;}Some(c)} else {self.remote_review_requests.clear();self.remote_review_cursors.clear();None};
+        self.run(cx,Target::RemoteInbox,Command::RemoteApprovals {action:RemoteApprovalAction::List {agent,room:string(&room,"id").into(),cursor}});
+    }
+    fn remote_room(&self,cx:&mut Cx)->Option<String> {
+        self.selected(cx,ids!(remote_approval_room),&self.remote_approval_rooms).map(|r|string(&r,"id").to_owned())
+    }
+    fn refresh_remote_rooms(&mut self,cx:&mut Cx) {
+        let selected=self.remote_room(cx);
+        // Cached room facts only choose candidates. The SDK adapter always
+        // checks fresh private state and signed devices before publication.
+        self.remote_approval_rooms=crate::sliding_sync::get_client().map(|client|client.joined_rooms().into_iter()
+            .filter(|r|!r.is_space() && r.encryption_state().is_encrypted() && r.joined_members_count()==1 && r.invited_members_count()==0)
+            .take(128).map(|r|json!({"id":r.room_id().as_str(),"name":r.cached_display_name().map(|n|n.to_string()).or_else(||r.name()).unwrap_or_else(||r.room_id().to_string())})).collect()).unwrap_or_default();
+        if let Some(room)=self.remote_approval["remoteApproval"]["approvalRoom"].as_str()
+            && !self.remote_approval_rooms.iter().any(|r|string(r,"id")==room) {
+            self.remote_approval_rooms.push(json!({"id":room,"name":room}));
+        }
+        self.labels(cx,ids!(remote_approval_room),"Select a private approval Room",&self.remote_approval_rooms,"name");
+        let index=selected.as_ref().and_then(|id|self.remote_approval_rooms.iter().position(|r|string(r,"id")==id)).map(|i|i+1)
+            .unwrap_or_else(||usize::from(selected.is_none() && self.remote_approval_rooms.len()==1));
+        self.view.drop_down(cx,ids!(remote_approval_room)).set_selected_item(cx,index);
     }
     fn refresh_approvals(&mut self,cx:&mut Cx) {
         if self.approval_poll.is_some() || self.busy || !self.approval_view_open(cx) || !self.local_agent(cx) {return;}
         let Some((agent,binding,room))=self.approval_scope(cx) else {return;};
         let Ok(service)=Service::for_current() else {return;};
         if service.identity()!=self.identity {return;}
+        self.refresh_remote_rooms(cx);
         let request=nonce();self.approval_poll=Some(request);self.approval_started=Some(Instant::now());let identity=self.identity.clone();
         cx.stop_timer(self.approval_timer);self.approval_timer=cx.start_timeout(3.0);
         spawn_async_task(async move {
@@ -1317,6 +1430,8 @@ impl HagencyPanel {
     fn render_approval_details(&self,cx:&mut Cx) {
         let text=self.selected(cx,ids!(approvals),&self.approvals).map(|p|super::approvals::details(&p,super::approvals::now())).unwrap_or_else(||crate::i18n::tr(if self.approvals.is_empty() {"No pending approvals."} else {"Select a request to review its exact action."}).into());
         self.view.label(cx,ids!(approval_details)).set_text(cx,&text);
+        let same=self.selected(cx,ids!(approvals),&self.approvals).is_some_and(|p|p["proposalId"]==self.remote_approval["approvalId"]);
+        if !same {self.view.label(cx,ids!(remote_approval_details)).set_text(cx,"");}
     }
     fn reset_detail_scroll(&mut self,cx:&mut Cx) {
         self.detail_scroll_key.clear();self.view.view(cx,ids!(details_scroll)).set_scroll_pos(cx,dvec2(0.0,0.0));
@@ -1856,9 +1971,12 @@ impl HagencyPanel {
         self.runtime_resources_loading = false;
         self.clear_configuration(cx);
         self.execution_agent_record = Value::Null;
+        self.agent_crypto = Value::Null;
+        self.render_crypto(cx);
 
         if self.direct_agent != string(&a,"id") {self.cancel_direct_retry(cx);}
         self.render_owner_direct(cx);
+        self.clear_remote_reviews(cx);
         self.view.view(cx, ids!(execution_badge)).label(cx, ids!(device_label)).set_text(cx, crate::i18n::tr("Checking execution device…"));
         self.view.check_box(cx, ids!(assignment_confirm)).set_active(cx, false, Animate::No);
         self.clear_approval_state(cx);
@@ -2034,6 +2152,17 @@ impl HagencyPanel {
             !self.approval_blocked.contains(string(&p,"proposalId")) && self.approval_scope(cx).is_some_and(|(a,b,r)|super::approvals::matches(&p,&a,&b,&r,super::approvals::now()))
         });
         for id in [ids!(approve),ids!(reject)] {let enabled=assigned_here && approval_selected && !self.busy;self.view.button(cx,id).set_enabled(cx,enabled);self.view.widget(cx,id).set_disabled(cx,!enabled);}
+        let remote_publication=self.selected(cx,ids!(approvals),&self.approvals).filter(|p|p["proposalId"]==self.remote_approval["approvalId"]).map(|_|&self.remote_approval["remoteApproval"]);
+        let published=remote_publication.is_some_and(Value::is_object);
+        let ready=assigned_here && approval_selected && !self.busy;
+        for (id,enabled) in [(ids!(remote_approval_publish),ready && !published && self.remote_room(cx).is_some()),(ids!(remote_approval_refresh),ready),(ids!(remote_approval_observe),ready && remote_publication.is_some_and(|v|v["phase"]=="sent"))] {
+            self.view.button(cx,id).set_enabled(cx,enabled);self.view.widget(cx,id).set_disabled(cx,!enabled);
+        }
+        self.view.widget(cx,ids!(remote_approval_room)).set_disabled(cx,self.busy || published);
+        let reviewed=self.selected(cx,ids!(remote_review_requests),&self.remote_review_requests);
+        let actionable=reviewed.as_ref().is_some_and(|r|r["publication"].is_null() && self.agent(cx).as_deref()==r["request"]["proposal"]["scope"]["agent"].as_str() && self.selected(cx,ids!(remote_review_room),&self.remote_review_rooms).is_some_and(|room|room["id"]==r["request"]["approvalRoom"]) && r["request"]["proposal"]["expires"].as_i64().is_some_and(|t|t>super::approvals::now()));
+        for (id,enabled) in [(ids!(remote_review_allow),actionable),(ids!(remote_review_deny),actionable),(ids!(remote_review_copy),reviewed.is_some()),(ids!(remote_review_receipt),reviewed.as_ref().is_some_and(|r|r["publication"].is_object())),(ids!(remote_review_refresh),!self.remote_review_rooms.is_empty()),(ids!(remote_review_older),self.remote_review_next.is_some() && self.remote_review_requests.len()<128)] {self.view.button(cx,id).set_enabled(cx,!self.busy && enabled);self.view.widget(cx,id).set_disabled(cx,self.busy || !enabled);}
+        self.view.widget(cx,ids!(remote_review_room)).set_disabled(cx,self.busy);
         let badge = self.view.widget(cx, ids!(execution_badge));
         render_device_badge(cx, &badge, agent_device_state(&self.execution_agent_record, &self.current_device_id, &self.execution_devices, self.devices_loaded), &self.device_badge(&self.execution_agent_record));
         let device_id=string(&self.execution_agent_record,"executionDeviceId");
@@ -2045,6 +2174,7 @@ impl HagencyPanel {
         self.view.label(cx, ids!(local_device_message)).set_text(cx, if self.devices_loaded && !self.execution_agent_record.is_null() {
             crate::i18n::tr("Model and Agent limits configure the assigned execution device. Service controls remain on that device.")
         } else {crate::i18n::tr("Checking execution device…")});
+        self.sync_crypto(cx);
         let assignable = self.devices_loaded && self.execution_agent_record["id"].as_str() == self.agent(cx).as_deref() && self.execution_agent_record["generation"].as_i64().is_some_and(|generation| generation > 0) && matches!(string(&self.execution_agent_record, "state"), "creating" | "active" | "suspended") && !self.current_device_id.is_empty() && self.execution_devices.iter().any(|d|string(d,"id") == self.current_device_id && d["revoked"] == false);
         self.view.button(cx, ids!(assign_current_device)).set_enabled(cx, assignable && !assigned_here && !self.busy && self.view.check_box(cx, ids!(assignment_confirm)).active(cx));
         self.view.check_box(cx, ids!(assignment_confirm)).set_visible(cx, assignable && !assigned_here);
@@ -2322,6 +2452,7 @@ impl HagencyPanel {
             ids!(runtime_section),
             ids!(usage_section),
             ids!(history_section),
+            ids!(remote_review_section),
             ids!(files_section),
             ids!(recovery_section),
         ] {
@@ -2334,6 +2465,7 @@ impl HagencyPanel {
             (ids!(runtime_tab), ids!(runtime_section)),
             (ids!(usage_tab), ids!(usage_section)),
             (ids!(history_tab), ids!(history_section)),
+            (ids!(remote_review_tab), ids!(remote_review_section)),
             (ids!(files_tab), ids!(files_section)),
             (ids!(recovery_tab), ids!(recovery_section)),
         ] {
@@ -2487,7 +2619,7 @@ impl HagencyPanel {
             } else {uuid::Uuid::new_v4().to_string()};
             Command::AgentConfiguration {agent_id,expected_generation,idempotency_key,command:Box::new(command)}
         } else {command};
-        if matches!(&command,Command::AgentConfigurationStatus {..}|Command::ExecutionEnvironment {..}) {
+        if matches!(&command,Command::AgentConfigurationStatus {..}|Command::ExecutionEnvironment {..}|Command::AgentCrypto {..}) {
             configuration_fence=Some((string(&self.execution_agent_record,"id").into(),self.execution_agent_record["generation"].as_i64().unwrap_or(0),string(&self.execution_agent_record,"executionDeviceId").into()));
         }
         if self.busy || !self.active {
@@ -2848,10 +2980,12 @@ impl HagencyPanel {
                 self.view.view(cx, ids!(detail_audience_badge)).label(cx, ids!(device_label)).set_text(cx, crate::i18n::tr(audience_label(record)));
                 self.status(cx, "Service audience saved.");
             }
+            Target::Crypto => self.apply_crypto(cx,value),
             Target::AgentAssigned | Target::AgentDetails => {
                 let Some(agent) = self.agent(cx) else {return;};
                 let record = &value["agent"];
                 if string(record, "id") != agent || record["generation"].as_i64().is_none() {return;}
+                if self.execution_agent_record != *record {self.agent_crypto=Value::Null;self.render_crypto(cx);}
                 self.execution_agent_record = record.clone();
                 self.view.drop_down(cx, ids!(agent_visibility)).set_selected_item(cx, usize::from(record["visibility"] == "public"));
                 self.view.view(cx, ids!(detail_audience_badge)).label(cx, ids!(device_label)).set_text(cx, crate::i18n::tr(audience_label(record)));
@@ -3217,6 +3351,33 @@ impl HagencyPanel {
                     self.status(cx,"Restore the complete current-schema ledger of this exact Matrix owner, including spent costs and unresolved holds. No new model requests are allowed; known original replies may reconcile. Stop, restore, then start again.");
                 }
                 self.refresh_approvals(cx);
+            }
+            Target::RemoteApproval => {
+                if !self.selected(cx,ids!(approvals),&self.approvals).is_some_and(|p|p["proposalId"]==value["approvalId"]) {return;}
+                self.remote_approval=value.clone();
+                self.view.label(cx,ids!(remote_approval_details)).set_text(cx,&super::approvals::remote_details(&value["remoteApproval"]));
+                if let Some(room)=value["remoteApproval"]["approvalRoom"].as_str() {
+                    if !self.remote_approval_rooms.iter().any(|r|string(r,"id")==room) {self.remote_approval_rooms.push(json!({"id":room,"name":room}));}
+                    self.labels(cx,ids!(remote_approval_room),"Select a private approval Room",&self.remote_approval_rooms,"name");
+                    if let Some(index)=self.remote_approval_rooms.iter().position(|r|string(r,"id")==room) {self.view.drop_down(cx,ids!(remote_approval_room)).set_selected_item(cx,index+1);}
+                }
+                self.sync_navigation(cx);
+            }
+            Target::RemoteInbox => {
+                if self.agent(cx).as_deref()!=value["agentId"].as_str() || !self.selected(cx,ids!(remote_review_room),&self.remote_review_rooms).is_some_and(|r|r["id"]==value["roomId"]) {return;}
+                for row in array(value,"requests") {
+                    if self.remote_review_requests.len()>=128 {break;}
+                    if let Some(existing)=self.remote_review_requests.iter_mut().find(|r|r["requestEventId"]==row["requestEventId"]) {*existing=row;}else{self.remote_review_requests.push(row);}
+                }
+                self.remote_review_next=value["nextBatch"].as_str().map(str::to_owned);self.render_remote_reviews(cx);self.sync_navigation(cx);
+            }
+            Target::RemoteVerdict => {
+                for row in &mut self.remote_review_requests {if row["request"]["approvalId"]==value["approvalId"] {row["publication"]=value["publication"].clone();}}
+                self.render_remote_reviews(cx);self.sync_navigation(cx);
+            }
+            Target::RemoteApprovalDecision => {
+                if value["decided"]==true {if let Some(id)=value["approvalId"].as_str() {self.approval_blocked.insert(id.into());}}
+                self.apply(cx,Target::ApprovalDecision,value);
             }
             Target::ApprovalDecision => {
                 self.view.label(cx,ids!(approval_feedback)).set_text(cx,crate::i18n::tr(if value["decided"]==true {
@@ -3620,6 +3781,14 @@ impl Widget for HagencyPanel {
                     Err(error) => {
                         if matches!(done.target,Target::ModelSaved) {self.finish_model_save(cx,Err(error));}
                         if done.configuration_fence.is_some() {self.sync_navigation(cx);}
+                        if matches!(done.target,Target::RemoteApprovalDecision) && error=="remote_approval_waiting" {
+                            self.view.label(cx,ids!(remote_approval_details)).set_text(cx,crate::i18n::tr("Waiting for a verified decision."));
+                            self.status(cx,"");continue;
+                        }
+                        if matches!(done.target,Target::RemoteApproval | Target::RemoteApprovalDecision) {
+                            self.view.label(cx,ids!(remote_approval_details)).set_text(cx,crate::i18n::tr("Private approval could not be confirmed. Refresh its original status."));
+                            self.refresh_approvals(cx);
+                        }
                         if matches!(done.target,Target::ApprovalDecision) {
                             self.view.label(cx,ids!(approval_feedback)).set_text(cx,crate::i18n::tr("Decision delivery is unconfirmed. Refresh status; do not resubmit this request."));
                             self.refresh_approvals(cx);
@@ -3912,6 +4081,9 @@ impl Widget for HagencyPanel {
         }
         if self.open_card(cx, actions) {
             return;
+        }
+        if self.view.button(cx,ids!(remote_review_tab)).clicked(actions) {
+            self.section(cx,ids!(remote_review_section));self.refresh_remote_review_rooms(cx);self.sync_navigation(cx);return;
         }
         for (id, section) in [
             (ids!(setup_tab), ids!(setup_section)),
@@ -4536,6 +4708,7 @@ impl Widget for HagencyPanel {
             self.local(cx, Target::Runtime, LocalAction::StartAgentService, Some(input));
             return;
         }
+        if self.handle_crypto(cx,actions) {return;}
         if self.view.button(cx, ids!(runtime_check)).clicked(actions) {
             self.load_runtime_resources(cx);
             return;
@@ -4544,6 +4717,31 @@ impl Widget for HagencyPanel {
             self.refresh_approvals(cx);
             return;
         }
+        if self.view.drop_down(cx,ids!(remote_review_room)).selected(actions).is_some() {
+            self.remote_review_requests.clear();self.remote_review_next=None;self.remote_review_cursors.clear();self.render_remote_reviews(cx);self.sync_navigation(cx);return;
+        }
+        if self.view.drop_down(cx,ids!(remote_review_requests)).selected(actions).is_some() {self.render_remote_reviews(cx);self.sync_navigation(cx);return;}
+        if self.view.button(cx,ids!(remote_review_refresh)).clicked(actions) || self.view.button(cx,ids!(remote_review_older)).clicked(actions) {
+            self.load_remote_reviews(cx,self.view.button(cx,ids!(remote_review_older)).clicked(actions));return;
+        }
+        if self.view.button(cx,ids!(remote_review_copy)).clicked(actions) {
+            if let Some(row)=self.selected(cx,ids!(remote_review_requests),&self.remote_review_requests) {cx.copy_to_clipboard(&serde_json::to_string_pretty(&row["request"]).unwrap_or_default());}return;
+        }
+        if self.view.button(cx,ids!(remote_review_allow)).clicked(actions) || self.view.button(cx,ids!(remote_review_deny)).clicked(actions) || self.view.button(cx,ids!(remote_review_receipt)).clicked(actions) {
+            if self.busy {return;}
+            let Some(row)=self.selected(cx,ids!(remote_review_requests),&self.remote_review_requests) else {return;};
+            let Some(agent)=self.agent(cx) else {return;};
+            if row["request"]["proposal"]["scope"]["agent"]!=agent {return;}
+            let id=string(&row["request"],"approvalId").to_owned();
+            let action=if self.view.button(cx,ids!(remote_review_receipt)).clicked(actions) {RemoteApprovalAction::Status {approval_id:id}} else {
+                if !row["publication"].is_null() || row["request"]["proposal"]["expires"].as_i64().is_none_or(|t|t<=super::approvals::now()) || !self.selected(cx,ids!(remote_review_room),&self.remote_review_rooms).is_some_and(|r|r["id"]==row["request"]["approvalRoom"]) {return;}
+                let approved=self.view.button(cx,ids!(remote_review_allow)).clicked(actions);
+                for r in &mut self.remote_review_requests {if r["request"]["approvalId"]==id {r["publication"]=json!({"phase":"unknown","approved":approved});}}
+                self.render_remote_reviews(cx);
+                RemoteApprovalAction::Decide {agent,room:string(&row["request"],"approvalRoom").into(),event_id:string(&row,"requestEventId").into(),request_digest:string(&row,"requestDigest").into(),approved}
+            };
+            self.run(cx,Target::RemoteVerdict,Command::RemoteApprovals {action});return;
+        }
         if self
             .view
             .drop_down(cx, ids!(approvals))
@@ -4551,6 +4749,21 @@ impl Widget for HagencyPanel {
             .is_some()
         {
             self.render_approval_details(cx);self.sync_navigation(cx);
+            return;
+        }
+        if self.view.button(cx,ids!(remote_approval_publish)).clicked(actions) || self.view.button(cx,ids!(remote_approval_refresh)).clicked(actions) || self.view.button(cx,ids!(remote_approval_observe)).clicked(actions) {
+            let Some(p)=self.selected(cx,ids!(approvals),&self.approvals) else {return;};
+            if self.busy || !self.local_agent(cx) || !self.approval_checked || self.approval_blocked.contains(string(&p,"proposalId"))
+                || !self.approval_scope(cx).is_some_and(|(a,b,r)|super::approvals::matches(&p,&a,&b,&r,super::approvals::now())) {return;}
+            let id=string(&p,"proposalId").to_owned();
+            if self.view.button(cx,ids!(remote_approval_publish)).clicked(actions) {
+                let Some(room)=self.remote_room(cx) else {return;};
+                self.local(cx,Target::RemoteApproval,LocalAction::PublishRemoteApproval {approval_id:id},Some(json!({"argsDigest":p["argsDigest"],"approvalRoom":room})));
+            } else if self.view.button(cx,ids!(remote_approval_observe)).clicked(actions) {
+                self.local(cx,Target::RemoteApprovalDecision,LocalAction::ObserveRemoteApproval {approval_id:id},Some(json!({"argsDigest":p["argsDigest"]})));
+            } else {
+                self.local(cx,Target::RemoteApproval,LocalAction::RemoteApprovalStatus {approval_id:id},None);
+            }
             return;
         }
         if self.view.button(cx, ids!(approve)).clicked(actions)
@@ -4778,11 +4991,11 @@ impl HagencyPanelRef {
             panel.agent_rooms.clear();
             panel.spaces.clear();
             panel.agents.clear(); panel.runtime_list.clear();panel.runtime_list_errors.clear();panel.runtime_list_loading=false;panel.runtime_list_request=nonce();
-            panel.devices_loaded = false; panel.current_device_id.clear(); panel.execution_devices.clear(); panel.execution_agent_record = Value::Null;
+            panel.devices_loaded = false; panel.current_device_id.clear(); panel.execution_devices.clear(); panel.execution_agent_record = Value::Null; panel.agent_crypto = Value::Null;panel.render_crypto(cx);
             panel.agents_loaded = false;
             panel.agents_loading = false;
             panel.bindings.clear();
-            panel.clear_approval_state(cx);panel.approval_blocked.clear();
+            panel.clear_approval_state(cx);panel.clear_remote_reviews(cx);panel.approval_blocked.clear();
             panel.approvals.clear();
             panel.clear_configuration(cx);panel.configuration_keys.clear();
             panel.policy = Value::Null;
@@ -5085,6 +5298,65 @@ mod tests {
             assert!(!panel.view.button(&cx,ids!(provider_logout)).visible());
         }
     }
+    #[test]
+    fn remote_approval_controls_bind_original_proposal_and_keep_unknown_non_retryable() {
+        let mut cx=Cx::new(Box::new(|_,_|{}));
+        let mut panel=cx.with_vm(|vm|{makepad_widgets::script_mod(vm);crate::app::register_widgets(vm);vm.bx.captured_errors=Some(Vec::new());let v=script_eval!(vm,{mod.widgets.HagencyPanel {}});let p=HagencyPanel::script_from_value(vm,v);assert!(vm.take_errors().is_empty());p});
+        panel.agents=vec![json!({"id":"a","executionDeviceId":"device-here","state":"active","generation":1})];
+        local_device_fixture(&mut panel,"a");
+        panel.labels(&mut cx,ids!(agents),"Select my Agent",&panel.agents,"id");
+        panel.view.drop_down(&cx,ids!(agents)).set_selected_item(&mut cx,1);
+        panel.bindings=vec![json!({"id":"binding","roomId":"!task:test"})];
+        panel.labels(&mut cx,ids!(bindings),"Select a Room binding",&panel.bindings,"id");panel.select_policy_room(&mut cx,1);
+        panel.apply_approvals(&mut cx,&json!({"approvals":[{"proposalId":"original","argsDigest":"a".repeat(64),"proposal":{"scope":{"agent":"a","binding":"binding","room":"!task:test","requester":"@owner:test"},"tool":"codex.command","arguments":{"command":"echo original"},"expires":crate::hagency::approvals::now()+300}}]}));
+        panel.view.drop_down(&cx,ids!(approvals)).set_selected_item(&mut cx,1);
+        panel.remote_approval_rooms=vec![json!({"id":"!private:test","name":"Private approvals"})];
+        panel.labels(&mut cx,ids!(remote_approval_room),"Select a private approval Room",&panel.remote_approval_rooms,"name");
+        panel.view.drop_down(&cx,ids!(remote_approval_room)).set_selected_item(&mut cx,1);
+        panel.sync_navigation(&mut cx);
+        assert!(panel.view.button(&cx,ids!(remote_approval_publish)).borrow().unwrap().enabled());
+        panel.apply(&mut cx,Target::RemoteApproval,&json!({"approvalId":"foreign","remoteApproval":{"phase":"sent","approvalRoom":"!foreign:test","requestEventId":"$foreign"}}));
+        assert!(panel.remote_approval.is_null());
+        let sent=json!({"approvalId":"original","remoteApproval":{"phase":"sent","approvalRoom":"!private:test","requestEventId":"$original"}});
+        panel.apply(&mut cx,Target::RemoteApproval,&sent);
+        assert_eq!(panel.view.label(&cx,ids!(remote_approval_details)).text(),crate::i18n::tr("Private approval published. Waiting for a verified decision."));
+        assert!(!panel.view.button(&cx,ids!(remote_approval_publish)).borrow().unwrap().enabled());
+        assert!(panel.view.button(&cx,ids!(remote_approval_observe)).borrow().unwrap().enabled());
+        let mut unknown=sent;unknown["remoteApproval"]["phase"]=json!("unknown");
+        panel.apply(&mut cx,Target::RemoteApproval,&unknown);
+        assert!(!panel.view.button(&cx,ids!(remote_approval_publish)).borrow().unwrap().enabled());
+        assert!(!panel.view.button(&cx,ids!(remote_approval_observe)).borrow().unwrap().enabled());
+        assert!(panel.view.button(&cx,ids!(remote_approval_refresh)).borrow().unwrap().enabled());
+        assert!(panel.view.button(&cx,ids!(reject)).borrow().unwrap().enabled());
+        panel.approvals[0]["proposal"]["expires"]=json!(0);panel.sync_navigation(&mut cx);
+        assert!(!panel.view.button(&cx,ids!(remote_approval_refresh)).borrow().unwrap().enabled());
+        panel.clear_approval_state(&mut cx);assert!(panel.remote_approval.is_null());
+        assert_eq!(panel.view.drop_down(&cx,ids!(remote_approval_room)).selected_item(),0);
+    }
+
+    #[test]
+    fn remote_reviewer_ui_shows_complete_action_on_other_device_and_never_rearms_unknown() {
+        let mut cx=Cx::new(Box::new(|_,_|{}));
+        let mut panel=cx.with_vm(|vm|{makepad_widgets::script_mod(vm);crate::app::register_widgets(vm);vm.bx.captured_errors=Some(Vec::new());let v=script_eval!(vm,{mod.widgets.HagencyPanel {}});let p=HagencyPanel::script_from_value(vm,v);assert!(vm.take_errors().is_empty());p});
+        panel.agents=vec![json!({"id":"a","executionDeviceId":"other-device","state":"active","generation":1})];
+        local_device_fixture(&mut panel,"a");panel.execution_agent_record["executionDeviceId"]=json!("other-device");
+        panel.labels(&mut cx,ids!(agents),"Select my Agent",&panel.agents,"id");panel.view.drop_down(&cx,ids!(agents)).set_selected_item(&mut cx,1);
+        panel.remote_review_rooms=vec![json!({"id":"!private:test","name":"Private approvals"})];
+        panel.labels(&mut cx,ids!(remote_review_room),"Select a private approval Room",&panel.remote_review_rooms,"name");panel.view.drop_down(&cx,ids!(remote_review_room)).set_selected_item(&mut cx,1);
+        let command=format!("{} exact final bytes","x".repeat(20000));
+        let row=json!({"requestEventId":"$original","requestDigest":"a".repeat(64),"request":{"approvalId":"a".repeat(64),"approvalRoom":"!private:test","proposalDigest":"b".repeat(64),"proposal":{"scope":{"agent":"a","binding":"b","room":"!task:test","requester":"@owner:test"},"tool":"codex.command","arguments":{"command":command},"expires":super::super::approvals::now()+300}},"publication":null});
+        panel.apply(&mut cx,Target::RemoteInbox,&json!({"agentId":"foreign","roomId":"!private:test","requests":[row.clone()]}));assert!(panel.remote_review_requests.is_empty());
+        panel.apply(&mut cx,Target::RemoteInbox,&json!({"agentId":"a","roomId":"!private:test","requests":[row],"nextBatch":"older"}));
+        panel.view.drop_down(&cx,ids!(remote_review_requests)).set_selected_item(&mut cx,1);panel.render_remote_reviews(&mut cx);panel.sync_navigation(&mut cx);
+        assert!(panel.view.button(&cx,ids!(remote_review_allow)).borrow().unwrap().enabled());
+        assert!(panel.view.button(&cx,ids!(remote_review_deny)).borrow().unwrap().enabled());
+        assert!(panel.view.label(&cx,ids!(remote_review_details)).text().contains(&command));
+        panel.apply(&mut cx,Target::RemoteVerdict,&json!({"approvalId":"a".repeat(64),"publication":{"phase":"unknown","approved":true}}));
+        assert!(!panel.view.button(&cx,ids!(remote_review_allow)).borrow().unwrap().enabled());assert!(!panel.view.button(&cx,ids!(remote_review_deny)).borrow().unwrap().enabled());
+        assert!(panel.view.button(&cx,ids!(remote_review_receipt)).borrow().unwrap().enabled());assert!(panel.view.button(&cx,ids!(remote_review_copy)).borrow().unwrap().enabled());
+        panel.clear_remote_reviews(&mut cx);panel.sync_navigation(&mut cx);assert!(panel.remote_review_requests.is_empty());assert!(!panel.view.button(&cx,ids!(remote_review_allow)).borrow().unwrap().enabled());
+    }
+
     #[test]
     fn approval_widget_filters_rooms_keeps_selection_and_disables_stale_decisions() {
         let mut cx=Cx::new(Box::new(|_,_|{}));

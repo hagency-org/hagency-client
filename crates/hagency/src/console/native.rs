@@ -1,7 +1,14 @@
 //! Token-free native commands routed through the existing authenticated service.
+mod agent_crypto;
 mod configuration;
 mod ledger;
+mod remote_reviews;
+pub use agent_crypto::{
+    AgentCryptoAction, AgentCryptoAuthority, AgentCryptoContext, AgentCryptoIdentity,
+    AgentCryptoPreparation, AgentCryptoTransport, DecryptedAgentCiphertext, DecryptedAgentEvent,
+};
 pub use ledger::LedgerAction;
+pub use remote_reviews::RemoteApprovalAction;
 mod history;
 mod speech;
 mod usage;
@@ -66,6 +73,126 @@ pub struct ContinuationMessage {
 pub use hagency_agent_local::attachments::Attachment as AgentAttachment;
 pub const MAX_AGENT_FILE_BYTES: usize = hagency_agent_local::received_files::MAX_BYTES;
 pub trait MatrixTokenSource: Send + Sync {
+    /// Observe or explicitly sign the exact prepared Agent identity using the
+    /// current owner's actual Matrix SDK. The boolean is presentation only.
+    fn agent_crypto_owner_trust(
+        &self,
+        _identity: AgentCryptoIdentity,
+        _authority: AgentCryptoAuthority,
+        verify: bool,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool, NativeError>> + Send + '_>>
+    {
+        Box::pin(async move {
+            if verify {
+                Err(failure(503, "agent_crypto_owner_verification_unavailable"))
+            } else {
+                Ok(false)
+            }
+        })
+    }
+    fn supports_agent_crypto(&self) -> bool {
+        false
+    }
+    fn prepare_agent_crypto(&self, _context: AgentCryptoContext) -> AgentCryptoPreparation<'_> {
+        Box::pin(async { Err(failure(503, "agent_crypto_transport_unavailable")) })
+    }
+    fn list_remote_requests<'a>(
+        &'a self,
+        _room: &'a str,
+        _cursor: Option<&'a str>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        hagency_agent_local::remote_approval::review::RequestPage,
+                        NativeError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async { Err(failure(503, "remote_approval_transport_unavailable")) })
+    }
+    fn inspect_remote_request<'a>(
+        &'a self,
+        _room: &'a str,
+        _event: &'a str,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        hagency_agent_local::remote_approval::review::ObservedRequest,
+                        NativeError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async { Err(failure(503, "remote_approval_transport_unavailable")) })
+    }
+    fn publish_remote_verdict(
+        &self,
+        _permit: hagency_agent_local::remote_approval::review::VerdictSendPermit,
+        _live: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, NativeError>> + Send + '_>>
+    {
+        Box::pin(async { Err(failure(503, "remote_approval_transport_unavailable")) })
+    }
+    fn supports_remote_approvals(&self) -> bool {
+        false
+    }
+    fn prepare_remote_approval<'a>(
+        &'a self,
+        _room: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, NativeError>> + Send + 'a>>
+    {
+        Box::pin(async { Err(failure(503, "remote_approval_transport_unavailable")) })
+    }
+    fn publish_remote_approval(
+        &self,
+        _permit: hagency_agent_local::remote_approval::SendPermit,
+        _live: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, NativeError>> + Send + '_>>
+    {
+        Box::pin(async { Err(failure(503, "remote_approval_transport_unavailable")) })
+    }
+    fn observe_remote_approval<'a>(
+        &'a self,
+        _publication: &'a hagency_agent_local::remote_approval::Publication,
+        _request_event: &'a str,
+        _verdict_event: &'a str,
+        _live: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        hagency_agent_local::remote_approval::ObservedVerdict,
+                        NativeError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async { Err(failure(503, "remote_approval_transport_unavailable")) })
+    }
+    fn find_remote_approval<'a>(
+        &'a self,
+        _publication: &'a hagency_agent_local::remote_approval::Publication,
+        _request_event: &'a str,
+        _live: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        hagency_agent_local::remote_approval::ObservedVerdict,
+                        NativeError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async { Err(failure(503, "remote_approval_transport_unavailable")) })
+    }
     fn supports_agent_file_receive(&self) -> bool {
         false
     }
@@ -148,6 +275,9 @@ pub enum LocalAction {
     AgentServiceStatus,
     Approvals,
     Decision { approval_id: String },
+    PublishRemoteApproval { approval_id: String },
+    ObserveRemoteApproval { approval_id: String },
+    RemoteApprovalStatus { approval_id: String },
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -191,6 +321,12 @@ impl<'de> Deserialize<'de> for RoomCreationPolicy {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Command {
+    AgentCrypto {
+        action: AgentCryptoAction,
+    },
+    RemoteApprovals {
+        action: RemoteApprovalAction,
+    },
     AgentHistory {
         action: HistoryAction,
     },
@@ -346,7 +482,10 @@ impl Command {
     pub fn continues_running_task(&self) -> bool {
         matches!(
             self,
-            Self::Projects
+            Self::AgentCrypto {
+                action: AgentCryptoAction::Status { .. } | AgentCryptoAction::Stop { .. }
+            } | Self::Projects
+                | Self::RemoteApprovals { .. }
                 | Self::ProjectRooms { .. }
                 | Self::Agents
                 | Self::Bindings { .. }
@@ -360,12 +499,14 @@ impl Command {
                         | LocalAction::AgentModel
                         | LocalAction::AgentPolicy
                         | LocalAction::Policy
-                        | LocalAction::Model,
+                        | LocalAction::Model
+                        | LocalAction::RemoteApprovalStatus { .. },
                     input: None,
                     ..
                 }
                 | Self::Local {
-                    action: LocalAction::Decision { .. },
+                    action: LocalAction::Decision { .. }
+                        | LocalAction::ObserveRemoteApproval { .. },
                     ..
                 }
         )
@@ -428,6 +569,8 @@ fn request(command: Command) -> Result<(&'static str, String, Option<Value>), Na
         | Command::ExecutionEnvironment { .. }
         | Command::AgentConfiguration { .. }
         | Command::Ledger { .. }
+        | Command::RemoteApprovals { .. }
+        | Command::AgentCrypto { .. }
         | Command::AgentUsage { .. }
         | Command::AgentHistory { .. } => {
             return Err(failure(400, "configuration_operation_unsupported"));
@@ -747,6 +890,21 @@ fn request(command: Command) -> Result<(&'static str, String, Option<Value>), Na
                 LocalAction::StopAgentService => ("POST", "runtime/service/stop".into()),
                 LocalAction::AgentServiceStatus => ("GET", "runtime/service".into()),
                 LocalAction::Approvals => ("GET", "runtime/approvals".into()),
+                LocalAction::PublishRemoteApproval { approval_id } => {
+                    key(&approval_id)?;
+                    ("POST", format!("runtime/approvals/{approval_id}/remote"))
+                }
+                LocalAction::ObserveRemoteApproval { approval_id } => {
+                    key(&approval_id)?;
+                    (
+                        "POST",
+                        format!("runtime/approvals/{approval_id}/remote-verdict"),
+                    )
+                }
+                LocalAction::RemoteApprovalStatus { approval_id } => {
+                    key(&approval_id)?;
+                    ("GET", format!("runtime/approvals/{approval_id}/remote"))
+                }
                 LocalAction::Decision { approval_id } => {
                     key(&approval_id)?;
                     ("POST", format!("runtime/approvals/{approval_id}/decision"))
@@ -769,7 +927,7 @@ fn request(command: Command) -> Result<(&'static str, String, Option<Value>), Na
     };
     Ok((method, path, body))
 }
-struct Inner {
+pub(super) struct Inner {
     host: OwnerHost,
     service: salvo::Service,
     address: SocketAddr,
@@ -781,6 +939,8 @@ struct Inner {
     matrix_sync: Mutex<()>,
     configuration_stopped: std::sync::atomic::AtomicBool,
     configuration_tasks: StdMutex<Vec<tokio::task::JoinHandle<()>>>,
+    review_tasks: StdMutex<Vec<tokio::task::JoinHandle<()>>>,
+    crypto: agent_crypto::Registry,
     callback_task: StdMutex<Option<tokio::task::JoinHandle<()>>>,
     matrix_source: StdMutex<Option<Arc<dyn MatrixTokenSource>>>,
     shutdown: std::sync::OnceLock<crate::shutdown::Task>,
@@ -788,6 +948,12 @@ struct Inner {
 impl Drop for Inner {
     fn drop(&mut self) {
         self.host.console.retire();
+        self.crypto.retire();
+        if let Ok(tasks) = self.review_tasks.get_mut() {
+            for task in tasks.drain(..) {
+                task.abort();
+            }
+        }
         if let Ok(tasks) = self.configuration_tasks.get_mut() {
             for task in tasks.drain(..) {
                 task.abort();
@@ -803,7 +969,7 @@ impl Drop for Inner {
 /// A native owner service. Neither credentials nor its private local grants are
 /// returned in command responses. Only the OAuth callback listens on loopback.
 #[derive(Clone)]
-pub struct NativeOwner(Arc<Inner>);
+pub struct NativeOwner(pub(super) Arc<Inner>);
 impl NativeOwner {
     pub async fn open(state: &Path, origin: &str, owner: &str) -> Result<Self, NativeError> {
         Self::open_inner(state, origin, owner, true).await
@@ -874,6 +1040,8 @@ impl NativeOwner {
             matrix_sync: Mutex::new(()),
             configuration_stopped: std::sync::atomic::AtomicBool::new(false),
             configuration_tasks: StdMutex::new(Vec::new()),
+            review_tasks: StdMutex::new(Vec::new()),
+            crypto: Default::default(),
             callback_task: StdMutex::new(None),
             matrix_source: StdMutex::new(None),
             shutdown: std::sync::OnceLock::new(),
@@ -886,6 +1054,13 @@ impl NativeOwner {
         });
         *native.0.callback_task.lock().unwrap() = Some(task);
         // Consume any bootstrap response without exposing a grant to the caller.
+        let _ = native
+            .0
+            .host
+            .console
+            .0
+            .native_owner
+            .set(Arc::downgrade(&native.0));
         let _ = grant.take_json::<Value>().await;
         if start_worker {
             configuration::start(&native);
@@ -1004,8 +1179,30 @@ impl NativeOwner {
             owner: d.owner_mxid().into(),
         })
     }
+    /// In-process execution-host capability; never a native command response.
+    /// Retained snapshots share retirement and expiry checks with this owner.
+    pub async fn authorized_execution_device(
+        &self,
+    ) -> Result<super::AuthorizedDevice, NativeError> {
+        let device = self
+            .0
+            .host
+            .console
+            .authorized_device()
+            .await
+            .map_err(|_| failure(401, "owner_authorization_required"))?;
+        if device.origin() != self.0.expected_origin || device.owner_mxid() != self.0.expected_owner
+        {
+            return Err(failure(401, "matrix_account_mismatch"));
+        }
+        device
+            .bearer()
+            .map_err(|_| failure(401, "owner_authorization_required"))?;
+        Ok(device)
+    }
     pub fn retire(&self) {
         self.0.host.console.retire();
+        self.0.crypto.retire();
         self.0
             .configuration_stopped
             .store(true, std::sync::atomic::Ordering::Release);
@@ -1036,6 +1233,16 @@ impl NativeOwner {
         // Fence capabilities synchronously before any awaited cleanup, including
         // a late OAuth exchange or an in-flight runtime/provider launch.
         self.retire();
+        let crypto_result = self.0.crypto.shutdown().await;
+        let (reviews, mut review_result) = match self.0.review_tasks.lock() {
+            Ok(mut tasks) => (std::mem::take(&mut *tasks), Ok(())),
+            Err(_) => (Vec::new(), Err(crate::shutdown::Error::Worker)),
+        };
+        for task in reviews {
+            if task.await.is_err() {
+                review_result = Err(crate::shutdown::Error::Worker);
+            }
+        }
         let (tasks, mut result) = match self.0.configuration_tasks.lock() {
             Ok(mut tasks) => (std::mem::take(&mut *tasks), Ok(())),
             Err(_) => (Vec::new(), Err(crate::shutdown::Error::Worker)),
@@ -1063,6 +1270,8 @@ impl NativeOwner {
             }
         }
         result
+            .and(review_result)
+            .and(crypto_result)
             .and(stopped)
             .and(login.persist_revocations_for_update().await)
     }
@@ -1211,6 +1420,18 @@ impl NativeOwner {
             self.check_matrix_source().await?;
             return result;
         }
+        if let Command::RemoteApprovals { action } = command {
+            self.check_matrix_source().await?;
+            let result = remote_reviews::execute(self, action).await;
+            self.check_matrix_source().await?;
+            return result;
+        }
+        if let Command::AgentCrypto { action } = command {
+            self.check_matrix_source().await?;
+            let result = agent_crypto::execute(self, action).await;
+            self.check_matrix_source().await?;
+            return result;
+        }
         if let Command::AgentUsage { action } = command {
             self.check_matrix_source().await?;
             let result = usage::execute(self, action).await;
@@ -1223,6 +1444,7 @@ impl NativeOwner {
             self.check_matrix_source().await?;
             return result;
         }
+        let crypto_command = command.clone();
         let (method, path, body) = request(command)?;
         let cookie = self.0.cookie.lock().await.clone();
         let mut response = self.call(method, &path, body, &cookie).await;
@@ -1239,7 +1461,10 @@ impl NativeOwner {
         {
             *self.0.cookie.lock().await = cookie;
         }
-        let result = read_response(&mut response).await;
+        let mut result = read_response(&mut response).await;
+        if let Ok(value) = &mut result {
+            agent_crypto::automatic(self, &crypto_command, value).await;
+        }
         if matrix_managed && path != "/console/server-login/logout" {
             self.check_matrix_source().await?;
         }

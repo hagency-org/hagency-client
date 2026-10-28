@@ -88,6 +88,11 @@ jobs:
       - run: node tools/native/check-rust-spec-bindings.mjs
       - run: node --test tools/native/check-production-callers.test.mjs tools/native/check-spec-bindings.test.mjs
       - run: node tools/native/check-production-callers.mjs --spec native-owner-client.spec.md
+      - name: Run execution fixtures with independent host resources
+        # Each case owns a real child and strict database/lease clocks. Run
+        # independent cases serially; concurrency and fault gates inside each
+        # case, every deadline and every assertion remain unchanged.
+        run: cargo test --locked -p hagency-execution --all-targets --no-fail-fast -- --skip native_codex_real_app_server --skip native_two_agent_qualification_records_its_evidence --test-threads=1
       - id: native-tests
         # ADR-144's operator-run qualification test fails (never skips inside
         # a test) while its evidence record is a placeholder — by design.
@@ -99,17 +104,10 @@ jobs:
         # qualified host per the ADR-144 runbook. The codex qualification
         # skip (ADR-140, native_codex_real_app_server) is the same class and
         # rides the same line; both stay present for the --list inventory.
-        shell: bash
-        run: |
-          # The 31s positive fixture owns its Windows process/database workload
-          # for this run. Its two-second writer bound and every assertion stay
-          # unchanged; failure is fatal and the case is not retried below.
-          separate=()
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            cargo test --locked -p hagency-execution --test owned idle::native_owned_turn_long_lifetime -- --exact --test-threads=1
-            separate=(--skip idle::native_owned_turn_long_lifetime)
-          fi
-          cargo test -p hagency -p hagency-agent-local -p hagency-core -p hagency-crypto-proof -p hagency-execution -p hagency-files -p hagency-matrix -p hagency-matrix-format -p hagency-media -p hagency-media-store -p hagency-metering -p hagency-palpo -p hagency-permissions -p hagency-platform -p hagency-progress -p hagency-progress-runtime -p hagency-runtime -p hagency-store --all-targets --locked --no-fail-fast -- --skip native_codex_real_app_server --skip native_two_agent_qualification_records_its_evidence "${separate[@]}"
+        # Execution ran once above. Keep other workspace tests running after
+        # its failure for diagnostics; its failed verdict stays fatal.
+        if: ${{ !cancelled() }}
+        run: cargo test -p hagency -p hagency-agent-local -p hagency-core -p hagency-crypto-proof -p hagency-files -p hagency-matrix -p hagency-matrix-format -p hagency-media -p hagency-media-store -p hagency-metering -p hagency-palpo -p hagency-permissions -p hagency-platform -p hagency-progress -p hagency-progress-runtime -p hagency-runtime -p hagency-store --all-targets --locked --no-fail-fast -- --skip native_codex_real_app_server --skip native_two_agent_qualification_records_its_evidence
       - name: Qualify default Windows media storage with fresh process restoration
         if: ${{ !cancelled() && runner.os == 'Windows' }}
         shell: pwsh

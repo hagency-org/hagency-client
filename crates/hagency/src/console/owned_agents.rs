@@ -1206,6 +1206,87 @@ async fn call(req: &mut Request, depot: &Depot) -> Result<Value, OwnerError> {
             }
             if parts.len() == 5
                 && parts[2] == "approvals"
+                && ["remote", "remote-verdict"].contains(&parts[4])
+            {
+                key(parts[3])?;
+                if method == Method::GET && parts[4] == "remote" {
+                    let status = host
+                        .0
+                        .owned_runtime
+                        .remote_status(host, &agent, parts[3])
+                        .await
+                        .map_err(runtime_error)?;
+                    return Ok(json!({"approvalId":parts[3],"remoteApproval":status}));
+                }
+                if method != Method::POST {
+                    return Err(error(405, "method_not_allowed"));
+                }
+                require_execution_device(req, depot, &agent).await?;
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                struct Publish {
+                    args_digest: String,
+                    approval_room: String,
+                }
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                struct Observe {
+                    args_digest: String,
+                    verdict_event_id: Option<String>,
+                }
+                let cookie = cookie(req)
+                    .map_err(|_| error(401, "sign_in_required"))?
+                    .to_owned();
+                if parts[4] == "remote" {
+                    let input: Publish = parse(req).await?;
+                    if input.args_digest.len() != 64
+                        || !input.args_digest.bytes().all(|c| c.is_ascii_hexdigit())
+                        || input.approval_room.len() > 512
+                        || !input.approval_room.starts_with('!')
+                    {
+                        return Err(error(400, "invalid_arguments"));
+                    }
+                    let status = host
+                        .0
+                        .owned_runtime
+                        .publish_remote(
+                            host,
+                            &cookie,
+                            &agent,
+                            parts[3],
+                            &input.args_digest,
+                            &input.approval_room,
+                        )
+                        .await
+                        .map_err(runtime_error)?;
+                    return Ok(json!({"approvalId":parts[3],"remoteApproval":status}));
+                }
+                let input: Observe = parse(req).await?;
+                if input.args_digest.len() != 64
+                    || !input.args_digest.bytes().all(|c| c.is_ascii_hexdigit())
+                    || input
+                        .verdict_event_id
+                        .as_ref()
+                        .is_some_and(|event| event.len() > 255 || !event.starts_with('$'))
+                {
+                    return Err(error(400, "invalid_arguments"));
+                }
+                host.0
+                    .owned_runtime
+                    .observe_remote(
+                        host,
+                        &cookie,
+                        &agent,
+                        parts[3],
+                        &input.args_digest,
+                        input.verdict_event_id.as_deref(),
+                    )
+                    .await
+                    .map_err(runtime_error)?;
+                return Ok(json!({"approvalId":parts[3],"decided":true}));
+            }
+            if parts.len() == 5
+                && parts[2] == "approvals"
                 && parts[4] == "decision"
                 && method == Method::POST
             {

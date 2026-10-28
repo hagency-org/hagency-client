@@ -71,3 +71,28 @@ validation report for exact commands, original failures and remaining gates.
   User identities still require their server suffix and path injection stays refused.
   Test: version12_rooms_keep_exact_identity_and_reject_truncated_or_foreign_sigil
   Test: version12_native_room_routes_encode_the_original_hash_without_weakening_path_checks
+
+## Encrypted input durable admission
+
+- Actual host SDK plaintext and original AS ciphertext commit atomically before
+  metadata ACK. Ordinary execution APIs cannot start these requests.
+  Test: encrypted_input_commit_binds_plaintext_locally_and_keeps_history_ciphertext_only
+  Test: encrypted_input_invalid_body_or_capacity_rolls_back_both_records
+  Test: encrypted_input_snapshot_retains_both_digests_without_minting_execution
+  Test: encrypted_input_legacy_snapshot_adds_no_crypto_claim_and_partial_schema_refuses
+  Test: encrypted_input_same_sealed_message_under_a_new_event_id_never_becomes_new_work
+- Typed encrypted admission sends metadata only, retains original source/dispatch
+  and checks host retirement before any authority or HTTP work.
+  Test: encrypted_admission_wire_never_sends_plaintext_and_cannot_substitute_source_or_mode
+  Test: encrypted_device_retirement_fence_rejects_before_authority_or_http_setup
+
+Real Synapse qualification lives in agent_encrypted_inbox_qualification. It uses
+normal Agent creation, actual owner SDK ciphertext and current Server AS custody.
+Its successful ACK is not a model/tool start, encrypted reply or file qualification.
+
+- Encrypted file history reads only the original ciphertext publication after
+  execution ends, without a lease acquisition, plaintext file lookup or resend.
+  Missing publication is not final absence; changed identities and SDK loss
+  cannot commit a late receipt. Historical unknown audit evidence is retained.
+  Test-Platforms: [linux, macos]
+  Test: native_owner_encrypted_file_history_reads_late_receipt_without_lease_or_plaintext_lookup

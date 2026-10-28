@@ -10,6 +10,10 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+pub mod ciphertexts;
+pub mod encrypted;
+pub use ciphertexts::Ciphertext;
+
 const MAX_WIRE_BYTES: usize = 131_072;
 const MAX_TEXT_BYTES: usize = 65_536;
 // Up to 100 events with 64KiB text each, worst-case six-byte JSON escaping.
@@ -357,6 +361,29 @@ pub enum DeviceOperation {
     Release {
         lease: LeaseRef,
     },
+    PrepareCiphertext {
+        lease: LeaseRef,
+        expected: Ciphertext,
+        projection: encrypted::Projection,
+    },
+    AckCiphertext {
+        lease: LeaseRef,
+        expected: Ciphertext,
+        prepared: Box<encrypted::Admission>,
+    },
+    CiphertextAdmission {
+        lease: LeaseRef,
+        expected: Ciphertext,
+    },
+    PollCiphertexts {
+        lease: LeaseRef,
+        binding_id: String,
+        limit: usize,
+    },
+    ReadCiphertext {
+        lease: LeaseRef,
+        inbox_id: String,
+    },
     Poll {
         lease: LeaseRef,
         binding_id: String,
@@ -417,6 +444,9 @@ pub enum DeviceResponse {
     Lease(Lease),
     Released,
     Events(Vec<Dispatch>),
+    Ciphertexts(Vec<Ciphertext>),
+    EncryptedAdmission(encrypted::Admission),
+    Ciphertext(Ciphertext),
     Attachments(ExecutionAttachments),
     Acknowledged,
     Started(ExecutionStart),
@@ -437,6 +467,11 @@ impl DeviceOperation {
             | Self::QueueFile { lease, .. }
             | Self::Renew { lease, .. }
             | Self::Release { lease }
+            | Self::PrepareCiphertext { lease, .. }
+            | Self::AckCiphertext { lease, .. }
+            | Self::CiphertextAdmission { lease, .. }
+            | Self::PollCiphertexts { lease, .. }
+            | Self::ReadCiphertext { lease, .. }
             | Self::Poll { lease, .. }
             | Self::PollFiles { lease, .. }
             | Self::Attachments { lease, .. }
@@ -454,6 +489,55 @@ impl DeviceOperation {
             lease.validate()?;
         }
         let (path, body) = match self {
+            Self::PrepareCiphertext {
+                lease,
+                expected,
+                projection,
+            } => {
+                expected.validate(lease)?;
+                projection.validate()?;
+                (
+                    "ciphertexts/prepare",
+                    json!({"lease":lease,"inboxId":expected.id,"sourceDigest":expected.source_digest,"projection":projection}),
+                )
+            }
+            Self::AckCiphertext {
+                lease, expected, ..
+            }
+            | Self::CiphertextAdmission { lease, expected } => {
+                expected.validate(lease)?;
+                (
+                    if matches!(self, Self::AckCiphertext { .. }) {
+                        "ciphertexts/ack"
+                    } else {
+                        "ciphertexts/admission"
+                    },
+                    json!({"lease":lease,"inboxId":expected.id,"sourceDigest":expected.source_digest}),
+                )
+            }
+
+            Self::PollCiphertexts {
+                lease,
+                binding_id,
+                limit,
+            } => {
+                id(binding_id)?;
+                if *limit == 0 || *limit > 4 {
+                    return Err(error(400, "invalid_poll_limit"));
+                }
+                (
+                    "ciphertexts/poll",
+                    json!({"lease":lease,"bindingId":binding_id,"limit":limit}),
+                )
+            }
+            Self::ReadCiphertext { lease, inbox_id } => {
+                id(inbox_id)?;
+                (
+                    "ciphertexts/read",
+                    json!({"lease":lease,"inboxId":inbox_id}),
+                )
+            }
+
             Self::PrepareFile {
                 lease,
                 dispatch_id,
@@ -920,6 +1004,58 @@ fn parse_response(
             }
             Ok(DeviceResponse::Lease(lease))
         }
+        DeviceOperation::PrepareCiphertext {
+            lease,
+            expected,
+            projection,
+        } => {
+            let result: encrypted::Admission = decode(&value, "admission")?;
+            result.check(expected, lease, device, Some(projection))?;
+            Ok(DeviceResponse::EncryptedAdmission(result))
+        }
+        DeviceOperation::AckCiphertext {
+            lease,
+            expected,
+            prepared,
+        } => {
+            let result: encrypted::Admission = decode(&value, "admission")?;
+            result.check(expected, lease, device, None)?;
+            if !result.same_input(prepared) || result.dispatch.state != "encrypted_acknowledged" {
+                return Err(invalid());
+            }
+            Ok(DeviceResponse::EncryptedAdmission(result))
+        }
+        DeviceOperation::CiphertextAdmission { lease, expected } => {
+            let result: encrypted::Admission = decode(&value, "admission")?;
+            result.check(expected, lease, device, None)?;
+            Ok(DeviceResponse::EncryptedAdmission(result))
+        }
+        DeviceOperation::PollCiphertexts {
+            lease,
+            binding_id,
+            limit,
+        } => {
+            let events: Vec<Ciphertext> = decode(&value, "ciphertexts")?;
+            if events.len() > *limit {
+                return Err(invalid());
+            }
+            let mut ids = std::collections::BTreeSet::new();
+            for event in &events {
+                event.validate(lease)?;
+                if event.binding_id != *binding_id || !ids.insert(&event.id) {
+                    return Err(invalid());
+                }
+            }
+            Ok(DeviceResponse::Ciphertexts(events))
+        }
+        DeviceOperation::ReadCiphertext { lease, inbox_id } => {
+            let event: Ciphertext = decode(&value, "ciphertext")?;
+            event.validate(lease)?;
+            if event.id != *inbox_id {
+                return Err(invalid());
+            }
+            Ok(DeviceResponse::Ciphertext(event))
+        }
         DeviceOperation::Poll {
             lease,
             binding_id,
@@ -1051,21 +1187,35 @@ impl Console {
         &self,
         operation: DeviceOperation,
     ) -> Result<DeviceResponse, DeviceError> {
-        self.execution_api_inner(operation, None).await
+        self.execution_api_inner(operation, None, None).await
     }
     pub(super) async fn execution_api_pinned(
         &self,
         operation: DeviceOperation,
         expected: &DeviceIdentity,
     ) -> Result<DeviceResponse, DeviceError> {
-        self.execution_api_inner(operation, Some(expected)).await
+        self.execution_api_inner(operation, Some(expected), None)
+            .await
+    }
+    pub(super) async fn execution_api_pinned_live(
+        &self,
+        operation: DeviceOperation,
+        expected: &DeviceIdentity,
+        live: std::sync::Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> Result<DeviceResponse, DeviceError> {
+        self.execution_api_inner(operation, Some(expected), Some(live))
+            .await
     }
     async fn execution_api_inner(
         &self,
         operation: DeviceOperation,
         expected: Option<&DeviceIdentity>,
+        live: Option<std::sync::Arc<dyn Fn() -> bool + Send + Sync>>,
     ) -> Result<DeviceResponse, DeviceError> {
         let (path, body) = operation.request()?;
+        if live.as_ref().is_some_and(|f| !f()) {
+            return Err(error(409, "agent_crypto_scope_retired"));
+        }
         let device = self.authorized_device().await.map_err(|e| {
             if matches!(e, super::Error::Unavailable) {
                 error(503, "server_unavailable")
@@ -1082,7 +1232,7 @@ impl Console {
         let bearer = device
             .bearer()
             .map_err(|_| error(401, "device_authorization_required"))?;
-        let mut response = client
+        let request = client
             .post(
                 server
                     .join(&format!("/hagency/api/v1/execution/{path}"))
@@ -1090,7 +1240,11 @@ impl Console {
             )
             .bearer_auth(bearer)
             .header("content-type", "application/json")
-            .body(body)
+            .body(body);
+        if live.as_ref().is_some_and(|f| !f()) {
+            return Err(error(409, "agent_crypto_scope_retired"));
+        }
+        let mut response = request
             .send()
             .await
             .map_err(|_| error(503, "server_unavailable"))?;

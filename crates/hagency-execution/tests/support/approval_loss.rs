@@ -323,7 +323,12 @@ async fn choose(domain: &DomainStore, id: String) {
             choice: ApprovalChoice::Once,
         })
         .await
-        .unwrap();
+        .unwrap_or_else(|error| {
+            panic!(
+                "original owner verdict failed: {error:?}; domain_last_unknown_dequeued={:?}",
+                domain.last_unknown_dequeued()
+            )
+        });
 }
 #[tokio::test]
 async fn native_owned_approval_barriers_pending_receipt() {
@@ -467,10 +472,25 @@ async fn native_owned_approval_usage_successful_control() {
     )
     .unwrap();
     let mut notices = op.take_approval_requests().unwrap();
-    let first = tokio::time::timeout(harness_wait() * 3, notices.recv())
-        .await
-        .unwrap()
-        .unwrap();
+    let first = match tokio::time::timeout(harness_wait() * 3, notices.recv()).await {
+        Ok(Some(notice)) => notice,
+        Ok(None) => {
+            let report = op.wait().await.unwrap();
+            panic!(
+                "original usage-control notice stream closed: failure={:?}, startup={:?}, protocol={:?}, cleanup={:?}, runtime={:?}, domain_last_unknown_dequeued={:?}",
+                report.failure,
+                report.startup_error(),
+                report.protocol,
+                report.cleanup,
+                report.runtime_observation(),
+                domain.last_unknown_dequeued()
+            );
+        }
+        Err(error) => panic!(
+            "original usage-control notice deadline: {error:?}; domain_last_unknown_dequeued={:?}",
+            domain.last_unknown_dequeued()
+        ),
+    };
     choose(&domain, first.request_id).await;
     let end = tokio::time::Instant::now() + harness_wait();
     while !gate.entered.load(Ordering::Acquire) {

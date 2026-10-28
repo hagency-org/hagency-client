@@ -14462,3 +14462,616 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 - Added marker origin/type negative regression, actual SDK example and shared qualification runner, private Synapse setup script and detailed report. Production OAuth, manual desktop, Windows file tools, A4/A3 and earlier gates remain; goal stays active.
 
 - Final local proof: App620/2 original ignores; completion-origin regression1; current core/App strict default-feature all-targets Clippy, core format/spelling,46 guards, one caller and1163 selector bindings pass with no missing/deferred/platform gaps. Server110 and strict/contract checks pass. Real3 original-state verification exits0; original driver401 stays failed. New-head remote validation remains distinct from previous bbab2f1e fast CI40418585682/Servercab1ae1 CI40418520999 successes and still-live full40418590223.
+
+## 2026-10-27: Native owner remote approval evidence stage
+
+- Prior goal turn made concrete progress: Client0f7a5a7c/Server5d21eb7 pushed; current source fetched latest main and branched codex/remote-owner-approvals from0f7a5a7c. Server5d CI40421451268 and Client0f fast40421483397/spelling passed. Old bbab full40418590223 completed with all three actual platform jobs success. New0f full40423919137 is live;0f App arm success/intel still live.
+- Added current owner remote request/verdict journal, original Ledger-instance non-Clone publication custody, original execution/device/epoch/policy fences, atomic decision/audit and8MiB/4096/32KiB bounds. Another handle/reopen/restore cannot use the original custody. Decisions never mint tool approvals or signal a provider.
+- SDK read adapter uses bounded current private encrypted-room state, actual SDK decrypt, Verified metadata, fresh verified identity/cross-signed device/key comparison and exact original reply/digest. Source observations are host-only, not Deserialize. Guard tests use explicit SDK metadata fixtures, not live cryptographic qualification. No publication/runtime/UI activation yet.
+- Actual writer-lock race first failed, then passed after post-lock execution/policy/expiry checks. Old snapshot fixtures had to remove new empty metadata to reconstruct exact published schema; production allowlist remains exact, original histories retained. Preserve first compile, method/signature, SQL-column, fixture-schema and guard failures in logs.
+- Agent-local155/3 original ignores; engine263/9 (7 original+2 external); App622/2 original ignores pass. Current core/App strict default all-targets Clippy passed. Binding/static final results are recorded before push. Full A4 still requires private publication, current PendingApproval/UI, actual verified two-device gate, per-Agent crypto identity and encrypted tasks/DM/files; A3 and earlier gates remain, goal active.
+
+- Final review samples the supplied actual host clock after the real SQLite writer wait; dedicated clock-jump/expiry regression passes without extending the original deadline. Receipt/proof timestamps cannot predate the original publication. Final155 core tests, current strict Clippy and1176 bindings/46 guards/one caller/format/spelling pass. App622 and engine263 completed; final targeted SDK2 also passed. The A4 source is not activated in runtime/UI, and synthetic SDK metadata is not a live verified-device pass.
+- A2 base0f7a5a7c App40421487611 completed successfully on both macOS architectures plus article job; fast CI40421483397 and Server5d21eb7 CI40421451268 succeeded. Base full40423919137 remains separately live; these runs do not qualify the new remote-approval branch.
+
+## 2026-10-27: Required encryption and single-use publication transport
+
+- Fetched origin/main again before work;42e59b9e remains an ancestor of the clean
+  codex/remote-owner-approvals branch. No main edits. The next published change
+  continues the existing A4 branch rather than moving A2/Server branch heads.
+- SDK send_raw can choose plaintext from cached room state, and ordinary
+  reactions bypass encryption. Added opt-in require_encryption() to the pinned
+  0.19.1 fork: no-crypto/plain-room paths reject before message IO; explicitly
+  required reactions encrypt too. Pushed SDK33de0b705 and attached draft SDK PR1.
+  Client pins all eight SDK patches to that exact revision and existing encrypted
+  continuation now uses it. Private recipient checks remain separate required work.
+- Publication keeps original receipt/verdict custody but transfers an owned
+  SendPermit only once. Failed/cancelled/dropped original attempts cannot mint a
+  second permit; reopen/restore still cannot reserve the same original request.
+- Frozen-source local regression: Agent-local156/3 original ignores, engine263/9
+  (7 original plus2 external gates), App622/2 original ignores all pass. Actual SDK
+  continuation passes; SDK HTTP integration3 with encryption,2 without,3 with the
+  application's bounded-history feature pass. Client/core/App all-targets strict
+  Clippy, core format/spelling,46 guards, one caller and1177 bindings pass; no
+  missing/deferred/platform gaps. Logs use required-encryption/send-permit prefixes.
+- Preserve failures: first SDK test macro rejected missing test_ prefixes; strict
+  SDK Clippy without bounded history hits the existing conditional cache branch's
+  question_mark lint. Current actual feature combination passes without allow.
+  Manifest pin assertion initially expected seven entries; actual eight were
+  checked and pinned. Cargo's unrelated Windows dependency reselection was removed
+  from the lock diff; locked builds/tests verify the retained dependency graph.
+- A2 base0f full40423919137 completed: Linux/macOS success, actual Windows failure
+  at native_matrix_shared_request_pacing teardown, fixture.store.shutdown() returns
+  OutcomeUnknown after HTTP assertions passed. Overall workflow success is not a
+  Windows qualification pass. Original log is retained in
+  /tmp/hagency-full0f-windows-failed.log; root cause is not yet established. PR11
+  now reports that failure. A4's older8c CI/App/full remain separate live runs.
+- Current private approval publication, PendingApproval consumption, native UI,
+  verified two-device and per-Agent encrypted execution are still open, alongside
+  A3 and earlier manual/platform/production OAuth gates. Objective stays active.
+
+## 2026-10-27: Private approval publication and original pending consumption
+
+- Fetched origin/main before continuing and confirmed42e59b9e is an ancestor of
+  codex/remote-owner-approvals; no direct main edits. SDK1c48a831 is already pushed
+  on codex/mandatory-encrypted-send and SDK PR1 describes its final scope.
+- Detached SDK one-event Megolm encryption shares only with current cross-signed
+  own devices; the old broadly shared room session cannot leak approval content.
+  The non-Clone capsule checks original liveness before every write, disables
+  retries and retains actual late acceptance. All eight Client pins use1c48a831.
+- NativeOwner holds the same original Ledger/Publication and live PendingApproval;
+  current Server bindings/execution/device/policy/expiry gates precede publication
+  and decision. Runtime joins retain possible IO. Weak pending liveness cannot
+  keep/recreate the sender; original turn cancellation/receiver closure retires
+  future writes. Unknown status never republishes or changes destination.
+- English/Chinese execution-device UI selects private-room candidates by name,
+  publishes, reads original status and finds actual SDK-verified decisions from
+  bounded complete original relations. Cached names are not authority; fresh SDK
+  private state and cross-signed identities are required. No event-ID input.
+- Agent-local157/3 original ignores; engine269/9 (7 original plus2 external gates);
+  App624/2 original ignores pass. Six NativeOwner/TCP/SQLite/live-pending tests use
+  an explicit Matrix host double. App actual SDK public cross-signatures and real
+  Olm/Megolm over local HTTP prove private publication, unsigned-device rejection,
+  relation lookup and original journal decision; this is not real Synapse/manual
+  qualification. SDK detached2/required3 and strict SDK/crypto library checks pass.
+- Current core/App default all-targets strict Clippy with the App CI --no-deps
+  boundary, core format/spelling,46 guards, one caller and1184 bindings pass with
+  no missing/deferred/platform gaps; i18n missing0. Broad dependency Clippy first
+  failed27 existing article-makepad lints; a new helper's position after tests was
+  then fixed. Original constructor compile/SDK/UI/wiremock fixture failures remain
+  separately documented; no cache edits, retry relaxation or failure relabeling.
+- Old8c full40426784089 finished with actual Linux/macOS/Windows jobs success.
+  It is separate from this source and does not explain the older A2 Windows
+  shutdown OutcomeUnknown failure. Remote approver inbox/outgoing-verdict UI,
+  real Synapse/native qualification, per-Agent encrypted identity/tasks/files,
+  A3 and earlier manual/platform/OAuth gates remain. Objective stays active.
+
+## 2026-10-27: Remote owner inbox and irreversible verdict publication
+
+- Previous goal turn pushedff496b83. Fetched origin/main before this work;
+  main42e59b9e remains an ancestor of codex/remote-owner-approvals. Its live CI
+  40438406366/App40438410171/full40438413947 were specifically re-observed; do
+  not replace those original runs merely because an observation period elapsed.
+- Added native-only RemoteApprovals commands for the other owner's device,
+  actual SDK signed-request history/inspection and detached encrypted verdicts.
+  SDK proof/current private state, exact reviewed digest and owner/profile/Room/
+  Agent scope precede reservation. Re-sample time after the actual SQLite writer
+  wait; received request metadata never establishes trust or execution authority.
+- Permanent outgoing publication/receipt tables live in the same owner ledger;
+  first committed possible IO alone yields non-Clone single-use send custody.
+  Unknown, another choice/event/device, reopen or snapshot restore cannot rearm.
+  Exact older schemas migrate empty metadata; current snapshots retain all rows.
+  SDK re-observes the original request before sealing/sending, disables retries
+  and checks current account/device/expiry before every write. NativeOwner joins
+  original IO after retirement; a retained update guard fences installation.
+- English/Chinese remote approval tab works without a local provider or execution
+  assignment: named private-room candidates, bounded paged requests, complete
+  exact action/copy, approve once/deny and original verdict delivery status.
+  Unknown disables new decisions. Actual Makepad component test proves a complete
+  >20000-character command and scope reset; manual desktop qualification remains.
+- Actual SDK crypto HTTP fixture now invokes real inbox/request inspection,
+  remote journal reservation and verdict publisher, then original device decrypt/
+  verify/journal consumption. It remains local HTTP, not Synapse/native/provider
+  joint qualification. Two new NativeOwner tests use an explicit Matrix double.
+- Agent-local162/3 original ignores, engine271/9 (7 original plus2 external gates),
+  App625/2 original ignores pass. Final Native reviewer2 pass after retaining the
+  update guard. Current core/App default-feature all-targets strict Clippy with
+  App CI --no-deps, core format/spelling,46 guards, one caller and1191 bindings
+  pass with no missing/deferred/platform gaps. i18n2520/1906/missing0.
+- Initial test-helper visibility, SDK child-module visibility, Native test method/
+  private-field errors and an independent-if formatting lint remain failed in
+  their original logs. Corrections did not weaken production checks. Detailed
+  evidence and remaining real Synapse/native/provider, encrypted Agent identity/
+  tasks/files, A3 and earlier manual/platform/OAuth gates stay in dev-vibe.
+  The full objective remains active.
+
+## 2026-10-27: Actual Synapse, two native owners and real remote-approved Codex
+
+- Previous goal turn pusheda7d08a7c. Before current source work fetched main and
+  confirmed it is an ancestor; Server qualification checkout did the same. Current
+  a7 fast CI40440897177 and spelling passed. Priorff App40438410171 succeeded on
+  both actual macOS architectures; full40438413947 Linux/macOS pass, Windows is
+  separately still live. Priorff fast CI was cancelled by meaningful new-head
+  concurrency, never relabelled passed.
+- Added an explicit external qualification entry with the real guardian. Reuse
+  the exact production desktop SDK functions through public transport aliases;
+  two actual signed SDK devices, private encrypted room and independent public
+  NativeOwners carry the same original proposal and remote verdict. Original
+  PendingApproval consumption alone permits the actual terminal operation.
+- Freshjoint4 passed end-to-end: real encrypted Matrix request/decision IDs,
+  file absent after remote verdict publication but before original consumption,
+ 31 exact output bytes and completed verified_matrix_device audit. One settled
+  call10839input+73output=10912, cache5248 subset; pending/unreported/reserved0.
+  whole_tree stop and checked shutdown pass; Server retains one historical epoch
+  with zero currently live leases. Independent read-only HTTP verifies both
+  original events are Megolm encrypted and contain no plaintext command.
+- Server example's explicit OAuth bridge now checks actual whoami for each
+  owner token, supporting both devices; owner/remote accepted, Bob/invalid token/
+  wrong secret refused. Optional script flag retains only a fresh test owner's
+  password in the private fixture. Production authentication/router unchanged.
+- Preserve failed runs: joint1 well_known origin change was refused before native
+  init; joint2 bad Agent-level scope parameters, both calls/audits0. Joint3's model
+  replied unavailable for the internal audit name, no tools/file; original10967
+  tokens are settled and whole_tree observed. The driver timed out waiting for an
+  approval. Joint4 is a separate new task, not a replay or rewrite of that result.
+- CLI build/command guard, remote App15 and current App default all-target strict
+  --no-deps Clippy pass; Server example strict Clippy and script syntax pass.
+  Initial header borrow/reqwest feature/device argument compile errors retained.
+  shlex2.0.1 is only a dev-dependency edge for exact shell payload inspection.
+- All four owned Synapse containers, current Server and dedicated PG stopped;
+  actual SDK/Native owners closed and original data/logs preserved. Detailed
+  evidence is in owner-remote-approval-synapse-validation in dev-vibe. Plain task
+  execution is distinct from unfinished Agent encrypted identity/tasks/files.
+  Continue that work, then A3 and prior manual/platform/OAuth gates. Goal active.
+
+- Final remote observation: priorff496b83 full40438413947 completed with actual
+  Linux/macOS/Windows job success. This is separate from the new qualification
+  source and does not retroactively fix the older A2 Windows shutdown failure.
+- Current source final core format/spelling,46 guards, one production caller and
+ 1191 bindings pass with missing/deferred/platformDeferred empty; no paid tests
+  were rerun by these inventory checks. Server fixture support pushed5b4e0a3.
+
+## 2026-10-27: Independent Agent SDK identity and actual native restart
+
+- Prior turn classification: verified wait, polling the live5ea fast/App/full CI
+  handles and confirming fetched main ancestry. Those lanes now pass, including
+  actual Linux/macOS/Windows full jobs. Current source still needs its own CI.
+- Current turn is progress: identity-only Server broker and native host capability
+  feed independent encrypted SDK stores, without owner keys/AS/login credentials.
+  Stable Agent/device key identity is separate from authorization generations;
+  account cross-signing pins survive host reassignment. Public pins commit before
+  bounded IO; post-lock clocks, actual rows, private store locks and missing-key
+  refusal preserve original identity. Dedicated crypto DB/4slots isolate waits.
+- Actual Synapse/native identity6 passes two independent Agents, original SDK
+  store reopen, real owner API revocation and direct-HS bearer refusal. Checked
+  close/drop/reopen on the same installation rotates authorization1→3 while
+  original keys stay; actual HS retains one Matrix device per Agent. Independent
+  ledger calls0, Server leases0. No model inference or encrypted task claim.
+- Preserve all failed qualification1..5, initial compiler failures, reused-DB
+ 112/2 notice fixture failure and the erroneous foreign-owner404 assertion.
+  Their corrections and final independent success are detailed in dev-vibe.
+- Current fresh Server full114/0/0, additional security4/0/0, engine271/9original
+  ignores, App627/2original ignores; strict affected Clippy, format, OpenAPI90+4/
+ 22guards,46static checks,1caller and1191bindings pass. Local typos unavailable;
+  spelling will use remote CI. No new remote/platform qualification claimed yet.
+- All owned qualification services stopped; original data retained. Normal runtime
+  lifecycle/secret-store integration, owner verification/recovery, encrypted Agent
+  tasks/replies/files, A3 and earlier manual/platform/production OAuth gates stay
+  open. The full objective remains active.
+
+
+## 2026-10-27: Normal Agent crypto lifecycle and native identity controls
+
+- Confirmed current work is on codex/remote-owner-approvals, fetched latest
+  origin/main42e59b9e again and verified full ancestry before continuing edits.
+  Prior db6f Full40450763616 completed with actual Linux/macOS/Windows success.
+- Added managed private filesystem credentials, weak current authority, retained
+  shared init/close receipts, normal create/start/assignment/stop hooks and desktop
+  public identity controls. No OS keychain/owner verification claim. SDK368152a8
+  per-HTTP admission/retirement/drain retains the original store lease through IO.
+- Actual final managed3 passes normal two-Agent creation, independent public keys,
+  same sessions after35-second renewal, actual Server revocation, native same-host
+  restart retaining keys, and a third real SDK held in the qualification callback
+  until canceled stop/shutdown observers rejoin original cleanup. Independent
+  homeserver/PG/native ledger reads confirm one device per primary Agent, key
+  pins1→3, calls0/leases0. Callback hold and actual SDK HTTP body tests are separate.
+- Preserve failed managed1 wrong local route; use existing AgentDetails builder
+  instead of duplicate path constants. Preserve initial UI visibility, driver
+  canonicalize comparison and strict-lint failures. Managed2 and final managed3
+  are separate new runs; old creation/task records were not replayed/deleted.
+- Core276/9 existing ignores, App628/2 existing ignores pass; final focused5+3,
+  strict affected all-target Clippy, core format, i18n2534/1913/missing0, static46,
+  production caller1 and bindings1196 all pass without missing/deferred gaps.
+- Owned Server/Synapse/PG stopped and original data retained. See
+  dev-vibe/agent-crypto-managed-lifecycle-2026-10-27.zh.md. Encrypted tasks/replies/
+  files, owner verification/recovery, A3 and previous manual/platform/production
+  OAuth gates remain; no paid inference/deployment/merge. Full goal remains active.
+
+
+## 2026-10-27: Exact owner-to-Agent Matrix verification
+
+- Previous turn was progress: pushed normal lifecycle956f8980 and actual managed3.
+  This turn fetched current main before edits and confirmed ancestry again before
+  commit. Work remains codex/remote-owner-approvals; SDK stays on0.19.1 history fork.
+- Added native exact fingerprint verification and shared original task custody,
+  current owner SDK cross-signing/reobservation, master fingerprint presentation
+  and explicit review controls. Signed current owner devices without the private
+  user signer receive restore-key guidance. Unavailable transports hide cached
+  positive status; this metadata never becomes an execution/tool grant.
+- SDK6cc4c711 then c1962ee2 add per-request/global fence composition, no implicit
+  credential refresh and strict fresh identity/device response checks. Actual
+  verified-cache negative cases reject partial/missing/invalid keys/signatures;
+ 1unit+9HTTP integration and affected strict library Clippy pass, required3/own2
+  regressions retained. No upgrade to unrelated SDK main.
+- Actual owner3 fresh Synapse/native proof passes exact signing, an actually
+  cross-signed no-private-signer owner device refusal, native authorization1→2
+  restart with original keys/trust, and a late actual verified callback joined by
+  stop/shutdown. Independent HTTP/OpenSSL verifies both real master signatures;
+  PG public pins2, native calls0, Server leases0. No paid inference.
+- Preserve owner1's pre-hardening success and owner2's missing-device preparation
+  failure. Corrected the driver to perform real SDK sync before cross-signing a
+  new owner device. Preserve initial compile/API/lint failures; no weakened gates.
+- Core277/9original ignores and App628/2original ignores, final focused6+3,
+  affected all-target strict Clippy, format, i18n2542/1916/0, static46, caller1 and
+ 1197bindings pass without deferred gaps. Prior956 fast/App/spelling and actual
+  Linux/macOS jobs pass; Windows actual tests/release pass, cache cleanup live.
+- All three owned Synapse containers, Servers and dedicated PG stopped. Detailed
+  evidence: dev-vibe/agent-crypto-owner-verification-2026-10-27.zh.md. Continue
+  encrypted intake/ACK, Agent requester trust, current Room/member/lease gates and
+  original encrypted Codex replies/files, then A3 and prior qualification gates.
+  Full A4/objective remains active; no deployment/merge.
+
+
+## 2026-10-27 — actual Agent owner ciphertext receive
+
+- Separate receiver8/identity7 routes, owner-only public queries/pinned user-signer
+  signatures, fixed empty-room zero-wait sync and bounded response guards wired.
+  Normal desktop lifecycle uses receiver mode with original private SDK store.
+- SDKfc640 adds local roomless decryption; Native host-only opaque evidence and
+  shared original receiving task custody do not grant admission/ACK/lease/execution.
+  Stop snapshot and receive admission serialize; canceled waiters cannot bypass joins.
+- Preserve receive1/2/3/4 failures (SDK query compatibility, original device OTK
+  collision, missing actual fixture identity worker). Fresh receive5 passes actual
+  two-Agent trust, original owner ciphertext, negative scopes/tamper, native
+  restart1→2 and retired-host refusal. Independent actual public-key HTTP/OpenSSL
+  verifies Agent→owner signature; native ledger calls0, Server lease rows0/pins2.
+- Server119 fresh PG tests/no ignores, OpenAPI98+4/24guards, Native279/9original
+  ignores/App628/2original ignores, focused crypto8, strict no-deps Client lint,
+  Server strict lint, Rust1199bindings/no gaps and46guards/caller1 pass. Original
+  dependency-lint failure retained. Prior490 full actualLinux/macOS/Windows CI
+  success; new-head checks remain separate. See owner-receive dev-vibe evidence.
+- All four owned Synapse fixtures, their Servers and dedicated PG stopped; data retained.
+- Continue original ciphertext admission/ACK and current member/binding/lease gates,
+  real encrypted Codex replies/files, then A3 and prior gates. Full goal active.
+
+
+## 2026-10-27 — original AS ciphertext intake and current-lease SDK read
+
+- Separate durable encrypted inbox verifies exact pending AS source in the same
+  transaction lock before retaining canonical ciphertext and allowing compaction.
+  Current scope/lease/generations/member checks guard typed poll/read; plaintext
+  execution still refuses encryption. Capacity, expiry tombstones and Agent-loop
+  exclusion have real PG coverage. No task ACK/admission/model start is exposed.
+- Native host reads original ID/current lease, obtains actual SDK owner crypto
+  proof and rereads current source/authority. Shared task retains original IO/
+  update guards. Removed owned-job calls locking/nested raw-decrypt entry so a
+  Stop holding calls can still join original work. DTOs do not grant execution.
+- Fresh intake2 actual Synapse/normal Native lifecycle proves normal+thread,
+  wrong Agent/epoch/released-lease refusal and native restart1→2 preserving keys.
+  Independent actual homeserver event reads, Python canonical SHA and PG prove
+  two retained originals after AS body compaction, plain events0, calls0/live
+  leases0 and one historical lease retained. intake1 pre-hardening success and
+  compiler/driver failures remain separate evidence; no paid inference.
+- Server122 fresh PG tests/no ignores + final targeted3, OpenAPI100owner+4AS/
+ 27guards, Native281/9original ignores, strict affected all-target lint,1201 Rust
+  spec bindings/no gaps,46guards/caller1 and cross-repo fixture bytes all pass.
+  Both owned Synapse/Servers and dedicated PG stopped with original data retained.
+- Continue local inbox/history binding and exact task ACK/admission without
+  Server plaintext, actual Codex/tool checks, encrypted original replies/files,
+  shared requester trust, A3 and prior manual/platform/production OAuth gates.
+  See dev-vibe/agent-ciphertext-intake-2026-10-27.zh.md. Full goal remains active.
+
+- Prior89a7 head fast/App/spelling CI succeed; full Linux/macOS jobs and actual
+  Windows tests/release succeed, while Windows cache finalization is still live.
+  New-source CI must remain separate from these predecessor results.
+
+## 2026-10-27 — original encrypted input durable local receipt and metadata ACK
+
+- Resumed on codex/remote-owner-approvals; Client/Server fetched current main
+  before edits and reconfirmed ancestry. SDK stays on the pinned0.19.1 history
+  fork; 9b547c0e strips unencrypted outer relation fallback only in host receive.
+- Server prepare/ACK/admission bind original AS source/current lease; encrypted_*
+  modes and mapping constraints keep ordinary execution closed. Local input/source
+  and plaintext/transport digests commit atomically before ACK; whole snapshots
+  preserve them. Normalized sealed-payload uniqueness prevents changed-header work.
+- Fresh actual Synapse ACK1 passes normal/thread inputs, duplicate original ID,
+  native restart1→2/new lease, original snapshot export/inspect, fake outer relation,
+  sealed replay and wrong-scope negatives. Independent HS/Python/PG/SQLite proves
+  admissions2/ciphertexts3, AS-compacted3/plain events0/calls0/live leases0 and one
+  retained historical lease. Actual history API has no started executions; digest
+  comparison derives its exact immutable tuple encoding, not a synthetic execution.
+- Local167/3original ignores, Core283/9original ignores, App628/2original ignores,
+  fresh PG Server123/0ignores, SDK2 integration, affected all-target strict no-deps
+  Client Clippy/Server strict Clippy and affected format pass. OpenAPI103+4 with
+  30 negative guards, Rust1208bindings/no gaps and46static guards/caller audit pass.
+- Preserve original compiler/legacy-fixture/seal iteration and Clippy failures,
+  initial Server35/88ignored run, and Python string-hash diagnostic separately;
+  corrected final runs above do not relabel them. Prior744 four Client CI terminal
+  successes are predecessor evidence only. All owned ACK fixture services and PG
+  stopped; original data/logs retained. No paid inference/deployment/merge.
+- Continue separate encrypted model/tool Start and original encrypted replies/files,
+  shared requester trust, A3 and previous manual/platform/production OAuth gates.
+  Full goal stays unfinished. See encrypted inbox ACK dev-vibe report.
+
+
+## 2026-10-27 — Complete owner encrypted Codex execution and files
+
+- Completed the CURRENT Native/Codex execution path: original actual SDK input
+  persistence and metadata ACK, one original Server start permit, existing tool
+  policies/audit/usage/process stop, actual encrypted reply and bidirectional files.
+  New owner DMs default to Megolm. Shared Project requester execution remains closed.
+- Durable original output custody prevents resealing/reupload/republication after
+  unknown results. Server possible commits before IO, owner-only key shares and
+  actual Matrix receipts control sent/completed. SDK fenced media HTTP includes
+  queued admission; Server has no plaintext file rows in the verified chain.
+- Actual macOS Synapse/PG/AS/SDK/NativeOwner/Codex success:131073-byte encrypted input,
+  actual command,131097-byte owner-decrypted output compared byte for byte; genuine
+  Agent file/reply receipts, completed tools and whole_tree stop. Successful task
+  calls1/input44629/output467/total45096; all pending/reserved/unreported0.
+  Two service reopens retain calls1 and identical cost/decryption. Normal new DM
+  creation also verified encrypted. Independent actual HS/PG/SQLite proof verifies
+  source/transport/ciphertext/receipt/execution/file/usage: publications2, live
+  leases0, plaintext file rows0; history retained. See full dev-vibe validation.
+- Preserve original paid failures32725 and117460 tokens without replay; total195281
+  across three calls. Absolute workspace path capture and actual SDK msgid validation
+  root causes fixed; failed/unknown work, AS409 collision and earlier diagnostics
+  remain recorded. Fixture OAuth bridge is not production OAuth qualification.
+- Final local Agent-local170/Core284/App628 pass, existing ignores3/9/2 unchanged.
+  Server fresh PG125/0 ignored using explicit include-ignored; SDK4 actual crypto/HTTP
+  integrations pass. Strict Client affected all-target no-deps Clippy also passes
+  with real remote git SDK pins, Server all-target and SDK library Clippy pass.
+  A registry index fetch stalled; final pinned/locked check used already-fetched
+  remote source offline, with no dependency upgrade. Core/local and selected App
+  format pass. OpenAPI105+4/34 negative guards, Rust1212 bindings/no gaps,46static
+  guards and production caller audit pass.
+- Fresh remote main remains an ancestor for Client and Server; work is on feature
+  branches. SDK919a38b3ae6d0db1f310cb1fcad6b274380f6811 and Server
+  f24b95db9cefd9e4bf426dd74848bb58c6400243 pushed; Client uses that exact remote
+  SDK0.19.1 revision, with only ten SDK lock-source changes. Owned fixture Server,
+  Synapse and PG stopped after final independent proof; data retained.
+- This owner private DM chain is complete. A3, shared Project trust, cross-host key
+  recovery and prior manual/production OAuth/other-platform gates remain open in
+  the saved absorption task list. Broader migration is not declared complete.
+
+
+## 2026-10-27: Open Client PR review (#9–#12)
+
+- Reviewed stacked current heads 1724b7d9/c5f42926/0f7a5a7c/2daae62d.
+  #9–#11 were marked ready and @codex review was posted after inspection.
+  GitHub plugin writes returned integration403; authenticated local gh succeeded.
+- Fixed #12 encrypted-file history: current NativeOwner now reads the exact
+  original encrypted publication, using retained epoch metadata without lease
+  acquisition or a plain file lookup. Missing/possible status stays uncertain;
+  invalid identities/receipts and SDK authority loss cannot mutate history.
+  Runtime and history share receipt validation. No new upload/send path.
+- The new actual NativeOwner/HTTP regression fails against the original history
+  implementation (file_history_upgrade_required) and passes with the fix.
+  Full original local Agent suites181 passed/3 existing ignored; original engine
+  library284 passed/9 existing ignored. Final checks are recorded in the review
+  report. No paid inference, deployment, merge or original-checkout edits.
+- Preserve original CI verdicts: #10 macOS Claude capacity test observed Timeout
+  instead of Capacity, and App arm64 was cancelled; failed-job reruns requested.
+  #11 Windows pacing fixture shutdown remained OutcomeUnknown, regardless of
+  workflow-level success. No earlier failure is relabelled as passing.
+- task-writer and specs/project.spec.md are absent in this source checkout; no
+  substitute canonical task state was invented. Code/test changes are in this
+  chat's isolated managed review worktree.
+- Final fix verification: engine library285 passed/0failed/9existing ignored;
+  strict hagency lib/tests no-deps Clippy, package format,46 static guards,
+  production caller and diff checks pass. Logs: /tmp/hagency-pr-review-engine-final2.log,
+  /tmp/hagency-pr-review-clippy-final2.log, /tmp/hagency-pr-review-guards.log.
+  The expanded regression explicitly reopens the retired owner and proves the
+  original late encrypted receipt survives that boundary without a new lease.
+
+
+## 2026-10-27: Direct review and CI investigation without GitHub Codex
+
+- Operator clarified no GitHub Codex installation. Continued direct source review
+  of all four stacked PRs; no further @codex requests or tool installation.
+- Found and reproduced a programming authorization race: local approval consumed,
+  then awaited Server gate; a second SQLite handle commits high-risk Deny during
+  that final wait, yet the original fake peer executed. New regression fails
+  old PR9 with effects1 vs expected0, then passes18 combinations after the exact
+  proposal is checked again after the final awaited gate. No repeated grant or
+  approval consumption. Initial test compile needed Layer.clone(); corrected.
+- PR9 fix106743e1:85unit+3+8integration pass/3existing ignored; strict all-target
+  no-deps Clippy and format pass. PR10 merge6f5551ac preserves audit behavior;
+ 114unit+3+8integration pass/3existing ignored and strict Clippy. The regression
+  also requires the original audit to be Expired rather than Submitted.
+- PR11 merges the same fix via aed6bf89;143unit+3+8integration pass/3existing
+  ignored.0eb40cf8 adds only original pacing-shutdown failure observation using
+  existing common helper; macOS selector1/1 and strict Agent/Matrix all-target
+  no-deps Clippy/format pass. Original2s enqueue/reply and fatal errors unchanged.
+- Latest PR12 merge2830e716 inherits these fixes and retains prior6103cbba
+  encrypted-history repair; final local/remote validation is reported below.
+- CI classification: #9 macOS matrix and arm64 package plus #10 App arm64
+  annotations say hosted runner not acquired/capacity constrained. Do not change
+  product code for unexecuted jobs. #10 complete matrix attempt2 passes all actual
+  Linux/macOS/Windows jobs, preserving original Claude capacity/Timeout failure.
+  #11 original Windows pacing assertions passed before shutdown OutcomeUnknown;
+  original log has no phase data, so cause remains unproven and the new helper
+  captures future original evidence without claiming a production fix.
+- Final merged code validation: Agent171unit+3+8integration pass/3existing
+  ignored; engine285/0/9existing ignored; Matrix pacing1/1; strict affected
+  lib/tests no-deps Clippy,format,46static guards,production caller and diff
+  pass. Logs /tmp/hagency-review2-final-{agent,engine,pacing,clippy,guards}.log.
+- Previous PR12 exact6103cbba complete-matrix40509336784 now has actual
+  Linux/macOS/Windows jobs each success, with fast CI40509323755 success. This
+  is evidence only for6103cbba, not the later authorization-fix merge. No claim
+  that the historical Windows failure was repaired by the diagnostic helper.
+
+
+## 2026-10-28: Continue latest PR CI to actual pass
+
+- Current heads at intake: #9=106743e1, #10=6f5551ac, #11=0eb40cf8,
+  #12=321f0d06. Exact-head fast CI all passed; #9 Full matrix/App passed,
+  arm64 package run40517440408 failed solely because runner was never acquired.
+  #12 run40518749173 App Intel passed/arm64 was not acquired; reran only failed
+  jobs for both infra failures. Original annotations and failed attempts retained.
+- #12 full40518755948: Ubuntu passed; macOS Palpo rotation expected Generation
+  but got Timeout; Windows quiet long turn ended17.92s with LostAuthority at
+  LeaseRenew/TimedOut, no provider RPC pending and observed whole-tree cleanup.
+  This means the domain writer's2s reply bound expired; exact OS cause unknown.
+- Palpo controlled400ms old-response hold reproduces identical Timeout vs
+  Generation failure on original300ms header configuration. The lifecycle case
+  now uses existing default finite5s headers/10s request, keeps the controlled
+  hold and all byte/Generation/restart assertions. Tight timing-negative tests
+  remain on their unchanged300/800ms budgets. No production transport changed.
+- Windows CI executes the original31s/45s positive case once as a required exact
+  isolated selector before the concurrent native suite, omitting it only from
+  that subsequent invocation. Original2s writer wait/5s lease renewals and all
+  failures remain unchanged. Added read-only last-unknown/dequeued diagnostic.
+  Workflow routing tested for Windows/macOS/Linux; a failed isolated command
+  stops the step, verified with a recording stub. actionlint/bash syntax pass.
+- Local Palpo transport16/16 (including unchanged negative deadlines) and full
+  owned52/52 pass. Strict both-package all-target no-deps Clippy/format and diff
+  pass. Logs /tmp/hagency-ci3-{palpo-before,palpo-after,owned,clippy}.log.
+- Remote follow-up is checked per exact SHA and per actual job, including
+  Windows continue-on-error. Final run evidence is recorded on the PRs after
+  completion; no merge/deploy/paid model call or installed Codex is involved.
+- Additional infrastructure root found in the official runner-images13518
+  announcement: macOS14 is retiring2026-11-02, with constrained capacity and
+  scheduled brownouts. Switched app-main/app-builds arm64 and optional mobile
+  host labels to macos-15, retaining Intel and all build/test steps. Base PR9
+  commit7ea40644 is merged through PR10/PR11 into PR12; no force push. Both
+  workflow files pass actionlint. Source: https://github.com/actions/runner-images/issues/13518
+- Final exact-head remote validation remains required after this migration.
+  Previous queued/cancelled old-head attempts are retained as history, never
+  counted as a successful build on their replacement image.
+- Confirmed Palpo/execution production sources and owned harness are identical
+  across this PR stack. Applied the same tested fixture/routing patch to PR9 as
+  d53d31e6, then normal merges ffabbc21(#10),57058917(#11),3a3c2f7f(#12).
+  Base-head local Palpo16/16,owned52/52 and strict all-target Clippy pass again,
+  proving the patch does not depend on later feature APIs. PR12 content merge
+  is identical to its already-tested fixture fixes, preserving ancestry.
+
+
+## 2026-10-28: Remove irrelevant domain lifecycle from pure HTTP fixtures
+
+- Original #9 d53d31e6 Full matrix40561752670 Windows job122393152490
+  passed the isolated31s owned selector, then failed only Matrix library
+  native_matrix_get_rate_limit at rate_limit_tests.rs:64: shutdown returned
+  OutcomeUnknown. Its HTTP result/auth/delay/count assertions had all passed.
+  The original2s shutdown error does not identify an unobserved close/OS phase.
+  Preserve the run; diagnostic repeats never replace its failed verdict.
+- Both rate-limit and pacing fixtures used a whole DomainRepository/DomainStore
+  solely to build HostConfig. They now use Http::for_host (the exact constructor
+  Http::new delegates to), same real TLS/root/auth/endpoint/common limits and
+  per-scenario budget. No database is constructed for these pure HTTP tests;
+  every HTTP assertion and fake cleanup remains. Actual store/service fixtures
+  and shutdown2s contracts are unchanged. The earlier pacing observer entry is
+  historical, not evidence that writer shutdown was repaired.
+- Actual edited base#9: Matrix lib280/280, all HTTP12 included; strict Matrix
+  all-target no-deps Clippy, formatting, domain shutdown8/8, guard46/46 pass.
+  Logs /tmp/hagency-ci3-{matrix-http-fixture,http-fixture-clippy,
+  http-fixture-domain,http-fixture-guards}.log. Base fix fe449853, normal
+  merges631a342f(#10),29b20c1d(#11), then #12. No force push.
+- Prior head9db9212f Windows full job actually passed including media storage;
+  prior d53d31e6 dual-arch App and all desktop package jobs also actually passed.
+  These historical results cannot substitute for the final new-head runs.
+  Final remote evidence will be posted in PR follow-up comments without creating
+  a new docs-only head. task-writer remains absent; no control-plane state faked.
+
+
+## 2026-10-28: #12 Linux execution fixture resources and failure evidence
+
+- Head8e0e50fd Full matrix40572803517 Linux job122431362644 has four
+  original execution failures; log /tmp/hagency-ci3-new-linux12.log. Owner
+  verdict OutcomeUnknown and a dequeued long-control LeaseRenew/TimedOut are
+  known2s domain reply failures. The other two are a closed usage notice stream
+  and an overdue midwrite marker. Past OS phase/cause for these is unobserved.
+  Never infer that all four share a proved disk or scheduler cause.
+- Library42/42 passes locally at16 threads and1 thread (comparison JSON/logs
+  /tmp/hagency-ci3-execution-*), so the historical cloud symptom is not locally
+  reproduced. The CI repair removes independent cases' concurrent host workload
+  as a variable: execution --all-targets in one-thread stage on every OS, other
+  workspace packages stay parallel. Per-case concurrency/fault barriers and all
+  production/fixture deadlines/assertions remain. Package multiset unchanged,
+  exactly once; only the original ADR140/144 qualification filters remain.
+  Later workspace coverage runs even after an execution-stage failure, without
+  changing its fatal verdict. actionlint and parsed YAML coverage check pass.
+- First all-target local probe omitted the original qualification filters:
+  108 ordinary tests passed and2 operator evidence placeholder tests correctly
+  failed. Preserve /tmp/hagency-ci3-execution-all-serial.log as failed; corrected
+  exact CI command has the original filters, not new exclusions or fake evidence.
+  Reverify current diagnostic code in /tmp/hagency-ci3-execution-ci-serial.log
+  and strict all-target no-deps Clippy in execution-ci-clippy.log.
+- Failure-only choose/usage-control notice text now retains original domain
+  unknown/dequeued and operation failure/startup/cleanup/runtime fields. No retry
+  or new success outcome. Prior Windows-only long-case routing is superseded by
+  the independent whole execution stage. Only#12 changes; #9 current Linux full
+  and all four current fast CI runs pass. Keep remaining jobs and follow new#12.
+
+- Exact CI command recheck on current edited sources passes108 ordinary tests,
+  2 original qualification filters,0 ignored. Strict execution all-target
+  no-deps Clippy, fmt, actionlint and parsed-YAML package multiset/exactly-once/
+  unchanged filters/fatal independent-stage checks all pass. No further local
+  broad tests are needed before following the new remote head.
+
+
+## 2026-10-28: Real store ownership release before successful shutdown ACK
+
+- Original #12 ccda4501 fast CI40578195066 job122450182413 failed only
+  native_configured_fleet_reattaches_after_restart at inline_factory/mod.rs:488:
+  shutdown returned success, immediate domain reopen reported Locked. The old
+  lock mapping discarded native error detail; historic errno/holder are unknown.
+- Actual retained File::try_clone regression reproduces acknowledged-but-Locked
+  deterministically for domain and custody. Old2/2 fail with Locked; fixed2/2
+  pass for both ordinary/observed shutdown and retain replacement exclusivity
+  after the old clone closes. This proves the release defect; not a particular
+  historic child. Rust File docs confirm shared descriptor lifetime; Unix
+  spawning marks inherited fds CLOEXEC, leaving a pre-exec retention window.
+- Both original writers now close SQLite, explicitly unlock/close ownership,
+  then drop the receiver before success ACK. Unlock failure logs and closes
+  reply without ACK, preserving Unavailable/ReplyClosed or the original timeout.
+  Existing2s waits/phases, WAL/FULL, checkpoint policy, privacy/schema unchanged.
+  Only real WouldBlock maps Locked; native lock IO errors remain Io. No reopen
+  retry, fallback, timeout widening or test skip. ADR120's SQLite policy is not
+  changed or claimed to solve an unobserved OS close stall.
+- Actual edited base#9: store105/105, close_path1/1, inline_factory21/21,
+  execution108 ordinary/2 original qualification filters/0 ignored; strict
+  store+engine+execution all-target no-deps Clippy, fmt, guard46/46, production
+  caller guard and all-feature Rust inventory1167/0 missing pass. Before/after
+  and suite evidence: /tmp/hagency-ci3-inherited-lock-{before,after}.log,
+  store-release-final.log, ownership-{inline,execution,final-clippy,bindings,
+  guards,callers}.log, all with the same /tmp/hagency-ci3- prefix.
+- Common production fix8bb16bd6(#9), normal merges07df6724(#10),cd57377b(#11),
+  then#12. All six store-fix source files identical across branches; no force push. Follow
+  latest new SHAs through actual remote job success before completion; final CI
+  evidence belongs in PR comments, without another docs-only source commit.
+
+- The final merged#12 copy independently passes both original-lock regressions
+  again (/tmp/hagency-ci3-ownership-tip.log); diff against8bb16bd6 is empty for
+  all six store-fix files. No new documentation-only commit after final CI.
+
+
+## 2026-10-28: Correct the new restart scenario's supported-platform declaration
+
+- New#9 Windows job122474169790 failed only check-rust-spec-bindings: the new
+  store spec omitted Test-Platforms on the existing Unix-only factory restart.
+  Correct that one scenario to [linux,macos], matching its original contract/cfg;
+  both new actual ownership-lock regressions remain required on every platform.
+  No Rust implementation or runtime skip changed.
+- Same binder reproduces missing factory selector in a Windows inventory and,
+  after correction, requires the2 portable regressions with only the1 original
+  factory scenario deferred; Linux/macOS bind all3. Logs
+  /tmp/hagency-ci3-ownership-platform-{before,after}.log, guard46 and actualMac
+  all-feature inventory0missing in /tmp/hagency-ci3-platform-bindings.log pass.
+- Regularcommit c8bd20b7(#9), merges0498473e(#10),353036ec(#11), then#12.
+  All six production store-fix files still identical to8bb16bd6. Check current
+  SHAs again; preserve original non-blocking Windows failure as actual failure.
+
+
+## 2026-10-28 — App CI 整体 job 预算
+
+#12 当前头42484608的App Intel job122486397191全部测试、Clippy、构建和静态检查均成功，最后在59m20s开始缓存上传，60分钟整体job上限将其取消；GitHub annotation明确 exceeded maximum execution time 1h0m0s。原attempt1保留，单job诊断补跑已触发。为避免依赖冷构建速度碰运气，#12 app-main的整体job预算从60改为有限90分钟，包含缓存和cleanup；原用例、断言、生产2s/25s/45s边界及执行次数完全不变。此为编译和收尾总预算，未放宽任何测试操作deadline。新头需重新通过实际CI。

@@ -40,9 +40,15 @@ pub(super) async fn send(
         .map_err(|_| source_error("invalid_continuation_message"))?;
     let transaction_id: matrix_sdk::ruma::OwnedTransactionId = message.transaction_id.into();
     live_check()?;
-    let response = room
+    let send = room
         .send_raw("m.room.message", content)
-        .with_transaction_id(&transaction_id)
+        .with_transaction_id(&transaction_id);
+    let send = if message.require_encrypted {
+        send.require_encryption()
+    } else {
+        send
+    };
+    let response = send
         .await
         .map_err(|_| source_error("continuation_delivery_unknown"))?;
     // Retain the actual SDK acceptance even if the account changes just

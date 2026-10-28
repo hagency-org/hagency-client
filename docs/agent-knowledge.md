@@ -1,7 +1,144 @@
+- **Encrypted owner chain, 2026-10-27:** Deliver through the current runtime,
+  not a second execution engine. Distinct encrypted run permits require original
+  local input and fresh newly-started Server receipts; compare ciphertext history
+  commitments before translating wire bodies. Seal on host and retain original
+  payload before Server publication. Owner-only SDK shares include optional
+  org.matrix.msgid; validate its bounded metadata, do not reject real SDK output.
+  File staging is local, ciphertext upload is owner SDK, final publication is
+  Agent/AS with durable possible-before-IO and exact receipts. Never label local
+  staging a Server observation. Accept absolute file selections only after exact
+  lexical workspace stripping; retain nofollow physical capture. Final actual
+  Synapse/Codex success is131097 bytes/one45096-token call, two service reopens
+  without new usage; default encrypted owner DM also proved. Preserve failed
+  charges32725/117460 and original unknowns. Shared requester trust remains open.
+
+- **Encrypted input ACK, 2026-10-27:** Commit local plaintext plus original AS
+  ciphertext/source/seal/transport/plaintext commitments atomically before ACK.
+  Server retains ciphertext body and encrypted_* modes; old plain execution must
+  refuse. Identical sealed payload under new outer headers cannot become work.
+  Matrix SDK group decryption can copy unencrypted outer m.relates_to into missing
+  inner metadata; strip it only in the dedicated roomless host helper and reject
+  outer-only relation input. Preserve authenticated inner relation. ACK/restart and
+  snapshot evidence grants no model start. Fresh actual ACK1 + independent proof
+  has admissions2/ciphers3, AS-compacted3/plain0/calls0/live0/history lease1.
+
 > Historical record: CLI and browser-console instructions below are retired.
+
+- **Original AS ciphertext intake, 2026-10-27:** Preserve a separate opaque
+  queue before AS body compaction, under the same original transaction lock.
+  Verify the pending durable AS source contains the exact raw event; keep binding/
+  Agent generations and canonical sorted source digests. Plain Poll cannot select
+  ciphertext rows; expired tombstones cannot rearm. External m.relates_to is opaque
+  metadata, not thread/mention authority. Native receives by original ID/current
+  lease and rereads after actual SDK decrypt. An owned receive task must not take
+  Native calls (Stop may hold it while joining), or nest the raw decrypt entry.
+  Fresh intake2 proves normal/thread, current-scope negatives/restart and independent
+  actual-HS/Python/PG source custody after compaction, calls0/live0/history-lease1.
+  Local durable admission/ACK/history binding, encrypted Codex replies/files and
+  shared requester trust remain open; crypto/read evidence alone cannot run models.
+
+
+- **Owner ciphertext receipt, 2026-10-27:** Matrix SDK sync adds
+  use_state_after=true; accept that precise hint while forcing zero-wait empty-room
+  sync. Keep the original identity namespace closed. Owner master signatures must
+  match the Agent's pinned user signer, stripping other signers before forwarding.
+  Normal fixture lifecycle needs the actual cleanup worker to finish creating
+  Agents. New owner stores cannot reuse an old Matrix device (OTK collision).
+  Receive admission and stop snapshot share the slot lock; stop and shutdown join
+  original tasks, including canceled observers. Roomless crypto evidence does not
+  establish AS event origin or execution grants. Fresh receive5 plus independent
+  OpenSSL/ledger/PG prove original owner ciphertext, restart1→2 and calls/leases0;
+  complete encrypted task/reply/file authorization and A3 remain open.
+
 > The current client is the native desktop application; see the repository README.
 
 # Repository audit knowledge
+
+- **Exact owner-to-Agent verification, 2026-10-27:** A local verified cache latch
+  is not a fresh keys/query result. Require a successful complete response, its
+  exact device, and matching SDK-validated master/subkeys/signatures; missing
+  current master returns None. Per-request fences add to global fences and
+  disable hidden credential refresh. Verify only the prepared exact Agent DTO
+  under original shared task custody; serialized trust flags never grant access.
+  A cross-signed owner device can still lack the private user signer; surface
+  restore-key guidance. New SDK logins must actually sync/upload device keys
+  before another device can sign them. Owner3 proves actual trust/restart and
+  independent OpenSSL signatures; native/SDK host doubles are separate evidence.
+  Agent-side requester trust and encrypted execution authorization remain open.
+
+- **Managed Agent crypto lifecycle, 2026-10-27:** Reuse Native AgentDetails route
+  generation rather than a hand-written local path. Keep normal create/start
+  result separate from identity diagnostics. Original shared init/close receipts
+  survive canceled observers; SDK HTTP fences recheck after actual queue waits/
+  each retry and hold permits through the body. Retain the store lease with the
+  SDK fence as well as the host. Private filesystem credentials are not an OS
+  keychain or cross-host recovery. Actual managed3 proves 35-second renewal,
+  unchanged keys through native restart/revocation and a held prepared SDK
+  callback joined by checked shutdown; callback hold is not HTTP body hold.
+  SDK actual HTTP tests supply the separate body-drain evidence. OwnerVerified
+  stays false and encrypted task/file execution remains refused. See dev-vibe.
+
+- **Independent Agent SDK identity, 2026-10-27:** Keep authorization generations
+  separate from permanent Agent/host Matrix keys. Server pins account cross-signing
+  keys across hosts, device keys across credential epochs, before possible HTTP;
+  AS registration must inhibit login and global versions must not masquerade as
+  an unregistered user. Actual device-bearing whoami proves device support; pass
+  actual advertised versions to SDK. Private SDK stores require original binding/
+  file lock/keys and a host secret-store passphrase. Checked NativeOwner shutdown
+  retires work; drop the original host before reopening its exclusive state dir.
+  Synapse identity6 proves two independent Agents and native credential1→3 key
+  continuity with real revocation; ledger calls/leases0. It does not qualify normal
+  Agent runtime/owner trust/encrypted tasks/files or production OAuth. See dev-vibe.
+
+- **Actual remote approval joint proof, 2026-10-27:** Fresh Synapse/two actual SDK
+  devices/two NativeOwners/real Codex consume the original encrypted approval and
+  produce31 exact bytes with completed verified-device audit, settled10912tokens,
+  whole_tree stop and zero currently live leases (one historical epoch retained).
+  Native SDK qualification reuses production bounded transport functions. A normal
+  SDK password login follows well_known; explicit local bridge setup must restore
+  the actual login response at its pinned proxy origin, without weakening account
+  checks. Internal audit name codex.command is not a model tool name: ask the
+  available terminal to execute. Previous no-tool10967-token response stays settled
+  and failed qualification; never replay it. Production OAuth/manual UI and Agent
+  encrypted identity/tasks/files remain unqualified. See the remote Synapse report.
+
+- **Remote approval reviewer, 2026-10-27:** RemoteApprovals is a native-only
+  owner-profile command and does not require a local Agent/provider assignment.
+  Its SDK inbox reads signed original requests, never trusts JSON verification,
+  and re-observes the exact reviewed digest before decision. Outgoing verdicts
+  commit permanent possible-IO witnesses before single-use send custody; another
+  choice/event/device, reopen or snapshot restore cannot rearm them. Keep the
+  original same Ledger handle for late actual receipts. NativeOwner joins these
+  jobs after retirement; each job retains an update continuation guard. Incoming
+  request proof and outgoing publication are not an execution or tool grant.
+  The full current ledger snapshot includes these rows; exact older schemas
+  migrate empty metadata. Real Synapse/native/provider qualification and encrypted
+  Agent identity/task/file execution still remain, alongside A3 and prior gates.
+
+- **Private owner approval runtime, 2026-10-27:** SDK1c48a831 on the pinned0.19.1
+  fork seals a detached one-event Megolm session for current cross-signed own
+  devices only; never reuse or cache it as a room outbound session. Owned SDK
+  ciphertext and journal SendPermit are single-use; each write checks original
+  live authority and disables SDK retries. The Native original approval slot
+  retains the same Ledger/Publication; joined IO can record late acceptance but
+  cannot restart. Weak PendingApproval liveness cannot retain its sender; include
+  original turn cancellation and receiver closure in every write check. Actual
+  SDK crypto HTTP proof and NativeOwner host-double tests are separate evidence,
+  not real Synapse/manual qualification. Relations lookup must fail closed on
+  incomplete/duplicate/invalid history and re-observe the selected signed event.
+  Remote approver UI and per-Agent encrypted task/file execution remain open.
+  wiremock0.6.5 scoped mocks can deactivate a wrong slot after priority sorting;
+  use fixed dynamic responders for changing state, not priority overrides.
+
+- **Required SDK encryption, 2026-10-27:** Client pins eight Matrix SDK patches
+  to33de0b705 on the existing0.19.1 history fork. Sensitive sends must use
+  require_encryption(), which rejects plaintext before message IO, including
+  builds without crypto. It does not establish trusted/private recipients.
+  Remote Publication retains receipt custody but mints an owned SendPermit only
+  once; failure/drop/cancellation cannot rearm it. Runtime publication and remote
+  PendingApproval consumption still need wiring and real two-device proof.
+  gh defaults to upstream hagency-rs in this checkout: always pass --repo for
+  Client and dependency PR/CI operations.
 
 - **Frozen Agent sender, 2026-10-27:** Capture real nofollow workspace/parent/file
   objects and bytes before exact approval; recheck the original objects at begin.
@@ -5457,3 +5594,89 @@ PR #8 审查及验证记录见 `dev-vibe/pr-8-board-ux-review-2026-10-25.zh.md`�
 
 
 - **Actual v12/SDK files, 2026-10-27:** Room hashes have43 URL-safe characters and no server suffix; user IDs still require servers. V12 creators/additional_creators have authority outside power users, only from current trusted create state; legacy claims never escalate and membership remains separate. Use the shared SDK bounded fetch helper, current SDK token for readback, and exact original Agent/Room/text completion markers: user file instructions can contain the same marker. Synapse Docker callbacks may need its private host IPv4 when IPv6 is unreachable; never fake readiness. Failed or pending originals stay retained and cannot be rearmed by a new fixture.
+
+
+- **Remote approval foundation, 2026-10-27:** Current protocol is im.hagency.owner.approval, separate from legacy Fleet cards. Durable first publication binds full original audit/execution/profile/device/room and a nonserializable original Ledger-instance capsule. Restore/reopen cannot mint or reuse that capsule. Remote decision records atomically append the audit but do not grant tools; current live PendingApproval/server/device/lease gates are still required. Recheck policy/execution/age after the actual SQLite writer wait. SDK verification must come from actual decrypt + Verified provenance and fresh current cross-signing/key checks, never wire verified/device fields; timestamp the earliest proof, not the end of network waits. Publication/runtime/UI and actual two-device qualification remain to connect.
+
+- **Encrypted Agent file history, 2026-10-27 review:** encrypted sends live in
+  Server encrypted_publications, not ordinary file_outbox. Refresh the original
+  encrypted status using its retained execution/request/epoch metadata; status
+  authenticates current owner scope without acquiring a lease. Missing status
+  never proves final preparation absence or grants replacement IO. Retain the
+  original local efile ID/manifest and unknown approval audit when a late receipt
+  arrives. Ordinary /files/lookup cannot reconcile these publications.
+
+- **Native tool approval post-await fence, 2026-10-27 direct review:** the last
+  Server authorization can yield after local approval consumption. Another real
+  ledger handle may commit policy revocation during that wait. Revalidate the
+  exact original ToolProposal's current revisions and expiry after the awaited
+  gate and immediately before provider acceptance. Never consume twice. The
+  deterministic regression covers command/file/MCP, owner/rule approvals and all
+  Agent/Room/requester layers; downstream audit records remain Expired.
+- GitHub cancelled arm64 jobs on #9/#10 carried explicit runner-capacity failure
+  annotations: job never acquired a hosted runner. This is separate from source
+  build/test failure. #11's original Windows pacing failure was at final store
+  shutdown; only failure-only original phase observation was added. A passing
+  repeat or continue-on-error workflow cannot erase the original unknown result.
+
+- **CI publication/long-owned fixture audit, 2026-10-28:** the Palpo rotation
+  test intentionally holds old HTTP headers while two durable replacement
+  operations run. Its shared300ms header fixture can win with Timeout before
+  the expected Generation fence. Controlled400ms withholding reproduces it.
+  This positive lifecycle test now uses existing production default finite
+  network budgets; independent tight deadline cases and production source stay
+  unchanged. Windows long-owned failure was a2s domain renewal reply timeout,
+  with observed whole-tree stop; original logs cannot attribute disk vs schedule.
+  Run this31s positive fixture once in isolation before Windows concurrent CI,
+  retaining45s/2s budgets, fatal result and all ordinary in-test concurrency.
+
+- **macOS hosted-runner retirement, 2026-10-28:** official runner-images
+  issue13518 schedules macOS14 retirement for2026-11-02 and explicitly warns
+  about constrained queues/brownouts. Repeated no-runner-acquired arm64 jobs
+  used this retiring image. Migrate App CI plus desktop/optional mobile build
+  host labels to pinned macos-15, retaining macos-15-intel and both architectures.
+  Runtime deployment target remains12.0. Source: https://github.com/actions/runner-images/issues/13518
+
+- **Pure HTTP fixtures and teardown, 2026-10-28:** Windows#9 job122393152490
+  passed all native_matrix_get_rate_limit HTTP assertions but its unrelated
+  DomainStore shutdown returned OutcomeUnknown at line64. This is a shutdown
+  failure site, not proof of an HTTP timeout or particular OS close phase.
+  Rate-limit/pacing fixtures need no domain state: use Http::for_host with the
+  original TLS root/auth/endpoint/limits/pacing owner, avoiding an unrelated
+  repository and worker. This changes test dependencies, not production shutdown
+  or its2s deadlines; real store/service lifecycle failures remain fatal.
+
+- **Execution fixture resource routing, 2026-10-28 (#12):** Linux job122431362644
+  at8e0e50fd failed two domain2s replies plus a closed usage notice and late probe
+  marker; do not claim a shared historic OS cause. Local42-case runs at16/1
+  threads both pass. Independent execution fixtures own real processes/writers
+  under strict clocks: run that package's all-target ordinary CI tests once in
+  a separate one-thread stage, retaining within-case concurrency and all timing
+  and verdict contracts. Keep the original ADR140/144 operator qualification
+  exclusions; all-target without them correctly fails placeholder evidence.
+  Keep other workspace coverage after a failed separate stage, but never make
+  its failure nonfatal. Read-only stop diagnostics are not execution authority.
+
+- **Acknowledged store shutdown and inherited ownership, 2026-10-28:** #12
+  job122450182413 reported Locked immediately after a successful domain shutdown.
+  The old mapping erased native lock error detail. A real retained File clone
+  deterministically reproduces false release in both writers: close-only keeps
+  the shared lock; safe File::unlock after SQLite close releases it before ACK.
+  Original2s waits/phase meanings and receiver-before-ACK remain. On unlock
+  error close the reply without success and log the native error; preserve lock
+  IO errors as Io, reserve Locked for WouldBlock. Never weaken live-writer
+  exclusivity or add a reopen retry. New real-handle tests cover both shutdown
+  paths and late old-copy close while the replacement stays locked. The exact
+  historical child/errno remains unrecorded, not proved by the regression.
+
+- **Mixed-platform spec bindings:** when reusing an existing cfg-gated scenario
+  in a new spec, copy its Test-Platforms declaration immediately before Test.
+  A selector's scope in one spec does not scope another binding of that selector.
+  New ownership regressions are portable; only the existing factory restart
+  scenario is Linux/macOS. Correcting its declaration does not skip runnable
+  Windows tests; current hosted Windows must still execute both new regressions.
+
+
+## 2026-10-28 — App CI 整体 job 预算
+
+#12 当前头42484608的App Intel job122486397191全部测试、Clippy、构建和静态检查均成功，最后在59m20s开始缓存上传，60分钟整体job上限将其取消；GitHub annotation明确 exceeded maximum execution time 1h0m0s。原attempt1保留，单job诊断补跑已触发。为避免依赖冷构建速度碰运气，#12 app-main的整体job预算从60改为有限90分钟，包含缓存和cleanup；原用例、断言、生产2s/25s/45s边界及执行次数完全不变。此为编译和收尾总预算，未放宽任何测试操作deadline。新头需重新通过实际CI。

@@ -44,13 +44,30 @@ pub(super) fn is_tool(tool: &Value) -> bool {
 }
 pub(super) fn specifications() -> Value {
     value!([
-     {"type":"function","name":"send_file","description":"Freeze a regular file inside the selected workspace and ask exact owner policy/approval before staging original bytes for this request's Agent/Room/thread. Returns a delivery_id and observed state. Queued/uploaded/unknown are NOT delivered. Never create a replacement attempt to clear unknown; query the original delivery_id only. Same original file cannot regain sending custody after restart or lost response.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"filename":{"type":["string","null"]},"caption":{"type":["string","null"]}},"required":["path"],"additionalProperties":false}},
+     {"type":"function","name":"send_file","description":"Freeze a regular file selected by a relative path or an absolute path inside the selected workspace and ask exact owner policy/approval before staging original bytes for this request's Agent/Room/thread. Returns a delivery_id and observed state. Queued/uploaded/unknown are NOT delivered. Never create a replacement attempt to clear unknown; query the original delivery_id only. Same original file cannot regain sending custody after restart or lost response.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"filename":{"type":["string","null"]},"caption":{"type":["string","null"]}},"required":["path"],"additionalProperties":false}},
      {"type":"function","name":"get_file_delivery","description":"Read only an existing original file delivery_id from this execution. No upload, continuation or resend. Only state sent with the actual Matrix event receipt proves delivery; preserve pending/unknown and report it honestly.","inputSchema":{"type":"object","properties":{"delivery_id":{"type":"string"}},"required":["delivery_id"],"additionalProperties":false}}
     ])
+}
+fn workspace_selection(path: &str, workspace: &std::path::Path) -> Option<String> {
+    let path = std::path::Path::new(path);
+    let selected = if path.is_absolute() {
+        path.strip_prefix(workspace).ok()?
+    } else {
+        path
+    };
+    if selected.as_os_str().is_empty()
+        || selected
+            .components()
+            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+    {
+        return None;
+    }
+    selected.to_str().map(str::to_owned)
 }
 fn output(record: &Record, phase: Phase) -> Value {
     let remote = record.remote.as_ref();
     let server_state = remote.map(|r| r.state.as_str()).unwrap_or("unknown");
+    let host_staging = remote.is_some_and(|r| r.id.starts_with("efile_"));
     let state = if record.absence.is_some() {
         "not_prepared"
     } else if phase == Phase::Unknown && !matches!(server_state, "sent" | "cancelled") {
@@ -58,7 +75,7 @@ fn output(record: &Record, phase: Phase) -> Value {
     } else {
         server_state
     };
-    value!({"success":true,"contentItems":[{"type":"inputText","text":value!({"delivery_id":record.id,"file":record.manifest,"state":state,"last_observed_server_state":server_state,"matrix_event_id":remote.and_then(|r|r.matrix_event_id.as_deref()),"guidance":if state=="sent" {"Original Matrix event receipt observed."}else if state=="not_prepared" {"Server confirmed no preparation before the original execution closed. Original custody remains consumed; this is not a retry grant."}else if state=="cancelled" {"Original delivery cancelled. No message receipt observed."}else{"Not proven delivered. Query only this original delivery_id; do not send another file to clear pending/unknown. Upload acceptance is not message delivery."}}).to_string()}]})
+    value!({"success":true,"contentItems":[{"type":"inputText","text":value!({"delivery_id":record.id,"file":record.manifest,"state":state,"last_observed_delivery_state":server_state,"last_observed_server_state":if host_staging{None}else{Some(server_state)},"observation_source":if host_staging{"execution_host_and_original_publication"}else{"server"},"matrix_event_id":remote.and_then(|r|r.matrix_event_id.as_deref()),"guidance":if state=="sent" {"Original Matrix event receipt observed."}else if state=="not_prepared" {"Server confirmed no preparation before the original execution closed. Original custody remains consumed; this is not a retry grant."}else if state=="cancelled" {"Original delivery cancelled. No message receipt observed."}else{"Not proven delivered. Query only this original delivery_id; do not send another file to clear pending/unknown. Upload acceptance is not message delivery."}}).to_string()}]})
 }
 fn failure(code: &str) -> Value {
     value!({"success":false,"contentItems":[{"type":"inputText","text":code}]})
@@ -198,12 +215,15 @@ impl SentFiles {
             Ok(i) => i,
             Err(_) => return Ok(failure("invalid_send_file_request")),
         };
+        let Some(path) = workspace_selection(&input.path, self.sender.canonical_directory()) else {
+            return Ok(failure("file_capture_refused"));
+        };
         let captured = match self.sender.capture(
             ledger,
             scope,
             dispatch,
             execution,
-            &input.path,
+            &path,
             input.filename.as_deref(),
             input.caption,
             thread,

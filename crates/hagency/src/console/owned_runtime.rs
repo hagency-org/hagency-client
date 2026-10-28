@@ -1,6 +1,10 @@
-//! Explicit owner-started, chat-only Codex host. No legacy execution fallback.
+//! Owner-started Codex host with scoped plaintext and encrypted owner transport.
+mod encrypted;
+#[cfg(unix)]
+mod encrypted_files;
 #[cfg(unix)]
 mod received_files;
+mod remote_approvals;
 #[cfg(unix)]
 mod sent_files;
 mod service;
@@ -357,6 +361,9 @@ struct ApprovalSlot {
     view: ApprovalView,
     pending: codex::PendingApproval,
     device: DevicePin,
+    gate: Option<Arc<dyn codex::ExecutionGate>>,
+    turn_cancel: watch::Receiver<bool>,
+    remote: Option<remote_approvals::RemoteSlot>,
 }
 struct BindingHandle {
     cancel: watch::Sender<bool>,
@@ -400,15 +407,15 @@ impl Entry {
             .get(binding)
             .is_some_and(|b| !*b.cancel.borrow() && b.status.borrow().phase != "stopped")
     }
-    fn take_approval(
-        &mut self,
+    fn check_approval(
+        &self,
         pin: &DevicePin,
         agent: &str,
         id: &str,
         digest: &str,
         bindings: &[Binding],
         at: i64,
-    ) -> Result<codex::PendingApproval, RuntimeError> {
+    ) -> Result<&ApprovalSlot, RuntimeError> {
         if *self.cancel.borrow() || self.task.is_finished() || &self.device != pin {
             return Err(RuntimeError::Authorization);
         }
@@ -418,6 +425,7 @@ impl Entry {
             || &slot.device != pin
             || proposal.expires <= at
             || slot.pending.is_closed()
+            || *slot.turn_cancel.borrow()
             || proposal.scope.agent != agent
             || !self.binding_active(&proposal.scope.binding)
             || !bindings.iter().any(|b| {
@@ -429,6 +437,18 @@ impl Entry {
         {
             return Err(RuntimeError::Approval);
         }
+        Ok(slot)
+    }
+    fn take_approval(
+        &mut self,
+        pin: &DevicePin,
+        agent: &str,
+        id: &str,
+        digest: &str,
+        bindings: &[Binding],
+        at: i64,
+    ) -> Result<codex::PendingApproval, RuntimeError> {
+        self.check_approval(pin, agent, id, digest, bindings, at)?;
         Ok(self
             .approvals
             .remove(id)
@@ -809,6 +829,8 @@ impl OwnedRuntime {
         console: &Console,
         expected: &DevicePin,
         mut pending: codex::PendingApproval,
+        gate: Arc<dyn codex::ExecutionGate>,
+        turn_cancel: watch::Receiver<bool>,
     ) -> Result<(), RuntimeError> {
         use sha2::{Digest, Sha256};
         let device = console.authorized_device().await.map_err(device_error)?;
@@ -861,6 +883,9 @@ impl OwnedRuntime {
                 view,
                 pending,
                 device: DevicePin::from(&device),
+                gate: Some(gate),
+                turn_cancel,
+                remote: None,
             },
         );
         Ok(())
@@ -1180,11 +1205,47 @@ struct PinnedConsole {
     console: Console,
     pin: DevicePin,
 }
+/// Historical encrypted publication lookup uses the original epoch as metadata;
+/// the Server's status action authenticates the owner without acquiring a lease.
+pub(super) async fn encrypted_file_status(
+    console: &Console,
+    device: &AuthorizedDevice,
+    dispatch: &inbox::Dispatch,
+    execution: &str,
+    record: &hagency_agent_local::sent_files::Record,
+) -> Result<Option<hagency_agent_local::file_delivery::Delivery>, RuntimeError> {
+    let host = PinnedConsole {
+        console: console.clone(),
+        pin: DevicePin::from(device),
+    };
+    let lease = LeaseRef {
+        agent_id: dispatch.agent_id.clone(),
+        epoch: dispatch.dispatch_epoch.ok_or(RuntimeError::Profile)?,
+    };
+    let result = encrypted::call(
+        &host,
+        &lease,
+        &dispatch.id,
+        execution,
+        "status",
+        serde_json::json!({"kind":"file","requestId":record.request_id}),
+    )
+    .await?;
+    let publication = result.get("publication").ok_or(RuntimeError::Transport)?;
+    if publication.is_null() {
+        // Missing encrypted publication is not proof of final preparation absence.
+        return Ok(None);
+    }
+    encrypted::file_receipt(record, publication).map(Some)
+}
 impl Transport for PinnedConsole {
     fn approval_host(&self) -> Option<PinnedConsole> {
         Some(self.clone())
     }
     async fn execute(&self, op: Op) -> Result<Response, RuntimeError> {
+        if let Some(response) = encrypted::execute(self, &op).await? {
+            return Ok(response);
+        }
         let acquiring = matches!(&op, Op::Acquire { .. });
         let request = matches!(
             &op,
@@ -1985,7 +2046,9 @@ async fn execution_loop_admitted<T: Transport>(
             let scope = event.scope();
             // Poll transport has verified current owner/device/Agent and lease.
             local(ledger.register_binding(owner, &scope))?;
-            local(ledger.receive_dispatch(owner, &event, inbox::Limits::default(), now()))?;
+            if local(ledger.encrypted_input_transport_digest(owner, &event.id))?.is_none() {
+                local(ledger.receive_dispatch(owner, &event, inbox::Limits::default(), now()))?;
+            }
             let record = local(ledger.inbox_record(owner, &event.id))?;
             // A redelivery is not permission to repeat provider work. Close the
             // unstarted server offer even after a restart changed the lease epoch.
@@ -2101,7 +2164,14 @@ async fn execution_loop_admitted<T: Transport>(
             if local(ledger.inbox_available_bytes(owner))? < 65_536 {
                 return Err(RuntimeError::Profile);
             }
-            let prepared = local(ledger.prepare_execution(owner, &record.dispatch.id))?;
+            let is_encrypted =
+                local(ledger.encrypted_input_transport_digest(owner, &record.dispatch.id))?
+                    .is_some();
+            let prepared = local(if is_encrypted {
+                ledger.prepare_encrypted_execution(owner, &record.dispatch.id)
+            } else {
+                ledger.prepare_execution(owner, &record.dispatch.id)
+            })?;
             let start = operation(
                 console,
                 cancel,
@@ -2118,7 +2188,11 @@ async fn execution_loop_admitted<T: Transport>(
                         dispatch: convert(start.dispatch)?,
                         newly_started: start.newly_started,
                     };
-                    let Some(permit) = local(ledger.confirm_execution_start(owner, &response))?
+                    let Some(permit) = local(if is_encrypted {
+                        ledger.confirm_encrypted_execution_start(owner, &response)
+                    } else {
+                        ledger.confirm_execution_start(owner, &response)
+                    })?
                     else {
                         continue;
                     };
@@ -2585,13 +2659,18 @@ async fn run_turn<T: Transport>(
     }
     let has_approval_host = host.is_some();
     let bridge = host.map(|console| {
+        let approval_gate: Arc<dyn codex::ExecutionGate> = Arc::new(LiveToolGate {
+            console: console.clone(), lease: lease.clone(), expected: prepared.dispatch.clone(),
+            execution: prepared.execution_id.clone(), cancel: cancel.clone(),
+        });
+        let approval_cancel=cancel.clone();
         tokio::spawn(async move {
             while let Some(pending) = receiver.recv().await {
                 if console
                     .console
                     .0
                     .owned_runtime
-                    .offer_approval(&console.console, &console.pin, pending)
+                    .offer_approval(&console.console, &console.pin, pending, approval_gate.clone(), approval_cancel.clone())
                     .await
                     .is_err()
                 {
@@ -2829,6 +2908,13 @@ async fn send_reply<T: Transport>(
     record: &inbox::Record,
 ) -> Result<(), RuntimeError> {
     let execution = record.execution_id.clone().ok_or(RuntimeError::Profile)?;
+    if local(ledger.encrypted_input_transport_digest(owner, &record.dispatch.id))?.is_some() {
+        let host = console.approval_host().ok_or(RuntimeError::Authorization)?;
+        if encrypted::reply(&host, lease, record).await?.is_some() {
+            local(ledger.confirm_matrix_delivery(owner, &record.dispatch.id, &execution))?;
+        }
+        return Ok(());
+    }
     let body = record.reply.clone().ok_or(RuntimeError::Profile)?;
     let receipt = match operation(
         console,
@@ -4859,6 +4945,9 @@ for raw in sys.stdin:
                     },
                     pending,
                     device: pin.clone(),
+                    gate: None,
+                    turn_cancel: watch::channel(false).1,
+                    remote: None,
                 },
             )]),
         };

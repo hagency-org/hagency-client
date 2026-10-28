@@ -30,7 +30,8 @@ jobs:
       matrix:
         os: [macos-15, macos-15-intel]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # Intel cold builds reached cache upload at 59m20s; include cleanup in the job budget.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master

@@ -121,37 +121,63 @@ pub(super) async fn execute(
             let original = ledger
                 .sent_file_record(&identity.owner, &agent, &id)
                 .map_err(file_error)?;
-            let metadata = crate::server_admission::discover(&identity.origin)
-                .await
-                .map_err(|_| failure(503, "file_history_unavailable"))?;
-            if !metadata
-                .capabilities
-                .iter()
-                .any(|c| c == hagency_agent_local::file_delivery::HISTORY_CAPABILITY)
-            {
-                return Err(failure(409, "file_history_upgrade_required"));
-            }
             let request = hagency_agent_local::file_delivery::FileLookup {
                 dispatch_id: original.dispatch_id.clone(),
                 execution_id: original.execution_id.clone(),
                 request_id: original.record.request_id.clone(),
             };
-            let response = native
-                .0
-                .host
-                .console
-                .execution_api(
-                    crate::console::device_execution::DeviceOperation::LookupFile {
-                        request,
-                        file: original.record.manifest.clone(),
-                    },
+            let observation = if ledger
+                .encrypted_input_transport_digest(&identity.owner, &original.dispatch_id)
+                .map_err(file_error)?
+                .is_some()
+            {
+                let dispatch = ledger
+                    .inbox_record(&identity.owner, &original.dispatch_id)
+                    .map_err(file_error)?
+                    .dispatch;
+                let delivery = crate::console::owned_runtime::encrypted_file_status(
+                    &native.0.host.console,
+                    &device,
+                    &dispatch,
+                    &original.execution_id,
+                    &original.record,
                 )
                 .await
-                .map_err(|e| failure(e.status, &e.code))?;
-            let crate::console::device_execution::DeviceResponse::FileObservation(observation) =
-                response
-            else {
-                return Err(failure(502, "invalid_file_observation_response"));
+                .map_err(|_| failure(503, "file_history_unavailable"))?;
+                hagency_agent_local::file_delivery::FileObservation {
+                    request,
+                    delivery,
+                    preparation_closed: false,
+                }
+            } else {
+                let metadata = crate::server_admission::discover(&identity.origin)
+                    .await
+                    .map_err(|_| failure(503, "file_history_unavailable"))?;
+                if !metadata
+                    .capabilities
+                    .iter()
+                    .any(|c| c == hagency_agent_local::file_delivery::HISTORY_CAPABILITY)
+                {
+                    return Err(failure(409, "file_history_upgrade_required"));
+                }
+                let response = native
+                    .0
+                    .host
+                    .console
+                    .execution_api(
+                        crate::console::device_execution::DeviceOperation::LookupFile {
+                            request,
+                            file: original.record.manifest.clone(),
+                        },
+                    )
+                    .await
+                    .map_err(|e| failure(e.status, &e.code))?;
+                let crate::console::device_execution::DeviceResponse::FileObservation(observation) =
+                    response
+                else {
+                    return Err(failure(502, "invalid_file_observation_response"));
+                };
+                observation
             };
             native.check_matrix_source().await?;
             let fresh = native

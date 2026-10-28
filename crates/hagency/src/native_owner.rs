@@ -1,5 +1,6 @@
 //! Native owner management reuses the authenticated client service in process.
 pub use crate::console::native::*;
+pub use hagency_agent_local::remote_approval;
 
 /// Desktop entry point preserving the original Matrix authorization boundary.
 pub async fn open_with_matrix(

@@ -1,5 +1,100 @@
 # Native migration working plan
 
+Current encrypted owner-chain delivery (2026-10-27): original encrypted attachment
+now runs through the CURRENT Native/Codex/policy/ledger service and returns actual
+encrypted file and reply. Real Synapse/SDK/Codex success proves131097 exact bytes,
+original file/reply receipts, completed tools, whole_tree stop and one45096-token
+call. Two Native/service reopens retain one call/cost and original decryption;
+normal newly created owner DM is encrypted by default. Source/transport/receipt
+proof independently checked against HS/PG/SQLite. Preserve the two earlier paid
+failures and195281 total tokens; no original work/reply/file was replayed. Owner
+private chain is delivered; shared Project requester trust, cross-host recovery,
+A3 and prior manual/production OAuth/platform gates remain in the main plan.
+See agent-encrypted-codex-validation dev-vibe report.
+
+
+Current encrypted-inbox ACK checkpoint (2026-10-27): actual Synapse/NativeOwner
+now persists original SDK plaintext and source/history bindings atomically before
+metadata-only Server ACK. encrypted_* states keep ordinary execution closed;
+normalized sealed-payload uniqueness and authenticated inner thread handling reject
+new-header replay and outer relation forgery. Restart retains original dispatch.
+Independent HS/Python/PG/SQLite proves admissions2/ciphertexts3, compacted AS3,
+plaintext events0/calls0/live leases0/history lease1. Full encrypted model/tool
+start, original encrypted replies/files, shared requester trust, A3 and prior
+manual/platform/production OAuth gates remain. See current encrypted ACK report.
+
+
+Current ciphertext-intake checkpoint (2026-10-27): original verified AS ciphertext
+now persists in a separate inbox before routing compaction, with canonical source
+commitments and current-lease/member/generation scoped poll/read. Native receives
+by original ID, verifies actual owner SDK crypto, then rereads current authority.
+Fresh intake2 proves actual normal+thread messages, wrong Agent/epoch/released
+lease refusal and native restart; independent actual-HS/Python/PG proves two
+original retained digests, compacted AS bodies, plain events0, calls0/live leases0
+and one retained historical lease. This grants no task ACK/admission/start.
+Next: consume opaque evidence into durable local inbox/history, exact metadata
+ACK/admission without Server plaintext, then actual Codex/current-tool gates and
+original encrypted replies/files. Shared requester trust and A3 remain open.
+See current ciphertext-intake dev-vibe report. Full goal active.
+
+
+Current owner-receive checkpoint (2026-10-27): separate scoped broker and normal
+Agent SDK lifecycle now receive actual owner Olm/Megolm keys and decrypt original
+owner ciphertext through host-only opaque evidence. Fresh receive5 Synapse proves
+wrong Agent/generation/room/sender/ciphertext refusal and native restart1→2 retaining
+original keys; independent OpenSSL Agent→owner signature and calls/leases0 pass.
+Stop/shutdown join original receiving tasks even after canceled observers. Crypto
+evidence alone grants no event origin/member/admission/ACK/lease/execution authority.
+Next: original AS ciphertext admission/ACK, current Room/member/lease binding and
+original encrypted Codex replies/files; then A3 and existing gates. See dev-vibe
+owner-receive report. Full goal active.
+
+
+Current owner-verification checkpoint (2026-10-27): exact native Agent identity
+review now signs via the current verified owner SDK and reobserves actual
+cross-signatures. Fresh scoped queries reject partial/missing/invalid responses
+instead of using verified cache; private user-signing keys are required for new
+trust. Actual owner3 Synapse proof includes a cross-signed owner device without
+private signer being refused, native restart1→2, original held callback joined
+retirement, independent OpenSSL signature proof and calls/leases0. This is owner
+trust in Agent keys, not Agent trust in requesters or encrypted execution grants.
+Next: encrypted event intake/ACK and original encrypted Codex replies/files, then
+A3 and remaining gates. See the owner-verification dev-vibe report. Goal active.
+
+Current managed identity checkpoint (2026-10-27): normal native create/start/
+assignment and desktop Service identity controls now manage independent SDK
+sessions. Private filesystem credentials (not OS keychain) and original task/
+HTTP/store-lock custody survive canceled waiters; actual managed3 Synapse proof
+passes two Agents, 35-second authority renewal, real revocation, same-installation
+restart with unchanged keys and held callback joined shutdown. Ledger calls and
+Server leases0. Owner verification/recovery, encrypted tasks/replies/files and A3
+remain open; all existing refusal gates stay. See the managed lifecycle dev-vibe
+report. Full goal active.
+
+Current A4 identity checkpoint (2026-10-27): independent Agent SDK identity-only
+broker/facade passes actual Synapse, two Agents, original store and same-host
+NativeOwner reopen with authorization1→3 and unchanged crypto keys. Real API
+revocation refuses old SDK and direct-HS bearer; calls/leases0. Normal runtime
+lifecycle/secret-store and owner verification/recovery are not yet wired; encrypted
+tasks/replies/files remain refused until their complete path is implemented.
+See dev-vibe/agent-crypto-identity-validation-2026-10-27.zh.md. Full goal active.
+
+Current A4 implementation checkpoint (2026-10-27): execution-device private
+publication, original live PendingApproval consumption and native desktop actions
+are wired. SDK1c48a831 uses detached own-device encryption; actual SDK local HTTP
+crypto and NativeOwner host-double proofs are separate from real Synapse/manual
+qualification. Real remote approvals now pass Synapse/two SDKs/two NativeOwners/
+actual Codex with original verified decision, exact bytes/audit and settled usage.
+The remote owner inbox, exact review/decision and original verdict
+status UI are now wired with permanent journal custody and joined IO.
+manual desktop/production OAuth qualification, per-Agent encrypted identity/tasks/files
+and A3 remain next work, alongside earlier platform/OAuth gates. Full scope remains
+in the owner capability plan and remote-approval contract
+in dev-vibe. Work stays on codex/remote-owner-approvals; freshly fetched main42e59b9e
+is an ancestor. Old8c full40426784089 has actual Linux/macOS/Windows job success;
+this cannot replace current-source qualification or explain the older A2 Windows
+store-shutdown OutcomeUnknown failure in40423919137.
+
 This is coordination, not canonical runtime task state. There is no provisioned
 `task-writer` in this source checkout. User instruction: execute the Rust migration
 in a clean worktree. Branch `feat/rust-migration`; baseline `5dbef22`.
