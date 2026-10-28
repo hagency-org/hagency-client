@@ -3,6 +3,55 @@
 
 # Repository audit knowledge
 
+- **Frozen Agent sender, 2026-10-27:** Capture real nofollow workspace/parent/file
+  objects and bytes before exact approval; recheck the original objects at begin.
+  First committed sent_files insertion alone mints non-Clone custody, before
+  Server IO. Exact old intent and unresolved path/content cannot rearm by a new
+  call ID, copied file, changed workspace, reopen or snapshot restore. Send only
+  frozen bytes; later reads are original-ID status, never upload continuation.
+  Late sent is historical evidence, not an original unknown audit rewrite.
+  Combined file contexts need exact settlement AND usage-gap reset handling.
+  Owner historical refresh and real joint/Windows qualification remain required.
+
+- **Client file delivery protocol, 2026-10-27:** Manifest/Target/Delivery and
+  typed prepare/chunk/queue/status carry no byte or send custody. Retain the
+  original manifest/request/file expectation locally and validate each response;
+  status sends only the original target, never an expired lease or arbitrary
+  destination. Sent requires an actual original event ID, including modern
+  opaque IDs without colon. Capture/approval/durable local ownership remain
+  necessary before exposing dynamic sender tools.
+
+- **Server original file delivery, 2026-10-27:** Separate durable upload/send
+  custody commits before IO. Fresh Matrix facts and exact execution device/lease
+  bind each phase; lock actual device/session/user rows and recheck real clocks
+  after waits/hash work. Unknown never reclaims; late upload acceptance retains
+  unknown, while actual original HTTP/verified AS message receipts may record
+  sent after revocation without authorizing new work. Safe status is historical
+  and source-free. Client sender capture/approval integration remains required.
+
+- **Original attachment receive, 2026-10-27:** Receiver reservations mint one
+  non-Clone custody; commit write_possible before filesystem effects. Ready paths
+  require original file/workspace/parent identity and hash, never content-only
+  reconstruction. Lost custody and restored snapshots cannot redownload/overwrite.
+  Current SDK bounded authenticated downloads bypass preview cache and verify v2
+  ciphertext. Model receives safe metadata and generated paths only. Receive
+  contexts must be accepted by exact settlement validation AND usage-gap baseline
+  reset; omitting either can create unknown or mischarge after actual publication.
+  Current publication is macOS/Linux; sender/encrypted Room execution remain work.
+
+
+- **Agent attachment protocol, 2026-10-27:** Server records descriptors in the
+  original owner-event transaction; legacy Poll excludes them before LIMIT.
+  Explicit PollFiles is reserved for a fully wired host. Read metadata only for
+  the exact running lease/device/execution and current Gateway facts; no arbitrary
+  Room/event/URL selectors. Sorted compact UTF-8 JSON tuple commitments are shared
+  across serde_json map feature differences. Descriptors/debug/model summaries
+  must not leak locator/key; filenames and declared size are untrusted. No actual
+  receive/send activation yet. PG service tests require a fresh DB and CI serial
+  execution: parallel migration DDL deadlocks and retained notification pagination
+  contaminate assertions. Preserve original failures; do not add IO retries.
+
+
 - **Stopped request recovery, 2026-10-27:** Keep a separate copy of unknown/failed
   input before compacting inbox bodies. Workspace and observed stop scope bind
   the original execution; programming continuation requires the original whole
@@ -5377,3 +5426,34 @@ PR #8 审查及验证记录见 `dev-vibe/pr-8-board-ux-review-2026-10-25.zh.md`�
 - Codex CLI disable arguments override ordinary feature overrides, and environments:[] disables native execution despite enabled shell flags. Programming must enable the two shell flags and omit the empty environment override. Configured MCP is pinned to local and must use prompt, without ambient headers/env/tool exceptions. Existing prefix-rule directories are refused for programming.
 - Capability contexts include programming config, workspace/model/effort/search; their usage gaps must reset only exact matching scoped baselines. ModelProfile's new field is omitted for default profiles and stripped from v1 remote configuration results; remote ordinary Codex edits preserve execution-local programming settings.
 - Actual Codex 0.164.0-alpha.11.1/gpt-6.1-sol completed exact existing-file edit, native command file, configured MCP file and byte readback with 6/6 tools and whole-tree stop. This is adapter/fixture-owner evidence, not real Matrix/desktop manual acceptance. Validation and remaining boundaries: dev-vibe/codex-programming-validation-2026-10-26.zh.md.
+
+- Original file preparation can be looked up by dispatch/execution/request ID
+  without a lease or original file ID (agent-file-history-v1). Absence is final
+  only with a Server preparationClosed attestation taken under the same fence as
+  prepare/terminal transitions. A present delivery always keeps its own state;
+  closed does not mean sent/cancelled. Client owner history must retain this
+  proof separately rather than forge a delivery or reconstruct write custody.
+
+- File history observations live separately from write custody. Final absence is
+  an immutable sent_file_absence row bound to the exact original request with no
+  delivery and Server preparationClosed=true; it releases only file bytes, never
+  Token reservations or the permanent witness. SDK/device/profile must be checked
+  again after the lookup and before storing it. Unknown audits stay unknown.
+- SQLite deferred FKs do not defer INSERT triggers. Snapshot restoration must
+  insert sent_files before sent_file_absence so its original-record validation
+  remains active. Keep explicit pre-history schema compatibility and add only
+  empty observation metadata when restoring older snapshots.
+
+- Real programming qualification must use an executable implementing the real
+  guardian entry before owner initialization. libtest main interprets guardian
+  as a test filter and cannot replace that entry; never disable supervision to
+  make a probe pass. native_owner_files_qualification exercises the public facade.
+- Fixture issuers are part of permanent deployment identity. New random ports
+  require fresh isolated databases, while an original Server restart retains its
+  port/database. The fixture enforces loopback and agent_files_joint_ naming.
+- A failed qualification driver after a sent receipt must verify that original
+  outcome, not rerun paid inference or reconstruct send custody. Explicit
+  VERIFY_EXISTING stops the original intent and only checks receipts/audits/fees.
+
+
+- **Actual v12/SDK files, 2026-10-27:** Room hashes have43 URL-safe characters and no server suffix; user IDs still require servers. V12 creators/additional_creators have authority outside power users, only from current trusted create state; legacy claims never escalate and membership remains separate. Use the shared SDK bounded fetch helper, current SDK token for readback, and exact original Agent/Room/text completion markers: user file instructions can contain the same marker. Synapse Docker callbacks may need its private host IPv4 when IPv6 is unreachable; never fake readiness. Failed or pending originals stay retained and cannot be rearmed by a new fixture.

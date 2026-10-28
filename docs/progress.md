@@ -14256,3 +14256,209 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 - Real encrypted owner-direct -> Server -> new Agent execution, manual desktop
   interaction and cross-platform acceptance remain unqualified. A2/A4/A3 stay in
   scope; no goal-complete claim, deployment or reconstructed task-writer state.
+
+
+## 2026-10-27: Agent file protocol foundation (A2 remains in progress)
+
+- Re-fetched Client main42e59b9e and Server main6340df32 before work; both are
+  included in their codex/agent-file-transfer branches. No direct main edits.
+- Server c98e210 atomically retains immutable canonical attachment descriptors
+  with original requests, rejects changed duplicates, filters legacy polls before
+  LIMIT, and exposes device/execution/lease/Gateway-scoped private metadata only.
+- Client validates matching dispatch/execution, portable canonical digests and
+  bounded MXC/v2 source parameters. Model Summary excludes source; ordinary
+  runtime Poll stays text-only until actual receive/send tools are ready.
+- Final fresh-PG serial Server95/0 ignored, strict Clippy/format/OpenAPI78+4 and
+  15 guards pass. Client Agent116+3+8/3 existing ignored, engine255/7 ignored,
+  actual authenticated TCP and strict affected checks pass. Broad Client tests
+  fail the existing real two-agent qualification placeholder; original failures,
+  Server parallel deadlocks and populated-test-DB pagination failures are retained
+  in the validation reports. No false all-green, transfer, deployment or A2 pass.
+- A1 run40363073237 now has successful Linux/Windows native jobs, macOS cancelled;
+  original historical caller-loss cause remains unproven. A6 CI passes while its
+  full/App matrix is still pending. Actual A2 byte tools and A4/A3 remain work.
+
+
+## 2026-10-27: Original Agent attachment receive connected
+
+- Current Codex host conditionally opts into file requests only with explicit
+  programming/Room-file capability, current SDK source and Server metadata
+  support. list_received_files/receive_file select only the original event.
+  Server/device/lease/source and current local policy fences precede effects.
+- Owner proposals exclude MXC/key; the current SDK performs bounded authenticated
+  reads and v2 verification/decryption. Durable reserved/write_possible/ready or
+  prewrite-failed records retain original custody. Generated private no-replace
+  publication verifies physical root/parent/file and byte hash. Unknown, changed
+  files and restored snapshots never recreate download/write ownership.
+- Fixed receive context settlement and exact usage-gap invalidation after the
+  new namespace initially failed AFTER actual file completion. Original logs
+  retained. The integrated fake model now reads actual bytes and completes with
+  lease renewal and original reply; separate real SDK/TCP crypto transport passes.
+- Agent125+programming3+runtime8, engine256, App618 pass with original3/7/2 ignores.
+  Strict3-package all-targets no-deps Clippy, core/new-SDK format, callers/spec
+  bindings pass. Whole-App format fails existing unmodified baseline files; no
+  broad format rewrite. See agent-file-receive-validation for logs/limits.
+- Earlier metadata Client/Server CI pass; Mac full-matrix inventory fails its
+  ten-minute cold compile/list deadline. Added exact-scope no-run build steps to
+  CI before the unchanged bounded verifier; remote revalidation is still owed.
+- No real homeserver/model/manual desktop joint receive or Windows publication
+  qualification. send_file/get_file_delivery, A4 encrypted execution/remote
+  approval, A3 collaboration and remaining earlier gates stay active goals.
+
+
+## 2026-10-27: Server original file delivery foundation
+
+- Re-fetched Client main42e59b9e and Server main6340df32; both remain ancestors
+  of the current codex/agent-file-transfer branches. No direct main edits.
+- Server4f2f466 adds bounded exact original-execution preparation/chunks/queue,
+  independent upload/send custody and safe historical delivery status. Unknown
+  work cannot rearm; actual HTTP or verified AS events confirm historical sends.
+  Original sender/thread and current device/session/lease/Matrix gates remain.
+- Final fresh-PG serial Agent-service103/0 ignored, strict three-package Clippy,
+  format, OpenAPI82+4/19 negative guards pass. Local HTTP bytes and AS router
+  cover actual transport; the report retains initial reused-DB and deadline
+  fixture failures. Server PR7 updated; updated remote CI pending.
+- Client1bbff570 CI/App CI succeeded; full Windows/macOS matrix still pending.
+  Client send_file/get_file_delivery/capture/approval wiring remains next, then
+  A4/A3 and qualification. No A2/whole-goal completion or deployment claim.
+
+
+## 2026-10-27: Client typed original-file delivery protocol
+
+- Added source-free Manifest/Target/Delivery validation and exact original
+  expectation checks to device prepare/chunk/queue/status operations. 64KiB
+  chunks retain the existing 128KiB HTTP bound; status carries no lease or
+  destination and cannot reupload/requeue. Modern opaque Matrix event IDs work.
+- Actual NativeOwner OAuth/device/TCP verifies all four payloads, original byte
+  encoding, unknown non-replay and changed/private receipt rejection. This is
+  typed transport evidence, not Server/model/owner-approval joint qualification.
+- Agent127/3 existing ignored and engine258/7 existing ignored pass. Strict
+  two-package all-targets Clippy, core fmt, caller/guard checks and1155 bound
+  selectors pass (original superseded entries retained). See the
+  delivery validation report for logs. Capture/approval/one-shot local state and
+  dynamic sender tools remain next; A2 and the whole goal remain active.
+- Server03c9e0b fixes a CI spelling-only fixture failure without changing original
+  bytes/assertions. Matching typos1.48 and targeted test pass; Server CI40389964561 now succeeds
+  at03c9e0b, including PostgreSQL, backend/frontend tests and WASM Clippy.
+
+
+## 2026-10-27: Frozen Agent sender connected to current Codex
+
+- Added bounded physical-source capture, exact owner policy/approval, persistent
+  one-shot sent_files witness before Server IO, 64KiB staged delivery and
+  get_file_delivery for original local IDs. New call IDs, changed workspace,
+  restart and restored snapshots cannot recreate original send custody.
+- NativeOwner capability opt-in connects ordinary text or attachment requests
+  to current restricted-file/programming Codex sessions. New context namespace
+  settlement and usage-gap handling are covered. Windows execution stays open.
+- Real owner-queue/file/TCP/runtime tests cover original bytes, denial/revocation,
+  changed source/parents, unknown queue acknowledgement, no resend, late actual
+  receipt, original reply/restart/renewal and accounting. Local policy denial
+  during a status read suppresses the model response. Actual Server/Matrix/real
+  model joint and manual proof remain distinct, unqualified gates.
+- Agent137+programming3+runtime8/3 existing ignores, engine260/7 ignores, App618/2
+  ignores and strict core/App Clippy pass. Core format/caller/spec guards pass;
+  final inventory logs and original fixture/compiler/lint failures are in the
+  send validation report. No failure was changed into a pass by retry/timeout.
+- Next: owner historical delivery refresh/settlement after execution end, actual
+  joint and Windows qualification, then A4/A3 and remaining earlier gates. Whole
+  goal and A2 remain active; no deployment or task-writer reconstruction.
+
+- Final review found Server completed-task file intents could rearm after a
+  requester/speaking/encryption denial, because completed outcomes cannot be
+  rewritten. New regression reproduced the bug. A permanent original-event
+  file-denial journal now fences old active/pending files, preserving completed
+  outcomes and late actual receipts; new requests remain independent. True old
+  03-format migration preserves all9 file/199 event/14 reply rows exactly. Final
+  fresh-PG serial Server106, strict checks pass; remote revalidation remains.
+- Room replies now append deterministic unconfirmed/cancelled file notices from
+  validated original receipts. A third persistent-unknown Native/TCP scenario
+  proves ordinary text cannot hide it, while replies/fees/restart stay correct.
+- Final frozen-source inventory:1155 bindings, no missing/deferred/platform gaps;
+  46 guards and one production caller pass. Both latest remote mains remain
+  ancestors (Client42e59b9e, Server6340df32). Server denial fix f5ac86c is pushed;
+  its CI40404302743 is pending. Client sender is ready for feature-branch push.
+- Historical refresh must also resolve lost prepare acknowledgements by original
+  request ID. Temporary absence is not cancellation and never grants a retry;
+  preserve custody/audit witnesses and require authoritative terminal evidence
+  before releasing a final-absence hold.
+
+## 2026-10-27: Original file lookup protocol
+
+- Pushed Client sender971578c0 and Server permanent-denial f5ac86c; Server CI
+  40404302743 passed. Sender CI40405525369/App40405530521/full40405535861 were
+  dispatched against971578c0; remote results are distinct from local proof.
+- Server0a1ef55 adds owner/device-only original-request lookup, serialized with
+  preparation and terminal transitions. Missing running rows remain uncertain;
+  closed preparation is evidence only and never cancels an existing delivery.
+  Fresh PG107/107 and strict checks pass; CI40406382037 is pending.
+- Client typed lookup binds original IDs/manifest, rejects private/changed output,
+  preserves missing/closed evidence without a retry grant. Agent138/3 ignored,
+  engine260/7 ignored pass. Strict core/App/miniapp Clippy including Sparkle passes
+  after setting the existing SDK path; the initial missing-SDK failure is kept.
+- Owner historical list/refresh UI and durable final-absence capacity settlement
+  are still next, followed by actual joint/Windows qualification and A4/A3. No
+  model restart or write-custody reconstruction was introduced; A2 stays open.
+
+## 2026-10-27: Owner file history and final-absence settlement
+
+- Added exact owner/Agent paged file history, original detail and read-only refresh
+  in NativeOwner and the desktop File delivery tab with English/Chinese text.
+  Fresh SDK/device/profile checks after IO prevent stale authorization evidence
+  from releasing capacity. No model/lease restart or upload/queue operation.
+- Permanent final-absence evidence releases actual file capacity while retaining
+  original send/audit witnesses. Temporary absence remains unknown. Restore keeps
+  its INSERT validation active by inserting original witnesses first. Legacy
+  snapshots add empty evidence only; original identities cannot regain custody.
+- Real disk/SQLite tests pass142/3 original ignores; Native OAuth/device/TCP and
+  Makepad component tests pass. Full library regression/current Clippy/spec and
+  guard evidence are recorded in the new history validation report. Original
+  fixture, restore-order, compiler and DSL failures are retained.
+- Server0a1ef55 CI40406382037 passed. Client fe000bb7 remote runs remain separate
+  from this new source. Next: true joint/manual/Windows qualification, A4/A3 and
+  earlier open gates. Whole objective remains active; no deployment or messages.
+- Final frozen-source regression: Agent142/3 original ignores, engine261/7 and
+  App620/2 all pass; programming3/runtime8 pass. Strict current core/App/miniapp
+  Clippy including pinned Sparkle passes. Format, spelling,46 guards, one caller
+  and1160 bindings pass, no missing/deferred/current-platform gaps. Original
+  platform-annotation ordering failure stays in the first inventory log; only
+  the spec's metadata order was corrected. Latest fetched main remains42e59b9e.
+
+## 2026-10-27: Cross-repository files and real public NativeOwner qualification
+
+- Added a loopback-only Server example using actual verifier/API/PG/AS/readiness/
+  workers with explicit Pasion/Matrix doubles. Current Client worker now connects
+  to it; final normal/lost-queue-ACK runs verify131073 incoming/131089 outgoing
+  exact bytes, original sender/thread, historical receipts, restart/no replay and
+  retained unknown audit. Provider5-token values there are synthetic only.
+- Public NativeOwner example implements the real guardian entry, authenticates
+  the current managed Codex account without copying secrets, configures all
+  three policies and launches the actual model. Original execution produced one
+  sent file and one settled call:38549 input+401 output=38950, cached30976 already
+  contained in input; no pending/unreported/reserved. Four audits completed and
+  the original process stop scope was whole_tree.
+- Original real libtest failed preflight because libtest cannot act as guardian;
+  replaced the paid wrapper with an external public-example launch. The original
+  public driver then failed stopping with a missing bindingId after actual sent.
+  Preserve both failures. Corrected validation-only existing-state mode verifies
+  the same original bytes/receipt/audits/usage and checked shutdown, with no new
+  inference, lease acquisition, upload or resend. Fresh paid wrapper not run.
+- Current engine261 passes; original7 ignores plus2 explicit external gates are
+  reported separately. Core strict Clippy/format and Server strict/contract
+  checks pass. Final static/binding logs are in the joint validation report.
+- b5206bf7 CI40409737074 and App40409741968 passed; full40409746628 completed
+  with Linux/macOS/Windows jobs all success, including Windows media restoration.
+  Current local all-targets Clippy, format/spelling,46 guards, one caller and1161
+  bindings pass with no missing/deferred/platform gaps. Real Matrix/SDK,
+  desktop/manual, Windows tools and A4/A3/earlier gates remain unqualified.
+
+## 2026-10-27: Actual Synapse SDK files and v12 authority
+
+- Previous goal turn changed authoritative state: pushed Clientbbab2f1e and Servercab1ae1. Their fast CI/Server CI and spelling passed; original Client full40418590223 remains independently observed. Latest fetched main still an ancestor before current changes.
+- Started only a new isolated Synapse1.163.2 official digest container, actual loopback media/messages/AS/state. OAuth introspection remains an explicit bridge. Actual desktop SDK helper verifies131073 plain/v2 decrypted bytes and rejects a modified hash.
+- Live v12 exposed colon-only Room validation and missing creator authority. Server regression first failed, then current Domain/Gateway fixes pass110 tests including PG. Client native/device/workspace/project policies now accept exact v12 hashes while retaining user servers/path checks. Engine263/9 ignores passes (7 original+2 external).
+- Public NativeOwner/actual Codex received/transformed/sent131089 exact bytes to the real original Room/thread/Agent. One settled call38892+418=39310, cache24832 subset, all holds/pending/unreported zero, four completed audits, whole_tree stop.
+- Preserve failed drivers: old Client ID guard denied before events; incoming marker false-positive stopped a pending request with zero calls/accounts, not replayed. Actual successful execution's final readback used old fake token and returned401. Current explicit VERIFY_EXISTING validates the same original bytes/receipt/audits/fees and checked shutdown with no inference/acquire/upload/resend. No fresh default paid rerun claim.
+- Added marker origin/type negative regression, actual SDK example and shared qualification runner, private Synapse setup script and detailed report. Production OAuth, manual desktop, Windows file tools, A4/A3 and earlier gates remain; goal stays active.
+
+- Final local proof: App620/2 original ignores; completion-origin regression1; current core/App strict default-feature all-targets Clippy, core format/spelling,46 guards, one caller and1163 selector bindings pass with no missing/deferred/platform gaps. Server110 and strict/contract checks pass. Real3 original-state verification exits0; original driver401 stays failed. New-head remote validation remains distinct from previous bbab2f1e fast CI40418585682/Servercab1ae1 CI40418520999 successes and still-live full40418590223.

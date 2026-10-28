@@ -1654,7 +1654,7 @@ fn policy_scope(project: &str, room: Option<&str>) -> Result<String, OwnerError>
     match room {
         Some(room) => {
             matrix_creations::room_id(room)?;
-            if room.contains('%') || !room.contains(':') {
+            if room.contains('%') || !super::matrix_identifiers::room_id(room) {
                 return Err(OwnerError::new(400, "invalid_room_id"));
             }
             Ok(format!(

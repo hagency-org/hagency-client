@@ -2,15 +2,19 @@
 //! A host must authenticate the owner, validate server binding records and enforce tool
 //! interception before using this library. Each call ID denotes ONE provider invocation:
 //! a retry which can charge again requires a fresh call ID under the original requester.
+pub mod attachments;
 pub mod audit;
 pub mod backup;
 pub mod codex;
+pub mod file_delivery;
 pub mod inbox;
 pub mod process_cleanup;
+pub mod received_files;
 pub mod recovery;
 #[cfg(unix)]
 pub mod room_files;
 pub mod runtime;
+pub mod sent_files;
 pub mod usage;
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
@@ -294,6 +298,9 @@ impl Ledger {
         db.execute_batch(usage::SCHEMA)?;
         db.execute_batch(audit::SCHEMA)?;
         db.execute_batch(recovery::SCHEMA)?;
+        db.execute_batch(received_files::SCHEMA)?;
+        db.execute_batch(sent_files::SCHEMA)?;
+        db.execute_batch(sent_files::HISTORY_SCHEMA)?;
         db.execute_batch("COMMIT")?;
         db.pragma_update(None, "foreign_keys", true)?;
         Ok(Self {
@@ -672,20 +679,29 @@ impl Ledger {
     ) -> Result<()> {
         verify(&self.db, scope)?;
         let base = scope.context_key(&self.owner)?;
-        let valid = context == base
-            || context
-                .strip_prefix(&format!(
-                    "{}:",
-                    crate::codex::PROGRAMMING_CAPABILITY_VERSION
-                ))
-                .and_then(|v| v.split_once(':'))
-                .is_some_and(|(digest, tail)| {
-                    digest.len() == 64
-                        && digest.bytes().all(|v| v.is_ascii_hexdigit())
-                        && tail == base
-                });
-        #[cfg(unix)]
-        let valid = valid || context == format!("{}:{base}", crate::codex::FILE_CAPABILITY_VERSION);
+        let bases = [
+            base.clone(),
+            format!("{}:{base}", crate::received_files::CAPABILITY_VERSION),
+            format!("{}:{base}", crate::sent_files::CAPABILITY_VERSION),
+        ];
+        let valid = bases.iter().any(|base| {
+            let valid = context == base
+                || context
+                    .strip_prefix(&format!(
+                        "{}:",
+                        crate::codex::PROGRAMMING_CAPABILITY_VERSION
+                    ))
+                    .and_then(|v| v.split_once(':'))
+                    .is_some_and(|(digest, tail)| {
+                        digest.len() == 64
+                            && digest.bytes().all(|v| v.is_ascii_hexdigit())
+                            && tail == base
+                    });
+            #[cfg(unix)]
+            let valid =
+                valid || context == format!("{}:{base}", crate::codex::FILE_CAPABILITY_VERSION);
+            valid
+        });
         if !valid {
             return Err(Error::Unauthorized);
         }
@@ -1065,21 +1081,30 @@ fn settle_unreported_calls(tx: &rusqlite::Transaction, binding: Option<&str>) ->
 // The next reported total establishes a new baseline without charging old usage.
 fn mark_usage_gap(tx: &rusqlite::Transaction, scope: &Scope, owner: &str) -> Result<()> {
     let context = scope.context_key(owner)?;
-    #[cfg(unix)]
-    let contexts = [
+    let bases = [
         context.clone(),
-        format!("{}:{context}", crate::codex::FILE_CAPABILITY_VERSION),
+        format!("{}:{context}", crate::received_files::CAPABILITY_VERSION),
+        format!("{}:{context}", crate::sent_files::CAPABILITY_VERSION),
     ];
+    #[cfg(unix)]
+    let contexts = bases
+        .iter()
+        .flat_map(|base| {
+            [
+                base.clone(),
+                format!("{}:{base}", crate::codex::FILE_CAPABILITY_VERSION),
+            ]
+        })
+        .collect::<Vec<_>>();
     #[cfg(not(unix))]
-    let contexts = [context.clone()];
+    let contexts = bases.clone();
     for context in contexts {
-        tx.execute("INSERT INTO codex_usage VALUES (?,'null') ON CONFLICT(scope) DO UPDATE SET counters='null'", [&context])?;
+        tx.execute("INSERT INTO codex_usage VALUES (?,'null') ON CONFLICT(scope) DO UPDATE SET counters='null'",[&context])?;
     }
     let prefix = format!("{}:", crate::codex::PROGRAMMING_CAPABILITY_VERSION);
-    tx.execute(
-        "UPDATE codex_usage SET counters='null' WHERE substr(scope,1,?)=? AND substr(scope,?)=?",
-        (prefix.len(), &prefix, prefix.len() + 66, &context),
-    )?;
+    for base in bases {
+        tx.execute("UPDATE codex_usage SET counters='null' WHERE substr(scope,1,?)=? AND substr(scope,?)=?",(prefix.len(),&prefix,prefix.len()+66,&base))?;
+    }
     tx.execute(
         "UPDATE external_sessions SET counters='null' WHERE scope=?",
         [&context],

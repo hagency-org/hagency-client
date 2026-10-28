@@ -1,6 +1,9 @@
 //! Host-only device transport. This module performs no model/tool execution and
 //! never ACKs automatically: callers must durably persist events before ACK.
 use super::{AuthorizedDevice, Console};
+use hagency_agent_local::file_delivery::{
+    self, Delivery as FileDelivery, Manifest as FileManifest, Target as FileTarget,
+};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -66,12 +69,14 @@ fn id(value: &str) -> Result<(), DeviceError> {
     }
 }
 fn matrix(value: &str, prefix: char) -> Result<(), DeviceError> {
-    if value.starts_with(prefix)
-        && value.len() <= 255
-        && value[1..]
-            .split_once(':')
-            .is_some_and(|(a, b)| !a.is_empty() && !b.is_empty())
-        && !value.chars().any(|c| c.is_control() || c.is_whitespace())
+    if (prefix == '!' && super::matrix_identifiers::room_id(value))
+        || (prefix != '!'
+            && value.starts_with(prefix)
+            && value.len() <= 255
+            && value[1..]
+                .split_once(':')
+                .is_some_and(|(a, b)| !a.is_empty() && !b.is_empty())
+            && !value.chars().any(|c| c.is_control() || c.is_whitespace()))
     {
         Ok(())
     } else {
@@ -250,7 +255,90 @@ impl ProcessingReceipt {
         Ok(())
     }
 }
+/// Private host response. Never include descriptors in model tool output.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecutionAttachments {
+    pub dispatch_id: String,
+    pub execution_id: String,
+    pub attachments: Vec<hagency_agent_local::attachments::Attachment>,
+}
+impl ExecutionAttachments {
+    fn validate(&self, dispatch: &str, execution: &str) -> Result<(), DeviceError> {
+        if self.dispatch_id != dispatch
+            || self.execution_id != execution
+            || self.attachments.len() > 1
+        {
+            return Err(error(502, "execution_scope_mismatch"));
+        }
+        for attachment in &self.attachments {
+            attachment
+                .validate()
+                .map_err(|_| error(502, "invalid_execution_response"))?;
+        }
+        Ok(())
+    }
+}
+/// Local original metadata used to validate every later response. Only target
+/// is serialized; this value never grants file-byte or send ownership.
+#[derive(Clone)]
+pub struct FileExpectation {
+    pub target: FileTarget,
+    pub request_id: String,
+    pub file: FileManifest,
+}
+impl FileExpectation {
+    fn validate(&self) -> Result<(), DeviceError> {
+        self.target
+            .validate()
+            .map_err(|_| error(400, "invalid_file_target"))?;
+        id(&self.request_id)?;
+        self.file
+            .validate()
+            .map_err(|_| error(400, "invalid_file_manifest"))
+    }
+    fn check(&self, delivery: &FileDelivery) -> Result<(), DeviceError> {
+        delivery
+            .validate(
+                &self.target.dispatch_id,
+                &self.target.execution_id,
+                &self.request_id,
+                &self.file,
+            )
+            .map_err(|_| error(502, "invalid_file_delivery_response"))?;
+        if delivery.id != self.target.file_id {
+            return Err(error(502, "execution_scope_mismatch"));
+        }
+        Ok(())
+    }
+}
 pub enum DeviceOperation {
+    PrepareFile {
+        lease: LeaseRef,
+        dispatch_id: String,
+        execution_id: String,
+        request_id: String,
+        file: FileManifest,
+    },
+    StageFileChunk {
+        lease: LeaseRef,
+        expected: FileExpectation,
+        offset: u64,
+        bytes: Vec<u8>,
+    },
+    QueueFile {
+        lease: LeaseRef,
+        expected: FileExpectation,
+    },
+    /// Historical status only: no previous lease is supplied or renewed.
+    FileDelivery {
+        expected: FileExpectation,
+    },
+    /// Read by original request ID when no preparation response/file ID survived.
+    LookupFile {
+        request: file_delivery::FileLookup,
+        file: FileManifest,
+    },
     History {
         agent_id: String,
         cursor: Option<String>,
@@ -273,6 +361,18 @@ pub enum DeviceOperation {
         lease: LeaseRef,
         binding_id: String,
         limit: usize,
+    },
+    /// Explicit opt-in for a host with working attachment tools. Ordinary Poll
+    /// stays text-only, including when a newer Server supports file admission.
+    PollFiles {
+        lease: LeaseRef,
+        binding_id: String,
+        limit: usize,
+    },
+    Attachments {
+        lease: LeaseRef,
+        dispatch_id: String,
+        execution_id: String,
     },
     Ack {
         lease: LeaseRef,
@@ -311,10 +411,13 @@ pub enum DeviceOperation {
     },
 }
 pub enum DeviceResponse {
+    FileObservation(file_delivery::FileObservation),
+    FileDelivery(FileDelivery),
     History(ExecutionHistory),
     Lease(Lease),
     Released,
     Events(Vec<Dispatch>),
+    Attachments(ExecutionAttachments),
     Acknowledged,
     Started(ExecutionStart),
     Processing(ProcessingReceipt),
@@ -325,10 +428,18 @@ pub enum DeviceResponse {
 impl DeviceOperation {
     fn lease(&self) -> Option<&LeaseRef> {
         match self {
-            Self::Acquire { .. } | Self::History { .. } => None,
-            Self::Renew { lease, .. }
+            Self::Acquire { .. }
+            | Self::History { .. }
+            | Self::FileDelivery { .. }
+            | Self::LookupFile { .. } => None,
+            Self::PrepareFile { lease, .. }
+            | Self::StageFileChunk { lease, .. }
+            | Self::QueueFile { lease, .. }
+            | Self::Renew { lease, .. }
             | Self::Release { lease }
             | Self::Poll { lease, .. }
+            | Self::PollFiles { lease, .. }
+            | Self::Attachments { lease, .. }
             | Self::Ack { lease, .. }
             | Self::Start { lease, .. }
             | Self::Processing { lease, .. }
@@ -343,6 +454,67 @@ impl DeviceOperation {
             lease.validate()?;
         }
         let (path, body) = match self {
+            Self::PrepareFile {
+                lease,
+                dispatch_id,
+                execution_id,
+                request_id,
+                file,
+            } => {
+                id(dispatch_id)?;
+                id(execution_id)?;
+                id(request_id)?;
+                file.validate()
+                    .map_err(|_| error(400, "invalid_file_manifest"))?;
+                (
+                    "files/prepare",
+                    json!({"lease":lease,"dispatchId":dispatch_id,"executionId":execution_id,"requestId":request_id,"file":file}),
+                )
+            }
+            Self::StageFileChunk {
+                lease,
+                expected,
+                offset,
+                bytes,
+            } => {
+                use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
+                expected.validate()?;
+                if bytes.is_empty()
+                    || bytes.len() > file_delivery::CHUNK_BYTES
+                    || offset.saturating_add(bytes.len() as u64) > expected.file.bytes
+                {
+                    return Err(error(400, "invalid_file_chunk"));
+                }
+                (
+                    "files/chunk",
+                    json!({"lease":lease,"target":expected.target,"offset":offset,"data":STANDARD_NO_PAD.encode(bytes)}),
+                )
+            }
+            Self::QueueFile { lease, expected } => {
+                expected.validate()?;
+                (
+                    "files/queue",
+                    json!({"lease":lease,"target":expected.target}),
+                )
+            }
+            Self::FileDelivery { expected } => {
+                expected.validate()?;
+                (
+                    "files/status",
+                    serde_json::to_value(&expected.target)
+                        .map_err(|_| error(400, "invalid_file_target"))?,
+                )
+            }
+            Self::LookupFile { request, file } => {
+                request
+                    .validate()
+                    .and_then(|_| file.validate())
+                    .map_err(|_| error(400, "invalid_file_lookup"))?;
+                (
+                    "files/lookup",
+                    serde_json::to_value(request).map_err(|_| error(400, "invalid_file_lookup"))?,
+                )
+            }
             Self::History {
                 agent_id,
                 cursor,
@@ -386,14 +558,32 @@ impl DeviceOperation {
                 lease,
                 binding_id,
                 limit,
+            }
+            | Self::PollFiles {
+                lease,
+                binding_id,
+                limit,
             } => {
                 id(binding_id)?;
                 if !(1..=100).contains(limit) {
                     return Err(error(400, "invalid_poll_limit"));
                 }
+                let mut body = json!({"lease":lease,"bindingId":binding_id,"limit":limit});
+                if matches!(self, Self::PollFiles { .. }) {
+                    body["acceptFiles"] = true.into();
+                }
+                ("events/poll", body)
+            }
+            Self::Attachments {
+                lease,
+                dispatch_id,
+                execution_id,
+            } => {
+                id(dispatch_id)?;
+                id(execution_id)?;
                 (
-                    "events/poll",
-                    json!({"lease":lease,"bindingId":binding_id,"limit":limit}),
+                    "files/attachments",
+                    json!({"lease":lease,"dispatchId":dispatch_id,"executionId":execution_id}),
                 )
             }
             Self::Ack { lease, dispatch_id } => {
@@ -606,6 +796,51 @@ fn parse_response(
 ) -> Result<DeviceResponse, DeviceError> {
     let invalid = || error(502, "invalid_execution_response");
     match operation {
+        DeviceOperation::LookupFile { request, file } => {
+            let observation: file_delivery::FileObservation = decode(&value, "observation")?;
+            observation
+                .validate(request, file)
+                .map_err(|_| error(502, "invalid_file_observation_response"))?;
+            Ok(DeviceResponse::FileObservation(observation))
+        }
+        DeviceOperation::PrepareFile {
+            dispatch_id,
+            execution_id,
+            request_id,
+            file,
+            ..
+        } => {
+            let delivery: FileDelivery = decode(&value, "delivery")?;
+            delivery
+                .validate(dispatch_id, execution_id, request_id, file)
+                .map_err(|_| error(502, "invalid_file_delivery_response"))?;
+            Ok(DeviceResponse::FileDelivery(delivery))
+        }
+        DeviceOperation::StageFileChunk {
+            expected,
+            offset,
+            bytes,
+            ..
+        } => {
+            let delivery: FileDelivery = decode(&value, "delivery")?;
+            expected.check(&delivery)?;
+            if delivery.state != "staging"
+                || delivery.received_bytes < offset.saturating_add(bytes.len() as u64)
+            {
+                return Err(error(502, "invalid_file_delivery_response"));
+            }
+            Ok(DeviceResponse::FileDelivery(delivery))
+        }
+        DeviceOperation::QueueFile { expected, .. }
+        | DeviceOperation::FileDelivery { expected } => {
+            let delivery: FileDelivery = decode(&value, "delivery")?;
+            expected.check(&delivery)?;
+            if matches!(operation, DeviceOperation::QueueFile { .. }) && delivery.state == "staging"
+            {
+                return Err(error(502, "invalid_file_delivery_response"));
+            }
+            Ok(DeviceResponse::FileDelivery(delivery))
+        }
         DeviceOperation::History {
             agent_id,
             cursor,
@@ -689,6 +924,11 @@ fn parse_response(
             lease,
             binding_id,
             limit,
+        }
+        | DeviceOperation::PollFiles {
+            lease,
+            binding_id,
+            limit,
         } => {
             let events: Vec<Dispatch> = decode(&value, "events")?;
             if events.len() > *limit {
@@ -705,6 +945,16 @@ fn parse_response(
                 }
             }
             Ok(DeviceResponse::Events(events))
+        }
+        DeviceOperation::Attachments {
+            dispatch_id,
+            execution_id,
+            ..
+        } => {
+            let attachments: ExecutionAttachments =
+                serde_json::from_value(value).map_err(|_| invalid())?;
+            attachments.validate(dispatch_id, execution_id)?;
+            Ok(DeviceResponse::Attachments(attachments))
         }
         DeviceOperation::Start {
             lease,
@@ -923,5 +1173,178 @@ mod processing_tests {
         assert!(receipt.validate("dispatch-a", "execution-a").is_err());
         receipt.state = "arbitrary".into();
         assert!(receipt.validate("dispatch-a", "execution-a").is_err());
+    }
+}
+
+#[cfg(test)]
+mod attachment_tests {
+    use super::*;
+    fn lease() -> LeaseRef {
+        LeaseRef {
+            agent_id: "agent-a".into(),
+            epoch: 1,
+        }
+    }
+    #[test]
+    fn legacy_poll_does_not_opt_in_and_attachment_lookup_cannot_choose_a_url() {
+        let legacy = DeviceOperation::Poll {
+            lease: lease(),
+            binding_id: "binding-a".into(),
+            limit: 1,
+        };
+        let capable = DeviceOperation::PollFiles {
+            lease: lease(),
+            binding_id: "binding-a".into(),
+            limit: 1,
+        };
+        let (route, bytes) = legacy.request().unwrap();
+        assert_eq!(route, "events/poll");
+        let mut expected: Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(expected.get("acceptFiles").is_none());
+        expected["acceptFiles"] = true.into();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&capable.request().unwrap().1).unwrap(),
+            expected
+        );
+        let lookup = DeviceOperation::Attachments {
+            lease: lease(),
+            dispatch_id: "dispatch-a".into(),
+            execution_id: "execution-a".into(),
+        };
+        let (route, bytes) = lookup.request().unwrap();
+        assert_eq!(route, "files/attachments");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&bytes).unwrap(),
+            json!({"lease":{"agentId":"agent-a","epoch":1},"dispatchId":"dispatch-a","executionId":"execution-a"})
+        );
+    }
+    #[test]
+    fn private_attachment_response_pins_request_and_rejects_mutated_source() {
+        let attachment = hagency_agent_local::attachments::Attachment::from_content(
+            &json!({"msgtype":"m.file","body":"report.txt","url":"mxc://media.test/opaque"}),
+        )
+        .unwrap();
+        let value = json!({"dispatchId":"dispatch-a","executionId":"execution-a","attachments":[attachment]});
+        let receipt: ExecutionAttachments = serde_json::from_value(value.clone()).unwrap();
+        receipt.validate("dispatch-a", "execution-a").unwrap();
+        assert!(receipt.validate("dispatch-b", "execution-a").is_err());
+        assert!(receipt.validate("dispatch-a", "execution-b").is_err());
+        assert!(!format!("{receipt:?}").contains("mxc://"));
+        let mut changed = value.clone();
+        changed["attachments"][0]["source"]["url"] = json!("mxc://other.test/replaced");
+        assert!(
+            serde_json::from_value::<ExecutionAttachments>(changed)
+                .unwrap()
+                .validate("dispatch-a", "execution-a")
+                .is_err()
+        );
+        let mut extra = value.clone();
+        extra["roomId"] = json!("!other:test");
+        assert!(serde_json::from_value::<ExecutionAttachments>(extra).is_err());
+        let mut many = value;
+        many["attachments"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::to_value(attachment).unwrap());
+        assert!(
+            serde_json::from_value::<ExecutionAttachments>(many)
+                .unwrap()
+                .validate("dispatch-a", "execution-a")
+                .is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod file_delivery_tests {
+    use super::*;
+    fn expected() -> FileExpectation {
+        FileExpectation {
+            target: FileTarget {
+                dispatch_id: "dispatch-a".into(),
+                execution_id: "execution-a".into(),
+                file_id: "file-a".into(),
+            },
+            request_id: "request-a".into(),
+            file: FileManifest {
+                filename: "report.bin".into(),
+                caption: None,
+                bytes: file_delivery::MAX_BYTES as u64,
+                sha256: "0".repeat(64),
+            },
+        }
+    }
+    #[test]
+    fn file_wire_is_bounded_and_status_never_carries_a_lease_or_destination() {
+        let lease = LeaseRef {
+            agent_id: "agent-a".into(),
+            epoch: 1,
+        };
+        let original = expected();
+        let chunk = DeviceOperation::StageFileChunk {
+            lease: lease.clone(),
+            expected: original.clone(),
+            offset: 0,
+            bytes: vec![255; file_delivery::CHUNK_BYTES],
+        };
+        let (route, bytes) = chunk.request().unwrap();
+        assert_eq!(route, "files/chunk");
+        assert!(bytes.len() < MAX_WIRE_BYTES);
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value.as_object().unwrap().len(), 4);
+        assert_eq!(
+            value["target"],
+            serde_json::to_value(&original.target).unwrap()
+        );
+        use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
+        assert_eq!(
+            STANDARD_NO_PAD
+                .decode(value["data"].as_str().unwrap())
+                .unwrap(),
+            vec![255; file_delivery::CHUNK_BYTES]
+        );
+        for (offset, length) in [
+            (0, 0),
+            (0, file_delivery::CHUNK_BYTES + 1),
+            (file_delivery::MAX_BYTES as u64, 1),
+            (u64::MAX, 1),
+        ] {
+            assert!(
+                DeviceOperation::StageFileChunk {
+                    lease: lease.clone(),
+                    expected: original.clone(),
+                    offset,
+                    bytes: vec![0; length]
+                }
+                .request()
+                .is_err()
+            );
+        }
+        let status = DeviceOperation::FileDelivery {
+            expected: original.clone(),
+        };
+        assert!(status.lease().is_none());
+        let (route, bytes) = status.request().unwrap();
+        assert_eq!(route, "files/status");
+        let lookup = DeviceOperation::LookupFile {
+            request: file_delivery::FileLookup {
+                dispatch_id: original.target.dispatch_id.clone(),
+                execution_id: original.target.execution_id.clone(),
+                request_id: original.request_id.clone(),
+            },
+            file: original.file.clone(),
+        };
+        assert!(lookup.lease().is_none());
+        let (lookup_route, lookup_bytes) = lookup.request().unwrap();
+        assert_eq!(lookup_route, "files/lookup");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&lookup_bytes).unwrap(),
+            json!({"dispatchId":original.target.dispatch_id,"executionId":original.target.execution_id,"requestId":original.request_id})
+        );
+
+        assert_eq!(
+            serde_json::from_slice::<Value>(&bytes).unwrap(),
+            serde_json::to_value(original.target).unwrap()
+        );
     }
 }

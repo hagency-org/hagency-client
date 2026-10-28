@@ -6,6 +6,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum HistoryAction {
+    Files {
+        agent: String,
+        cursor: Option<String>,
+    },
+    File {
+        agent: String,
+        id: String,
+    },
+    RefreshFile {
+        agent: String,
+        id: String,
+    },
     Stopped {
         agent: String,
         cursor: Option<String>,
@@ -57,7 +69,10 @@ pub(super) async fn execute(
     )
     .map_err(|_| failure(403, "owner_scope_required"))?;
     let agent = match &action {
-        HistoryAction::Approvals { agent, .. }
+        HistoryAction::Files { agent, .. }
+        | HistoryAction::File { agent, .. }
+        | HistoryAction::RefreshFile { agent, .. }
+        | HistoryAction::Approvals { agent, .. }
         | HistoryAction::Approval { agent, .. }
         | HistoryAction::Stopped { agent, .. }
         | HistoryAction::InspectStopped { agent, .. }
@@ -96,6 +111,74 @@ pub(super) async fn execute(
             .map_err(local_error)?;
     }
     let result = match action {
+        HistoryAction::Files { agent, cursor } => {
+            json!({"agentId":agent,"files":ledger.sent_file_history(&identity.owner,&agent,cursor.as_deref()).map_err(file_error)?,"runtimeActive":active})
+        }
+        HistoryAction::File { agent, id } => {
+            json!({"agentId":agent,"file":ledger.sent_file_record(&identity.owner,&agent,&id).map_err(file_error)?,"runtimeActive":active})
+        }
+        HistoryAction::RefreshFile { agent, id } => {
+            let original = ledger
+                .sent_file_record(&identity.owner, &agent, &id)
+                .map_err(file_error)?;
+            let metadata = crate::server_admission::discover(&identity.origin)
+                .await
+                .map_err(|_| failure(503, "file_history_unavailable"))?;
+            if !metadata
+                .capabilities
+                .iter()
+                .any(|c| c == hagency_agent_local::file_delivery::HISTORY_CAPABILITY)
+            {
+                return Err(failure(409, "file_history_upgrade_required"));
+            }
+            let request = hagency_agent_local::file_delivery::FileLookup {
+                dispatch_id: original.dispatch_id.clone(),
+                execution_id: original.execution_id.clone(),
+                request_id: original.record.request_id.clone(),
+            };
+            let response = native
+                .0
+                .host
+                .console
+                .execution_api(
+                    crate::console::device_execution::DeviceOperation::LookupFile {
+                        request,
+                        file: original.record.manifest.clone(),
+                    },
+                )
+                .await
+                .map_err(|e| failure(e.status, &e.code))?;
+            let crate::console::device_execution::DeviceResponse::FileObservation(observation) =
+                response
+            else {
+                return Err(failure(502, "invalid_file_observation_response"));
+            };
+            native.check_matrix_source().await?;
+            let fresh = native
+                .0
+                .host
+                .console
+                .authorized_device()
+                .await
+                .map_err(|_| failure(401, "owner_authorization_required"))?;
+            if DeviceIdentity::from(&fresh) != pin || native.identity().await? != identity {
+                return Err(failure(401, "owner_authorization_required"));
+            }
+            device
+                .bearer()
+                .map_err(|_| failure(401, "owner_authorization_required"))?;
+            ledger
+                .observe_file_lookup(
+                    &original.scope,
+                    &original.dispatch_id,
+                    &original.execution_id,
+                    &id,
+                    observation,
+                    epoch_now()?,
+                )
+                .map_err(file_error)?;
+            json!({"agentId":agent,"file":ledger.sent_file_record(&identity.owner,&agent,&id).map_err(file_error)?,"runtimeActive":active})
+        }
         HistoryAction::Stopped { agent, cursor } => {
             json!({"agentId":agent,"runtimeActive":active,"stopped":ledger.stopped_history(&identity.owner,&agent,cursor.as_deref()).map_err(local_error)?})
         }
@@ -256,4 +339,15 @@ fn epoch_now() -> Result<i64, NativeError> {
         .ok()
         .and_then(|t| t.as_secs().try_into().ok())
         .ok_or_else(|| failure(503, "local_state_unavailable"))
+}
+
+fn file_error(error: hagency_agent_local::Error) -> NativeError {
+    match error {
+        hagency_agent_local::Error::Unauthorized => failure(403, "owner_scope_required"),
+        hagency_agent_local::Error::Invalid(_) => failure(400, "invalid_file_history_query"),
+        hagency_agent_local::Error::Conflict | hagency_agent_local::Error::Unknown => {
+            failure(409, "file_history_changed")
+        }
+        _ => failure(503, "file_history_unavailable"),
+    }
 }

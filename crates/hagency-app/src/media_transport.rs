@@ -200,4 +200,4 @@ async fn fetch_inner(client: &Client, request: &MediaRequestParameters) -> matri
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

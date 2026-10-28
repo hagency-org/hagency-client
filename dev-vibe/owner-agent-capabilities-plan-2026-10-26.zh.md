@@ -29,3 +29,19 @@
 2026年10月27日：阶段 3 的审批审计子项已实现，含完整原提案、不可改写事件、精确工具回执、原生历史及快照迁移。真实 Codex 5 个工具的独立审计完成证据通过；普通回复不能掩盖工具未知。见 [审批审计验收](owner-approval-audit-validation-2026-10-27.zh.md)。停止请求检查、文件现状摘要和主人显式继续仍待完成，A6 继续进行。
 
 2026年10月27日：阶段 3 已接通停止请求检查、原输入留存、实际停止范围、文件摘要、主人处置和一次性新继续消息。原 unknown 和费用不变；缺少停止证据不放行继续。真实 Matrix SDK 本地 HTTP 请求及 NativeOwner 磁盘链通过，见 [停止请求恢复验收](owner-stopped-recovery-validation-2026-10-27.zh.md)。本批实现进入整体验收，人工原生操作、真实加密联合路径及跨平台尚未完成。阶段 4 接入 A2；A4/A3 继续保留。
+
+2026年10月27日：阶段4第一批已实现两端附件声明协议、Server原请求原子入库、旧轮询隔离、限定当前执行的设备读取及 Client 可移植摘要校验。Server95、Agent-local116+3+8、engine255及实际TCP检查通过。Client运行链尚不启用附件，下一批接实际接收、落盘、发送和投递状态；A2未完成。见 [文件收发当前验收](agent-file-transfer-validation-2026-10-27.zh.md)。
+
+2026年10月27日：阶段4进一步接通 list_received_files/receive_file、当前 SDK 的认证有界下载、v2 校验解密、持久接收所有权及原子落盘。元数据、审批和返回值不含私有源；未知写入与快照恢复不能重建写权限。详情见 [接收验收](agent-file-receive-validation-2026-10-27.zh.md)。发送/投递状态和真实联合/平台资格仍需完成，A2继续进行。
+
+2026年10月27日：阶段4的Server发送基础已实现，含原请求分块暂存、实际字节摘要、上传/消息两阶段一次性所有权、未知不重发、安全投递历史与原可信事件确认。Server103项（含全部PG）及严格检查通过，见 [Server PR7](https://github.com/hagency-org/hagency-server/pull/7) 中的 agent-file-delivery-contract。Client 的冻结字节、审批、send_file/get_file_delivery 接线和完整联合资格仍需完成；A2保持进行中。Client接收的1bbff570 CI和App CI已成功，完整平台矩阵仍在运行。
+
+2026年10月27日：阶段4继续补齐Client类型化发送协议，原manifest/target/历史回执校验及64KiB分块、只读status实际TCP验证通过。Agent127/3原忽略、运行引擎258/7原忽略与严格检查通过。见 [发送协议当前验收](agent-file-delivery-validation-2026-10-27.zh.md)。尚未启用动态发送工具；冻结字节、审批和本地一次性登记继续实施，A2未完成。
+
+2026年10月27日：阶段4已接入冻结真实字节、精确主人审批、发送前永久见证、64KiB分块和原投递只读观察；新call编号/恢复快照不能重建所有权。macOS/Linux当前Codex动态发送/查询、实际NativeOwner TCP链及账本回归通过，见 [发送工具验收](agent-file-send-validation-2026-10-27.zh.md)。下一批完成主人历史投递刷新、真实联合/Windows资格；A4/A3和前阶段剩余门槛保留，未宣布A2或总目标完成。
+
+2026年10月27日：主人历史列表、详情、只读刷新及最终未准备证据结清已接入当前NativeOwner和桌面组件。保留原unknown审计、永久发送见证和旧快照兼容，查询途中SDK变更不能释放容量。见 [历史投递验收](agent-file-history-validation-2026-10-27.zh.md)。下一步是真实联合、Windows与平台资格，再继续A4/A3；A2及总目标保持进行中。
+
+2026年10月27日：当前Client/Server真实HTTP、PG、AS和worker跨仓库链已验证大于128KiB文件、丢失queue响应、原回执和双端重启不重放；公开NativeOwner及真实Codex完成原文件处理、发送、四项工具审计及38,950实际Token结算。身份/Matrix仍为明确fixture，原驱动失败与后续只读核验分开记录。见 [联合与真实模型验收](agent-file-joint-validation-2026-10-27.zh.md)。真实Matrix/SDK、人工、Windows和A4/A3等门槛仍保留。
+
+2026年10月27日：阶段4继续经过真实Synapse、桌面SDK和实际Codex验证原附件、生成文件、原事件回执及39310 Token结算，并修复真实v12 Room hash和创建者权限兼容。首轮验收驱动失败与修正后原结果只读核验分别保留；未重发原文件。见 [真实Matrix与v12验收](agent-file-synapse-validation-2026-10-27.zh.md)。生产OAuth、桌面人工、Windows与A4/A3门槛继续保留。

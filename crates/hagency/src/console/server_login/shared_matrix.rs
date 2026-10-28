@@ -22,6 +22,29 @@ fn local_device_name() -> String {
     device_name(&host.to_string_lossy(), std::env::consts::OS)
 }
 impl ServerLogin {
+    #[cfg(unix)]
+    pub(in crate::console) async fn agent_file_source(
+        &self,
+        expected: &super::super::device_execution::DeviceIdentity,
+    ) -> Option<Arc<dyn MatrixTokenSource>> {
+        if self.stopped.load(Ordering::Acquire) {
+            return None;
+        }
+        self.sessions
+            .lock()
+            .await
+            .values()
+            .find(|s| {
+                !s.invalidated
+                    && s.authorized_until > Instant::now()
+                    && s.device.as_ref().is_some_and(|d| {
+                        super::super::device_execution::DeviceIdentity::from(d) == *expected
+                    })
+            })
+            .and_then(|s| s.matrix_source.clone())
+            .filter(|source| source.supports_agent_file_receive())
+    }
+
     pub(in crate::console) async fn authorize_matrix(
         &self,
         console: &super::super::Console,

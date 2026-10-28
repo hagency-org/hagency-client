@@ -2,6 +2,7 @@
 //! OAuth login, refresh and logout; the owner engine never starts another login.
 use super::model::{BindingAction, Command, LocalAction, ProviderAction};
 mod continuation;
+mod agent_files;
 use ::hagency::native_owner::{MatrixAccessToken, MatrixTokenSource, NativeError, NativeOwner};
 use serde_json::Value;
 use std::{
@@ -106,6 +107,19 @@ fn log_runtime_recovery(result: Result<Value, NativeError>) {
     }
 }
 
+/// Bounded attachment transport shared by native owner hosts. The caller must
+/// retain current account liveness and separately authorize the original Agent
+/// dispatch/approval; returned bytes do not confer execution or write custody.
+pub async fn fetch_agent_attachment_bytes(
+    client: &matrix_sdk::Client,
+    origin: &str,
+    owner: &str,
+    attachment: &::hagency::native_owner::AgentAttachment,
+    live: impl Fn() -> Result<(), NativeError>,
+) -> Result<Vec<u8>, NativeError> {
+    agent_files::fetch(client, origin, owner, attachment, live).await
+}
+
 struct SdkTokens(Weak<Inner>);
 fn source_error(code: &str) -> NativeError {
     NativeError {
@@ -114,6 +128,16 @@ fn source_error(code: &str) -> NativeError {
     }
 }
 impl MatrixTokenSource for SdkTokens {
+    fn supports_agent_file_receive(&self)->bool { true }
+    fn fetch_agent_attachment(&self, attachment: ::hagency::native_owner::AgentAttachment) -> std::pin::Pin<Box<dyn std::future::Future<Output=Result<Vec<u8>,NativeError>> + Send + '_>> {
+        Box::pin(async move {
+            self.access_token().await?;
+            let service=Service(self.0.upgrade().ok_or_else(||source_error("matrix_account_changed"))?);
+            let client=crate::sliding_sync::get_client().ok_or_else(||source_error("matrix_sign_in_required"))?;
+            fetch_agent_attachment_bytes(&client,&service.0.origin,&service.0.owner,&attachment,||service.check().map_err(|e|source_error(&e))).await
+        })
+    }
+
     fn send_continuation(&self, message: ::hagency::native_owner::ContinuationMessage) -> std::pin::Pin<Box<dyn std::future::Future<Output=Result<String,NativeError>> + Send + '_>> {
         Box::pin(async move {
             self.access_token().await?;

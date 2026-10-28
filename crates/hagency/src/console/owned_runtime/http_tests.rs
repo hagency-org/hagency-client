@@ -32,6 +32,18 @@ fn event(id: &str, epoch: i64) -> Value {
 #[derive(Default)]
 struct WireState {
     epoch: i64,
+    attachment_response: Option<Value>,
+    incoming_attachment: Option<Value>,
+    attachment_input: Option<Value>,
+    file_delivery_response: Option<Value>,
+    file_delivery_input: Option<Value>,
+    file_history: bool,
+    file_lookup_deny: Option<Arc<std::sync::atomic::AtomicBool>>,
+    send_mode: u8,
+    sent_remote: Option<Value>,
+    sent_bytes: Vec<u8>,
+    sent_queues: usize,
+    sent_status: usize,
     restore_scope: bool,
     binding_states: BTreeMap<String, String>,
     no_messages: bool,
@@ -65,7 +77,7 @@ impl WireState {
         match path {
             "/hagency/api/v1/discovery" => (
                 200,
-                json!({"product":"hagency-server","version":"0.1.0","protocolVersion":3,"capabilities":["pasion-oauth","owner-agent-appservice-v1","global-agent-identity-v2","execution-device-v1","owner-direct-v1"],"homeserver":origin,"issuer":format!("{origin}auth/")}),
+                json!({"product":"hagency-server","version":"0.1.0","protocolVersion":3,"capabilities":(["pasion-oauth","owner-agent-appservice-v1","global-agent-identity-v2","execution-device-v1","owner-direct-v1"].into_iter().chain((self.incoming_attachment.is_some()||self.send_mode>0).then_some(hagency_agent_local::attachments::CAPABILITY)).chain((self.send_mode>0).then_some(hagency_agent_local::file_delivery::CAPABILITY)).chain(self.file_history.then_some(hagency_agent_local::file_delivery::HISTORY_CAPABILITY)).collect::<Vec<_>>()),"homeserver":origin,"issuer":format!("{origin}auth/")}),
             ),
             "/hagency/api/v1/agents/agent-a" if self.restore_scope => (
                 200,
@@ -125,6 +137,9 @@ impl WireState {
                 }
             }
             "/hagency/api/v1/execution/events/poll" => {
+                if self.incoming_attachment.is_some() {
+                    assert_eq!(input["acceptFiles"], true);
+                }
                 assert!(
                     input["bindingId"] == "binding-a"
                         || self
@@ -167,6 +182,44 @@ impl WireState {
                 (
                     200,
                     json!({"processing":{"id":"processing-a","dispatchId":input["dispatchId"],"executionId":input["executionId"],"state":"pending","matrixEventId":null}}),
+                )
+            }
+            "/hagency/api/v1/execution/files/prepare"
+            | "/hagency/api/v1/execution/files/chunk"
+            | "/hagency/api/v1/execution/files/queue"
+            | "/hagency/api/v1/execution/files/status" => {
+                if self.send_mode > 0 {
+                    return self.deliver_file(path, input);
+                }
+                self.file_delivery_input = Some(input.clone());
+                (
+                    200,
+                    json!({"delivery":self.file_delivery_response.clone().expect("explicit original file response")}),
+                )
+            }
+            "/hagency/api/v1/execution/files/lookup" => {
+                if let Some(deny) = &self.file_lookup_deny {
+                    deny.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+                self.file_delivery_input = Some(input.clone());
+                (
+                    200,
+                    json!({"observation":self.file_delivery_response.clone().expect("explicit original file observation")}),
+                )
+            }
+            "/hagency/api/v1/execution/files/attachments" => {
+                self.attachment_input = Some(input.clone());
+                (
+                    200,
+                    if let Some(attachment) = &self.incoming_attachment {
+                        json!({"dispatchId":input["dispatchId"],"executionId":input["executionId"],"attachments":[attachment]})
+                    } else if self.send_mode > 0 {
+                        json!({"dispatchId":input["dispatchId"],"executionId":input["executionId"],"attachments":[]})
+                    } else {
+                        self.attachment_response
+                            .clone()
+                            .expect("fixture attachment response must be explicit")
+                    },
                 )
             }
             "/hagency/api/v1/execution/events/authorize-tool" => (
@@ -358,6 +411,12 @@ async fn host_round(
     restart: bool,
 ) {
     let device = console.authorized_device().await.unwrap();
+    let diagnostic = config
+        .profile
+        .executable
+        .parent()
+        .unwrap()
+        .join("turns-receive-stderr");
     let (initial, _binding_handle, _) = binding_work(config);
     let local_path = path.clone();
     let device_profile = profile_identity(
@@ -433,6 +492,22 @@ async fn host_round(
         .await
         .unwrap()
         .unwrap();
+    if !matches!(ready, Ok(true)) {
+        let ledger = Ledger::open_scoped(&local_path, OWNER, &device_profile).unwrap();
+        eprintln!(
+            "original fixture stderr: {}",
+            std::fs::read_to_string(&diagnostic)
+                .unwrap_or_default()
+                .chars()
+                .take(8192)
+                .collect::<String>()
+        );
+        eprintln!(
+            "original failed runtime event: {:?}; audit: {:?}",
+            state.lock().unwrap().events,
+            ledger.approval_history(OWNER, "agent-a", None)
+        );
+    }
     assert!(
         matches!(ready, Ok(true)),
         "runtime ended before completion: {result:?}; binding={:?}; paths={:?}",
@@ -449,16 +524,37 @@ async fn fixture(unknown: bool, budget: u64) {
     fixture_with_processing_failure(unknown, budget, 0).await;
 }
 async fn fixture_with_processing_failure(unknown: bool, budget: u64, processing_failure: u8) {
+    fixture_with_receive(unknown, budget, processing_failure, false).await;
+}
+async fn fixture_with_receive(unknown: bool, budget: u64, processing_failure: u8, receive: bool) {
+    fixture_with_files(unknown, budget, processing_failure, receive, 0).await;
+}
+async fn fixture_with_files(
+    unknown: bool,
+    budget: u64,
+    processing_failure: u8,
+    receive: bool,
+    send_mode: u8,
+) {
+    let sending = send_mode > 0;
     use hagency_agent_local::{
         Budget, Layer, Limit, ModelProfile, Period, Policy, RequestPolicy, ToolPolicy,
     };
     let (origin, state, server) = server(unknown, processing_failure).await;
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();
-    let native =
-        NativeOwner::open_with_matrix(&root.join("state"), &origin, OWNER, Arc::new(Source))
-            .await
-            .unwrap();
+    state.lock().unwrap().send_mode = send_mode;
+    if receive {
+        state.lock().unwrap().incoming_attachment=Some(serde_json::to_value(hagency_agent_local::attachments::Attachment::from_content(&json!({"msgtype":"m.file","body":"inbound.txt","url":"mxc://media.test/incoming","info":{"size":5}})).unwrap()).unwrap());
+    }
+    let source: Arc<dyn MatrixTokenSource> = if receive || sending {
+        Arc::new(FileSource)
+    } else {
+        Arc::new(Source)
+    };
+    let native = NativeOwner::open_with_matrix(&root.join("state"), &origin, OWNER, source)
+        .await
+        .unwrap();
     let console = native.test_console().clone();
     let device = console.authorized_device().await.unwrap();
     let path = ledger_path(
@@ -488,6 +584,12 @@ async fn fixture_with_processing_failure(unknown: bool, budget: u64, processing_
     let marker = root.join("turns");
     std::fs::write(&marker, "").unwrap();
     provider(&script, &marker, &path, unknown);
+    if receive {
+        receive_provider(&script);
+    }
+    if sending {
+        send_provider(&script, send_mode >= 2, send_mode == 3);
+    }
     let scope = inbox::Dispatch {
         id: "dispatch-a".into(),
         binding_id: "binding-a".into(),
@@ -537,6 +639,53 @@ async fn fixture_with_processing_failure(unknown: bool, budget: u64, processing_
             },
         )
         .unwrap();
+    if receive || sending {
+        let incoming_workspace =
+            hagency_agent_local::room_files::Workspace::open(directory, OWNER, &scope).unwrap();
+        let directory = incoming_workspace
+            .canonical_directory()
+            .to_string_lossy()
+            .into_owned();
+        if sending {
+            std::fs::write(
+                incoming_workspace.canonical_directory().join("result.txt"),
+                b"hello",
+            )
+            .unwrap();
+        }
+        drop(incoming_workspace);
+        for layer in [Layer::Agent, Layer::Room, Layer::Requester] {
+            let current = ledger.policy_snapshot(&scope).unwrap()[match layer {
+                Layer::Agent => 0,
+                Layer::Room => 1,
+                Layer::Requester => 2,
+            }]
+            .clone();
+            ledger
+                .set_policy(
+                    OWNER,
+                    &scope,
+                    layer,
+                    current.revision,
+                    &Policy {
+                        budget: Budget {
+                            limit: Limit::Tokens(budget),
+                            period: Period::Lifetime,
+                        },
+                        requests: RequestPolicy::Allow,
+                        high_risk: ToolPolicy::AllowWithRules {
+                            tools: if sending {
+                                vec!["matrix.send_file".into()]
+                            } else {
+                                vec!["matrix.receive_file".into()]
+                            },
+                            directories: vec![directory.clone()],
+                        },
+                    },
+                )
+                .unwrap();
+        }
+    }
     drop(ledger);
     let config = || StartConfig {
         agent_id: "agent-a".into(),
@@ -555,7 +704,7 @@ async fn fixture_with_processing_failure(unknown: bool, budget: u64, processing_
         mode: BudgetMode::Estimated { reservation: 10 },
         credential_ref: "keychain:fixture".into(),
         takeover: Takeover::Never,
-        host_files: false,
+        host_files: receive || sending,
         owner_direct: false,
         recovery_device_id: None,
         recovery_consent_id: None,
@@ -570,6 +719,35 @@ async fn fixture_with_processing_failure(unknown: bool, budget: u64, processing_
     )
     .await;
     let mut ledger = Ledger::open_scoped(&path, OWNER, &profile_id).unwrap();
+    if sending {
+        let audit = ledger
+            .approval_history(OWNER, "agent-a", None)
+            .unwrap()
+            .records
+            .into_iter()
+            .find(|a| a.tool == "matrix.send_file")
+            .unwrap();
+        assert_eq!(
+            audit.phase,
+            if send_mode >= 2 {
+                hagency_agent_local::audit::Phase::Unknown
+            } else {
+                hagency_agent_local::audit::Phase::Completed
+            }
+        );
+        let wire = state.lock().unwrap();
+        assert_eq!(wire.sent_bytes, b"hello");
+        assert_eq!(wire.sent_queues, 1);
+        assert!(wire.sent_status >= 1);
+        if send_mode == 3 {
+            assert!(wire.sent_remote.as_ref().unwrap()["matrixEventId"].is_null());
+        } else {
+            assert_eq!(
+                wire.sent_remote.as_ref().unwrap()["matrixEventId"],
+                "$fixtureFileSent"
+            );
+        }
+    }
     let expected_turns = if unknown { 2 } else { usize::from(budget > 0) };
     assert_eq!(
         std::fs::read_to_string(&marker).unwrap().lines().count(),
@@ -616,6 +794,13 @@ async fn fixture_with_processing_failure(unknown: bool, budget: u64, processing_
             assert!(reply.contains("可用额度不足"));
             assert!(reply.contains("本次未调用模型"));
             assert!(!reply.contains("本轮处理已结束"));
+        }
+        if sending {
+            assert_eq!(
+                reply.contains("尚未取得 1 个文件的投递回执"),
+                send_mode == 3,
+                "ordinary reply must not hide an unknown file"
+            );
         }
         assert!(!reply.contains("Agent 配额"));
         assert_eq!(
@@ -1340,4 +1525,471 @@ async fn heartbeat_retries_transport_failure_but_never_extends_unconfirmed_lease
     }
 }
 
+mod file_history;
+mod joint_files;
 mod recovery;
+
+#[tokio::test]
+async fn typed_http_attachment_response_is_private_and_pinned_to_original_execution() {
+    let (origin, state, server) = server(false, 0).await;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap().join("state");
+    let native = NativeOwner::open_with_matrix(&root, &origin, OWNER, Arc::new(Source))
+        .await
+        .unwrap();
+    let console = native.test_console();
+    let attachment = hagency_agent_local::attachments::Attachment::from_content(&json!({"msgtype":"m.file","body":"file.txt","url":"mxc://media.test/opaque","info":{"size":5}})).unwrap();
+    let expected =
+        json!({"dispatchId":"dispatch-a","executionId":"execution-a","attachments":[attachment]});
+    state.lock().unwrap().attachment_response = Some(expected.clone());
+    let operation = || Op::Attachments {
+        lease: LeaseRef {
+            agent_id: "agent-a".into(),
+            epoch: 1,
+        },
+        dispatch_id: "dispatch-a".into(),
+        execution_id: "execution-a".into(),
+    };
+    let response = console.execution_api(operation()).await.unwrap();
+    let Response::Attachments(response) = response else {
+        panic!("wrong response")
+    };
+    assert_eq!(response.attachments, vec![attachment]);
+    assert!(!format!("{response:?}").contains("mxc://"));
+    assert_eq!(
+        state.lock().unwrap().attachment_input,
+        Some(
+            json!({"lease":{"agentId":"agent-a","epoch":1},"dispatchId":"dispatch-a","executionId":"execution-a"})
+        )
+    );
+    let mut mismatched = expected.clone();
+    mismatched["executionId"] = json!("foreign-execution");
+    state.lock().unwrap().attachment_response = Some(mismatched);
+    let Err(error) = console.execution_api(operation()).await else {
+        panic!("foreign response accepted")
+    };
+    assert_eq!(error.code, "execution_scope_mismatch");
+    let mut mutated = expected;
+    mutated["attachments"][0]["source"]["url"] = json!("mxc://media.test/replaced");
+    state.lock().unwrap().attachment_response = Some(mutated);
+    let Err(error) = console.execution_api(operation()).await else {
+        panic!("mutated response accepted")
+    };
+    assert_eq!(error.code, "invalid_execution_response");
+    server.abort();
+}
+
+struct FileSource;
+impl MatrixTokenSource for FileSource {
+    fn supports_agent_file_receive(&self) -> bool {
+        true
+    }
+    fn fetch_agent_attachment(
+        &self,
+        attachment: super::super::native::AgentAttachment,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Vec<u8>, NativeError>> + Send + '_>,
+    > {
+        Box::pin(async move {
+            attachment.validate().unwrap();
+            assert_eq!(attachment.source["url"], "mxc://media.test/incoming");
+            Ok(b"hello".to_vec())
+        })
+    }
+    fn access_token(
+        &self,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<MatrixAccessToken, NativeError>> + Send + '_>,
+    > {
+        Source.access_token()
+    }
+}
+fn receive_provider(path: &std::path::Path) {
+    let source = std::fs::read_to_string(path).unwrap();
+    let start = source.find("  time.sleep(6)").unwrap();
+    let end = source[start..].find(" else: raise Exception(m)").unwrap() + start;
+    let source = format!(
+        "{}{}{}",
+        &source[..start],
+        "  emit('item/tool/call',{'threadId':'thread-a','turnId':'turn-a','callId':'list-incoming','tool':'list_received_files','arguments':{}},'host-list')\n",
+        &source[end..]
+    );
+    let branch = r#" if m is None:
+  assert f['result']['success']
+  result=json.loads(f['result']['contentItems'][0]['text'])
+  assert 'mxc://' not in str(result)
+  if f['id']=='host-list':
+   assert result['files'][0]['event_id']=='$dispatch-a:test'
+   emit('item/tool/call',{'threadId':'thread-a','turnId':'turn-a','callId':'receive-incoming','tool':'receive_file','arguments':{'event_id':'$dispatch-a:test'}},'host-receive')
+  else:
+   assert f['id']=='host-receive'
+   assert result['bytes']==5
+   assert open(result['path'],'rb').read()==b'hello'
+   time.sleep(6)
+   emit('thread/tokenUsage/updated',{'threadId':'thread-a','turnId':'turn-a','tokenUsage':{'total':{'inputTokens':3,'outputTokens':2,'cachedInputTokens':0,'reasoningOutputTokens':0,'totalTokens':5},'last':{'inputTokens':3,'outputTokens':2,'cachedInputTokens':0,'reasoningOutputTokens':0,'totalTokens':5}}})
+   emit('item/completed',{'threadId':'thread-a','turnId':'turn-a','item':{'id':'message-a','type':'agentMessage','text':'isolated fixture answer'}})
+   emit('turn/completed',{'threadId':'thread-a','turn':{'id':'turn-a','status':'completed'}})
+  continue
+"#;
+    let source=source.replace(" def emit(m,p): print(json.dumps({'method':m,'params':p}),flush=True)"," def emit(m,p,i=None): print(json.dumps(dict({'method':m,'params':p},**({'id':i} if i is not None else {}))),flush=True)");
+    let source=source.replace(" elif m in ['thread/start','thread/resume']:\n", " elif m in ['thread/start','thread/resume']:\n  assert {'receive_file','list_received_files'} <= {t['name'] for t in p['dynamicTools']}\n  assert 'mxc://' not in str(p)\n");
+    let source = source.replace(
+        " if m=='initialize':",
+        &format!("{branch} if m=='initialize':"),
+    );
+    let source=source.replace("for raw in sys.stdin:","sys.stderr=open(marker+'-receive-stderr','a')\nfor raw in sys.stdin:\n with open(marker+'-receive-frames','a') as trace:trace.write(raw)");
+    std::fs::write(path, source).unwrap();
+}
+#[tokio::test]
+async fn typed_http_current_runtime_receives_original_file_into_private_workspace() {
+    if std::env::var_os("HAGENCY_RECEIVE_TEST_DIAGNOSTICS").is_some() {
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .with_test_writer()
+            .try_init();
+    }
+    fixture_with_receive(false, 100, 0, true).await;
+}
+
+#[tokio::test]
+async fn typed_http_file_delivery_pins_manifest_and_preserves_unknown_without_sending_again() {
+    use super::super::device_execution::FileExpectation;
+    use hagency_agent_local::file_delivery::{Manifest, Target};
+    let (origin, state, server) = server(false, 0).await;
+    let temp = tempfile::tempdir().unwrap();
+    let native = NativeOwner::open_with_matrix(
+        &temp.path().canonicalize().unwrap().join("state"),
+        &origin,
+        OWNER,
+        Arc::new(Source),
+    )
+    .await
+    .unwrap();
+    let console = native.test_console();
+    let file = Manifest {
+        filename: "report.bin".into(),
+        caption: Some("Exact caption".into()),
+        bytes: 5,
+        sha256: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824".into(),
+    };
+    let expected = FileExpectation {
+        target: Target {
+            dispatch_id: "dispatch-a".into(),
+            execution_id: "execution-a".into(),
+            file_id: "file-a".into(),
+        },
+        request_id: "call-a".into(),
+        file: file.clone(),
+    };
+    let lease = LeaseRef {
+        agent_id: "agent-a".into(),
+        epoch: 1,
+    };
+    let mut delivery = json!({"id":"file-a","dispatchId":"dispatch-a","executionId":"execution-a","requestId":"call-a","createdAtMs":1,"manifest":file,"manifestDigest":file.digest().unwrap(),"receivedBytes":0,"state":"staging","uploadAccepted":false,"matrixEventId":null});
+    state.lock().unwrap().file_delivery_response = Some(delivery.clone());
+    assert!(matches!(
+        console
+            .execution_api(Op::PrepareFile {
+                lease: lease.clone(),
+                dispatch_id: "dispatch-a".into(),
+                execution_id: "execution-a".into(),
+                request_id: "call-a".into(),
+                file: file.clone()
+            })
+            .await
+            .unwrap(),
+        Response::FileDelivery(_)
+    ));
+    assert_eq!(
+        state.lock().unwrap().file_delivery_input,
+        Some(
+            json!({"lease":lease,"dispatchId":"dispatch-a","executionId":"execution-a","requestId":"call-a","file":file})
+        )
+    );
+    delivery["receivedBytes"] = 5.into();
+    state.lock().unwrap().file_delivery_response = Some(delivery.clone());
+    console
+        .execution_api(Op::StageFileChunk {
+            lease: lease.clone(),
+            expected: expected.clone(),
+            offset: 0,
+            bytes: b"hello".to_vec(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        state.lock().unwrap().file_delivery_input,
+        Some(json!({"lease":lease,"target":expected.target,"offset":0,"data":"aGVsbG8"}))
+    );
+    delivery["state"] = "queued".into();
+    state.lock().unwrap().file_delivery_response = Some(delivery.clone());
+    console
+        .execution_api(Op::QueueFile {
+            lease: lease.clone(),
+            expected: expected.clone(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        state.lock().unwrap().file_delivery_input,
+        Some(json!({"lease":lease,"target":expected.target}))
+    );
+    delivery["state"] = "unknown".into();
+    delivery["uploadAccepted"] = true.into();
+    state.lock().unwrap().file_delivery_response = Some(delivery.clone());
+    let Response::FileDelivery(receipt) = console
+        .execution_api(Op::FileDelivery {
+            expected: expected.clone(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("wrong response")
+    };
+    assert_eq!(receipt.state, "unknown");
+    assert!(receipt.matrix_event_id.is_none());
+    assert_eq!(
+        state.lock().unwrap().file_delivery_input,
+        Some(json!(expected.target))
+    );
+    for key in ["id", "requestId", "executionId", "manifestDigest"] {
+        let mut changed = delivery.clone();
+        changed[key] = "foreign".into();
+        state.lock().unwrap().file_delivery_response = Some(changed);
+        assert!(
+            console
+                .execution_api(Op::FileDelivery {
+                    expected: expected.clone()
+                })
+                .await
+                .is_err()
+        );
+    }
+    let mut private = delivery.clone();
+    private["mxcUrl"] = "mxc://private.test/blob".into();
+    state.lock().unwrap().file_delivery_response = Some(private.clone());
+    assert!(
+        console
+            .execution_api(Op::FileDelivery {
+                expected: expected.clone()
+            })
+            .await
+            .is_err()
+    );
+    let query = hagency_agent_local::file_delivery::FileLookup {
+        dispatch_id: expected.target.dispatch_id.clone(),
+        execution_id: expected.target.execution_id.clone(),
+        request_id: expected.request_id.clone(),
+    };
+    for (value, valid) in [
+        (
+            json!({"request":query,"delivery":null,"preparationClosed":false}),
+            true,
+        ),
+        (
+            json!({"request":query,"delivery":null,"preparationClosed":true}),
+            true,
+        ),
+        (
+            json!({"request":query,"delivery":delivery,"preparationClosed":true}),
+            true,
+        ),
+        (
+            json!({"request":{"dispatchId":"foreign","executionId":query.execution_id,"requestId":query.request_id},"delivery":null,"preparationClosed":true}),
+            false,
+        ),
+        (
+            json!({"request":query,"delivery":private,"preparationClosed":true}),
+            false,
+        ),
+        (
+            json!({"request":query,"delivery":null,"preparationClosed":"true"}),
+            false,
+        ),
+    ] {
+        state.lock().unwrap().file_delivery_response = Some(value.clone());
+        let observed = console
+            .execution_api(Op::LookupFile {
+                request: query.clone(),
+                file: file.clone(),
+            })
+            .await;
+        assert_eq!(observed.is_ok(), valid);
+        if let Ok(Response::FileObservation(observation)) = observed {
+            assert_eq!(serde_json::to_value(observation).unwrap(), value);
+        }
+        assert_eq!(
+            state.lock().unwrap().file_delivery_input,
+            Some(json!(query))
+        );
+    }
+    // Modern event IDs are opaque; a colon is not required for the actual receipt.
+    delivery["state"] = "sent".into();
+    delivery["matrixEventId"] = "$actualOpaqueEventId".into();
+    state.lock().unwrap().file_delivery_response = Some(delivery);
+    let Response::FileDelivery(sent) = console
+        .execution_api(Op::FileDelivery { expected })
+        .await
+        .unwrap()
+    else {
+        panic!("wrong response")
+    };
+    assert_eq!(
+        sent.matrix_event_id.as_deref(),
+        Some("$actualOpaqueEventId")
+    );
+    {
+        let wire = state.lock().unwrap();
+        for suffix in ["prepare", "chunk", "queue"] {
+            assert_eq!(
+                wire.paths
+                    .iter()
+                    .filter(|p| p.ends_with(&format!("/files/{suffix}")))
+                    .count(),
+                1,
+                "status cannot resend"
+            );
+        }
+    }
+    native.shutdown().await;
+    server.abort();
+    let _ = server.await;
+}
+
+impl WireState {
+    fn deliver_file(&mut self, path: &str, input: &Value) -> (u16, Value) {
+        use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
+        if path.ends_with("/prepare") {
+            assert!(self.sent_remote.is_none());
+            let file: hagency_agent_local::file_delivery::Manifest =
+                serde_json::from_value(input["file"].clone()).unwrap();
+            file.validate().unwrap();
+            assert_eq!(file.filename, "report.txt");
+            assert_eq!(file.caption.as_deref(), Some("Exact original"));
+            self.sent_remote = Some(
+                json!({"id":"fil_fixture","dispatchId":input["dispatchId"],"executionId":input["executionId"],"requestId":input["requestId"],"createdAtMs":1,"manifest":file,"manifestDigest":file.digest().unwrap(),"receivedBytes":0,"state":"staging","uploadAccepted":false,"matrixEventId":null}),
+            );
+        } else {
+            let r = self.sent_remote.as_mut().unwrap();
+            let target = if path.ends_with("/status") {
+                input
+            } else {
+                &input["target"]
+            };
+            assert_eq!(
+                target,
+                &json!({"dispatchId":r["dispatchId"],"executionId":r["executionId"],"fileId":r["id"]})
+            );
+            if path.ends_with("/chunk") {
+                assert_eq!(
+                    input["offset"].as_u64().unwrap(),
+                    self.sent_bytes.len() as u64
+                );
+                self.sent_bytes.extend(
+                    STANDARD_NO_PAD
+                        .decode(input["data"].as_str().unwrap())
+                        .unwrap(),
+                );
+                r["receivedBytes"] = self.sent_bytes.len().into();
+            } else if path.ends_with("/queue") {
+                self.sent_queues += 1;
+                assert_eq!(self.sent_queues, 1);
+                assert_eq!(self.sent_bytes, b"hello");
+                assert_eq!(
+                    r["manifest"]["sha256"],
+                    format!("{:x}", Sha256::digest(&self.sent_bytes))
+                );
+                r["state"] = if self.send_mode >= 2 {
+                    "unknown"
+                } else {
+                    "queued"
+                }
+                .into();
+                if self.send_mode >= 2 {
+                    return (503, json!({"code":"fixture_queue_ack_lost"}));
+                }
+            } else {
+                assert!(path.ends_with("/status"));
+                assert!(input.get("lease").is_none());
+                self.sent_status += 1;
+                if self.send_mode == 3 {
+                    r["state"] = "unknown".into();
+                } else {
+                    r["state"] = "sent".into();
+                    r["uploadAccepted"] = true.into();
+                    r["matrixEventId"] = "$fixtureFileSent".into();
+                }
+            }
+        }
+        (200, json!({"delivery":self.sent_remote.as_ref().unwrap()}))
+    }
+}
+fn send_provider(path: &std::path::Path, lost: bool, unconfirmed: bool) {
+    let source = std::fs::read_to_string(path).unwrap();
+    let start = source.find("  time.sleep(6)").unwrap();
+    let end = source[start..].find(" else: raise Exception(m)").unwrap() + start;
+    let source = format!(
+        "{}{}{}",
+        &source[..start],
+        "  emit('item/tool/call',{'threadId':'thread-a','turnId':'turn-a','callId':'send-original','tool':'send_file','arguments':{'path':'result.txt','filename':'report.txt','caption':'Exact original'}},'host-send')\n",
+        &source[end..]
+    );
+    let branch=r#" if m is None:
+  assert f['result']['success'],str(f)
+  result=json.loads(f['result']['contentItems'][0]['text'])
+  assert 'mxc://' not in str(result)
+  if f['id']=='host-send':
+   assert result['state']==EXPECTED_STATE,str(result)
+   emit('item/tool/call',{'threadId':'thread-a','turnId':'turn-a','callId':'query-original','tool':'get_file_delivery','arguments':{'delivery_id':result['delivery_id']}},'host-status')
+  else:
+   assert f['id']=='host-status'
+   assert (result['state']=='unknown' and result['matrix_event_id'] is None) if UNCONFIRMED else (result['state']=='sent' and result['matrix_event_id']=='$fixtureFileSent'),str(result)
+   time.sleep(6)
+   emit('thread/tokenUsage/updated',{'threadId':'thread-a','turnId':'turn-a','tokenUsage':{'total':{'inputTokens':3,'outputTokens':2,'cachedInputTokens':0,'reasoningOutputTokens':0,'totalTokens':5},'last':{'inputTokens':3,'outputTokens':2,'cachedInputTokens':0,'reasoningOutputTokens':0,'totalTokens':5}}})
+   emit('item/completed',{'threadId':'thread-a','turnId':'turn-a','item':{'id':'message-a','type':'agentMessage','text':'isolated fixture answer'}})
+   emit('turn/completed',{'threadId':'thread-a','turn':{'id':'turn-a','status':'completed'}})
+  continue
+"#.replace("EXPECTED_STATE",if lost{"'unknown'"}else{"'sent'"}).replace("UNCONFIRMED",if unconfirmed{"True"}else{"False"});
+    let source=source.replace(" def emit(m,p): print(json.dumps({'method':m,'params':p}),flush=True)"," def emit(m,p,i=None): print(json.dumps(dict({'method':m,'params':p},**({'id':i} if i is not None else {}))),flush=True)");
+    let source=source.replace(" elif m in ['thread/start','thread/resume']:\n"," elif m in ['thread/start','thread/resume']:\n  assert {'send_file','get_file_delivery'} <= {t['name'] for t in p['dynamicTools']}\n  assert 'mxc://' not in str(p)\n");
+    let source = source.replace(
+        " if m=='initialize':",
+        &format!("{branch} if m=='initialize':"),
+    );
+    let source=source.replace("for raw in sys.stdin:","sys.stderr=open(marker+'-receive-stderr','a')\nfor raw in sys.stdin:\n with open(marker+'-receive-frames','a') as trace:trace.write(raw)");
+    std::fs::write(path, source).unwrap();
+}
+#[tokio::test]
+async fn typed_http_current_runtime_sends_frozen_file_and_queries_original_lost_ack() {
+    fixture_with_files(false, 100, 0, false, 1).await;
+    fixture_with_files(false, 100, 0, false, 2).await;
+    fixture_with_files(false, 100, 0, false, 3).await;
+}
+
+#[test]
+fn original_file_delivery_notice_cannot_be_hidden_by_model_text_or_large_utf8_reply() {
+    use hagency_agent_local::sent_files::DeliverySummary;
+    let unknown = DeliverySummary {
+        not_prepared: 0,
+        sent: 0,
+        cancelled: 1,
+        unconfirmed: 2,
+    };
+    let text = "已全部发送".repeat(3584);
+    let reply = with_file_delivery_notice(text, &unknown);
+    assert!(reply.len() <= 65_536);
+    assert!(reply.contains("本轮结束时尚未取得 2 个文件的投递回执"));
+    assert!(reply.contains("1 个文件投递已取消"));
+    assert_eq!(
+        with_file_delivery_notice(
+            "original".into(),
+            &DeliverySummary {
+                sent: 1,
+                cancelled: 0,
+                unconfirmed: 0,
+                not_prepared: 0
+            }
+        ),
+        "original"
+    );
+}

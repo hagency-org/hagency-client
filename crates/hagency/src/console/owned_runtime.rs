@@ -1,4 +1,8 @@
 //! Explicit owner-started, chat-only Codex host. No legacy execution fallback.
+#[cfg(unix)]
+mod received_files;
+#[cfg(unix)]
+mod sent_files;
 mod service;
 use super::{
     AuthorizedDevice, Console,
@@ -1188,6 +1192,10 @@ impl Transport for PinnedConsole {
                 | Op::Start { .. }
                 | Op::Processing { .. }
                 | Op::AuthorizeTool { .. }
+                | Op::Attachments { .. }
+                | Op::PrepareFile { .. }
+                | Op::StageFileChunk { .. }
+                | Op::QueueFile { .. }
                 | Op::Reply { .. }
                 | Op::ReconcileKnownReply { .. }
                 | Op::Finish { .. }
@@ -1847,6 +1855,8 @@ async fn execution_loop_admitted<T: Transport>(
     let mut reported = BTreeSet::new();
     let mut reply_cursor = String::new();
     let mut finish_cursors = [String::new(), String::new(), String::new()];
+    #[cfg(unix)]
+    let mut attachment_check = None::<(Instant, bool)>;
     loop {
         if *cancel.borrow() {
             return Err(RuntimeError::Stopped);
@@ -1929,13 +1939,33 @@ async fn execution_loop_admitted<T: Transport>(
             tokio::select! {biased;_=canceled(cancel)=>return Err(RuntimeError::Stopped),_=tokio::time::sleep(Duration::from_millis(250))=>{}}
             continue;
         }
+        #[cfg(unix)]
+        let incoming_files = if let Some((at, enabled)) = attachment_check
+            && at.elapsed() < Duration::from_secs(30)
+        {
+            enabled
+        } else {
+            let enabled = received_files::enabled(console, config).await?;
+            attachment_check = Some((Instant::now(), enabled));
+            enabled
+        };
+        #[cfg(not(unix))]
+        let incoming_files = false;
         let events = match operation(
             console,
             cancel,
-            Op::Poll {
-                lease: lease.clone(),
-                binding_id: config.binding_id.clone(),
-                limit: 1,
+            if incoming_files {
+                Op::PollFiles {
+                    lease: lease.clone(),
+                    binding_id: config.binding_id.clone(),
+                    limit: 1,
+                }
+            } else {
+                Op::Poll {
+                    lease: lease.clone(),
+                    binding_id: config.binding_id.clone(),
+                    limit: 1,
+                }
             },
         )
         .await
@@ -2549,6 +2579,10 @@ async fn run_turn<T: Transport>(
             return Err(RuntimeError::Profile);
         }
     }
+    #[cfg(unix)]
+    if let Some(console)=&host {
+        received_files::attach(&mut provider.session,console,config,lease,&prepared,&profile.cwd,cancel).await?;
+    }
     let has_approval_host = host.is_some();
     let bridge = host.map(|console| {
         tokio::spawn(async move {
@@ -2660,6 +2694,8 @@ async fn run_turn<T: Transport>(
         return Err(RuntimeError::Profile);
     }
     let body = completion_body(&completed);
+    let file_summary=local(ledger.sent_file_summary(&scope,&prepared.dispatch.id,&prepared.execution_id))?;
+    let body=with_file_delivery_notice(body,&file_summary);
     let body = with_owner_budget(body, ledger, owner, &scope, config.owner_direct)?;
     local(ledger.persist_execution_reply(
         owner,
@@ -2675,6 +2711,29 @@ async fn run_turn<T: Transport>(
     outcome
 }
 
+fn with_file_delivery_notice(
+    body: String,
+    files: &hagency_agent_local::sent_files::DeliverySummary,
+) -> String {
+    let mut notices = Vec::new();
+    if files.unconfirmed > 0 {
+        notices.push(format!("📎 本轮结束时尚未取得 {} 个文件的投递回执，不能确认已送达。排队、上传和未知均不代表消息投递；请以实际文件消息或原投递状态为准。",files.unconfirmed));
+    }
+    if files.not_prepared > 0 {
+        notices.push(format!(
+            "📎 Server已确认 {} 个文件在原执行关闭前未准备，未发生这些原投递。",
+            files.not_prepared
+        ));
+    }
+    if files.cancelled > 0 {
+        notices.push(format!("📎 {} 个文件投递已取消。", files.cancelled));
+    }
+    if notices.is_empty() {
+        body
+    } else {
+        append_summary(&body, &notices.join("\n"))
+    }
+}
 fn completion_body(completed: &codex::Completed) -> String {
     // Cached input/reasoning output are subsets, not additional charge.
     let summary = format!(
