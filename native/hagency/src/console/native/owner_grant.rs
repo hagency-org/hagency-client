@@ -1,5 +1,5 @@
 //! Private owner-grant intent custody. No mini-app capability or source-adoption
-//! initializer is enabled. Publication needs a separate native confirmation.
+//! initializer is enabled. Native hosts own the explicit publication confirmation.
 use super::{NativeError, NativeManagement, failure};
 use crate::console::server_login::matrix_creations::service::Scope as MatrixScope;
 use crate::console::{AuthorizedDevice, device_execution::DeviceIdentity};
@@ -665,6 +665,11 @@ impl OwnerGrantIntents {
     }
 }
 impl OwnerGrantAccess {
+    /// Inspect exactly the admitted resource before the owner chooses how much
+    /// to publish. The actual write still re-verifies provider custody and budget.
+    pub async fn publication_form(&self, contribution: String) -> Result<OwnerGrantForm, NativeError> {
+        self.service().publication_form(&self.registry, contribution).await
+    }
     /// Adds a native host restriction. It cannot replace SDK/profile/provider
     /// authority; the composed check also runs inside the real SQLite writer.
     pub fn restrict_to_host(

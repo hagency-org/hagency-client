@@ -1,5 +1,7 @@
 # Repository audit knowledge
 
+- **Native publication form, 2026-10-28:** `OwnerGrantAccess::publication_form` reads the admitted resource and canonical remaining capacity without preparing an intent, reserving tokens, logging into a provider, or posting a grant. It checks owner/device/generation/admission/resource revision and both consent/publication permissions. Native Desktop can show limits before one explicit publish action, then use the existing immutable reservation and publication APIs.
+
 - **Live two-agent private DMs, 2026-09-17:** After explicit rate-limit recovery,
   root3 PID18059 on19432 physically provisions two local Codex agents and passes
   two task rounds, with exact distinct workspaces, canonical Done, encrypted

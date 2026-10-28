@@ -103,6 +103,38 @@ impl Fixture {
         }
     }
 }
+
+#[tokio::test]
+async fn publication_form_reads_budget_without_grants_or_publication() {
+    let mut f = Fixture::new().await;
+    f.enable_publication().await;
+    for _ in 0..2 {
+        let form = f.service.publication_form(&f.registry, "fixture_contribution".into()).await.unwrap();
+        assert_eq!(form.resource_id, f.resource);
+        assert_eq!(form.context.resource_revision, f.revision);
+        assert_eq!(form.context.remaining_tokens, Some(1000));
+        assert_eq!(form.context.resource_total_tokens, Some(1000));
+        assert_eq!(form.context.server_origin, f.origin);
+    }
+    assert!(f.history().await.data.records.is_empty());
+    assert_eq!(f.count("owner_capacity_grants"), 0);
+    assert_eq!(f.publications.lock().unwrap().posts, 0);
+}
+
+#[tokio::test]
+async fn publication_form_rejects_changed_admission_and_revision() {
+    let mut f = Fixture::new().await;
+    f.enable_publication().await;
+    for (key, value) in [("ownerMxid", "@other:test"), ("resourceRevision", &"a".repeat(64)), ("state", "pending")] {
+        let saved = f.admission.lock().unwrap()["admission"]["contribution"][key].clone();
+        f.admission.lock().unwrap()["admission"]["contribution"][key] = json!(value);
+        assert!(f.service.publication_form(&f.registry, "fixture_contribution".into()).await.is_err());
+        f.admission.lock().unwrap()["admission"]["contribution"][key] = saved;
+    }
+    assert!(f.history().await.data.records.is_empty());
+    assert_eq!(f.count("owner_capacity_grants"), 0);
+    assert_eq!(f.publications.lock().unwrap().posts, 0);
+}
 #[tokio::test]
 async fn native_grant_publication_cancel_restart_preserves_original_cas_and_one_hold() {
     let mut f = Fixture::new().await;

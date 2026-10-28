@@ -72,6 +72,16 @@ pub struct OwnerGrantReviewContext {
     pub observed_at_ms: u64,
 }
 
+/// Read-only facts for a native publication form. Opening the form creates no
+/// reservation, grant intent, provider login or server publication.
+#[derive(Clone, Debug)]
+pub struct OwnerGrantForm {
+    pub contribution_id: String,
+    pub resource_id: String,
+    pub label: String,
+    pub context: OwnerGrantReviewContext,
+}
+
 /// Not Clone or Deserialize. Only prepare/review_existing can produce this,
 /// and only its exact originating management instance may consume it.
 pub struct OwnerGrantReview {

@@ -197,6 +197,40 @@ pub(super) fn check_grant_enrollment(
     Ok(())
 }
 impl OwnerGrantIntents {
+    /// Native form preview only. Preparing an immutable grant and reserving its
+    /// budget happen after the owner submits the publication form.
+    pub async fn publication_form(
+        &self, registry: &OwnerResourceRegistry, contribution_id: String,
+    ) -> Result<OwnerGrantForm, NativeError> {
+        super::super::key(&contribution_id)?;
+        let cookie = self.cookie().await?;
+        let io = self.io(&cookie, Permission::ConsentGrants).await?;
+        io.session.authorize(&io.context, Permission::PublishGrants).map_err(storage)?;
+        let transport = AllocationTransport::new(self.manager.clone());
+        let scope = transport.scope(Permission::ConsentGrants).await?;
+        let reply: ConnectionReply = transport.request(
+            &scope, Operation::Contribution(contribution_id.clone()), false,
+        ).await?;
+        io.check().await?;
+        validate_admission(&reply, &io, &contribution_id)?;
+        let c = reply.admission.contribution;
+        let resource = registry.resource(&io.profile, c.resource_id.clone()).await.map_err(storage)?;
+        io.check().await?;
+        if resource.revision != c.resource_revision || resource.framework != c.runtime {
+            return Err(failure(409, "management_enrollment_changed"));
+        }
+        Ok(OwnerGrantForm {
+            contribution_id, resource_id: c.resource_id, label: c.label,
+            context: OwnerGrantReviewContext {
+                server_origin: io.identity.origin.clone(), profile_id: profile_digest(&io.identity)?,
+                resource_revision: resource.revision, framework: resource.framework, model: resource.model,
+                remaining_tokens: resource.budget.remaining_tokens.map(u64::from),
+                resource_total_tokens: resource.budget.pool.ceiling.map(u64::from),
+                shared_account_total_tokens: resource.budget.seat.quota.map(u64::from),
+                observed_at_ms: now_ms()?,
+            },
+        })
+    }
     /// Reconcile private intent outcomes with committed canonical closure.
     /// A missing receipt for an attempted intent is unknown, never zero effect.
     pub(super) async fn reconcile_prior_admission(
