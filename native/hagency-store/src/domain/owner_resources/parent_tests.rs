@@ -197,6 +197,44 @@ async fn parent_close_retains_children_until_explicit_release_and_latest_settlem
 }
 
 #[tokio::test]
+async fn ended_settled_grant_frees_its_allocation_but_keeps_an_unresolved_child() {
+    let temp = tempfile::tempdir().unwrap();
+    let registry = OwnerResourceRegistry::open_root(&temp.path().join("owner")).unwrap();
+    let a = authority('a');
+    let resource = enroll(&registry, &a, "enroll").await.resource_id;
+    let g = grant(&registry, &a, &resource, "monthly", 700)
+        .await
+        .unwrap();
+    let end = g.period_end_ms;
+    let child = command(&g, "month_child", 200);
+    assert_eq!(apply(&registry, &a, child.clone()).await.state, "reserved");
+    let settled = close(&registry, &a, &g, closure(&g, "close_month", None)).await;
+    assert_eq!(
+        (settled.state.as_str(), settled.retained_tokens),
+        ("retained", 200)
+    );
+    // The reserved child is unresolved liability in and after its month.
+    assert_eq!(
+        pool_at(&registry, &resource, end - 1).await,
+        (Some(800), 200)
+    );
+    assert_eq!(pool_at(&registry, &resource, end).await, (Some(800), 200));
+    let released = apply(&registry, &a, release(&child)).await;
+    assert_eq!(
+        (released.state.as_str(), released.retained_tokens),
+        ("released", 0)
+    );
+    // Within the month the settlement still retains its amount until it is
+    // settled again; after the month the settled grant frees its allocation.
+    assert_eq!(
+        pool_at(&registry, &resource, end - 1).await,
+        (Some(800), 200)
+    );
+    assert_eq!(pool_at(&registry, &resource, end).await, (Some(1000), 0));
+    registry.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn parent_fence_covers_unseen_reserves_and_distinct_empty_commands_get_distinct_revisions() {
     let temp = tempfile::tempdir().unwrap();
     let registry = OwnerResourceRegistry::open_root(&temp.path().join("owner")).unwrap();

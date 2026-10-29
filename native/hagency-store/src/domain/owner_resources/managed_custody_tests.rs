@@ -283,6 +283,28 @@ async fn managed_custody_call_preparation_and_issue_preserve_capacity_and_restar
 }
 
 #[tokio::test]
+async fn ended_month_keeps_the_full_hold_of_a_child_with_an_in_flight_call() {
+    let f = fixture().await;
+    let child = native_child(&f).await;
+    qualify(&f, &child).await;
+    let end = f.grant.period_end_ms;
+    let scope = issue(&f, &child, "month_end", 100).await;
+    f.registry
+        .record_managed_usage(&scope, reported("partial", 60, false, false))
+        .await
+        .unwrap();
+    // Unknown usage blocks new capacity in and after the month. After it, the
+    // parent's own allocation no longer counts, but the project and its
+    // in-flight child keep their whole hold (400), not only the 340 unresolved.
+    assert_eq!(
+        pool_at(&f.registry, &f.resource, end - 1).await,
+        (None, 700)
+    );
+    assert_eq!(pool_at(&f.registry, &f.resource, end).await, (None, 400));
+    f.registry.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn managed_custody_cumulative_usage_is_not_added_twice_and_zero_is_explicit() {
     let f = fixture().await;
     let child = native_child(&f).await;

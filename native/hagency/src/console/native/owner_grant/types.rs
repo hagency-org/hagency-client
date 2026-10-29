@@ -91,6 +91,8 @@ pub struct OwnerGrantReview {
     admission: admission::AdmissionRound,
     consent: OwnerGrantConsent,
     context: OwnerGrantReviewContext,
+    /// A new UTC month on an admission whose earlier months ended.
+    regrant: bool,
 }
 impl OwnerGrantReview {
     pub fn summary(&self) -> OwnerGrantSummary {

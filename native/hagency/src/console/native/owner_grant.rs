@@ -395,7 +395,33 @@ impl OwnerGrantIntents {
         // state machine, which also runs on ordinary small worker stacks.
         let admission = Box::pin(self.observe_grant_admission(&io, &binding)).await?;
         let receipt_version = if Box::pin(self.supports_admission_receipts(&io)).await? { 2 } else { 1 };
-        let (consent, closed_prior) = if receipt_version == 2 {
+        let regrant = receipt_version == 2
+            && History::load(&io.path, io.identity.clone())?.admission_month_ended(
+                &binding.contribution_id,
+                &admission.request_id,
+                now_ms()?,
+            );
+        let (consent, prior) = if regrant {
+            // A new UTC month on the same admission, after every earlier month ended.
+            if !Box::pin(self.supports_monthly_regrant(&io)).await? {
+                return Err(failure(409, "management_monthly_regrant_required"));
+            }
+            let prior = Box::pin(self.reconcile_regrant(
+                &io,
+                registry,
+                &binding.contribution_id,
+                &admission.request_id,
+            ))
+            .await?;
+            (
+                consent
+                    .with_admission_request(admission.request_id.clone())
+                    .map_err(storage)?
+                    .require_regrant_after_period_end()
+                    .map_err(storage)?,
+                prior,
+            )
+        } else if receipt_version == 2 {
             let closed = Box::pin(self.reconcile_prior_admission(&io, registry,
                 &binding.contribution_id, &admission.request_id)).await?;
             (consent.with_admission_request(admission.request_id.clone()).map_err(storage)?
@@ -427,8 +453,7 @@ impl OwnerGrantIntents {
         io.check().await?;
         let (consent, context) = self.review_context(&io, registry, consent).await?;
         let mut history = History::load(&io.path, io.identity.clone())?;
-        if closed_prior.is_empty() { history.insert(original.clone())?; }
-        else { history.insert_with_closed_grants(original.clone(), &closed_prior)?; }
+        history.insert_after(original.clone(), &prior, regrant)?;
         io.check().await?;
         consent.binding().map_err(storage)?;
         Ok(OwnerGrantReview {
@@ -438,6 +463,7 @@ impl OwnerGrantIntents {
             admission,
             consent,
             context,
+            regrant,
         })
     }
 
@@ -520,12 +546,29 @@ impl OwnerGrantIntents {
             return Err(failure(409, "owner_grant_original_review_expired"));
         }
         let admission = Box::pin(self.check_grant_admission(&io, &original)).await?;
+        let regrant = original.receipt_version == 2
+            && history.admission_month_ended(
+                &original.binding.contribution_id,
+                &admission.request_id,
+                now_ms()?,
+            );
         let consent = if original.receipt_version == 2 {
             if !Box::pin(self.supports_admission_receipts(&io)).await? {
                 return Err(failure(409, "management_admission_receipts_required"));
             }
-            consent.with_admission_request(admission.request_id.clone()).map_err(storage)?
-                .require_closed_prior_admissions().map_err(storage)?
+            let consent = consent
+                .with_admission_request(admission.request_id.clone())
+                .map_err(storage)?;
+            if regrant {
+                if !Box::pin(self.supports_monthly_regrant(&io)).await? {
+                    return Err(failure(409, "management_monthly_regrant_required"));
+                }
+                consent
+                    .require_regrant_after_period_end()
+                    .map_err(storage)?
+            } else {
+                consent.require_closed_prior_admissions().map_err(storage)?
+            }
         } else { consent };
         io.check().await?;
         let (consent, context) = self.review_context(&io, registry, consent).await?;
@@ -536,6 +579,7 @@ impl OwnerGrantIntents {
             admission,
             consent,
             context,
+            regrant,
         })))
     }
 
@@ -581,6 +625,9 @@ impl OwnerGrantIntents {
         let admission_receipts = Box::pin(self.supports_admission_receipts(&io)).await?;
         if review.original.receipt_version == 2 && !admission_receipts {
             return Err(failure(409, "management_admission_receipts_required"));
+        }
+        if review.regrant && !Box::pin(self.supports_monthly_regrant(&io)).await? {
+            return Err(failure(409, "management_monthly_regrant_required"));
         }
         history.data.records[index].state = State::Applying;
         history.save()?;
@@ -732,7 +779,9 @@ impl OwnerGrantAccess {
         self.service().list_existing(&self.registry).await
     }
     /// Refresh the approved admission before opening new choices from a closed
-    /// historical grant. Prepare/confirm still independently recheck authority.
+    /// historical grant, or from grants of this admission whose UTC month has
+    /// ended (a new month on the same admission). Prepare/confirm still
+    /// independently recheck authority.
     pub async fn check_new_admission(&self, contribution: String) -> Result<(), NativeError> {
         self.service().check_new_admission(&self.registry, contribution).await
     }

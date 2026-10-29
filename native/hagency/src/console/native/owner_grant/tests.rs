@@ -154,7 +154,9 @@ async fn server() -> (
                     "/hagency/api/v1/management/session" => {
                         let state = publications.lock().unwrap();
                         json!({"features": if state.allocations_disabled { vec![] }
-                        else if state.admission_receipts {
+                        else if state.admission_receipts && state.monthly_regrant {
+                            vec!["admission-bound-grants-v2", "pool-monthly-regrant-v1"]
+                        } else if state.admission_receipts {
                             vec!["admission-bound-grants-v2"]
                         } else { vec!["project-reservations-v1"] }})
                     }

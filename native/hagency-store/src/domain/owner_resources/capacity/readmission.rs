@@ -38,7 +38,7 @@ pub(super) fn closed_grants(
     Err(Error::Capacity)
 }
 
-fn checked_closure(
+pub(super) fn checked_closure(
     db: &rusqlite::Connection, profile: &ProfileAuthority, device: &str,
     grant: &NativeGrantReceipt, active: bool,
 ) -> Result<Option<NativeGrantSettlementReceipt>, Error> {

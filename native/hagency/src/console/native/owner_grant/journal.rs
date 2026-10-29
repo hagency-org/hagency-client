@@ -176,10 +176,15 @@ impl History {
             .position(|r| r.original.intent_id == intent)
             .ok_or_else(|| failure(404, "owner_grant_intent_missing"))
     }
-    fn insert(&mut self, original: Original) -> Result<(), NativeError> {
-        self.insert_with_closed_grants(original, &[])
-    }
-    fn insert_with_closed_grants(&mut self, original: Original, closed: &[String]) -> Result<(), NativeError> {
+    /// `prior` names the canonical grants that a new v2 original may follow:
+    /// closed grants of another admission and, for a `regrant`, grants of this
+    /// same admission whose UTC month ended before the new one starts.
+    fn insert_after(
+        &mut self,
+        original: Original,
+        prior: &[String],
+        regrant: bool,
+    ) -> Result<(), NativeError> {
         original.validate(&self.data.identity)?;
         if self.data.records.len() >= MAX_RECORDS {
             return Err(failure(409, "owner_grant_history_full"));
@@ -189,13 +194,33 @@ impl History {
                 && r.original.binding.contribution_id == original.binding.contribution_id
                 && !(original.receipt_version == 2
                     && r.state == State::Recorded
-                    && r.original.admission.as_ref().map(|a| &a.request_id)
+                    && prior.contains(&r.original.selection.grant_id)
+                    && (r.original.admission.as_ref().map(|a| &a.request_id)
                         != original.admission.as_ref().map(|a| &a.request_id)
-                    && closed.contains(&r.original.selection.grant_id))
+                        || (regrant && r.original.period.end_ms <= original.period.start_ms)))
         }) {
             return Err(failure(409, "owner_grant_original_intent_required"));
         }
         self.data.records.push(Record::new(original)?);
         self.save()
+    }
+    /// The contribution has recorded grants on this admission and every one
+    /// covers a UTC month that ended by `now`: a new month may be granted on
+    /// the same admission. The canonical writer repeats this check.
+    fn admission_month_ended(&self, contribution: &str, admission: &str, now: u64) -> bool {
+        let mut recorded = self
+            .data
+            .records
+            .iter()
+            .filter(|r| {
+                r.state == State::Recorded
+                    && r.original.binding.contribution_id == contribution
+                    && r.original
+                        .admission
+                        .as_ref()
+                        .is_some_and(|a| a.request_id == admission)
+            })
+            .peekable();
+        recorded.peek().is_some() && recorded.all(|r| r.original.period.end_ms <= now)
     }
 }

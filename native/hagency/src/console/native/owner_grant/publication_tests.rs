@@ -1,6 +1,8 @@
 #[derive(Default)]
 struct PublicationFixtureState {
     admission_receipts: bool,
+    /// The server accepts one grant per admission per UTC month.
+    monthly_regrant: bool,
     allocations_disabled: bool,
     commands: std::collections::BTreeMap<String, serde_json::Value>,
     posts: usize,

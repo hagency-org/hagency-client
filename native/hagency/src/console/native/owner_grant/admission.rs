@@ -41,9 +41,25 @@ impl OwnerGrantIntents {
         if history.data.records.iter().any(|r| r.original.binding.contribution_id == contribution
             && r.state == State::Recorded
             && r.original.admission.as_ref().is_some_and(|a| a.request_id == current.request_id)) {
-            return Err(failure(409, "owner_grant_new_admission_required"));
+            // The same admission may be granted again only for a new UTC month,
+            // once every one of its recorded grants covers a month that ended.
+            if !history.admission_month_ended(&contribution, &current.request_id, now_ms()?) {
+                return Err(failure(409, "owner_grant_new_admission_required"));
+            }
+            if !Box::pin(self.supports_monthly_regrant(&io)).await? {
+                return Err(failure(409, "management_monthly_regrant_required"));
+            }
+            Box::pin(self.reconcile_regrant(&io, registry, &contribution, &current.request_id))
+                .await?;
+        } else {
+            Box::pin(self.reconcile_prior_admission(
+                &io,
+                registry,
+                &contribution,
+                &current.request_id,
+            ))
+            .await?;
         }
-        Box::pin(self.reconcile_prior_admission(&io, registry, &contribution, &current.request_id)).await?;
         let resource = registry.resource(&io.profile, current.resource_id.clone()).await.map_err(storage)?;
         if resource.revision != current.resource_revision {
             return Err(failure(409, "management_enrollment_changed"));
@@ -51,7 +67,7 @@ impl OwnerGrantIntents {
         io.check().await
     }
 
-    pub(super) async fn supports_admission_receipts(&self, io: &NativeIo<'_>) -> Result<bool, NativeError> {
+    async fn session_features(&self, io: &NativeIo<'_>) -> Result<Vec<Value>, NativeError> {
         let transport = AllocationTransport::new(self.manager.clone());
         let scope = transport.scope(io.permission).await?;
         let reply: Value = transport.request(&scope, Operation::Session, false).await?;
@@ -62,6 +78,24 @@ impl OwnerGrantIntents {
         if features.iter().any(|v| v.as_str().is_none_or(|s| s.len() > 128)) {
             return Err(failure(503, "management_features_invalid"));
         }
+        Ok(features.clone())
+    }
+    /// The server accepts one grant per v2 admission per UTC month. Without it,
+    /// a second grant on an admission is refused even after its month ended.
+    pub(super) async fn supports_monthly_regrant(
+        &self,
+        io: &NativeIo<'_>,
+    ) -> Result<bool, NativeError> {
+        let features = self.session_features(io).await?;
+        Ok(features
+            .iter()
+            .any(|v| v.as_str() == Some("pool-monthly-regrant-v1")))
+    }
+    pub(super) async fn supports_admission_receipts(
+        &self,
+        io: &NativeIo<'_>,
+    ) -> Result<bool, NativeError> {
+        let features = self.session_features(io).await?;
         // Issuance is supported before an owner has published their first grant.
         // Project reservation discovery additionally requires available capacity.
         let admission_bound = features.iter().any(|v| v.as_str() == Some("admission-bound-grants-v2"));

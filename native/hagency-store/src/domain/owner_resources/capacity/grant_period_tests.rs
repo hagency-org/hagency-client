@@ -119,6 +119,36 @@ impl Fixture {
             .map(u64::from)
             .unwrap()
     }
+    /// A consent on the fixture's single v2 admission, with no history check.
+    fn admission_consent(&self, id: &str, now: u64, amount: u64) -> OwnerGrantConsent {
+        self.consent(id, now, amount)
+            .with_admission_request("period_admission".into())
+            .unwrap()
+    }
+    /// A new month's grant on the fixture's admission.
+    fn regrant(&self, id: &str, now: u64, amount: u64) -> OwnerGrantConsent {
+        self.admission_consent(id, now, amount)
+            .require_regrant_after_period_end()
+            .unwrap()
+    }
+    /// The resource budget as the writer evaluates it at native time `at`.
+    async fn remaining_at(&self, at: u64) -> Option<u64> {
+        let resource = self.resource.clone();
+        self.registry
+            .0
+            .store
+            .call(4096, move |db| {
+                let resource = read_resource(&db.db, &resource)?;
+                Ok(
+                    super::super::super::budget_at(&db.db, &resource, None, false, at)?
+                        .seat
+                        .remaining
+                        .map(u64::from),
+                )
+            })
+            .await
+            .unwrap()
+    }
 }
 fn boundary() -> u64 {
     month(graphs::now_ms().unwrap()).unwrap().2
@@ -223,13 +253,226 @@ async fn original_replay_and_recovery_preserve_old_period_and_hold() {
         .unwrap()
         .unwrap();
     assert_eq!(serde_json::to_value(recovered).unwrap(), saved);
+    // The hold is kept for its own month: no more than the rest fits there.
     assert!(
-        f.apply(f.consent("next_period", end, 301), end, end)
+        f.apply(f.consent("same_period", end - 1, 301), end - 1, end - 1)
             .await
             .is_err()
     );
     assert_eq!(f.state().await, state);
     assert_eq!(f.remaining().await, 300);
+    // The ceiling is monthly. Once the month has ended, the unused allocation
+    // of a grant without children no longer counts; its receipt is unchanged.
+    assert_eq!(f.remaining_at(end - 1).await, Some(300));
+    assert_eq!(f.remaining_at(end).await, Some(1000));
+    let recovered = f
+        .registry
+        .recover_capacity_grant(
+            Fixture::profile(),
+            "period_device".into(),
+            original.grant_id.clone(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(serde_json::to_value(recovered).unwrap(), saved);
+    f.registry.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn same_admission_regrant_waits_for_month_end_and_is_refused_twice_in_a_month() {
+    let f = Fixture::new().await;
+    let end = boundary();
+    let first = f
+        .apply(
+            f.admission_consent("first_month", end - 1, 700)
+                .require_unissued_contribution()
+                .unwrap(),
+            end - 1,
+            end - 1,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        first.admission_request_id.as_deref(),
+        Some("period_admission")
+    );
+    // Before the boundary the month still runs: refused although 300 are free.
+    let state = f.state().await;
+    assert!(matches!(
+        f.apply(f.regrant("early", end - 1, 300), end - 1, end - 1)
+            .await,
+        Err(Error::OwnerGrantReviewChanged)
+    ));
+    // Without the regrant restriction the same admission stays refused.
+    assert!(matches!(
+        f.apply(
+            f.admission_consent("unissued", end, 300)
+                .require_unissued_contribution()
+                .unwrap(),
+            end,
+            end
+        )
+        .await,
+        Err(Error::Conflict)
+    ));
+    assert!(matches!(
+        f.apply(
+            f.admission_consent("readmitted", end, 300)
+                .require_closed_prior_admissions()
+                .unwrap(),
+            end,
+            end
+        )
+        .await,
+        Err(Error::OwnerGrantReviewChanged)
+    ));
+    assert_eq!(f.state().await, state);
+    // After the boundary the ended month's unused 700 is free again.
+    assert_eq!(f.remaining_at(end).await, Some(1000));
+    let next = f
+        .apply(f.regrant("second_month", end, 600), end, end)
+        .await
+        .unwrap();
+    assert_eq!(next.version, 2);
+    assert_eq!(next.admission_request_id, first.admission_request_id);
+    assert_eq!(next.enrollment_id, first.enrollment_id);
+    assert_eq!(next.grant_revision, 1);
+    assert_eq!(next.period_key, month(end).unwrap().0);
+    assert_eq!(next.period_start_ms, end);
+    assert!(next.ledger_revision > first.ledger_revision);
+    assert_eq!(f.remaining_at(end).await, Some(400));
+    // One grant per admission per month: a second one is refused with room left.
+    let state = f.state().await;
+    assert!(matches!(
+        f.apply(f.regrant("twice", end + 1, 100), end + 1, end + 1)
+            .await,
+        Err(Error::OwnerGrantReviewChanged)
+    ));
+    assert_eq!(f.state().await, state);
+    assert_eq!(f.remaining_at(end + 1).await, Some(400));
+    // Both receipts stay exactly as issued.
+    for receipt in [&first, &next] {
+        let recovered = f
+            .registry
+            .recover_capacity_grant(
+                Fixture::profile(),
+                "period_device".into(),
+                receipt.grant_id.clone(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(recovered).unwrap(),
+            serde_json::to_value(receipt).unwrap()
+        );
+    }
+    f.registry.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn regrant_needs_this_admission_history_and_every_other_admission_closed() {
+    let f = Fixture::new().await;
+    let end = boundary();
+    // The restriction exists only for a v2 admission and excludes readmission.
+    assert!(matches!(
+        f.consent("v1", end, 100).require_regrant_after_period_end(),
+        Err(Error::LocalAuthority)
+    ));
+    assert!(matches!(
+        f.regrant("both", end, 100)
+            .require_closed_prior_admissions(),
+        Err(Error::LocalAuthority)
+    ));
+    assert!(matches!(
+        f.admission_consent("both_other_way", end, 100)
+            .require_closed_prior_admissions()
+            .unwrap()
+            .require_regrant_after_period_end(),
+        Err(Error::LocalAuthority)
+    ));
+    // No earlier grant on this admission: a first grant is not a regrant.
+    assert!(matches!(
+        f.apply(f.regrant("first_as_regrant", end, 100), end, end)
+            .await,
+        Err(Error::OwnerGrantReviewChanged)
+    ));
+    // An earlier, still open grant of another admission blocks a regrant even
+    // after this admission's own month has ended.
+    f.apply(
+        f.consent("other_admission", end - 1, 100)
+            .with_admission_request("older_admission".into())
+            .unwrap(),
+        end - 1,
+        end - 1,
+    )
+    .await
+    .unwrap();
+    f.apply(
+        f.admission_consent("this_admission", end - 1, 100),
+        end - 1,
+        end - 1,
+    )
+    .await
+    .unwrap();
+    let state = f.state().await;
+    assert!(matches!(
+        f.apply(f.regrant("blocked", end, 100), end, end).await,
+        Err(Error::OwnerGrantReviewChanged)
+    ));
+    assert_eq!(f.state().await, state);
+    f.registry.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn regrant_history_scan_stays_bounded_and_fails_closed() {
+    let f = Fixture::new().await;
+    let end = boundary();
+    let first = f
+        .apply(
+            f.admission_consent("bounded_first", end - 1, 100),
+            end - 1,
+            end - 1,
+        )
+        .await
+        .unwrap();
+    // Unrelated grants sort after this pool's grant. With 2048 rows the scan
+    // still reads them all; 2049 rows, which no writer creates, must be refused
+    // rather than skipped.
+    let scan = |extra: usize| {
+        let first = first.clone();
+        f.registry.0.store.call(64 * 1024, move |db| {
+            let tx = db.db.transaction()?;
+            let (profile, resource, preset, seat): (String, String, String, String) = tx.query_row(
+                "SELECT profile,resource_id,preset_id,seat_id FROM owner_capacity_grants WHERE id='bounded_first'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )?;
+            for index in 0..extra {
+                let mut other = first.clone();
+                other.grant_id = format!("zz_other_{index:04}");
+                other.contribution_id = "other_contribution".into();
+                tx.execute(
+                    "INSERT OR IGNORE INTO owner_capacity_grants(id,profile,resource_id,preset_id,seat_id,allocated_tokens,receipt,active,accounting_mode) VALUES(?1,?2,?3,?4,?5,1,?6,0,?7)",
+                    params![other.grant_id, profile, resource, preset, seat, serde_json::to_string(&other)?, parent::RESERVATION_ONLY],
+                )?;
+            }
+            tx.commit()?;
+            let profile = Fixture::profile();
+            let result = regrant::prior_periods_ended(&db.db, &profile, "period_device",
+                "period_contribution", "period_admission", None, &OwnerGrantPeriod::at(end)?, end);
+            Ok(result)
+        })
+    };
+    assert_eq!(scan(2047).await.unwrap().unwrap(), ["bounded_first"]);
+    assert!(matches!(scan(2048).await.unwrap(), Err(Error::Capacity)));
+    let state = f.state().await;
+    assert!(matches!(
+        f.apply(f.regrant("bounded_next", end, 100), end, end).await,
+        Err(Error::Capacity)
+    ));
+    assert_eq!(f.state().await, state);
     f.registry.shutdown().await.unwrap();
 }
 

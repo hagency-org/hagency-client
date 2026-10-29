@@ -985,7 +985,25 @@ fn budget(
     exclude_engagement_id: Option<&str>,
     for_auto_join: bool,
 ) -> Result<Budget, Error> {
-    budget_with_grant(db, resource, exclude_engagement_id, for_auto_join, None)
+    budget_at(
+        db,
+        resource,
+        exclude_engagement_id,
+        for_auto_join,
+        graphs::now_ms()?,
+    )
+}
+/// The budget at native time `at`. An owner grant whose UTC month ended
+/// before `at` keeps only its unresolved liability against the monthly
+/// ceiling (`owner_resources::additional_commitments`).
+fn budget_at(
+    db: &Connection,
+    resource: &Resource,
+    exclude_engagement_id: Option<&str>,
+    for_auto_join: bool,
+    at: u64,
+) -> Result<Budget, Error> {
+    budget_with_grant(db, resource, exclude_engagement_id, for_auto_join, None, at)
 }
 fn budget_with_grant(
     db: &Connection,
@@ -993,6 +1011,7 @@ fn budget_with_grant(
     exclude_engagement_id: Option<&str>,
     for_auto_join: bool,
     within_grant: Option<&str>,
+    at: u64,
 ) -> Result<Budget, Error> {
     let declaration: Option<String> = db
         .query_row(
@@ -1033,7 +1052,7 @@ fn budget_with_grant(
         resource,
         within_grant,
     )?);
-    commitments.extend(owner_resources::additional_commitments(db, resource)?);
+    commitments.extend(owner_resources::additional_commitments(db, resource, at)?);
     let mut result = allocation::resource_budget(&allocation::Input {
         preset: allocation::Preset {
             id: resource.preset_id.clone(),
@@ -1076,7 +1095,7 @@ fn headroom_with_grant(
     within_grant: Option<&str>,
 ) -> Result<Headroom, Error> {
     let report = usage::ceiling_report(db, &resource.id(), at)?;
-    let spent_budget = budget_with_grant(db, resource, None, false, within_grant)?;
+    let spent_budget = budget_with_grant(db, resource, None, false, within_grant, at)?;
     // backend-v2.js:14057: a seat declaration whose period mismatches the
     // pool's nulls the whole figure rather than falling back to the pool.
     let period_mismatch = spent_budget.seat.status == allocation::SeatStatus::PeriodMismatch;
@@ -2343,7 +2362,7 @@ impl DomainRepository {
     /// the alarm sweep and admission publish — never a second arithmetic
     /// path (ADR-121).
     pub fn resource_headroom(&self, id: &str, at: u64) -> Result<(Budget, CeilingReport), Error> {
-        let budget = budget(&self.db, &read_resource(&self.db, id)?, None, false)?;
+        let budget = budget_at(&self.db, &read_resource(&self.db, id)?, None, false, at)?;
         let report = usage::ceiling_report(&self.db, id, at)?;
         Ok((budget, report))
     }

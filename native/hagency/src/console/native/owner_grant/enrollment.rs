@@ -116,6 +116,14 @@ impl Enrollments {
     }
 }
 
+fn prior_intent(error: hagency_store::Error) -> NativeError {
+    if matches!(error, hagency_store::Error::Conflict) {
+        failure(409, "owner_grant_prior_intent_required")
+    } else {
+        storage(error)
+    }
+}
+
 pub(super) fn validate_admission(
     reply: &ConnectionReply,
     io: &NativeIo<'_>,
@@ -238,11 +246,38 @@ impl OwnerGrantIntents {
         contribution: &str, request: &str,
     ) -> Result<Vec<String>, NativeError> {
         let closed = registry.closed_prior_admission_grants(io.profile.clone(),
-            io.identity.device.clone(), contribution.into(), request.into()).await.map_err(|error| {
-                if matches!(error, hagency_store::Error::Conflict) {
-                    failure(409, "owner_grant_prior_intent_required")
-                } else { storage(error) }
-            })?;
+            io.identity.device.clone(), contribution.into(), request.into()).await.map_err(prior_intent)?;
+        self.reconcile_originals(io, registry, contribution, closed).await
+    }
+    /// Before a new UTC month on the same admission: every earlier original is
+    /// declined, or recorded and canonically history. This admission's grants
+    /// count as history only after their month ended; others must be closed.
+    pub(super) async fn reconcile_regrant(
+        &self,
+        io: &NativeIo<'_>,
+        registry: &OwnerResourceRegistry,
+        contribution: &str,
+        request: &str,
+    ) -> Result<Vec<String>, NativeError> {
+        let prior = registry
+            .regrant_prior_grants(
+                io.profile.clone(),
+                io.identity.device.clone(),
+                contribution.into(),
+                request.into(),
+            )
+            .await
+            .map_err(prior_intent)?;
+        self.reconcile_originals(io, registry, contribution, prior)
+            .await
+    }
+    async fn reconcile_originals(
+        &self,
+        io: &NativeIo<'_>,
+        registry: &OwnerResourceRegistry,
+        contribution: &str,
+        prior: Vec<String>,
+    ) -> Result<Vec<String>, NativeError> {
         io.check().await?;
         let mut grants = History::load(&io.path, io.identity.clone())?;
         for index in 0..grants.data.records.len() {
@@ -251,12 +286,12 @@ impl OwnerGrantIntents {
             let record = &grants.data.records[index];
             match progress.state {
                 OwnerGrantState::Declined => {},
-                OwnerGrantState::Recorded if closed.contains(&record.original.selection.grant_id) => {},
+                OwnerGrantState::Recorded if prior.contains(&record.original.selection.grant_id) => {},
                 _ => return Err(failure(409, "owner_grant_prior_intent_required")),
             }
         }
         io.check().await?;
-        Ok(closed)
+        Ok(prior)
     }
     /// The caller selects only an existing admitted contribution. Native code
     /// observes the real provider and canonical resource, then owns the ID.

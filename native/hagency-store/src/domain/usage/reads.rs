@@ -253,7 +253,7 @@ pub(crate) fn ceiling_report(
     for commitment in super::super::coordinator::additional_commitments(db, &resource, None)?
         .into_iter()
         .chain(super::super::owner_resources::additional_commitments(
-            db, &resource,
+            db, &resource, at,
         )?)
     {
         if commitment.preset_id.as_deref() == Some(resource.preset_id.as_str()) {

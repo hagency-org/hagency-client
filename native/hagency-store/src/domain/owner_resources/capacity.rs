@@ -8,6 +8,7 @@ pub use managed_agents::{budget, shared_execution};
 mod parent;
 mod publication;
 mod readmission;
+mod regrant;
 use super::*;
 use crate::resource_publication_revision;
 use hagency_core::project::identifier;
@@ -394,11 +395,26 @@ impl OwnerGrantConsent {
     /// replace the original unissued-history restriction with a flag-only test.
     pub fn require_closed_prior_admissions(mut self) -> Result<Self, Error> {
         self.check()?;
-        if self.enrollment.admission_request_id.is_none() {
+        if self.enrollment.admission_request_id.is_none() || self.regrant_after_period_end {
             return Err(Error::LocalAuthority);
         }
         self.require_unissued_contribution = true;
         self.closed_prior_admissions = true;
+        Ok(self)
+    }
+
+    /// A new UTC month on the same v2 admission. Every earlier grant of the
+    /// contribution must be history: this admission's grants only after their
+    /// month ended, another admission's only after canonical closure. The
+    /// writer repeats the complete check against the ledger rows; this flag
+    /// alone never permits a second grant in the same month.
+    pub fn require_regrant_after_period_end(mut self) -> Result<Self, Error> {
+        self.check()?;
+        if self.enrollment.admission_request_id.is_none() || self.closed_prior_admissions {
+            return Err(Error::LocalAuthority);
+        }
+        self.require_unissued_contribution = true;
+        self.regrant_after_period_end = true;
         Ok(self)
     }
 }
@@ -411,6 +427,7 @@ pub struct OwnerGrantConsent {
     expires: Instant,
     require_unissued_contribution: bool,
     closed_prior_admissions: bool,
+    regrant_after_period_end: bool,
     reviewed_budget: Option<String>,
 }
 impl OwnerGrantConsent {
@@ -594,6 +611,7 @@ impl OwnerResourceRegistry {
             expires,
             require_unissued_contribution: false,
             closed_prior_admissions: false,
+            regrant_after_period_end: false,
             reviewed_budget: None,
         };
         consent.check()?;
@@ -878,6 +896,7 @@ impl DomainRepository {
                 &e.contribution_id, Some(e.admission_request_id.as_deref().ok_or(Error::LocalAuthority)?), Some(&e.enrollment_id))
                 .map_err(|error| if matches!(error, Error::Conflict) { Error::OwnerGrantReviewChanged } else { error })?;
         } else if consent.require_unissued_contribution
+            && !consent.regrant_after_period_end
             && contribution_grant_exists(&tx, &e.profile, &e.contribution_id)?
         {
             return Err(Error::Conflict);
@@ -892,8 +911,29 @@ impl DomainRepository {
         let resource = read_resource(&tx, &e.resource_id)?;
         let now = now_ms()?;
         consent.period.require_current(now)?;
+        if consent.regrant_after_period_end {
+            regrant::prior_periods_ended(
+                &tx,
+                &e.profile,
+                &e.executor_device_id,
+                &e.contribution_id,
+                e.admission_request_id
+                    .as_deref()
+                    .ok_or(Error::LocalAuthority)?,
+                Some(&e.enrollment_id),
+                &consent.period,
+                now,
+            )
+            .map_err(|error| {
+                if matches!(error, Error::Conflict) {
+                    Error::OwnerGrantReviewChanged
+                } else {
+                    error
+                }
+            })?;
+        }
         if let Some(reviewed) = &consent.reviewed_budget {
-            let current = super::super::budget(&tx, &resource, None, false)?;
+            let current = super::super::budget_at(&tx, &resource, None, false, now)?;
             if &reviewed_budget_digest(&current)? != reviewed {
                 return Err(Error::OwnerGrantReviewChanged);
             }
@@ -1275,24 +1315,40 @@ fn apply_child(
 }
 
 /// Only parent holds are added to the existing allocation engine. Project
-/// children spend that already-counted capacity; ACL changes and UTC rollover
-/// do not silently free it or erase unknown/legacy commitments.
+/// children spend that already-counted capacity; ACL changes do not silently
+/// free it or erase unknown/legacy commitments. The ceiling is monthly: once a
+/// grant's UTC month has ended before `at`, its allocation (or settled amount)
+/// no longer counts. It keeps its children's unresolved liability, or their
+/// whole retained hold while any of their usage is unknown.
 pub(in super::super) fn additional_commitments(
     db: &Connection,
     resource: &Resource,
+    at: u64,
 ) -> Result<Vec<allocation::Commitment>, Error> {
-    let mut q=db.prepare("SELECT g.id,g.preset_id,g.seat_id,COALESCE(p.retained_tokens,g.allocated_tokens) FROM owner_capacity_grants g LEFT JOIN owner_parent_settlements p ON p.grant_id=g.id WHERE g.preset_id=?1 OR g.seat_id=?2")?;
+    let mut q=db.prepare("SELECT g.id,g.preset_id,g.seat_id,COALESCE(p.retained_tokens,g.allocated_tokens),CASE WHEN json_valid(g.receipt) AND json_type(g.receipt,'$.periodEndMs')='integer' THEN json_extract(g.receipt,'$.periodEndMs') END FROM owner_capacity_grants g LEFT JOIN owner_parent_settlements p ON p.grant_id=g.id WHERE g.preset_id=?1 OR g.seat_id=?2")?;
     let rows = q.query_map(params![resource.preset_id, resource.seat_id], |r| {
         Ok((
             r.get::<_, String>(0)?,
             r.get::<_, String>(1)?,
             r.get::<_, String>(2)?,
             r.get::<_, u64>(3)?,
+            r.get::<_, Option<i64>>(4)?,
         ))
     })?;
     rows.map(|row| {
-        let (id, preset, seat, tokens) = row?;
-        let tokens = tokens.max(managed_agents::grant_floor(db, &id)?.retained);
+        let (id, preset, seat, tokens, period_end) = row?;
+        let floor = managed_agents::grant_floor(db, &id)?;
+        // A receipt without a readable period end is never treated as ended.
+        let ended = period_end.is_some_and(|end| u64::try_from(end).is_ok_and(|end| end <= at));
+        let tokens = if ended {
+            if floor.complete {
+                floor.unresolved
+            } else {
+                floor.retained
+            }
+        } else {
+            tokens.max(floor.retained)
+        };
         Ok(allocation::Commitment {
             id: format!("owner_grant_{id}"),
             preset_id: Some(preset),

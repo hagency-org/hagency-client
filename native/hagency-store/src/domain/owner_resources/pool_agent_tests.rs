@@ -342,6 +342,54 @@ async fn closing_pool_preserves_direct_agent_liability() {
 }
 
 #[tokio::test]
+async fn ended_pool_month_frees_unused_capacity_but_live_agents_hold_until_fenced() {
+    let f = pool_fixture().await;
+    let end = f.grant.period_end_ms;
+    let resource = f.grant.resource_id.clone();
+    let reserve = pool_command(&f, "month_end", 200);
+    pool_reserve(&f, reserve.clone()).await;
+    // In its month the grant holds its whole allocation.
+    assert_eq!(
+        pool_at(&f.registry, &resource, end - 1).await,
+        (Some(300), 700)
+    );
+    // After the month only the live Agent's unused allocation stays held.
+    assert_eq!(pool_at(&f.registry, &resource, end).await, (Some(800), 200));
+    let digest = |v: &serde_json::Value| canonical::digest(v).unwrap();
+    let fence = ManagedAgentFenceCommand {
+        version: 1,
+        capability: AGENT_FENCE_CAPABILITY.into(),
+        operation: "agent.fence".into(),
+        command_id: "month_end_fence".into(),
+        reserve_command_digest: digest(&serde_json::to_value(&reserve).unwrap()),
+        reserve_command: reserve,
+        issued_at_ms: graphs::now_ms().unwrap(),
+    };
+    let fenced = f
+        .registry
+        .apply_managed_agent_fence(
+            VerifiedManagedAgentFence::for_pool(
+                proof(&f.profile, &f.grant),
+                fence.clone(),
+                digest(&serde_json::to_value(&fence).unwrap()),
+                true,
+                Instant::now() + Duration::from_secs(20),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(fenced.usage_complete);
+    // Fenced with complete usage: the ended month holds nothing more.
+    assert_eq!(pool_at(&f.registry, &resource, end).await, (Some(1000), 0));
+    assert_eq!(
+        pool_at(&f.registry, &resource, end - 1).await,
+        (Some(300), 700)
+    );
+    f.registry.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn pool_agent_owner_fence_retains_history_and_releases_only_known_unused_capacity() {
     let f = pool_fixture().await;
     let reserve = pool_command(&f, "fenced", 200);

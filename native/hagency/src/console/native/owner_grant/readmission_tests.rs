@@ -233,3 +233,267 @@ async fn admission_v2_first_grant_requires_no_preexisting_allocation() {
     assert_eq!(f.publications.lock().unwrap().posts, 0);
     f.stop().await;
 }
+
+/// Move a recorded original to an earlier UTC month in both the private journal
+/// and the canonical ledger, as if its month had ended. Explicit historical
+/// fixture, not a production clock override.
+async fn end_month(f: &Fixture, index: usize) -> NativeGrantReceipt {
+    let mut history = f.history().await;
+    let record = &mut history.data.records[index];
+    let mut receipt: NativeGrantReceipt =
+        serde_json::from_str(record.receipt.as_deref().unwrap()).unwrap();
+    record.original.period = Period {
+        key: "2000-01".into(),
+        start_ms: 946_684_800_000,
+        end_ms: 949_363_200_000,
+    };
+    record.original_digest = digest(&record.original).unwrap();
+    receipt.period_key = "2000-01".into();
+    receipt.period_start_ms = 946_684_800_000;
+    receipt.period_end_ms = 949_363_200_000;
+    let bytes = serde_json::to_string(&receipt).unwrap();
+    record.receipt = Some(bytes.clone());
+    history.save().unwrap();
+    let db = rusqlite::Connection::open(f.root.path().join("registry/domain.sqlite3")).unwrap();
+    assert_eq!(
+        db.execute(
+            "UPDATE owner_capacity_grants SET receipt=?1 WHERE id=?2",
+            rusqlite::params![bytes, receipt.grant_id]
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        db.execute(
+            "UPDATE owner_capacity_receipts SET result=?1 WHERE result LIKE ?2",
+            rusqlite::params![bytes, format!("%{}%", receipt.grant_id)]
+        )
+        .unwrap(),
+        1
+    );
+    receipt
+}
+
+#[tokio::test]
+async fn admission_v2_same_admission_regrants_once_its_month_ended() {
+    let mut f = Fixture::new().await;
+    f.enable_factory().await;
+    f.publications.lock().unwrap().admission_receipts = true;
+    f.publications.lock().unwrap().monthly_regrant = true;
+    let first = f
+        .service
+        .prepare(&f.registry, f.factory().await.unwrap(), Fixture::choices())
+        .await
+        .unwrap();
+    let first_id = first.summary().intent_id;
+    assert!(!first.regrant);
+    f.service.confirm(&f.registry, first).await.unwrap();
+    // While the month runs, this admission cannot be granted again.
+    assert_eq!(
+        f.service
+            .check_new_admission(&f.registry, "fixture_contribution".into())
+            .await
+            .unwrap_err()
+            .code,
+        "owner_grant_new_admission_required"
+    );
+    assert_eq!(
+        f.service
+            .prepare(&f.registry, f.factory().await.unwrap(), Fixture::choices())
+            .await
+            .err()
+            .expect("same month")
+            .code,
+        "owner_grant_prior_intent_required"
+    );
+    assert_eq!(f.history().await.data.records.len(), 1);
+    let ended = end_month(&f, 0).await;
+    let ended_record = serde_json::to_value(&f.history().await.data.records[0]).unwrap();
+    // A server that still accepts one grant per admission is never asked.
+    f.publications.lock().unwrap().monthly_regrant = false;
+    assert_eq!(
+        f.service
+            .check_new_admission(&f.registry, "fixture_contribution".into())
+            .await
+            .unwrap_err()
+            .code,
+        "management_monthly_regrant_required"
+    );
+    assert_eq!(
+        f.service
+            .prepare(&f.registry, f.factory().await.unwrap(), Fixture::choices())
+            .await
+            .err()
+            .expect("old server")
+            .code,
+        "management_monthly_regrant_required"
+    );
+    assert_eq!(f.history().await.data.records.len(), 1);
+    assert_eq!(f.count("owner_capacity_grants"), 1);
+    f.publications.lock().unwrap().monthly_regrant = true;
+    let enrollment = std::fs::read(f.enrollment_path().await).unwrap();
+    f.service
+        .check_new_admission(&f.registry, "fixture_contribution".into())
+        .await
+        .unwrap();
+    // The same admission and enrollment continue; nothing new is minted.
+    let review = f
+        .service
+        .prepare(&f.registry, f.factory().await.unwrap(), Fixture::choices())
+        .await
+        .unwrap();
+    assert!(review.regrant);
+    assert_eq!(review.original.binding.enrollment_id, ended.enrollment_id);
+    assert_eq!(
+        review.original.admission.as_ref().unwrap().request_id,
+        "admission_request"
+    );
+    let second_id = review.summary().intent_id;
+    // A dropped review is resumed as the same new month's grant.
+    drop(review);
+    let review = match f
+        .service
+        .review_existing(&f.registry, f.factory().await.unwrap(), second_id.clone())
+        .await
+        .unwrap()
+    {
+        OwnerGrantReviewResult::Review(review) => *review,
+        _ => panic!("expected the pending regrant review"),
+    };
+    assert!(review.regrant);
+    let recorded = f.service.confirm(&f.registry, review).await.unwrap();
+    assert!(matches!(recorded.state, OwnerGrantState::Recorded));
+    assert_ne!(recorded.summary.period_key, "2000-01");
+    assert_eq!(
+        std::fs::read(f.enrollment_path().await).unwrap(),
+        enrollment
+    );
+    assert_eq!(f.count("owner_capacity_grants"), 2);
+    let history = f.history().await;
+    assert_eq!(
+        serde_json::to_value(&history.data.records[0]).unwrap(),
+        ended_record
+    );
+    let receipt: NativeGrantReceipt =
+        serde_json::from_str(history.data.records[1].receipt.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        (receipt.version, receipt.admission_request_id.as_deref()),
+        (2, Some("admission_request"))
+    );
+    assert_eq!(receipt.enrollment_id, ended.enrollment_id);
+    assert!(receipt.ledger_revision > ended.ledger_revision);
+    // A second grant in this new month is refused again.
+    assert_eq!(
+        f.service
+            .check_new_admission(&f.registry, "fixture_contribution".into())
+            .await
+            .unwrap_err()
+            .code,
+        "owner_grant_new_admission_required"
+    );
+    assert_eq!(
+        f.service
+            .prepare(&f.registry, f.factory().await.unwrap(), Fixture::choices())
+            .await
+            .err()
+            .expect("twice in a month")
+            .code,
+        "owner_grant_prior_intent_required"
+    );
+    assert_eq!(f.count("owner_capacity_grants"), 2);
+    let mut f = f.restart().await;
+    f.enable_factory().await;
+    for id in [first_id, second_id] {
+        assert!(matches!(
+            f.service.recover(&f.registry, id).await.unwrap().state,
+            OwnerGrantState::Recorded
+        ));
+    }
+    f.stop().await;
+}
+
+#[tokio::test]
+async fn admission_v2_regrant_waits_for_every_earlier_original_of_the_contribution() {
+    let mut f = Fixture::new().await;
+    f.enable_factory().await;
+    f.publications.lock().unwrap().admission_receipts = true;
+    f.publications.lock().unwrap().monthly_regrant = true;
+    let first = f
+        .service
+        .prepare(&f.registry, f.factory().await.unwrap(), Fixture::choices())
+        .await
+        .unwrap();
+    f.service.confirm(&f.registry, first).await.unwrap();
+    let db = rusqlite::Connection::open(f.root.path().join("registry/domain.sqlite3")).unwrap();
+    let receipt = |db: &rusqlite::Connection| -> String {
+        db.query_row("SELECT receipt FROM owner_capacity_grants", [], |r| {
+            r.get(0)
+        })
+        .unwrap()
+    };
+    let this_month = receipt(&db);
+    end_month(&f, 0).await;
+    // An unattempted original of the new month must be resolved first.
+    let pending = f
+        .service
+        .prepare(&f.registry, f.factory().await.unwrap(), Fixture::choices())
+        .await
+        .unwrap();
+    let pending_id = pending.summary().intent_id;
+    drop(pending);
+    assert_eq!(
+        f.service
+            .prepare(&f.registry, f.factory().await.unwrap(), Fixture::choices())
+            .await
+            .err()
+            .expect("pending original")
+            .code,
+        "owner_grant_prior_intent_required"
+    );
+    let review = match f
+        .service
+        .review_cancellation(&f.registry, pending_id)
+        .await
+        .unwrap()
+    {
+        OwnerGrantCancellationResult::Review(review) => *review,
+        _ => panic!("expected cancellation review"),
+    };
+    f.service
+        .confirm_cancellation(&f.registry, review)
+        .await
+        .unwrap();
+    // The canonical ledger decides: a grant it still holds for this month
+    // refuses the regrant even when the private journal says it ended.
+    let ended = receipt(&db);
+    db.execute("UPDATE owner_capacity_grants SET receipt=?1", [&this_month])
+        .unwrap();
+    assert_eq!(
+        f.service
+            .check_new_admission(&f.registry, "fixture_contribution".into())
+            .await
+            .unwrap_err()
+            .code,
+        "owner_grant_prior_intent_required"
+    );
+    db.execute("UPDATE owner_capacity_grants SET receipt=?1", [&ended])
+        .unwrap();
+    let review = f
+        .service
+        .prepare(&f.registry, f.factory().await.unwrap(), Fixture::choices())
+        .await
+        .unwrap();
+    assert!(review.regrant);
+    f.service.confirm(&f.registry, review).await.unwrap();
+    assert_eq!(f.count("owner_capacity_grants"), 2);
+    let states: Vec<_> = f
+        .history()
+        .await
+        .data
+        .records
+        .iter()
+        .map(|r| r.state)
+        .collect();
+    assert_eq!(states, [State::Recorded, State::Declined, State::Recorded]);
+    f.stop().await;
+}

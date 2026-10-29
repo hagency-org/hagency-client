@@ -101,6 +101,24 @@ async fn native_host_fence_denies_a_grant_queued_before_account_retirement() {
     registry.shutdown().await.unwrap();
 }
 
+/// The resource pool budget evaluated at native time `at`: (remaining, committed).
+async fn pool_at(registry: &OwnerResourceRegistry, resource: &str, at: u64) -> (Option<u64>, u64) {
+    let resource = resource.to_owned();
+    registry
+        .0
+        .store
+        .call(4096, move |db| {
+            let resource = read_resource(&db.db, &resource)?;
+            let budget = crate::domain::budget_at(&db.db, &resource, None, false, at)?;
+            Ok((
+                budget.pool.remaining.map(u64::from),
+                u64::from(budget.pool.committed),
+            ))
+        })
+        .await
+        .unwrap()
+}
+
 async fn enrollment(
     registry: &OwnerResourceRegistry,
     profile: &ProfileAuthority,
