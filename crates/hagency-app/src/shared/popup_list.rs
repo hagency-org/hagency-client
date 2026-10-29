@@ -4,7 +4,11 @@ use crossbeam_queue::SegQueue;
 use makepad_widgets::*;
 use crate::{LivePtr, view_from_live_ptr};
 
-static PENDING_POPUP_NOTIFICATIONS: SegQueue<PopupItem> = SegQueue::new();
+struct PendingPopup {
+    epoch: Option<u64>,
+    item: PopupItem,
+}
+static PENDING_POPUP_NOTIFICATIONS: SegQueue<PendingPopup> = SegQueue::new();
 
 /// Displays a new popup notification with a popup item.
 ///
@@ -13,6 +17,25 @@ static PENDING_POPUP_NOTIFICATIONS: SegQueue<PopupItem> = SegQueue::new();
 /// and can be removed when manually closed by the user or automatically.
 /// Maximum auto dismissal duration is 3 minutes.
 pub fn enqueue_popup_notification(
+    message: impl Into<Cow<'static, str>>,
+    kind: PopupKind,
+    auto_dismissal_duration: Option<f64>,
+) {
+    enqueue_popup(None, message, kind, auto_dismissal_duration);
+}
+
+/// Diagnostics belonging to one original account operation are checked again
+/// when the UI actually dequeues them, including messages posted before logout.
+pub(crate) fn enqueue_scoped_popup_notification(
+    epoch: u64,
+    message: impl Into<Cow<'static, str>>,
+    kind: PopupKind,
+    duration: Option<f64>,
+) {
+    enqueue_popup(Some(epoch), message, kind, duration);
+}
+fn enqueue_popup(
+    epoch: Option<u64>,
     message: impl Into<Cow<'static, str>>,
     kind: PopupKind,
     auto_dismissal_duration: Option<f64>,
@@ -26,8 +49,27 @@ pub fn enqueue_popup_notification(
     popup_item.auto_dismissal_duration = popup_item
         .auto_dismissal_duration
         .map(|duration| duration.min(3. * 60.));
-    PENDING_POPUP_NOTIFICATIONS.push(popup_item);
+    PENDING_POPUP_NOTIFICATIONS.push(PendingPopup {
+        epoch,
+        item: popup_item,
+    });
     SignalToUI::set_ui_signal();
+}
+
+fn dequeue_current_popup(
+    queue: &SegQueue<PendingPopup>,
+    current: impl Fn() -> (u64, bool),
+) -> Option<PendingPopup> {
+    while let Some(pending) = queue.pop() {
+        let (epoch, logout) = current();
+        if pending
+            .epoch
+            .is_none_or(|original| original == epoch && !logout)
+        {
+            return Some(pending);
+        }
+    }
+    None
 }
 
 /// Retrieves a mutable reference to the global `RobrixPopupNotificationRef`.
@@ -249,7 +291,7 @@ script_mod! {
                 main_content := mod.widgets.MainContent {}
             }
             progress_bar := mod.widgets.ProgressBar {}
-            // Add a small gap between the progress bar and the end of the popup 
+            // Add a small gap between the progress bar and the end of the popup
             // to ensure the progress bar is within the popup.
             View {
                 height: 0.2
@@ -331,6 +373,7 @@ script_mod! {
 
 /// A widget that displays a vertical list of popups.
 struct PopupEntry {
+    epoch: Option<u64>,
     kind: PopupKind,
     view: View,
     close_timer: Timer,
@@ -360,7 +403,8 @@ pub struct RobrixPopupNotification {
     #[walk]
     walk: Walk,
     // A list of tuples containing individual widgets, its content and the close timer in the order they were added.
-    #[rust] popups: Vec<PopupEntry>,
+    #[rust]
+    popups: Vec<PopupEntry>,
 }
 
 impl ScriptHook for RobrixPopupNotification {
@@ -399,14 +443,24 @@ impl ScriptHook for RobrixPopupNotification {
 
 impl Widget for RobrixPopupNotification {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        self.prune_for_scope(
+            cx,
+            crate::account_session::epoch(),
+            crate::logout::logout_state_machine::is_logout_in_progress(),
+        );
         if std::mem::take(&mut self.restyle) {
             for popup in &mut self.popups {
                 style_popup(cx, &mut popup.view, popup.kind, &self.appearance);
             }
         }
         if matches!(event, Event::Signal) {
-            while let Some(popup_item) = PENDING_POPUP_NOTIFICATIONS.pop() {
-                self.push(cx, popup_item);
+            while let Some(popup_item) = dequeue_current_popup(&PENDING_POPUP_NOTIFICATIONS, || {
+                (
+                    crate::account_session::epoch(),
+                    crate::logout::logout_state_machine::is_logout_in_progress(),
+                )
+            }) {
+                self.push_pending(cx, popup_item);
             }
         }
         if self.popups.is_empty() {
@@ -450,6 +504,32 @@ impl Widget for RobrixPopupNotification {
 }
 
 impl RobrixPopupNotification {
+    #[cfg(test)]
+    pub(crate) fn matrix_link_visible_messages(&self, cx: &Cx) -> Vec<String> {
+        self.popups.iter().map(|popup|popup.view.label(cx,ids!(popup_label)).text()).collect()
+    }
+
+    fn push_pending(&mut self, cx: &mut Cx, pending: PendingPopup) {
+        self.push(cx, pending.item);
+        if let Some(entry) = self.popups.last_mut() {
+            entry.epoch = pending.epoch;
+        }
+    }
+    fn prune_for_scope(&mut self, cx: &mut Cx, epoch: u64, logout: bool) {
+        let before = self.popups.len();
+        self.popups.retain(|popup| {
+            let keep = popup
+                .epoch
+                .is_none_or(|original| original == epoch && !logout);
+            if !keep {
+                cx.stop_timer(popup.close_timer);
+            }
+            keep
+        });
+        if self.popups.len() != before {
+            self.redraw_overlay(cx);
+        }
+    }
     fn redraw_overlay(&self, cx: &mut Cx) {
         if let Some(draw_list) = &self.draw_list {
             draw_list.redraw(cx);
@@ -484,6 +564,7 @@ impl RobrixPopupNotification {
             Timer::empty()
         };
         self.popups.push(PopupEntry {
+            epoch: None,
             kind: popup_item.kind,
             view,
             close_timer,
@@ -514,6 +595,7 @@ impl RobrixPopupNotification {
             .auto_dismissal_duration
             .map(|duration| duration.min(3. * 60.));
         self.popups.push(PopupEntry {
+            epoch: None,
             kind: popup_item.kind,
             view,
             close_timer,
@@ -530,9 +612,16 @@ impl RobrixPopupNotification {
 
 impl WidgetMatchEvent for RobrixPopupNotification {
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions, _scope: &mut Scope) {
-        if actions.iter().any(|a| matches!(a.downcast_ref(), Some(crate::logout::logout_confirm_modal::LogoutAction::ClearAppState { .. }))) {
+        if actions.iter().any(|a| {
+            matches!(
+                a.downcast_ref(),
+                Some(crate::logout::logout_confirm_modal::LogoutAction::ClearAppState { .. })
+            )
+        }) {
             while PENDING_POPUP_NOTIFICATIONS.pop().is_some() {}
-            for popup in self.popups.drain(..) { cx.stop_timer(popup.close_timer); }
+            for popup in self.popups.drain(..) {
+                cx.stop_timer(popup.close_timer);
+            }
             self.redraw_overlay(cx);
             return;
         }
@@ -577,7 +666,7 @@ impl RobrixPopupNotificationRef {
 
 /// Recolors an existing popup without restarting its dismissal timer.
 fn style_popup(cx: &mut Cx, view: &mut View, kind: PopupKind, theme: &ThemeSnapshot) {
-    let (fg, bg) = super::feedback::colors(theme,kind);
+    let (fg, bg) = super::feedback::colors(theme, kind);
     view.view(cx, ids!(popup_content.inner.left_side_view))
         .set_visible(cx, kind != PopupKind::Blank);
     let mut icon = view.widget(cx, ids!(popup_content.inner.left_side_view.popup_icon));
@@ -601,4 +690,83 @@ fn style_popup(cx: &mut Cx, view: &mut View, kind: PopupKind, theme: &ThemeSnaps
     let mut close = view.button(cx, ids!(close_button));
     script_apply_eval!(cx,close,{draw_bg +: {color: #(bg) color_hover: #(bg) color_down: #(bg) border_color: #(fg) border_color_hover: #(fg) border_color_down: #(fg)} draw_icon.color: #(fg)});
     script_apply_eval!(cx,view,{draw_bg.color:#(bg)});
+}
+
+#[cfg(test)]
+mod scoped_popup_tests {
+    use super::*;
+    fn pending(epoch: Option<u64>, message: &'static str) -> PendingPopup {
+        PendingPopup {
+            epoch,
+            item: PopupItem {
+                message: message.into(),
+                ..Default::default()
+            },
+        }
+    }
+    #[test]
+    fn ui_dequeue_drops_old_account_filename_and_preserves_current_and_global_messages() {
+        let queue = SegQueue::new();
+        queue.push(pending(Some(7), "old-account-private-name.pdf"));
+        queue.push(pending(Some(8), "current-account-result"));
+        queue.push(pending(None, "global-status"));
+        assert_eq!(
+            dequeue_current_popup(&queue, || (8, false))
+                .unwrap()
+                .item
+                .message,
+            "current-account-result"
+        );
+        assert_eq!(
+            dequeue_current_popup(&queue, || (9, false))
+                .unwrap()
+                .item
+                .message,
+            "global-status"
+        );
+        assert!(dequeue_current_popup(&queue, || (9, false)).is_none());
+    }
+    #[test]
+    fn ui_dequeue_rejects_scoped_message_during_logout_but_keeps_global_api_behavior() {
+        let queue = SegQueue::new();
+        queue.push(pending(Some(8), "account-result"));
+        queue.push(pending(None, "global-status"));
+        assert_eq!(
+            dequeue_current_popup(&queue, || (8, true))
+                .unwrap()
+                .item
+                .message,
+            "global-status"
+        );
+        assert!(dequeue_current_popup(&queue, || (8, false)).is_none());
+    }
+    #[test]
+    fn already_visible_scoped_attachment_diagnostic_is_removed_when_account_changes() {
+        let mut cx = Cx::new(Box::new(|_, _| {}));
+        let mut widget = cx.with_vm(|vm| {
+            makepad_widgets::script_mod(vm);
+            crate::app::register_widgets(vm);
+            vm.bx.captured_errors = Some(Vec::new());
+            let value =
+                script_eval!(vm,{mod.widgets.RobrixPopupNotificationRightToLeftProgress {}});
+            let widget = RobrixPopupNotification::script_from_value(vm, value);
+            assert!(vm.take_errors().is_empty());
+            widget
+        });
+        widget.push_pending(&mut cx, pending(Some(7), "old-account-private-name.pdf"));
+        widget.push_pending(&mut cx, pending(Some(8), "current-account-result"));
+        widget.push(
+            &mut cx,
+            PopupItem {
+                message: "global-status".into(),
+                ..Default::default()
+            },
+        );
+        widget.prune_for_scope(&mut cx, 8, false);
+        assert_eq!(widget.popups.len(), 2);
+        assert!(widget.popups.iter().all(|popup| popup.epoch != Some(7)));
+        widget.prune_for_scope(&mut cx, 8, true);
+        assert_eq!(widget.popups.len(), 1);
+        assert_eq!(widget.popups[0].epoch, None);
+    }
 }

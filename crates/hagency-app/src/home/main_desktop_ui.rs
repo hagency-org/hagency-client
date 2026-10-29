@@ -109,6 +109,8 @@ pub struct MainDesktopUI {
     tabbed_chats: bool,
     #[rust]
     restored_context: Option<RestoredRoomContext>,
+    #[rust]
+    matrix_link_root: Option<crate::matrix_links::Ticket>,
 }
 
 impl ScriptHook for MainDesktopUI {
@@ -703,6 +705,28 @@ impl WidgetMatchEvent for MainDesktopUI {
                 self.redraw(cx);
                 continue;
             }
+            if matches!(action.downcast_ref(),Some(NavigationBarAction::GoToHome | NavigationBarAction::GoToTab(SelectedTab::Home)))
+                || matches!(action.downcast_ref(),Some(HagencyAction::OpenProjects)) {self.matrix_link_root=None;}
+            if let Some(crate::matrix_links::LinkAction::EnterHome(navigation)) = action.downcast_ref()
+                && navigation.is_current() && !self.drawn_previously {self.matrix_link_root=Some(navigation.ticket.clone());}
+            if let Some(crate::matrix_links::LinkAction::Navigate(navigation)) = action.downcast_ref() {
+                if !navigation.is_current() {continue;}
+                if crate::sliding_sync::get_client().and_then(|client|client.get_room(navigation.selected.room_id()))
+                    .is_some_and(|room|!room.direct_targets().is_empty()) {
+                    super::mobile::navigate_matrix_direct(cx, navigation.clone());
+                    continue;
+                }
+                if matches!(navigation.selected, SelectedRoom::Space {..}) {
+                    self.focus_or_create_tab(cx, navigation.selected.clone());
+                    continue;
+                }
+                let tab = navigation.selected.tab_id();
+                self.focus_or_create_tab(cx, navigation.selected.clone());
+                if let Some(event) = &navigation.event {
+                    self.view.dock(cx, ids!(dock)).item(tab).as_room_screen()
+                        .jump_to_matrix_event(cx, event.clone(), navigation.ticket.clone());
+                }
+            }
             if let Some(super::room_history::RoomHistoryAction::Jump {room, event}) = action.downcast_ref() {
                 if crate::sliding_sync::get_client().and_then(|c|c.get_room(room.room_id())).is_some_and(|r|!r.direct_targets().is_empty()) {
                     super::mobile::navigate_direct_view(cx,room.clone(),None,Some(event.clone()));continue;
@@ -907,8 +931,15 @@ impl WidgetMatchEvent for MainDesktopUI {
             match action.downcast_ref() {
                 Some(MainDesktopUiAction::LoadDockFromAppState) => {
                     let app_state = scope.data.get_mut::<AppState>().unwrap();
+                    // This records who requested initialization, not whether
+                    // navigation remains current. Retirement cannot authorize an
+                    // old passive LoadDock to enter the management factory.
+                    let permalink_initialization=self.matrix_link_root.take().is_some();
                     self.load_dock_state_from(cx, app_state);
-                    if self.most_recently_selected_room.is_none() {
+                    // A permalink initializes the dock to open its exact Room,
+                    // not to enter the management factory as an intermediate page.
+                    if self.most_recently_selected_room.is_none()
+                        && !permalink_initialization {
                         self.view.dock(cx, ids!(dock)).item(id!(home_tab))
                             .as_hagency_panel().action(cx, &HagencyAction::OpenProjects);
                     }
@@ -1441,8 +1472,37 @@ mod dock_state_repair {
 }
 
 #[cfg(test)]
-mod persistent_navigation_tests {
+pub(crate) mod persistent_navigation_tests {
     use super::*;
+    pub(crate) fn has_matrix_link_initialization(widget:&WidgetRef)->bool {
+        widget.as_main_desktop_ui().borrow().expect("original desktop UI").matrix_link_root.is_some()
+    }
+    pub(crate) fn matrix_link_navigation(navigation: crate::matrix_links::Navigation) {
+        let ticket=navigation.ticket.clone();
+        matrix_link_navigation_then(navigation,move |_|ticket.cancel());
+    }
+    pub(crate) fn matrix_link_navigation_then(navigation: crate::matrix_links::Navigation, replace: impl FnOnce(&mut Cx)) {
+        let mut cx=Cx::new(Box::new(|_,_|{}));
+        let mut ui=cx.with_vm(|vm| {
+            makepad_widgets::script_mod(vm);crate::app::register_widgets(vm);
+            let value=script_eval!(vm,{mod.widgets.MainDesktopUI {}});
+            MainDesktopUI::script_from_value(vm,value)
+        });
+        let mut state=AppState::default();
+        super::super::mobile::new_chat_tests::draw_with_state(&mut cx,&mut ui,1280.0,&mut state);
+        let actions=cx.capture_actions(|cx|cx.action(crate::matrix_links::LinkAction::Navigate(navigation.clone())));
+        ui.handle_event(&mut cx,&Event::Actions(actions),&mut Scope::with_data(&mut state));
+        super::super::mobile::new_chat_tests::draw_with_state(&mut cx,&mut ui,1280.0,&mut state);
+        let screen=ui.view.dock(&cx,ids!(dock)).item(navigation.selected.tab_id()).as_room_screen();
+        {
+            let mut target=screen.borrow_mut().expect("selected native RoomScreen");
+            super::super::mobile::new_chat_tests::draw_with_state(&mut cx,&mut *target,1280.0,&mut state);
+        }
+        screen.assert_matrix_link_target(&cx,&navigation);
+        replace(&mut cx);
+        screen.handle_event(&mut cx,&Event::Signal,&mut Scope::with_data(&mut state));
+        screen.assert_matrix_link_cancelled();
+    }
     fn room(name: &str) -> SelectedRoom {
         SelectedRoom::JoinedRoom {room_name_id: RoomNameId::new(matrix_sdk::RoomDisplayName::Named(name.into()), format!("!{name}:example.org").try_into().unwrap())}
     }

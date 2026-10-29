@@ -37,6 +37,9 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 #[path = "../tests/common/mod.rs"]
 pub(crate) mod clock_fixtures;
 
+#[cfg(feature = "test-fixture")]
+mod receive_fixture;
+
 type Operation = Box<dyn FnOnce(&mut DomainRepository) + Send>;
 enum ReceiverPolicy {
     CancelIfDropped,
@@ -369,7 +372,7 @@ mod clock_tests {
     fn owned_fixture(root: &std::path::Path) -> (DomainRepository, RunnerCapability) {
         owned_fixture_with_attachment(root, false)
     }
-    fn owned_fixture_with_attachment(
+    pub(super) fn owned_fixture_with_attachment(
         root: &std::path::Path,
         attachment: bool,
     ) -> (DomainRepository, RunnerCapability) {

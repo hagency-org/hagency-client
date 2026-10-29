@@ -318,6 +318,7 @@ script_mod! {
 /// Metadata describing a file to be uploaded.
 #[derive(Clone, Debug)]
 pub struct FileUploadMetadata {
+    pub(crate) selection: crate::upload_source::Selection,
     /// The local source file. For Android content selections this is a temp
     /// copy, auto-deleted once this metadata and all its clones drop.
     pub source: robius_file_picker::LocalFile,
@@ -810,6 +811,7 @@ fn load_file_metadata(
     };
 
     let file_data = FileUploadMetadata {
+        selection: crate::upload_source::Selection::capture(path).map_err(|error| format!("Could not capture upload source: {error}"))?,
         source,
         caption: None,
         mime_type,

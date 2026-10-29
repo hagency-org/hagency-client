@@ -90,6 +90,8 @@ pub enum JoinLeaveModalKind {
         details: BasicRoomDetails,
         is_space: bool,
     },
+    /// A permalink may request membership only after this exact native consent.
+    JoinMatrixLink { details: BasicRoomDetails, is_space: bool, ticket: crate::matrix_links::Ticket },
     /// The user wants to leave an already-joined room.
     LeaveRoom(BasicRoomDetails),
     /// The user wants to leave an already-joined space.
@@ -108,6 +110,7 @@ impl JoinLeaveModalKind {
             JoinLeaveModalKind::AcceptInvite(invite)
             | JoinLeaveModalKind::RejectInvite(invite) => invite.room_id(),
             JoinLeaveModalKind::JoinRoom { details, .. }
+            | JoinLeaveModalKind::JoinMatrixLink { details, .. }
             | JoinLeaveModalKind::LeaveRoom(details)
             | JoinLeaveModalKind::LeaveSpace { details, .. } => details.room_id(),
         }
@@ -118,6 +121,7 @@ impl JoinLeaveModalKind {
             JoinLeaveModalKind::AcceptInvite(invite)
             | JoinLeaveModalKind::RejectInvite(invite) => invite.room_name_id(),
             JoinLeaveModalKind::JoinRoom { details, .. }
+            | JoinLeaveModalKind::JoinMatrixLink { details, .. }
             | JoinLeaveModalKind::LeaveRoom(details)
             | JoinLeaveModalKind::LeaveSpace { details, .. } => details.room_name_id(),
         }
@@ -129,6 +133,7 @@ impl JoinLeaveModalKind {
             JoinLeaveModalKind::AcceptInvite(invite)
             | JoinLeaveModalKind::RejectInvite(invite) => &invite.room_info,
             JoinLeaveModalKind::JoinRoom { details, .. }
+            | JoinLeaveModalKind::JoinMatrixLink { details, .. }
             | JoinLeaveModalKind::LeaveRoom(details)
             | JoinLeaveModalKind::LeaveSpace { details, .. } => details,
         }
@@ -177,6 +182,11 @@ impl WidgetMatchEvent for JoinLeaveRoomModal {
             actions.iter().any(|a| matches!(a.downcast_ref(), Some(ModalAction::Dismissed)))
         {
             if let Some(kind) = self.kind.as_ref() {
+                if let JoinLeaveModalKind::JoinMatrixLink {ticket, ..} = kind {
+                    cx.action(crate::matrix_links::LinkAction::Dismiss(ticket.clone()));
+                    self.reset_state();
+                    return;
+                }
                 // Inform other widgets that this modal has been closed.
                 cx.action(JoinLeaveRoomModalAction::Close {
                     room_id: kind.room_id().clone(),
@@ -228,7 +238,8 @@ impl WidgetMatchEvent for JoinLeaveRoomModal {
                         });
                         set_invite_state(cx, invite.room_id(), InviteState::WaitingForLeaveResult);
                     }
-                    JoinLeaveModalKind::JoinRoom { details, is_space } => {
+                    JoinLeaveModalKind::JoinRoom { details, is_space }
+                    | JoinLeaveModalKind::JoinMatrixLink {details, is_space, ..} => {
                         title = if *is_space {
                             crate::i18n::tr("Joining this space...")
                         } else {
@@ -239,9 +250,12 @@ impl WidgetMatchEvent for JoinLeaveRoomModal {
                             &[("room", details.room_name_id().to_string())],
                         );
                         accept_button_text = crate::i18n::tr("Joining...");
-                        submit_async_request(MatrixRequest::JoinRoom {
-                            room_id: details.room_id().clone(),
-                        });
+                        if let JoinLeaveModalKind::JoinMatrixLink {ticket, ..} = kind {
+                            if !ticket.is_current() {return;}
+                            cx.action(crate::matrix_links::LinkAction::Confirm(ticket.clone()));
+                        } else {
+                            submit_async_request(MatrixRequest::JoinRoom {room_id: details.room_id().clone()});
+                        }
                     }
                     JoinLeaveModalKind::LeaveRoom(room) => {
                         title = crate::i18n::tr("Leaving this room...").into();
@@ -284,6 +298,10 @@ impl WidgetMatchEvent for JoinLeaveRoomModal {
             }
         }
 
+        if matches!(kind, JoinLeaveModalKind::JoinMatrixLink {..}) {
+            if needs_redraw {self.redraw(cx);}
+            return;
+        }
         let mut new_final_success = None;
         for action in actions {
             match action.downcast_ref() {
@@ -422,7 +440,8 @@ impl JoinLeaveRoomModal {
                 );
                 tip_button = crate::i18n::tr("Reject");
             }
-            JoinLeaveModalKind::JoinRoom { details, is_space } => {
+            JoinLeaveModalKind::JoinRoom { details, is_space }
+                    | JoinLeaveModalKind::JoinMatrixLink {details, is_space, ..} => {
                 title = if *is_space {
                     crate::i18n::tr("Join this space?")
                 } else {

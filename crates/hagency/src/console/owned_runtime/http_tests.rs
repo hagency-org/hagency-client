@@ -2007,3 +2007,170 @@ fn original_file_delivery_notice_cannot_be_hidden_by_model_text_or_large_utf8_re
         "original"
     );
 }
+
+#[tokio::test]
+async fn native_pending_approvals_pages_all_local_scopes_without_provider_or_new_leases() {
+    use super::super::native::Command;
+    let (origin, wire, server) = server(false, 0).await;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap().join("state");
+    let native = NativeOwner::open_with_matrix(&root, &origin, OWNER, Arc::new(Source))
+        .await
+        .unwrap();
+    let console = native.test_console();
+    let device = console.authorized_device().await.unwrap();
+    let empty = native
+        .execute(Command::PendingApprovals { cursor: None })
+        .await
+        .unwrap();
+    assert_eq!(empty["total"], 0);
+    assert!(empty["approvals"].as_array().unwrap().is_empty());
+    let mut decisions = Vec::new();
+    let mut entries = console.0.owned_runtime.entries.lock().await;
+    for agent in ["agent-a", "agent-b"] {
+        let (_status_tx, status) = watch::channel(RuntimeStatus::new(agent, "online", None));
+        let (cancel, mut stopped) = watch::channel(false);
+        let mut approvals = BTreeMap::new();
+        for index in 0..42 {
+            let binding = format!("binding-{}", index % 2);
+            let proposal = hagency_agent_local::ToolProposal {
+                scope: hagency_agent_local::Scope {
+                    agent: agent.into(),
+                    binding,
+                    room: format!("!room-{}:test", index % 2),
+                    requester: OWNER.into(),
+                    thread: "$root:test".into(),
+                },
+                dispatch: format!("dispatch-{index}"),
+                tool: "model.request".into(),
+                arguments: json!({"neverDisclose":"private exact arguments"}),
+                canonical_directory: "/private/workspace".into(),
+                risk: "model_request".into(),
+                policy_revision: [1, 1, 1],
+                expires: if index == 40 { now() - 1 } else { now() + 300 },
+            };
+            let (pending, decision) = codex::pending_approval(proposal.clone());
+            if index == 41 {
+                drop(decision);
+            } else {
+                decisions.push(decision);
+            }
+            let id = format!("proposal-{index:03}");
+            approvals.insert(
+                id.clone(),
+                ApprovalSlot {
+                    view: ApprovalView {
+                        proposal_id: id,
+                        args_digest: "a".repeat(64),
+                        proposal,
+                    },
+                    pending,
+                    device: DevicePin::from(&device),
+                    gate: None,
+                    turn_cancel: watch::channel(false).1,
+                    remote: None,
+                },
+            );
+        }
+        let bindings = (0..2)
+            .map(|index| {
+                (
+                    format!("binding-{index}"),
+                    BindingHandle {
+                        cancel: watch::channel(false).0,
+                        status: status.clone(),
+                    },
+                )
+            })
+            .collect();
+        entries.insert(
+            identity(&device, agent),
+            Entry {
+                commands: mpsc::unbounded_channel().0,
+                bindings,
+                cancel,
+                status,
+                task: tokio::spawn(async move { canceled(&mut stopped).await }),
+                device: DevicePin::from(&device),
+                approvals,
+            },
+        );
+    }
+    drop(entries);
+    let mut cursor = None;
+    let mut all = BTreeSet::new();
+    let mut first_cursor = None;
+    loop {
+        let page = native
+            .execute(Command::PendingApprovals { cursor })
+            .await
+            .unwrap();
+        assert_eq!(page["total"], 80);
+        let rows = page["approvals"].as_array().unwrap();
+        assert!(rows.len() <= 32);
+        for row in rows {
+            assert!(all.insert((
+                row["agentId"].as_str().unwrap().to_owned(),
+                row["proposalId"].as_str().unwrap().to_owned()
+            )));
+            assert!(row.get("proposal").is_none() && row.get("arguments").is_none());
+            assert!(!row.to_string().contains("private exact arguments"));
+        }
+        cursor = page["nextCursor"].as_str().map(str::to_owned);
+        if first_cursor.is_none() {
+            first_cursor = cursor.clone();
+        }
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(all.len(), 80);
+    let path = ledger_path(
+        &root,
+        device.origin(),
+        device.issuer(),
+        device.subject(),
+        device.owner_mxid(),
+    )
+    .unwrap();
+    let profile = profile_identity(
+        device.origin(),
+        device.issuer(),
+        device.subject(),
+        device.owner_mxid(),
+    )
+    .unwrap();
+    let ledger = Ledger::open_scoped(&path, OWNER, &profile).unwrap();
+    assert!(ledger.outstanding_calls(OWNER).unwrap().is_empty());
+    let db = rusqlite::Connection::open(&path).unwrap();
+    assert_eq!(
+        db.query_row("SELECT COUNT(*) FROM calls", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    {
+        let wire = wire.lock().unwrap();
+        assert_eq!(wire.processing, 0);
+        assert_eq!(wire.replies, 0);
+        assert!(
+            wire.paths
+                .iter()
+                .all(|p| !p.ends_with("/leases/acquire") && !p.ends_with("/events/start"))
+        );
+    }
+    native.retire();
+    assert!(
+        native
+            .execute(Command::PendingApprovals {
+                cursor: first_cursor
+            })
+            .await
+            .is_err()
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(5), native.shutdown_checked())
+        .await
+        .expect("discovery fixture shutdown must join the original runtime entries")
+        .expect("discovery fixture shutdown must be confirmed");
+    drop(decisions);
+    server.abort();
+}

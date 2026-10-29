@@ -9,8 +9,9 @@ pub enum ThemeStudioAction {
     Open,
     Close,
     Imported {
+        epoch: u64,
         owner: Option<OwnedUserId>,
-        result: Result<ThemePackage, String>,
+        result: Result<Box<ThemePackage>, String>,
     },
     Shared {
         owner: OwnedUserId,
@@ -440,8 +441,13 @@ impl ThemeStudioRef {
                 }
             }
             ThemeStudioAction::Open | ThemeStudioAction::Imported { .. } => {
-                if let ThemeStudioAction::Imported { owner, .. } = action {
-                    if owner != &crate::sliding_sync::current_user_id() {
+                if let ThemeStudioAction::Imported { owner, epoch, .. } = action {
+                    if !import_scope_matches(
+                        owner,
+                        *epoch,
+                        &crate::sliding_sync::current_user_id(),
+                        crate::account_session::epoch(),
+                    ) {
                         return;
                     }
                 }
@@ -489,7 +495,7 @@ impl ThemeStudioRef {
                     .drop_down(cx, ids!(share_rooms))
                     .set_selected_item(cx, 0);
                 let package = match action {
-                    ThemeStudioAction::Imported { result: Ok(p), .. } => p.clone(),
+                    ThemeStudioAction::Imported { result: Ok(p), .. } => p.as_ref().clone(),
                     _ => packages::export_current(cx)
                         .unwrap_or_else(|_| ThemePackage::blank("Custom theme")),
                 };
@@ -510,6 +516,7 @@ impl ThemeStudioRef {
     }
 }
 pub fn import_file() -> Result<(), String> {
+    let epoch = crate::account_session::epoch();
     let owner = crate::sliding_sync::current_user_id();
     robius_file_picker::FileDialog::new()
         .pick_file(move |picked| {
@@ -518,6 +525,7 @@ pub fn import_file() -> Result<(), String> {
                 Ok(None) => return,
                 Err(e) => {
                     Cx::post_action(ThemeStudioAction::Imported {
+                        epoch,
                         owner,
                         result: Err(e.to_string()),
                     });
@@ -534,10 +542,35 @@ pub fn import_file() -> Result<(), String> {
                         .take((contract::MAX_BYTES + 1) as u64)
                         .read_to_end(&mut data)
                         .map_err(|e| e.to_string())?;
-                    ThemePackage::parse(&data)
+                    ThemePackage::parse(&data).map(Box::new)
                 })();
-                Cx::post_action(ThemeStudioAction::Imported { owner, result });
+                Cx::post_action(ThemeStudioAction::Imported {
+                    owner,
+                    epoch,
+                    result,
+                });
             });
         })
         .map_err(|e| e.to_string())
+}
+
+fn import_scope_matches(
+    owner: &Option<OwnedUserId>,
+    epoch: u64,
+    current_owner: &Option<OwnedUserId>,
+    current_epoch: u64,
+) -> bool {
+    owner == current_owner
+        && epoch == current_epoch
+        && !crate::logout::logout_state_machine::is_logout_in_progress()
+}
+#[cfg(test)]
+mod attachment_import_tests {
+    use super::*;
+    #[test]
+    fn theme_import_rejects_old_epoch_even_when_original_owner_is_selected_again() {
+        let owner = Some(ruma::user_id!("@owner:example.org").to_owned());
+        assert!(!import_scope_matches(&owner, 7, &owner, 9));
+        assert!(import_scope_matches(&owner, 9, &owner, 9));
+    }
 }

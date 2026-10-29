@@ -1,0 +1,21 @@
+{
+  ".cargo_vcs_info.json": "0fd297195c704aa793f2c522a1aec2db9dcbf7756c95609e5d6ec11293104597",
+  ".github/workflows/codecov.yml": "f7e06b0b891f68ccd5d2841f77b057be33bcacabc87df892c12b11d7f0cb318d",
+  ".github/workflows/deps.yml": "78409611875c216e6b1fa495b03280ecf5c0094c258c52b6ad366e0413965116",
+  ".github/workflows/pages.yml": "9212961a2d80dce1d10e7c30600387caa7558636da9d95fc5e68e7effaefd082",
+  ".github/workflows/tests.yml": "f6b5094eac4ba47c489d38c69834be87557dbf12f29ac542ac4272c6b6eb90df",
+  ".gitignore": "75486e07946a87d634d7bdd5e09bc67eb921c6a3be3ea5da1d2687e0dd11d8e4",
+  "Cargo.toml": "6c5d9b5ea15fd2055968d7a32f792d5d6ca039e0ea1da1cd7aac97dd7efa3a16",
+  "Cargo.toml.orig": "420c9cceb6392ce88d1d85af50187aeabbe525d8f29adea4feaefd3fe6bad5ba",
+  "LICENSE": "5a9b09b9ef2046dc9604233e87ac555f02a7631b8b6641718965cccac74ceeb5",
+  "README.md": "2aef91b775200ff59599a56239d4626c6a3ae8c1c11b1988bb56539e144d2131",
+  "src/format.rs": "5f7e56870bb537053da36d29907f214602d84c6802839aa5f54452fa5df0eb5b",
+  "src/lib.rs": "2b5fc615b5ff680be6184cc5622f5ee31a2a4e1561ae17c586e6d9d7059e5652",
+  "src/parse.rs": "ce5a1da7d15dcd85529d09be57504c3c87468e976423953c1248989884896d04",
+  "src/url.rs": "6a94c86e879695cb9632d974e09ed6132fe0a2224418c2fe24f9f0d008102500",
+  "src/urlencode/asciiset.rs": "3724800a9a193078a385177ce92b03321394fab37f62d45f7a8ddcb5602eb538",
+  "src/urlencode/decode.rs": "dce7ed5ca4fe51a01fa64f847e4d61f1091cdc85adf211a60f6f1db1aee75a09",
+  "src/urlencode/encode.rs": "0d4013b2e5b4ddb4ba11ff6c579083e5ffc9580c343686f2c93dbf1ab0b89188",
+  "src/urlencode/mod.rs": "a9c898a14b6d8c82b7d62cc09f5187b095a3c37ab1a4fb01fb7171313e2baa82",
+  "tests/parse.rs": "4d8a61089fb84da145612abe30f6873b19c5138e85229abbaa40cdbda9a33484"
+}

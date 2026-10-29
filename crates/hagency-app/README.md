@@ -57,7 +57,18 @@ Matrix chat, contacts, room search and attachments, encrypted human conversation
 Moments, the native article editor and scoped mini-app import/consent/run remain.
 The default mini-app catalog has no Palpo app. Hagency management uses the native
 Projects and Agents pages; the former Palpo resource/coordinator workflow is retired.
-Agent encrypted-Room execution is deferred; this does not remove Matrix chat crypto.
+The current runtime supports encrypted tasks, Codex programming, encrypted replies
+and file transfers in the owner's private chat after verifying the exact Agent
+identity from a verified owner device. Newly created owner chats use encryption
+by default; existing plaintext chats require an explicit upgrade. Budgets, tool
+policies and explicit service start still apply.
+
+Encrypted execution for other requesters in shared Projects and cross-host key
+recovery are not delivered. The recorded end-to-end acceptance covers macOS with
+an isolated OAuth test bridge; manual desktop operation, production OAuth and
+other-platform qualification remain open. This does not mean that Pasion browser
+sign-in is unavailable. See the [encrypted owner-chain acceptance record](../../dev-vibe/agent-encrypted-codex-validation-2026-10-27.zh.md)
+for the implemented path and validation boundaries.
 
 The renderer remains experimental; arbitrary WeChat HTML import and complete
 WeChat compatibility are not claimed. See the [article integration evidence](lab/article-html-integration/README.md).

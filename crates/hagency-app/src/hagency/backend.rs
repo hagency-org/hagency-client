@@ -346,6 +346,8 @@ impl MatrixTokenSource for SdkTokens {
 }
 
 static CURRENT: LazyLock<Mutex<Option<Service>>> = LazyLock::new(|| Mutex::new(None));
+#[cfg(test)]
+static STARTUP_BOOTSTRAPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 // An update must join an account transition that already took CURRENT, rather
 // than mistake its empty slot for a completed owner shutdown.
 static STOP_CURRENT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -363,6 +365,22 @@ struct Inner {
 #[derive(Clone)]
 pub struct Service(Arc<Inner>);
 impl Service {
+    /// Read-only observation of an already-established owner for this account.
+    /// This never creates an owner, acquires its lease or replays saved runtime
+    /// startup intentions. Passive rendering and response checks must use this.
+    pub fn existing_current() -> Option<Self> {
+        let service = CURRENT.lock().ok()?.as_ref()?.clone();
+        service.check().ok()?;
+        Some(service)
+    }
+    #[cfg(test)]
+    pub(crate) fn startup_bootstrap_count() -> usize {
+        STARTUP_BOOTSTRAPS.load(std::sync::atomic::Ordering::Acquire)
+    }
+    /// Establish the current account owner, creating local state when absent.
+    /// This factory may also restore previously enabled runtime startup intent.
+    /// Reserve it for explicit user actions or the authorized login/start event;
+    /// passive rendering and observation must use `existing_current` instead.
     pub fn for_current() -> Result<Self, String> {
         if crate::logout::logout_state_machine::is_logout_in_progress() {
             return Err("matrix_account_changing".into());
@@ -421,6 +439,8 @@ impl Service {
         }));
         *current = Some(service.clone());
         let startup = service.clone();
+        #[cfg(test)]
+        STARTUP_BOOTSTRAPS.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         crate::sliding_sync::backend_runtime().spawn(async move {
             let _ = startup.execute(Command::LoginStatus).await;
         });
@@ -579,6 +599,21 @@ impl Service {
         let _update_task = if continuation { ::hagency::update_guard::PROCESS.continue_task() }
             else { ::hagency::update_guard::PROCESS.enter_task() }.ok_or("update_in_progress")?;
         self.check()?;
+        if matches!(command, Command::PendingApprovals { .. }) {
+            // Discovery observes an already-open owner only. It must never
+            // bootstrap or restore saved runtime intentions in the background.
+            let native = self.0.native.lock().await.as_ref().cloned();
+            self.check()?;
+            let Some(native) = native else {
+                if matches!(command, Command::PendingApprovals { cursor: Some(_) }) {
+                    return Err("approval_cursor_expired".into());
+                }
+                return Ok(serde_json::json!({"approvals":[],"total":0,"nextCursor":null}));
+            };
+            let result = native.execute(command).await.map_err(|error| error.code);
+            self.check()?;
+            return result;
+        }
         if matches!(command, Command::BeginLogin) {
             return Err("matrix_oauth_sign_in_required".into());
         }

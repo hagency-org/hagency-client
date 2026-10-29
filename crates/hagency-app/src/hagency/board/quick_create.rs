@@ -1,6 +1,15 @@
 //! Column-local title-only creation uses the same validated, idempotent write path.
 use super::*;
 
+const MAX_QUICK_DRAFTS: usize = 32;
+
+#[derive(Clone)]
+pub(super) struct QuickCreateDraft {
+    state: String,
+    title: String,
+    save_key: Option<String>,
+}
+
 fn minimal_fields(title: String) -> Result<Fields, &'static str> {
     let mut fields = Fields {
         title,
@@ -19,6 +28,44 @@ fn title_only(title: String, state: String) -> Result<Create, &'static str> {
 
 impl ProjectBoard {
     pub(super) fn clear_quick_create(&mut self, cx: &mut Cx) {
+        self.quick_drafts.remove(&self.project);
+        self.reset_quick_create(cx);
+    }
+
+    pub(super) fn remember_quick_create(&mut self, cx: &Cx) {
+        if self.project.is_empty() { return; }
+        let draft = self.quick_restore.clone().or_else(|| {
+            let state = self.quick_create_state.as_ref()?;
+            let index = (0..self.column_count()).find(|i| self.column_state(*i) == *state)?;
+            Some(QuickCreateDraft {
+                state: state.clone(),
+                title: self.view.view(cx, column_path(index)).text_input(cx, ids!(quick_title)).text(),
+                save_key: self.quick_save_key.clone(),
+            })
+        });
+        if let Some(draft) = draft { self.quick_drafts.insert(self.project.clone(), draft); }
+    }
+
+    /// Wait for the authoritative lane order before restoring custom-list inputs.
+    pub(super) fn restore_quick_create(&mut self, cx: &mut Cx) {
+        let Some(draft) = self.quick_restore.as_ref() else { return; };
+        let Some(index) = (0..self.column_count()).find(|i| self.column_state(*i) == draft.state)
+            .or_else(|| self.snapshot.as_ref()?.lanes.iter().position(|lane| !lane.archived))
+        else { return; };
+        let draft = self.quick_restore.take().unwrap();
+        let state = self.column_state(index);
+        let changed = state != draft.state;
+        self.quick_create_state = Some(state);
+        self.quick_save_key = draft.save_key;
+        self.quick_focus = true;
+        self.view.view(cx, column_path(index)).text_input(cx, ids!(quick_title)).set_text(cx, &draft.title);
+        if changed {
+            self.notice(cx, tr("Your card draft was restored in another list because its original list is unavailable. Review the list before adding it."));
+        }
+    }
+
+    pub(super) fn reset_quick_create(&mut self, cx: &mut Cx) {
+        self.quick_restore = None;
         self.quick_create_state = None;
         self.quick_save_key = None;
         self.quick_focus = false;
@@ -33,6 +80,10 @@ impl ProjectBoard {
 
     fn begin_quick_create(&mut self, cx: &mut Cx, index: usize) {
         if !self.can_quick_create() || self.quick_create_state.is_some() {
+            return;
+        }
+        if self.quick_drafts.len() >= MAX_QUICK_DRAFTS || self.quick_restore.is_some() {
+            self.notice(cx, tr("Save or cancel an existing card draft before starting another. You can return to its Board without losing your draft."));
             return;
         }
         self.created_card = None;

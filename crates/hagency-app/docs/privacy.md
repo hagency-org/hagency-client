@@ -29,8 +29,22 @@ content to the model/runtime service selected for that Agent. Enabled web search
 tools and speech services may contact their configured services. Review those
 providers' policies and your Agent's resource and permission settings.
 
-Human Matrix chat supports encryption. Agent execution in encrypted Rooms is
-currently deferred; do not treat an Agent conversation as encrypted by default.
+Human Matrix chat supports encryption. The current Agent runtime also supports
+encrypted tasks, Codex programming, replies and file transfers in the owner's
+private chat, with the exact Agent identity verified from a verified owner device.
+New owner chats enable encryption by default; existing plaintext chats require
+an explicit upgrade. Encryption of the Matrix conversation does not hide task
+content from the execution device or the selected model service: the device
+decrypts inputs and permitted files for processing, and retains local task,
+workspace and recovery data.
+
+Encrypted execution for other requesters in shared Projects and cross-host key
+recovery are not delivered. The [recorded end-to-end acceptance](../../../dev-vibe/agent-encrypted-codex-validation-2026-10-27.zh.md)
+covers macOS with an isolated OAuth test bridge, not completed manual desktop,
+production OAuth or other-platform qualification. Pasion browser sign-in remains
+the supported login path. Use the conversation's actual encryption state and
+verified identity; do not infer encryption for every Agent Room from this private
+owner path.
 
 ## Mini apps, articles and external links
 

@@ -1606,6 +1606,11 @@ impl RoomInputBarRef {
     }
 
     /// Tells this RoomInputBar which room or thread it is being shown beneath.
+    #[cfg(test)]
+    pub(crate) fn matrix_link_context(&self) -> Option<TimelineKind> {
+        self.borrow().and_then(|inner|inner.timeline_kind.clone())
+    }
+
     pub fn set_room_context(
         &self,
         cx: &mut Cx,

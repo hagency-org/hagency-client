@@ -94,6 +94,7 @@ script_mod! {
                 width: Fill height: 0 visible: true
                 CachedWidget {rooms_list := RoomsList {}}
             }
+            global_approvals := GlobalApprovalInbox {margin:Inset{left:10 right:10}}
             View {width: Fill height: Fill}
             open_settings := DesktopNavButton {margin: Inset{left: 10 right: 10} nav_icon.draw_icon.svg: ICON_SETTINGS tooltip_text: #(crate::i18n::tr("Settings")) label.text: #(crate::i18n::tr("Settings")) label.i18n_text: "Settings"}
             HagencyAccountBar {margin: Inset{left: 10 right: 10}}
@@ -121,6 +122,7 @@ script_mod! {
                 }
             }
             ChatViewSwitch {}
+            global_approvals := GlobalApprovalInbox {margin:Inset{left:10 right:10}}
             file_transfer_entry := MobileRow {height: 46 title.text: #(crate::i18n::tr("File Transfer")) title.i18n_text: "File Transfer" icon.draw_icon.svg: ICON_FILE}
             conversations := View {
                 width: Fill height: Fill flow: Down
@@ -302,7 +304,7 @@ impl Widget for RoomsSideBar {
 
             for action in actions {
                 if let Some(action) = action.downcast_ref::<crate::hagency::ui::HagencyAction>() {
-                    self.selected_primary = Some(match action {crate::hagency::ui::HagencyAction::OpenAgents | crate::hagency::ui::HagencyAction::NewAgent {..} | crate::hagency::ui::HagencyAction::AgentRun {..} => id!(open_agents), crate::hagency::ui::HagencyAction::Close => id!(open_group_chats), _ => id!(open_projects)});
+                    self.selected_primary = Some(match action {crate::hagency::ui::HagencyAction::OpenAgents | crate::hagency::ui::HagencyAction::NewAgent {..} | crate::hagency::ui::HagencyAction::AgentRun {..} | crate::hagency::ui::HagencyAction::ReviewApproval(..) => id!(open_agents), crate::hagency::ui::HagencyAction::Close => id!(open_group_chats), _ => id!(open_projects)});
                 }
                 if let Some(navigation) = action.downcast_ref::<crate::hagency::ui::ProjectRoomNavigation>()
                     && navigation.current() {
@@ -387,7 +389,9 @@ impl Widget for RoomsSideBar {
         for slot in [ids!(projects_action_slot).as_slice(),ids!(agents_action_slot).as_slice(),ids!(group_chats_action_slot).as_slice()] {self.view.view(cx,slot).set_visible(cx,!collapsed);}
         // Show every primary entry on a normal desktop window, reserving
         // space for the tree and footer before scrolling on short windows.
-        let navigation_height = (height - 260.0).clamp(100.0, 224.0);
+        // The persistent approval entry adds 36px plus the parent 5px spacing
+        // to the footer. Keep that space before assigning the scrolling menu.
+        let navigation_height = (height - 301.0).clamp(100.0, 224.0);
         let navigation = self.view.view(cx, ids!(primary_navigation));
         if let Some(mut view) = navigation.borrow_mut() {view.walk.height = Size::Fixed(navigation_height); }
         if let Some(state) = scope.data.get::<crate::app::AppState>() {
@@ -624,6 +628,10 @@ mod layout_tests {
         assert!(chats.size.y >= 40.0, "Navigation preserves a usable chat tree: {chats:?}");
         let account = sidebar.view.widget(&cx, ids!(account)).area().rect(&cx);
         assert!(account.size.y > 0.0 && account.pos.y + account.size.y <= 500.0, "Account stays within sidebar: {account:?}");
+        for id in [ids!(global_approvals).as_slice(),ids!(open_settings).as_slice()] {
+            let rect=sidebar.view.widget(&cx,id).area().rect(&cx);
+            assert!(rect.size.y>0.0 && rect.pos.y>=0.0 && rect.pos.y+rect.size.y<=500.0,"Footer action stays within sidebar: {id:?} {rect:?}");
+        }
     }
 
     #[test]

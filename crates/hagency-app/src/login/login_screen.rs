@@ -658,6 +658,7 @@ impl MatchEvent for LoginScreen {
         }
 
         for action in actions {
+            if matches!(action.downcast_ref::<LoginAction>(),Some(LoginAction::SessionExpired {scope,..}) if !scope.is_current()) {continue;}
             if let LoginStatusModalAction::Close = action.as_widget_action().cast() {
                 if self.sso_pending {
                     submit_async_request(MatrixRequest::CancelSsoLogin);
@@ -713,7 +714,7 @@ impl MatchEvent for LoginScreen {
                     self.reset_server(cx);
                     modal.close(cx);
                 }
-                Some(LoginAction::LoginFailure(error)) => {
+                Some(LoginAction::LoginFailure(error) | LoginAction::SessionExpired {message:error,..}) => {
                     self.login_pending = false;
                     self.sso_pending = false;
                     self.show_status(cx, crate::i18n::tr("Sign-in failed"), error, crate::i18n::tr("Okay"), true);
@@ -737,12 +738,26 @@ impl MatchEvent for LoginScreen {
     }
 }
 
+/// Opaque original SDK identity; Debug never formats credentials or Client internals.
+#[derive(Clone)]
+pub struct SessionFailureScope {epoch:u64,client:matrix_sdk::Client}
+impl std::fmt::Debug for SessionFailureScope {
+    fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result {f.write_str("SessionFailureScope { .. }")}
+}
+impl SessionFailureScope {
+    pub(crate) fn new(client:matrix_sdk::Client,epoch:u64)->Self {Self {client,epoch}}
+    pub(crate) fn is_current(&self)->bool {
+        self.epoch==crate::account_session::epoch() && crate::matrix_context::is_current(&self.client)
+    }
+}
+
 /// Actions sent to or from the login screen. Never include a password or token.
 #[derive(Clone, Default, Debug)]
 pub enum LoginAction {
     LoginSuccess,
     AccountPickerReady,
     LoginFailure(String),
+    SessionExpired {scope:SessionFailureScope,message:String},
     Status { title: String, status: String },
     CliAutoLogin { user_id: String, homeserver: Option<String> },
     SsoPending(bool),
@@ -853,5 +868,26 @@ mod browser_login_tests {
             assert!(browser_login_allowed(sso, oauth, true, true));
         }
         assert!(!browser_login_allowed(false, false, true, true));
+    }
+}
+
+#[cfg(test)]
+mod session_failure_action_tests {
+    use super::*;
+    #[tokio::test]
+    async fn queued_old_session_failure_is_ignored_at_actual_login_widget_consumer() {
+        let client=matrix_sdk::Client::builder().homeserver_url("http://127.0.0.1:1").server_versions([matrix_sdk::ruma::api::MatrixVersion::V1_11]).build().await.unwrap();
+        let mut cx=Cx::new(Box::new(|_,_|{}));
+        let mut screen=cx.with_vm(|vm| {
+            makepad_widgets::script_mod(vm);crate::app::register_widgets(vm);vm.bx.captured_errors=Some(Vec::new());
+            let value=script_eval!(vm,{mod.widgets.LoginScreen {}});let screen=LoginScreen::script_from_value(vm,value);assert!(vm.take_errors().is_empty());screen
+        });
+        screen.login_pending=true;
+        let old=SessionFailureScope::new(client,u64::MAX);
+        let actions=cx.capture_actions(|cx|cx.action(LoginAction::SessionExpired {scope:old,message:"expired original session".into()}));
+        screen.handle_actions(&mut cx,&actions);
+        assert!(screen.login_pending,"an old queued failure cannot clear the new account's pending sign-in");
+        let actions=cx.capture_actions(|cx|cx.action(LoginAction::LoginFailure("manual sign-in failed".into())));
+        screen.handle_actions(&mut cx,&actions);assert!(!screen.login_pending,"existing manual failure semantics stay intact");
     }
 }

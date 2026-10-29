@@ -15,6 +15,25 @@ def main():
     members = set(metadata["workspace_members"])
     packages = [p for p in metadata["packages"] if p["id"] in members]
     assert packages, "Empty workspace"
+    workspace_manifests = {Path(p["manifest_path"]).resolve() for p in packages}
+    root_manifest = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
+    excluded = set(root_manifest["workspace"].get("exclude", []))
+    vendored_manifests = {}
+    for name, patch in root_manifest.get("patch", {}).get("crates-io", {}).items():
+        if not isinstance(patch, dict) or "path" not in patch:
+            continue
+        relative = Path(patch["path"])
+        if relative.parts[0] != "vendor":
+            continue
+        assert not relative.is_absolute() and ".." not in relative.parts, relative
+        assert relative.as_posix() in excluded, f"Vendor patch not explicitly excluded: {relative}"
+        directory = ROOT / relative
+        assert directory == directory.resolve(), f"Symlinked vendor patch directory: {relative}"
+        assert directory.is_relative_to(ROOT / "vendor"), relative
+        manifest = directory / "Cargo.toml"
+        assert not manifest.is_symlink(), f"Symlinked vendor manifest: {relative}"
+        assert manifest not in workspace_manifests, f"Vendor patch is a workspace member: {relative}"
+        vendored_manifests[manifest] = patch.get("package", name)
     for package in packages:
         manifest = Path(package["manifest_path"]).resolve()
         assert manifest.parent.parent == ROOT / "crates", manifest
@@ -33,7 +52,13 @@ def main():
             continue
         data = tomllib.loads((ROOT / name).read_text(encoding="utf-8"))
         if "package" in data:
-            assert Path(name).parts[0] == "crates", f"Crate outside crates/: {name}"
+            # Match the registered manifest itself, never an unregistered alias
+            # whose symlink happens to resolve to an allowed package.
+            manifest = ROOT / name
+            if manifest in vendored_manifests:
+                assert data["package"]["name"] == vendored_manifests[manifest], f"Vendor patch name mismatch: {name}"
+            else:
+                assert Path(name).parts[0] == "crates", f"Crate outside crates/: {name}"
             assert "workspace" not in data, f"Nested workspace: {name}"
     lock = tomllib.loads((ROOT / "Cargo.lock").read_text())
     assert not any("github.com/chrislearn/hagency-client" in p.get("source", "") for p in lock["package"]), "Duplicate Git engine"
@@ -43,7 +68,8 @@ def main():
     binaries = [t["name"] for p in packages for t in p["targets"] if "bin" in t["kind"]]
     assert len(binaries) == len(set(binaries)), "Colliding workspace executable names"
     print(json.dumps({"packages": len(packages), "app_engine": engine["path"],
-                      "target_directory": metadata["target_directory"]}))
+                      "target_directory": metadata["target_directory"],
+                      "vendored_patches": sorted(p.relative_to(ROOT).as_posix() for p in vendored_manifests)}))
 
 
 if __name__ == "__main__":

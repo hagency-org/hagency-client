@@ -44,7 +44,7 @@ use crate::{
         user_profile::{ShowUserProfileAction, UserProfile, UserProfileAndRoomId, UserProfilePaneAction, UserProfilePaneInfo, UserProfileSlidingPaneRef, UserProfileSlidingPaneWidgetExt},
         user_profile_cache,
     },
-    room::{BasicRoomDetails, reply_preview::{CollapsiblePreviewRef, CollapsiblePreviewWidgetRefExt}, room_input_bar::{RoomInputBarState, RoomInputBarWidgetRefExt}, typing_notice::TypingNoticeWidgetExt},
+    room::{reply_preview::{CollapsiblePreviewRef, CollapsiblePreviewWidgetRefExt}, room_input_bar::{RoomInputBarState, RoomInputBarWidgetRefExt}, typing_notice::TypingNoticeWidgetExt},
     shared::{
         attachment_download::{
             enqueue_already_downloading_notification, DownloadDisplayState, DownloadKind,
@@ -1276,6 +1276,7 @@ pub struct RoomScreen {
     /// This lets us ignore a response that arrives after the user gave up on it.
     #[rust] pending_read_receipt_jump: Option<OwnedUserId>,
     #[rust] pending_history_jump: Option<OwnedEventId>,
+    #[rust] matrix_link_ticket: Option<crate::matrix_links::Ticket>,
     #[rust] pending_restore_scroll: Option<f64>,
     /// The message that the floating hover action bar overlay is shown for.
     #[rust] action_bar_message: Option<MessageDetails>,
@@ -1338,6 +1339,20 @@ impl ScriptHook for RoomScreen {
 impl Widget for RoomScreen {
     // Handle events and actions for the RoomScreen widget and its inner Timeline view.
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, _scope: &mut Scope) {
+        if self.matrix_link_ticket.as_ref().is_some_and(|ticket|!ticket.is_current()) {
+            self.matrix_link_ticket = None;
+            if let Some(target) = self.pending_history_jump.take() {
+                if let Some(tl) = self.tl_state.as_mut() {
+                    tl.request_sender.send_if_modified(|request| {
+                        let before = request.backwards_paginate.len();
+                        request.backwards_paginate.retain(|pending|pending.target_event_id != target);
+                        before != request.backwards_paginate.len()
+                    });
+                }
+                self.view.loading_pane(cx, ids!(loading_pane)).hide(cx);
+            }
+            self.history_jump_started = false;
+        }
         // Skip event handling if this RoomScreen is uninitialized (a background dock tab after dock restore).
         if self.tl_state.is_none() && self.room_name_id.is_none() {
             return;
@@ -1745,8 +1760,15 @@ impl Widget for RoomScreen {
                         .and_then(|k| k.thread_root_event_id().map(ToOwned::to_owned));
                     // This room has been loaded now, so we call `set_displayed_room()`.
                     // We first clear the `room_name_id`, otherwise that function will do nothing.
+                    let linked = self.matrix_link_ticket.take().filter(|ticket|ticket.is_current());
+                    let target = if linked.is_some() {self.pending_history_jump.take()} else {None};
                     self.room_name_id = None;
                     self.set_displayed_room(cx, &room_name_clone, thread_root_event_id);
+                    if linked.is_some() {
+                        self.matrix_link_ticket = linked;
+                        self.pending_history_jump = target;
+                        self.history_jump_started = false;
+                    }
                 } else {
                     self.all_rooms_loaded = rooms_list_ref.all_rooms_loaded();
                     return;
@@ -3026,8 +3048,20 @@ impl RoomScreen {
         action: &Action,
         pane: &UserProfileSlidingPaneRef,
     ) -> bool {
-        // A closure that handles both MatrixToUri and MatrixUri links,
-        // and returns whether the link was handled.
+        // Route room/alias/event links through the account-scoped native owner.
+        let link_url = match action.as_widget_action().cast() {
+            HtmlLinkAction::Clicked {url, ..} => Some(url),
+            _ => match action.as_widget_action().cast() {
+                RobrixHtmlLinkAction::ClickedMatrixLink {url, matrix_id, ..}
+                    if !matches!(matrix_id, MatrixId::User(_)) => Some(url),
+                _ => None,
+            },
+        };
+        if let Some(url) = link_url {
+            let user = crate::matrix_links::is_user_profile_link(&url);
+            if !user && crate::matrix_links::open(&url) {return true;}
+        }
+        // Existing in-conversation profile links keep their room context.
         let mut handle_matrix_link = |id: &MatrixId, _via: &[OwnedServerName]| -> bool {
             match id {
                 MatrixId::User(user_id) => {
@@ -3058,41 +3092,6 @@ impl RoomScreen {
                         },
                     );
                     true
-                }
-                MatrixId::Room(room_id) => {
-                    if self.room_name_id.as_ref().is_some_and(|r| r.room_id() == room_id) {
-                        enqueue_popup_notification(
-                            "You are already viewing that room.",
-                            PopupKind::Info,
-                            Some(4.0),
-                        );
-                        return true;
-                    }
-                    if let Some(room_name_id) = cx.get_global::<RoomsListRef>().get_room_name(room_id) {
-                        cx.action(AppStateAction::NavigateToRoom {
-                            room_to_close: None,
-                            destination_room: BasicRoomDetails::Name(room_name_id),
-                        });
-                        return true;
-                    } else {
-                        log!("TODO: fetch and display room preview for room {}", room_id);
-                    }
-                    false
-                }
-                MatrixId::RoomAlias(room_alias) => {
-                    log!("TODO: open room alias {}", room_alias);
-                    // TODO: open a room loading screen that shows a spinner
-                    //       while our background async task calls Client::resolve_room_alias()
-                    //       and then either jumps to the room if known, or fetches and displays
-                    //       a room preview for that room.
-                    false
-                }
-                MatrixId::Event(room_id, event_id) => {
-                    log!("TODO: open event {} in room {}", event_id, room_id);
-                    // TODO: this requires the same first step as the `MatrixId::Room` case above,
-                    //       but then we need to call Room::event_with_context() to get the event
-                    //       and its context (surrounding events ?).
-                    false
                 }
                 _ => false,
             }
@@ -4769,8 +4768,36 @@ impl RoomScreen {
 }
 
 impl RoomScreenRef {
+    #[cfg(test)]
+    pub(crate) fn assert_matrix_link_target(&self, cx: &Cx, navigation: &crate::matrix_links::Navigation) {
+        let inner=self.borrow().expect("actual target RoomScreen");
+        let expected=match &navigation.selected {
+            crate::app::SelectedRoom::Thread {room_name_id,thread_root_event_id} => TimelineKind::Thread {
+                room_id:room_name_id.room_id().clone(),thread_root_event_id:thread_root_event_id.clone()},
+            selected => TimelineKind::MainRoom {room_id:selected.room_id().clone()},
+        };
+        assert_eq!(inner.timeline_kind.as_ref(),Some(&expected));
+        assert_eq!(inner.pending_history_jump,navigation.event);
+        assert_eq!(inner.view.room_input_bar(cx,ids!(room_input_bar)).matrix_link_context(),Some(expected));
+        assert!(inner.matrix_link_ticket.as_ref().is_some_and(|ticket|ticket.is_current()));
+    }
+    #[cfg(test)]
+    pub(crate) fn assert_matrix_link_cancelled(&self) {
+        let inner=self.borrow().unwrap();
+        assert!(inner.pending_history_jump.is_none());
+        assert!(inner.matrix_link_ticket.is_none());
+    }
+    pub(crate) fn jump_to_matrix_event(&self, cx: &mut Cx, event: OwnedEventId, ticket: crate::matrix_links::Ticket) {
+        if !ticket.is_current() {return;}
+        self.jump_to_history_event(cx, event);
+        self.attach_matrix_link_ticket(ticket);
+    }
+    pub(crate) fn attach_matrix_link_ticket(&self, ticket: crate::matrix_links::Ticket) {
+        if let Some(mut inner) = self.borrow_mut() {inner.matrix_link_ticket = Some(ticket);}
+    }
     pub fn jump_to_history_event(&self, cx: &mut Cx, event: OwnedEventId) {
         if let Some(mut inner) = self.borrow_mut() {
+            inner.matrix_link_ticket = None;
             inner.view.action_room_board(cx, ids!(actions_board)).show_history(cx);
             inner.view.view(cx, ids!(room_screen_wrapper)).set_visible(cx, true);
             inner.pending_restore_scroll = None;
@@ -6892,11 +6919,11 @@ fn populate_audio_message_content(
         .or_else(|| audio.caption().map(|c| format!("{}<br>", htmlize::escape_text(c))))
         .unwrap_or_default();
 
-    // TODO: add an audio to play the audio file
+    // The existing attachment controls provide authenticated download/share.
 
     message_content_widget.show_html(
         cx,
-        crate::i18n::format("<b>Audio: </b>{caption}File: <i>{filename}</i>{size}{mime}{duration}<br> → <i>Video playback not yet supported.</i>", &[("caption", (caption).to_string()), ("filename", (filename).to_string()), ("size", (size).to_string()), ("mime", (mime).to_string()), ("duration", (duration).to_string())]),
+        crate::i18n::format("<b>Audio: </b>{caption}File: <i>{filename}</i>{size}{mime}{duration}<br> → <i>In-app audio playback is unavailable. Download to play in another app, or Share the file.</i>", &[("caption", (caption).to_string()), ("filename", (filename).to_string()), ("size", (size).to_string()), ("mime", (mime).to_string()), ("duration", (duration).to_string())]),
     );
     true
 }
@@ -6936,11 +6963,11 @@ fn populate_video_message_content(
         .or_else(|| video.caption().map(|c| format!("{}<br>", htmlize::escape_text(c))))
         .unwrap_or_default();
 
-    // TODO: populate a video widget here, once makepad supports that
+    // The existing attachment controls provide authenticated download/share.
 
     message_content_widget.show_html(
         cx,
-        crate::i18n::format("<b>Video: </b>{caption}File: <i>{filename}</i>{size}{mime}{duration}{dimensions}<br> → <i>Video playback not yet supported.</i>", &[("caption", (caption).to_string()), ("filename", (filename).to_string()), ("size", (size).to_string()), ("mime", (mime).to_string()), ("duration", (duration).to_string()), ("dimensions", (dimensions).to_string())]),
+        crate::i18n::format("<b>Video: </b>{caption}File: <i>{filename}</i>{size}{mime}{duration}{dimensions}<br> → <i>In-app video playback is unavailable. Download to play in another app, or Share the file.</i>", &[("caption", (caption).to_string()), ("filename", (filename).to_string()), ("size", (size).to_string()), ("mime", (mime).to_string()), ("duration", (duration).to_string()), ("dimensions", (dimensions).to_string())]),
     );
     true
 }
@@ -8325,6 +8352,9 @@ mod input_bar_focus {
         }
     }
 }
+
+#[cfg(test)]
+mod media_attachment_actions_tests;
 
 #[cfg(test)]
 mod desktop_information_columns_tests {

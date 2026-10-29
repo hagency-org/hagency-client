@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# Explicit offline-fixture receipt observation; absent from normal builds.
+test-fixture = []
+
 [dependencies]
 hagency-platform.workspace = true
 sha2.workspace = true
@@ -30,6 +34,7 @@ tracing.workspace = true
 rustix = { workspace = true, features = ["process"] }
 
 [dev-dependencies]
+hagency-store = { workspace = true, features = ["test-fixture"] }
 tempfile.workspace = true
 
 [target.'cfg(windows)'.dependencies]
