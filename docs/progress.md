@@ -15220,3 +15220,9 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 - Server隔离PostgreSQL完整132项通过（包含ignored数据库测试，最终0跳过）；严格自身all-targets Clippy通过。OpenAPI 127+4操作、34自检和启动器16项通过。Client样式303/0、翻译2664条/1969调用/0缺失、30包边界及双仓库diff检查通过。Client最终全库/Clippy及提交后原生结果另补，不把旧构建的结果冒称最终验收。
 - 当前目录是实际源码仓库，没有task-writer包装器，未伪造canonical任务状态。
 - 最终源码Client全库689通过/0失败/2原有ignored，console看板2通过，最终自身严格all-targets Clippy通过。Server已提交9d17c25并正常推送main；Client随本条记录提交，接下来按提交版本重建与原生复测。
+
+## 2026-10-29 — 提交后原生复测发现的成员快照刷新
+
+- Client0d70dc26、Server9d17c25已正常推送main并以提交来源完整重建，doctor校验通过。实际双账号验证历史窗口发送立即回到最新并显示，另一端接收/回复；旧my test message保留，浮条条件显隐和小圆角/字形、短消息工具栏/已读头像分离通过。截图归档于忽略目录.run/review-20261029-rounds。
+- 原生创建同一所有者的两个公开验收Agent，未连接模型或启动响应；两个绑定均保存、Matrix权威成员接口确认两个puppet都join；服务选择器同时列出两者，选择第二个可进入其Service页，另一账号服务列表不泄漏这些服务。
+- 实际发现A历史timeline未包含新成员事件时Members保留旧名单，B实时timeline显示正确。打开Members现在重新读取SDK名单和所有者映射，复用原有账号/room/epoch/request隔离且保留添加原意图，不依赖当前历史窗口收到新加入事件。房间信息12项及最终严格自身Clippy通过；不把提交前全库689冒称此6行补修后的全库重跑。继续重建和原生复测。

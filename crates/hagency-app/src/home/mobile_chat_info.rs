@@ -438,6 +438,12 @@ impl MobileChatInfo {
         self.choosing_notifications = false;
         self.services_open = false;
         self.view.portal_list(cx, ids!(list)).set_first_id_and_scroll(0, 0.0);
+        // A historical timeline may not receive newly joined members. Refresh
+        // the SDK roster when opening Members instead of relying on that window.
+        if tab == InfoTab::Members && self.pin_is_current()
+            && let Some(room) = self.room.clone() {
+            self.fetch_info(cx, room);
+        }
         self.view.redraw(cx);
     }
     fn load(&mut self, cx: &mut Cx, room: RoomNameId) {
