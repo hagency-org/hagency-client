@@ -14,6 +14,7 @@ mod file_history;
 mod recovery;
 mod crypto;
 mod project_navigation;
+mod model_resources;
 
 #[derive(Clone, Debug)]
 pub enum HagencyAction {
@@ -1051,34 +1052,39 @@ script_mod! {
                         Text {text: #(crate::i18n::tr("Local agent runtime")) i18n_text: "Local agent runtime"}
                         runtime_kind := Select {labels: ["Codex" "Claude Code" "Octos"]}
                         runtime_provider_note := Text {draw_text.color: mod.widgets.RINX_MUTED}
-                        provider_status := Text {}
-                        provider_controls := View {width: Fill height: Fit flow: Down spacing: 8
-                            use_local_provider := Action {text: #(crate::i18n::tr("Connect my local account")) i18n_text: "Connect my local account"}
-                            provider_login_actions := View {width: Fill height: 40 spacing: 8
-                                provider_check := Action {text: #(crate::i18n::tr("Check local account")) i18n_text: "Check local account"}
-                                provider_login := Action {text: #(crate::i18n::tr("Sign in to Codex")) i18n_text: "Sign in to Codex"}
+                        RinxCard {width: Fill height: Fit flow: Down padding: 12 spacing: 8
+                            View {width: Fill height: Fit spacing: 8 align: Align{y: 0.5}
+                                Text {width: Fill text: #(crate::i18n::tr("Local account")) i18n_text: "Local account" draw_text.text_style: theme.font_bold{font_size: mod.widgets.RINX_BODY_SIZE}}
+                                provider_spinner := LoadingSpinner {visible: false width: 18 height: 18 draw_bg.color: mod.widgets.RINX_ACCENT}
+                                provider_check := RinxIconButton {width: 32 height: 32 draw_icon.svg: crate_resource("self://resources/icons/article_refresh.svg")}
                             }
-                            provider_pending_actions := View {visible: false width: Fill height: 40 spacing: 8
+                            provider_status := Text {width: Fill height: Fit flow: Flow.Right{wrap: true} text: #(crate::i18n::tr("Checking local account…"))}
+                            provider_controls := View {width: Fill height: Fit flow: Flow.Right{wrap: true} spacing: 8
+                                use_local_provider := Primary {visible: false text: #(crate::i18n::tr("Connect my local account")) i18n_text: "Connect my local account"}
+                                provider_open := Action {visible: false text: #(crate::i18n::tr("Open sign-in page")) i18n_text: "Open sign-in page"}
                                 provider_cancel := Action {visible: false text: #(crate::i18n::tr("Cancel sign-in")) i18n_text: "Cancel sign-in"}
                             }
-                            provider_open := Action {visible: false text: #(crate::i18n::tr("Open provider sign-in URL")) i18n_text: "Open provider sign-in URL"}
                         }
-                        Text {text: #(crate::i18n::tr("Local model or Octos profile")) i18n_text: "Local model or Octos profile"}
-                        model := Select {labels: [#(crate::i18n::tr("Load available models or profiles"))]}
+                        model_label := Text {text: #(crate::i18n::tr("Local model")) i18n_text: "Local model"}
+                        View {width: Fill height: Fit spacing: 8 align: Align{y: 0.5}
+                            model := Select {width: Fill labels: [#(crate::i18n::tr("Load available models"))]}
+                            refresh_models := RinxIconButton {width: 36 height: 36 draw_icon.svg: crate_resource("self://resources/icons/article_refresh.svg")}
+                        }
                         model_note := Text {}
-                        Text {text: #(crate::i18n::tr("Reasoning effort")) i18n_text: "Reasoning effort"}
-                        effort := Select {labels: [#(crate::i18n::tr("Checking model choices…"))]}
-                        effort_note := Text {draw_text.color: mod.widgets.RINX_MUTED}
+                        effort_holder := View {width: Fill height: Fit flow: Down spacing: 8
+                            effort_label := Text {text: #(crate::i18n::tr("Reasoning effort")) i18n_text: "Reasoning effort"}
+                            effort := Select {labels: [#(crate::i18n::tr("Checking model choices…"))]}
+                            effort_note := Text {draw_text.color: mod.widgets.RINX_MUTED}
+                        }
                         web_search_holder := View {width: Fill height: Fit flow: Down spacing: 4
                             web_search := RinxCheckBox {text: #(crate::i18n::tr("Live web search")) i18n_text: "Live web search"}
                             Text {text: #(crate::i18n::tr("Enabled by default. Save and restart the service to apply changes.")) i18n_text: "Enabled by default. Save and restart the service to apply changes." draw_text.color: mod.widgets.RINX_MUTED}
                         }
-                        refresh_models := Action {text: #(crate::i18n::tr("Refresh available models")) i18n_text: "Refresh available models"}
                         advanced_toggle := Action {text: #(crate::i18n::tr("Advanced settings")) i18n_text: "Advanced settings" spacing: 6 icon_walk: Walk{width: 12 height: 12} draw_icon.svg: ICON_CHEVRON_RIGHT}
                         advanced_settings := View {visible: false width: Fill height: Fit flow: Down spacing: 8
                         Text {text: #(crate::i18n::tr("Local account")) i18n_text: "Local account"}
-                        View {width: Fill height: 40 spacing: 8
-                            provider_advanced_check := Action {text: #(crate::i18n::tr("Check local account")) i18n_text: "Check local account"}
+                        View {width: Fill height: Fit flow: Flow.Right{wrap: true} spacing: 8
+                            provider_login := Action {visible: false text: #(crate::i18n::tr("Sign in with a separate Codex account")) i18n_text: "Sign in with a separate Codex account"}
                             disconnect_provider := Action {visible: false text: #(crate::i18n::tr("Disconnect local account")) i18n_text: "Disconnect local account"}
                             provider_logout := Action {visible: false text: #(crate::i18n::tr("Sign out of separate Codex account")) i18n_text: "Sign out of separate Codex account"}
                         }
@@ -1091,9 +1097,58 @@ script_mod! {
                         programming_holder := View {width: Fill height: Fit flow: Down spacing: 8
                             programming := RinxCheckBox {text: #(crate::i18n::tr("Enable Codex programming")) i18n_text: "Enable Codex programming"}
                             Text {text: #(crate::i18n::tr("Run commands and edit existing files in this Agent's workspace. Rooms using this Agent share that workspace. Tool policies and exact owner approvals still apply.")) i18n_text: "Run commands and edit existing files in this Agent's workspace. Rooms using this Agent share that workspace. Tool policies and exact owner approvals still apply." draw_text.color: mod.widgets.RINX_MUTED}
-                            Text {text: #(crate::i18n::tr("MCP servers (JSON)")) i18n_text: "MCP servers (JSON)"}
-                            mcp_servers := Input {height: 140 is_multiline: true submit_on_enter: false empty_text: "{}"}
-                            Text {text: #(crate::i18n::tr("Configure only servers this Agent may use. Stdio: transport, absolute command and args. HTTP: transport and URL. Personal Codex servers are not imported.")) i18n_text: "Configure only servers this Agent may use. Stdio: transport, absolute command and args. HTTP: transport and URL. Personal Codex servers are not imported." draw_text.color: mod.widgets.RINX_MUTED}
+                            mcp_content := RinxCard {width: Fill height: Fit flow: Down padding: 12 spacing: 8
+                                mcp_header := View {width: Fill height: Fit flow: Right spacing: 8 align: Align{y:0.5}
+                                    Text {width: Fill text: #(crate::i18n::tr("MCP servers")) i18n_text: "MCP servers" draw_text.text_style: theme.font_bold{font_size:mod.widgets.RINX_BODY_SIZE}}
+                                    mcp_add := Action {text: #(crate::i18n::tr("Add server")) i18n_text: "Add server"}
+                                }
+                                Text {text: #(crate::i18n::tr("Give this Agent access to tools from an MCP server. These settings are saved with this Agent; personal Codex servers are not imported.")) i18n_text: "Give this Agent access to tools from an MCP server. These settings are saved with this Agent; personal Codex servers are not imported." draw_text.color: mod.widgets.RINX_MUTED}
+                                mcp_empty := Text {text: #(crate::i18n::tr("No MCP servers configured.")) i18n_text: "No MCP servers configured." draw_text.color: mod.widgets.RINX_MUTED}
+                                mcp_list := FlatList {width: Fill height: Fit flow: Down spacing: 8
+                                    scroll_bars +: {show_scroll_x:false show_scroll_y:false}
+                                    Server := View {width: Fill height: Fit flow: Down spacing: 4
+                                        View {width: Fill height: Fit spacing: 8 align: Align{y:0.5}
+                                            name := Text {width: Fill}
+                                            edit := Action {text:#(crate::i18n::tr("Edit")) i18n_text:"Edit"}
+                                            remove := Action {text:#(crate::i18n::tr("Remove")) i18n_text:"Remove"}
+                                        }
+                                        details := Text {width: Fill height: Fit flow: Flow.Right{wrap:true} draw_text.color:mod.widgets.RINX_MUTED}
+                                    }
+                                }
+                                mcp_form := View {visible:false width:Fill height:Fit flow:Down spacing:8
+                                    Text {text:#(crate::i18n::tr("Server name")) i18n_text:"Server name"}
+                                    mcp_name := Input {empty_text:"docs"}
+                                    Text {text:#(crate::i18n::tr("Use 1–64 letters, digits, hyphens or underscores.")) i18n_text:"Use 1–64 letters, digits, hyphens or underscores." draw_text.color:mod.widgets.RINX_MUTED}
+                                    Text {text:#(crate::i18n::tr("Transport")) i18n_text:"Transport"}
+                                    mcp_transport := Select {labels:["HTTP" "Stdio"]}
+                                    mcp_http := View {width:Fill height:Fit flow:Down spacing:6
+                                        Text {text:#(crate::i18n::tr("Server URL")) i18n_text:"Server URL"}
+                                        mcp_url := Input {empty_text:"https://example.com/mcp"}
+                                    }
+                                    mcp_stdio := View {visible:false width:Fill height:Fit flow:Down spacing:6
+                                        Text {text:#(crate::i18n::tr("Executable (absolute path)")) i18n_text:"Executable (absolute path)"}
+                                        mcp_command := Input {empty_text:"/absolute/path/to/mcp-server"}
+                                        Text {text:#(crate::i18n::tr("Arguments (JSON string array)")) i18n_text:"Arguments (JSON string array)"}
+                                        mcp_args := Input {empty_text:"[\"--port\", \"3000\"]"}
+                                    }
+                                    View {width:Fill height:Fit flow:Flow.Right{wrap:true} spacing:8
+                                        mcp_apply := Action {text:#(crate::i18n::tr("Apply server")) i18n_text:"Apply server"}
+                                        mcp_cancel := Action {text:#(crate::i18n::tr("Cancel")) i18n_text:"Cancel"}
+                                    }
+                                }
+                                mcp_json_toggle := Action {text:#(crate::i18n::tr("Edit JSON")) i18n_text:"Edit JSON"}
+                                mcp_json_panel := View {visible:false width:Fill height:Fit flow:Down spacing:8
+                                    Text {text:#(crate::i18n::tr("Use a server-name object, without an mcpServers wrapper. HTTP needs transport and url; stdio needs transport, an existing executable's canonical absolute path and an optional args array. Up to 16 servers. Headers and environment variables are not supported.")) i18n_text:"Use a server-name object, without an mcpServers wrapper. HTTP needs transport and url; stdio needs transport, an existing executable's canonical absolute path and an optional args array. Up to 16 servers. Headers and environment variables are not supported." draw_text.color:mod.widgets.RINX_MUTED}
+                                    Text {text:"{\n  \"docs\": {\"transport\": \"http\", \"url\": \"https://example.com/mcp\"},\n  \"local\": {\"transport\": \"stdio\", \"command\": \"/absolute/path/to/mcp-server\", \"args\": []}\n}"}
+                                    mcp_servers := Input {height:160 is_multiline:true submit_on_enter:false empty_text:"{}"}
+                                    View {width:Fill height:Fit flow:Flow.Right{wrap:true} spacing:8
+                                        mcp_validate := Action {text:#(crate::i18n::tr("Validate JSON")) i18n_text:"Validate JSON"}
+                                        mcp_format := Action {text:#(crate::i18n::tr("Format JSON")) i18n_text:"Format JSON"}
+                                    }
+                                }
+                                mcp_feedback := InlineNotice {}
+                                Text {text:#(crate::i18n::tr("Validation checks configuration and local paths only; it does not start servers or test connections. Apply changes with Save local model profile, then restart the Agent service.")) i18n_text:"Validation checks configuration and local paths only; it does not start servers or test connections. Apply changes with Save local model profile, then restart the Agent service." draw_text.color:mod.widgets.RINX_MUTED}
+                            }
                         }
                         credential := Text {visible: false}
                         View {width: Fill height: Fit flow: Right spacing: 10 align: Align{y:0.5}
@@ -1324,6 +1379,11 @@ pub struct HagencyPanel {
     provider_models: Vec<Value>,
     #[rust]
     provider_authenticated: bool,
+    #[rust] provider_state:Value,
+    #[rust] provider_timer:Timer,
+    #[rust] provider_poll_count:u16,
+    #[rust] mcp_editing:Option<String>,
+    #[rust] mcp_json_open:bool,
     #[rust]
     runtime_efforts: Vec<String>,
     #[rust]
@@ -1561,7 +1621,10 @@ impl HagencyPanel {
         self.configuration_metadata_error.clear();
         cx.stop_timer(self.configuration_timer);
         self.provider_models.clear(); self.runtime_efforts.clear(); self.credential_ref.clear();
-        self.provider_authenticated = false; self.provider_url = None; self.policy = Value::Null;
+        self.provider_authenticated = false; self.provider_url = None; self.provider_state=Value::Null;
+        cx.stop_timer(self.provider_timer);self.provider_timer=Timer::default();self.provider_poll_count=0;
+        self.mcp_editing=None;self.mcp_json_open=false;self.view.view(cx,ids!(mcp_form)).set_visible(cx,false);
+        self.view.inline_notice(cx,ids!(mcp_feedback)).clear(cx);self.policy = Value::Null;
         self.render_models(cx);
         self.view.text_input(cx,ids!(workspace)).set_text(cx, "");
         self.view.label(cx,ids!(provider_status)).set_text(cx, "");
@@ -1701,6 +1764,9 @@ impl HagencyPanel {
     }
     fn render_models(&mut self, cx:&mut Cx) {
         let codex = self.provider_runtime(cx)=="codex";
+        let octos = self.provider_runtime(cx)=="octos";
+        self.view.label(cx,ids!(model_label)).set_text(cx,crate::i18n::tr(if octos {"Octos profile"} else {"Local model"}));
+        self.view.view(cx,ids!(effort_holder)).set_visible(cx,!octos);
         self.view.view(cx,ids!(web_search_holder)).set_visible(cx,codex);
         let programming_here=codex && self.local_agent(cx);
         self.view.view(cx,ids!(programming_holder)).set_visible(cx,programming_here);
@@ -1709,10 +1775,11 @@ impl HagencyPanel {
         let selected = self.provider_models.iter().position(|m| string(m,"model") == configured && (string(m,"credentialRef").is_empty() || string(m,"credentialRef") == string(&self.policy["modelProfile"],"credential_ref")))
             .or_else(|| previous.as_deref().and_then(|id|self.provider_models.iter().position(|m|string(m,"model")==id)))
             .or_else(||self.provider_models.iter().position(|m|m["isDefault"] == true));
-        let labels=std::iter::once("Select a model or profile".to_owned()).chain(self.provider_models.iter().map(|m|format!("{}{}",string(m,"displayName"),if m["isDefault"] == true {" (default)"} else {""}))).collect();
+        let labels=std::iter::once(crate::i18n::tr(if octos {"Select an Octos profile"} else {"Select a model"}).to_owned()).chain(self.provider_models.iter().map(|m|format!("{}{}",string(m,"displayName"),if m["isDefault"] == true {" (default)"} else {""}))).collect();
         self.view.drop_down(cx,ids!(model)).set_labels(cx,labels);
         self.view.drop_down(cx,ids!(model)).set_selected_item(cx,selected.map_or(0,|i|i+1));
         self.render_efforts(cx);
+        self.render_mcp(cx);
     }
     fn render_efforts(&mut self, cx:&mut Cx) {
         let model=self.selected(cx,ids!(model),&self.provider_models);
@@ -1747,7 +1814,7 @@ impl HagencyPanel {
     }
     fn render_model_advanced(&self, cx:&mut Cx) {
         self.view.view(cx,ids!(advanced_settings)).set_visible(cx,self.model_advanced);
-        self.view.view(cx,ids!(provider_controls)).set_visible(cx,!self.provider_authenticated);
+        self.render_provider_controls(cx);
         let mut toggle=self.view.button(cx,ids!(advanced_toggle));
         if self.model_advanced {script_apply_eval!(cx,toggle,{draw_icon.svg: mod.widgets.ICON_CHEVRON_DOWN});}
         else {script_apply_eval!(cx,toggle,{draw_icon.svg: mod.widgets.ICON_CHEVRON_RIGHT});}
@@ -1898,7 +1965,7 @@ impl HagencyPanel {
             ids!(host_files),
             ids!(web_search),
             ids!(programming),
-            ids!(mcp_servers),
+            ids!(mcp_content),
             ids!(ledger_path), ids!(ledger_confirm), ids!(ledger_choose), ids!(ledger_toggle), ids!(ledger_export), ids!(ledger_inspect), ids!(ledger_restore),
             ids!(usage_scope),ids!(usage_room),ids!(usage_requester),ids!(usage_group),ids!(usage_from),ids!(usage_until),ids!(usage_refresh),ids!(usage_alerts),ids!(usage_ack),ids!(usage_latest),ids!(usage_older),
             ids!(history_records),ids!(history_refresh),ids!(history_older),ids!(history_copy),
@@ -2286,7 +2353,7 @@ impl HagencyPanel {
         for id in [ids!(provider_login),ids!(provider_logout),ids!(provider_cancel),ids!(provider_open),ids!(disconnect_provider)] {
             if remote {self.view.button(cx,id).set_visible(cx,false);}
         }
-        for id in [ids!(use_local_provider),ids!(provider_check),ids!(provider_advanced_check),ids!(refresh_models),ids!(prepare_workspace)] {
+        for id in [ids!(use_local_provider),ids!(provider_check),ids!(refresh_models),ids!(prepare_workspace)] {
             self.view.button(cx,id).set_enabled(cx,configurable && !self.busy);
         }
         let runtime=self.provider_runtime(cx);
@@ -2368,10 +2435,11 @@ impl HagencyPanel {
                 && self.policy["modelLoaded"] == true
         });
         let model_selected=self.selected(cx,ids!(model),&self.provider_models).is_some();
-        let save_enabled=configurable && model_exact && self.provider_authenticated && !self.credential_ref.is_empty() && model_selected && !self.runtime_efforts.is_empty() && !self.busy && !self.model_saving;
+        let save_enabled=configurable && model_exact && self.provider_authenticated && !self.credential_ref.is_empty() && model_selected && !self.runtime_efforts.is_empty() && !self.busy && !self.model_saving && !self.view.view(cx,ids!(mcp_form)).visible();
         self.view.button(cx, ids!(save_model)).set_enabled(cx,save_enabled);
         self.view.widget(cx,ids!(save_model)).set_disabled(cx,!save_enabled);
         self.render_model_save(cx);
+        self.render_provider_controls(cx);
         let policy_visible = self.view.view(cx, ids!(policy_section)).visible();
         if !assigned_here && ((!remote && (self.view.view(cx, ids!(model_section)).visible() || self.view.view(cx, ids!(policy_section)).visible())) || self.view.view(cx, ids!(runtime_section)).visible()) {self.section(cx, ids!(setup_section));}
         self.view.label(cx, ids!(runtime_chat_target)).set_text(cx, crate::i18n::tr("Automatically serves all connected Rooms, including Rooms added later."));
@@ -2812,7 +2880,7 @@ impl HagencyPanel {
         let configured=!string(&self.policy["modelProfile"],"model").is_empty();
         let setup=self.view.inline_notice(cx,ids!(model_setup_notice));
         if !configured && self.local_agent(cx) {
-            setup.show(cx,PopupKind::Info,"Next: connect a model","Your Agent has been created. Connect a local account, choose a model and save it. You can add shared Rooms later; they do not block creating other Agents.","",false);
+            setup.show(cx,PopupKind::Info,if self.provider_authenticated {"Next: choose a model"} else {"Next: connect a model"},if self.provider_authenticated {"Choose a model and save it for this Agent."} else {"Connect an account, then choose a model and save it."},"",false);
         } else {setup.clear(cx);}
         self.view.button(cx,ids!(continue_to_service)).set_visible(cx,configured);
         self.view.button(cx,ids!(continue_to_service)).set_enabled(cx,!self.busy);
@@ -2830,11 +2898,15 @@ impl HagencyPanel {
         self.model_save_message=match result {Ok(())=>crate::i18n::tr("Model profile saved.").into(),Err(error)=>visible_error(error)};
         self.sync_navigation(cx);
     }
-    fn render_policy(&self, cx: &mut Cx) {
+    fn render_policy(&mut self, cx: &mut Cx) {
+        self.mcp_editing=None;
+        self.view.view(cx,ids!(mcp_form)).set_visible(cx,false);
+        self.view.inline_notice(cx,ids!(mcp_feedback)).clear(cx);
         self.view.check_box(cx,ids!(web_search)).set_active(cx,self.policy["modelProfile"]["web_search"].as_bool().unwrap_or(true),Animate::No);
         self.view.check_box(cx,ids!(programming)).set_active(cx,self.policy["modelProfile"]["programming"]["enabled"]==true,Animate::No);
         let servers=&self.policy["modelProfile"]["programming"]["mcp_servers"];
         self.view.text_input(cx,ids!(mcp_servers)).set_text(cx,&serde_json::to_string_pretty(&servers.as_object().cloned().unwrap_or_default()).unwrap_or_default());
+        self.render_mcp(cx);
         if self.policy["modelLoaded"] == true {
             let profile = &self.policy["modelProfile"];
             let selected=self.provider_models.iter().position(|m|string(m,"model") == string(profile,"model") && (string(m,"credentialRef").is_empty() || string(m,"credentialRef") == string(profile,"credential_ref")));
@@ -3445,21 +3517,9 @@ impl HagencyPanel {
                 self.provider_url = value["authUrl"].as_str().map(str::to_owned);
                 self.provider_authenticated = value["authenticated"] == true;
                 self.view.label(cx, ids!(credential)).set_text(cx, "");
-                let signed_in = value["authenticated"] == true;
-                let external=matches!(string(value,"runtime"),"claude"|"octos");
-                let shared=value["shared"] == true && (value["credentialSource"] == "local_codex" || external);
-                let signing_in = !shared && !signed_in && self.provider_url.is_some();
-                self.view.button(cx,ids!(use_local_provider)).set_visible(cx,!shared || (external && !signed_in));
-                self.view.button(cx,ids!(disconnect_provider)).set_visible(cx,shared);
-                self.view.button(cx,ids!(provider_login)).set_visible(cx,!external && !shared && !signed_in && !signing_in);
-                self.view.button(cx,ids!(provider_cancel)).set_visible(cx,signing_in);
-                self.view.button(cx,ids!(provider_logout)).set_visible(cx,signed_in && !shared);
-                self.view.button(cx,ids!(provider_open)).set_visible(cx,signing_in);
-                self.view.view(cx,ids!(provider_pending_actions)).set_visible(cx,signing_in);
-                self.view.label(cx, ids!(provider_status)).set_text(
-                    cx,
-                    if external && signed_in {crate::i18n::tr("Local runtime connected. Credentials remain managed by its own app.")} else if external {crate::i18n::tr("Sign in or configure profiles in the local runtime, then connect it here.")} else if shared && signed_in {crate::i18n::tr("Using your signed-in local Codex account on this device.")} else if shared {crate::i18n::tr("Local Codex is signed out. Sign in through Codex, then check the account.")} else if signed_in {crate::i18n::tr("Separate Codex account connected on this device.")} else if signing_in {crate::i18n::tr("Finish Codex sign-in in your browser, then check the account.")} else {crate::i18n::tr("Connect your own local account to run this Agent here.")},
-                );
+                self.provider_state = value.clone();
+                self.render_provider_controls(cx);
+                self.schedule_provider_check(cx);
                 if self.remote_agent(cx) {
                     self.provider_url=None;
                     let installation=if value["installed"]==true {crate::i18n::tr("Installed")} else {crate::i18n::tr("Not installed")};
@@ -3832,6 +3892,13 @@ impl Widget for HagencyPanel {
             self.status(cx,"Account changed. Reopen management for this account; no old operations are adopted.");
             return;
         }
+        if self.provider_timer.is_event(event).is_some() {
+            self.provider_timer=Timer::default();
+            if self.active && self.view.view(cx,ids!(model_section)).visible() && self.local_agent(cx) && self.provider_url.is_some() && !self.provider_authenticated {
+                if self.busy {self.schedule_provider_check(cx);}
+                else {self.provider_poll_count+=1;self.run(cx,Target::Provider,Command::Provider {action:ProviderAction::Status});}
+            }
+        }
         if self.approval_timer.is_event(event).is_some() {
             if self.approval_started.is_some_and(|at|at.elapsed().as_secs()>=10) {
                 self.approval_checked=false;
@@ -3937,6 +4004,12 @@ impl Widget for HagencyPanel {
                         }
                     }
                     Err(error) => {
+                        if matches!(done.target,Target::Provider|Target::ProviderModels) {
+                            self.provider_authenticated=false;
+                            self.provider_state["checkFailed"]=true.into();
+                            cx.stop_timer(self.provider_timer);self.provider_timer=Timer::default();
+                            self.render_provider_controls(cx);
+                        }
                         if matches!(done.target,Target::ModelSaved) {self.finish_model_save(cx,Err(error));}
                         if done.configuration_fence.is_some() {self.sync_navigation(cx);}
                         if matches!(done.target,Target::RemoteApprovalDecision) && error=="remote_approval_waiting" {
@@ -4702,7 +4775,6 @@ impl Widget for HagencyPanel {
         }
         for (id, action) in [
             (ids!(provider_check), ProviderAction::Status),
-            (ids!(provider_advanced_check), ProviderAction::Status),
             (ids!(use_local_provider), ProviderAction::UseLocal),
             (ids!(disconnect_provider), ProviderAction::Disconnect),
             (ids!(provider_login), ProviderAction::Login),
@@ -4710,6 +4782,7 @@ impl Widget for HagencyPanel {
             (ids!(provider_logout), ProviderAction::Logout),
         ] {
             if self.view.button(cx, id).clicked(actions) {
+                self.provider_poll_count=0;
                 self.run(cx, Target::Provider, Command::Provider { action });
                 return;
             }
@@ -4749,15 +4822,19 @@ impl Widget for HagencyPanel {
         if self.view.drop_down(cx,ids!(runtime_kind)).selected(actions).is_some() {
             if self.busy || self.runtime_room_active {return;}
             self.clear_model_save_feedback(cx);
+            cx.stop_timer(self.provider_timer);self.provider_timer=Timer::default();self.provider_poll_count=0;
+            self.provider_state=Value::Null;self.provider_url=None;
             self.provider_models.clear();self.runtime_efforts.clear();self.credential_ref.clear();self.provider_authenticated=false;self.runtime_resources_checked=false;
             self.render_models(cx);
             self.run(cx,Target::ProviderModels,Command::Provider {action:ProviderAction::Models});return;
         }
-        if self.view.text_input(cx,ids!(workspace)).changed(actions).is_some() || self.view.check_box(cx,ids!(web_search)).changed(actions).is_some() || self.view.check_box(cx,ids!(programming)).changed(actions).is_some() || self.view.text_input(cx,ids!(mcp_servers)).changed(actions).is_some() {self.clear_model_save_feedback(cx);}
+        if self.view.text_input(cx,ids!(workspace)).changed(actions).is_some() || self.view.check_box(cx,ids!(web_search)).changed(actions).is_some() || self.view.check_box(cx,ids!(programming)).changed(actions).is_some() || self.view.text_input(cx,ids!(mcp_servers)).changed(actions).is_some() {self.clear_model_save_feedback(cx);self.render_mcp(cx);}
+        if !self.busy && self.handle_mcp(cx,actions) {self.sync_navigation(cx);return;}
         if self.view.drop_down(cx,ids!(model)).selected(actions).is_some() {self.clear_model_save_feedback(cx);self.render_efforts(cx);return;}
         if self.view.drop_down(cx,ids!(effort)).selected(actions).is_some() {self.clear_model_save_feedback(cx);self.render_effort_note(cx);return;}
         if self.view.button(cx, ids!(save_model)).clicked(actions) {
             if self.model_saving {return;}
+            if self.view.view(cx,ids!(mcp_form)).visible() {self.model_save_validation_failed(cx,"Apply or cancel the server edit before saving.");return;}
             if self.credential_ref.is_empty() {
                 self.model_save_validation_failed(cx, "Check your connected local account first.");
                 return;
@@ -4776,6 +4853,9 @@ impl Widget for HagencyPanel {
             if !self.provider_authenticated || self.credential_ref.is_empty() {self.model_save_validation_failed(cx,"Connect your local account first.");return;}
             let Some(effort)=self.runtime_efforts.get(self.view.drop_down(cx,ids!(effort)).selected_item()).cloned() else {self.model_save_validation_failed(cx,"Select a supported reasoning effort.");return;};
             let input = self.model_save_input(cx,&model,&effort);
+            if self.local_agent(cx) && self.provider_runtime(cx)=="codex" && self.view.check_box(cx,ids!(programming)).active(cx) && !self.validate_mcp(cx) {
+                self.model_save_validation_failed(cx,"Fix the MCP configuration before saving.");return;
+            }
             if self.local_agent(cx) && !input["profile"]["programming"]["mcp_servers"].is_object() {self.model_save_validation_failed(cx,"MCP servers must be a JSON object.");return;}
             self.local(cx, Target::ModelSaved, LocalAction::SaveAgentModel, Some(input));
             return;
@@ -4928,6 +5008,7 @@ impl Widget for HagencyPanel {
         // frame forever, even when the current page is an unchanged board.
         if !self.navigation_ready.replace(true) { self.sync_navigation(cx); }
         while let Some(step) = self.view.draw_walk(cx, scope, walk).step() {
+            if self.draw_mcp(cx,scope,&step) {continue;}
             let is_members =
                 step.widget_uid() == self.view.portal_list(cx, ids!(members_list)).widget_uid();
             if step.widget_uid()==self.view.flat_list(cx,ids!(overview_boards)).widget_uid() {
