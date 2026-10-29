@@ -15,7 +15,42 @@ struct Fixture {
     origin: String,
     stop: Arc<AtomicBool>,
     server: Option<thread::JoinHandle<()>>,
+    requests: Arc<std::sync::Mutex<Vec<(String, String)>>>,
 }
+
+fn request_head(reader: &mut impl Read) -> std::io::Result<(String, String)> {
+    let mut request = Vec::new();
+    let mut bytes = [0; 1024];
+    while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+        let remaining = 8192usize.saturating_sub(request.len());
+        if remaining == 0 {
+            return Err(std::io::Error::other("fixture request headers exceed their limit"));
+        }
+        let count = match reader.read(&mut bytes[..remaining.min(1024)]) {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => result?,
+        };
+        if count == 0 {
+            return Err(std::io::ErrorKind::UnexpectedEof.into());
+        }
+        request.extend_from_slice(&bytes[..count]);
+    }
+    let request = std::str::from_utf8(&request)
+        .map_err(|_| std::io::Error::other("fixture request headers are not UTF-8"))?;
+    let mut line = request.lines().next().unwrap_or_default().split_whitespace();
+    let method = line.next().ok_or(std::io::ErrorKind::InvalidData)?;
+    let path = line.next().ok_or(std::io::ErrorKind::InvalidData)?;
+    let version = line.next().ok_or(std::io::ErrorKind::InvalidData)?;
+    if !version.starts_with("HTTP/1.") || line.next().is_some() {
+        return Err(std::io::ErrorKind::InvalidData.into());
+    }
+    Ok((method.to_owned(), path.to_owned()))
+}
+
+fn sync_target(path: &str) -> bool {
+    matches!(path.split('?').next(), Some("/_matrix/client/r0/sync" | "/_matrix/client/v3/sync"))
+}
+
 impl Fixture {
     fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -23,22 +58,26 @@ impl Fixture {
         let origin = format!("http://{}", listener.local_addr().unwrap());
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = stop.clone();
+        let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let observed = requests.clone();
         let server = thread::spawn(move || {
             while !stopped.load(Ordering::Acquire) {
                 let Ok((mut socket, _)) = listener.accept() else {
                     thread::sleep(Duration::from_millis(2));
                     continue;
                 };
+                // BSD accepted sockets can inherit O_NONBLOCK. A timeout does
+                // not clear it; partial headers must never select a 404 route.
+                socket.set_nonblocking(false).unwrap();
                 socket.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-                let mut request = Vec::new();
-                let mut bytes = [0; 1024];
-                while !request.windows(4).any(|w| w == b"\r\n\r\n") && request.len() < 8192 {
-                    let Ok(count) = socket.read(&mut bytes) else { break; };
-                    if count == 0 { break; }
-                    request.extend_from_slice(&bytes[..count]);
+                socket.set_write_timeout(Some(Duration::from_secs(2))).unwrap();
+                let Ok((method, path)) = request_head(&mut socket) else { continue; };
+                {
+                    let mut requests = observed.lock().unwrap();
+                    if requests.len() == 32 { requests.remove(0); }
+                    requests.push((method.clone(), path.clone()));
                 }
-                let path = String::from_utf8_lossy(&request).split_whitespace().nth(1).unwrap_or("").to_owned();
-                let (status, body) = if path.contains("/sync?") {
+                let (status, body) = if method == "GET" && sync_target(&path) {
                     (200, json!({"next_batch":"media-fixture", "rooms":{"join":{"!media:test":{
                         "state":{"events":[
                             {"type":"m.room.create","state_key":"","event_id":"$create:test","sender":"@alice:test","origin_server_ts":1,
@@ -55,7 +94,7 @@ impl Fixture {
                 let _ = write!(socket, "HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
             }
         });
-        Self { origin, stop, server: Some(server) }
+        Self { origin, stop, server: Some(server), requests }
     }
 
     async fn items(&self) -> Vector<Arc<TimelineItem>> {
@@ -69,7 +108,8 @@ impl Fixture {
         })).unwrap(), Default::default()).await.unwrap();
         client.encryption().wait_for_e2ee_initialization_tasks().await;
         client.event_cache().subscribe().unwrap();
-        client.sync_once(matrix_sdk::config::SyncSettings::default().timeout(Duration::ZERO)).await.unwrap();
+        client.sync_once(matrix_sdk::config::SyncSettings::default().timeout(Duration::ZERO)).await
+            .unwrap_or_else(|error| panic!("actual SDK sync failed: {error}; complete fixture requests: {:?}", self.requests.lock().unwrap()));
         let room = client.get_room(ruma::room_id!("!media:test")).unwrap();
         let timeline = room.timeline().await.unwrap();
         tokio::time::timeout(Duration::from_secs(5), async {
@@ -267,6 +307,41 @@ async fn media_attachment_actions_recycled_text_row_hides_controls_and_rejects_o
             assert!(!actions.iter().any(|action| matches!(action.as_widget_action().cast_ref::<MessageAction>(), MessageAction::DownloadAttachment(_) | MessageAction::ShareAttachment(_))), "queued clicks from a recycled attachment must not export its old source");
         }
     }
+}
+
+#[test]
+fn media_attachment_actions_fixture_routes_only_complete_fragmented_headers() {
+    struct Fragments {
+        chunks: std::collections::VecDeque<std::io::Result<Vec<u8>>>,
+    }
+    impl Read for Fragments {
+        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+            let Some(chunk) = self.chunks.pop_front() else { return Ok(0); };
+            let chunk = chunk?;
+            assert!(chunk.len() <= bytes.len());
+            bytes[..chunk.len()].copy_from_slice(&chunk);
+            Ok(chunk.len())
+        }
+    }
+    let mut fragmented = Fragments { chunks: [
+        Err(std::io::ErrorKind::Interrupted.into()),
+        Ok(b"GET ".to_vec()),
+        Ok(b"/_matrix/client/r0/sync HTTP/1.1\r\nHost: localhost\r\n".to_vec()),
+        Ok(b"\r\n".to_vec()),
+    ].into() };
+    let (method, path) = request_head(&mut fragmented).unwrap();
+    assert_eq!(method, "GET");
+    assert!(sync_target(&path));
+    assert!(sync_target("/_matrix/client/v3/sync?timeout=0"));
+    assert!(!sync_target("/_matrix/client/v3/room_keys/version"));
+
+    let mut would_block = Fragments { chunks: [
+        Ok(b"GET ".to_vec()),
+        Err(std::io::ErrorKind::WouldBlock.into()),
+    ].into() };
+    assert_eq!(request_head(&mut would_block).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+    let mut truncated = std::io::Cursor::new(b"GET /_matrix/client/r0/sync HTTP/1.1\r\n");
+    assert_eq!(request_head(&mut truncated).unwrap_err().kind(), std::io::ErrorKind::UnexpectedEof);
 }
 
 #[test]

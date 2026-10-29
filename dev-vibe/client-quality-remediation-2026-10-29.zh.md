@@ -133,3 +133,30 @@ Task Contract 为 [task-client-quality-attachments.spec.md](../crates/hagency-ap
 八个独立进程全部输出校验、真实并发、私有文件清理及quota归零通过；固定32MiB绝对峰值/8MiB输入放大增量阈值未调整。最大Rust堆峰值3482524字节；采样全进程RSS最大31522816字节。仅证明该隔离HTTP fixture的生产remote transport测量窗口（SDK初始化在Rust计量窗外），不代表完整App基线、TLS、系统文件缓存或SQLite本地读的全进程内存资格。manifest保留binary/source/lock/driver SHA与基线Git HEAD，冻结工作树的未提交源码通过逐文件hash标识；提交后仍需当前head CI。最终原始数据见`.run/quality-attachments/remote-memory-a70f-final/`，原始失败及先前诊断/迭代未覆盖。
 
 一次未加--no-deps的全依赖严格Clippy还发现原有article-makepad27项lint；原始日志保留，不能据本次own App检查宣称全依赖严格Clippy已通过。独立安全与性能复核确认本批核心原IO、scope、TTL、创建失败及真实测量路径无已知阻断；SDK PR2、第三批客户端PR和当前head各平台CI尚需最终通过后才可合并。R02剩余迁移、R05凭据库、R07 SDK总队列、R13及R14内置播放器仍开放。
+
+
+### 合并候选复核更新（2026-10-30）
+
+SDK PR2 的当前 a70f 提交13项检查全部成功，已独立复核并合并为709ad8ec；
+Client继续固定已审查的a70f祖先。客户端统一PR20的361提交全部五个桌面构建、
+三平台engine、ARM App及拼写已通过；Intel App的808通过/1失败/2忽略保留为失败。
+失败发生在媒体HTTP测试服务器404，原日志没有记录完整请求路径，不能归因到
+已捕获的具体包阶段。修复测试服务器的原假设：accepted socket显式blocking，
+完整且受限的header才路由，Interrupted继续、不完整及读取失败直接拒绝；
+真实sync路径支持有无query，记录最近32个完整method/path供诊断。原实际控件
+点击、明文/加密、文本复用断言均保留，新分片/中断/不完整读取回归通过。
+
+新组合包含已审查的原始receive receipt夹具和R02 IDNA迁移。精确CI特性完整App
+810通过、0失败、2原有忽略；同特性own all-target严格Clippy通过。真实SQLite
+receipt2项、vendor binding正负2项及全仓typos1.51.1通过；原拼写失败保留，
+仅对四个上游文件中的四种完整原字符串加局部规则，没有排除vendor源码。
+R02本次主锁匹配12→11，audit仍exit1；其他依赖与独立Octos风险未关闭。
+
+新release二进制八组真实远程传输全部通过固定32MiB堆峰值/8MiB增量门槛，
+最大Rust堆3749524字节，采样RSS31490048字节。八份原始heap总和独立核实
+与报告峰值相同，输出及私有文件清理通过。证据在combined-memory-final；
+保留原始profile、进程采样和源码/二进制摘要，仅移除已验证的可再生输入文件。
+这些仍是隔离HTTP生产传输窗口证据，不能替代完整App、TLS或SQLite native资格。
+凭据库、SDK上传总队列、Matrix链接与内置播放器继续分批处理；新提交CI尚待完成。
+
+组合后的附件完整lifecycle7/7通过，0失败/跳过/不确定；六组真实Cargo绑定与显式文件边界均通过。

@@ -5873,3 +5873,8 @@ SDK 恢复 timeline 可包含同一事件多个句柄。保留原始 Vector 的�
   a workspace member or adding selector exceptions.
 - App Matrix formatting uses mdurl percent primitives and separate raw punycode.
   Removing old IDNA from the lock does not change or qualify IDN display policy.
+
+- Quality follow-up coordination: this repository has both origin hagency-client
+  and upstream hagency-rs. Always pass `--repo hagency-org/hagency-client` to gh
+  PR/check/run commands: implicit gh selection can read upstream PR numbers.
+  No upstream PR action is authorized by client remediation.

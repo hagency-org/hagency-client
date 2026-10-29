@@ -15450,3 +15450,29 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   policy check, original137+doc4, Matrix6/7originalignored and lifecycle3/0/0/0
   pass again. Independent archive SHA/file comparison proves only manifest and
   those two type annotations differ from the19 original files.
+
+- Parent combined review: SDK PR2 a70f passed all13 current-head checks and
+  was merged as709ad8ec. Client PR20 remains draft; previous361 head passed
+  all five desktop builds, both Linux and Mac/Windows engine suites, ARM App
+  and spelling, but Intel App failed808/1/2 in the media HTTP fixture with404.
+  Original packet/path details were absent, so no exact failure phase is claimed.
+  Accepted sockets now explicitly clear nonblocking mode; only complete bounded
+  headers route, with Interrupted handled, incomplete/failed reads rejected and
+  exact sync endpoints accepted with or without query. Keep last32 complete
+  method/path observations for future failures. Actual visible/recycled widget
+  assertions remain unchanged; new fragmented/Interrupted/WouldBlock/EOF case
+  passes alongside all three original cases. Full exact CI-feature App now
+  810passed/0failed/2originalignored; same-profile own all-target strict passes.
+- Combined IDNA plus original receive-receipt fixes independently reviewed and
+  integrated. Actual SQLite receipt2/2 and real vendor binding2/2 pass. Matching
+  typos1.51.1 first flags exact upstream fixture/comment strings; four file-local
+  original-string patterns preserve checksum provenance without excluding
+  vendor files. Full repository spelling then passes. Eight freshly built
+  release remote-memory processes pass unchanged gates: maximum Rust heap
+  3749524B and sampled RSS31490048B; all eight raw heap sums independently
+  equal reported peaks, outputs verified and actual private data cleaned.
+  Raw profiles, samples, source/binary hashes retained under combined-memory-final;
+  only1.2GB regenerable input fixtures removed after validation. Same measurement
+  limits apply: SDK initialization outside Rust window, no whole-App/TLS/SQLite
+  memory qualification. New combined head still requires hosted checks.
+- Combined attachment lifecycle completed7/7, zero fail/skip/uncertain, strict review mode; all six bound actual Cargo groups passed, with the explicit changed-file boundary verified.
