@@ -86,3 +86,24 @@ unmaintained 13、unsound 18、yanked 4。
 正负证明及 agent-spec 生命周期。发布/合并仍需独立复核和当前提交 CI。
 
 父复核补充：保留原生 `RUSTFLAGS=-D warnings` 的实际首次失败，两处显式 lifetime 注释后同一 formatter 依赖构建通过；重新运行完整 mdurl137+doc4、formatter6/7原忽略及 lifecycle3/0/0/0 通过。父评审独立核对原始 archive SHA，并逐个比对19原文件，变化严格限于 manifest 依赖与两行等价 lifetime；未加 lint 豁免或改变percent行为。
+
+
+## Hosted 布局门禁复核
+
+a30提交的macOS ARM精确特性App810项及严格Clippy通过，随后布局脚本把已
+明确排除的`vendor/mdurl`误判为自有crate而失败；原日志完整保留。布局检查
+现在只接受Root registry patch中明确登记、原路径exact exclude、位于vendor、
+不含路径/目录symlink别名、manifest非symlink且包名匹配、非workspace member的
+那个manifest，其他越界和嵌套workspace仍拒绝。没有排除vendor整树或忽略失败。
+
+独立复核用真实Git/Cargo小工作区检出首次修正仍接受目录别名的问题：先resolve
+再核对exclude会把别名混同为已登记路径。最终先核对原路径和全部目录身份，
+再登记manifest，保留该负例。实际Node集成4/4通过：原真实metadata/inventory
+正负2项；完整主工作区正例及两个未登记/嵌套假crate拒绝；真实registry patch
+最小工作区control通过，Cargo实际接受目录别名后，检查器分别拒绝未exclude
+别名和已exclude但仍为symlink/junction的别名。Windows使用junction，
+路径输出统一posix，未声称本机测试取得Windows执行资格。
+
+布局脚本确认31个workspace package及唯一显式vendor patch。R02完整绑定
+lifecycle3/3通过、0失败/跳过/不确定；运行时代码和锁文件未改变，不把之前
+App成功等同为新提交平台CI通过。最终三文件独立复核无已知阻断；新head仍需CI。
