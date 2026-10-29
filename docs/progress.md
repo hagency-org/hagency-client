@@ -15556,3 +15556,8 @@ PR21 当前 head48b33772 完整包含 PR20 的25beaf6e。父独立复核源码�
 当前48b Linux workflow40958705871/job123745783208的8组真实传输raw证据已独立重算，12source hashes全部对应精确提交，production validator无错误；最大Rust堆3506028B、采样RSS33034240B。证据在quality-matrix-links工作树.run/quality-matrix-navigation/parent-pr21-48b-raw-heap-validation.json。依旧仅remote transport窗，不是整个App/TLS/SQLite资格。执行报告顶部清单已按此实际交付更新，历史各轮保留。
 
 SDK PR3已审查并合并a34339e，13项当前CI和六份新鲜artifact的50profile独立复核通过。SDK PR4 head95de9a4e新增SQLite真正只读的一致WAL身份检查及固定有限PBKDF2导入策略，父独立8reader+15encryption通过，当前CI仍运行；agent-spec1.4不支持Cargo features，reader真实Skip保留，外部exact-feature测试单独执行，不把Skip计通过。R05客户端和R07 SDK资源控制仍实施/复核中。
+
+
+SDK PR4最终于2026-10-29T23:27:59Z合并为d325f930989d65044c52fcabcb2b7e66d533440a；实际审查head95de9a4e，target codex/mandatory-encrypted-send原basea343。父再次核对13/13当前SUCCESS/CLEAN，独立解析本head run40968952314六套raw profile共50个distinct非零命名测量，并比对60份原始文件SHA（24out+30log+6environment JSON）；reader8/8/7分别为Linux/macOS/Windows，公开Unix symlink例不计Windows执行。首次父审误把60raw均当.out的断言已纠正并记录，未把假设错误当数据失败。未把agent-spec feature限制造成的reader Skip记通过。
+
+R05相关复核新发现R19：启动完整inventory之后另一进程可创建新数据库，原prune没有统一跨进程创建/清理协议。已决定安全停止生产自动删除，明确deferred原因且不在启动探测Native；旧prune仅保留测试，真实多进程创建/原数据sentinel及旧算法负对照在实现验证中。自动空间回收未交付，数据/旧OS key可能继续占空间；不以mtime grace或采样宣称强互斥。
