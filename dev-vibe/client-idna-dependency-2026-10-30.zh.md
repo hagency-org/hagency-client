@@ -19,6 +19,10 @@
 版本仍是 0.3.1，这不是新的上游发布；新增测试和补丁说明单独可见。
 root patch 指向该副本，workspace 显式排除它；registry/Git 源缓存未被手工修改。
 
+合并候选的实际 typos 1.51.1 首次检查标记了上游原样 IPv6、截断域名向量、
+一个测试标识符和原始注释；没有改写这些来源字节。`typos.toml` 只在对应四个
+上游文件内忽略四种完整原字符串，其余内容继续检查；原失败日志保留。
+
 实际 Matrix formatter 只调用 mdurl 的 percent encode/decode。
 `links.rs` 的主机名转换继续使用既有 `idna 1.1.0::punycode` 原语；
 fullwidth、相对路径、Matrix URI 和已转义字节的 JS 对照契约不变。

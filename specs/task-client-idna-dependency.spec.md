@@ -36,6 +36,7 @@ repair, not a qualification of every independent lockfile or IDN display policy.
 - .github/workflows/engine-checks.yml
 - tools/native/check-rust-spec-bindings.mjs
 - tools/native/check-rust-spec-bindings-vendor.test.mjs
+- typos.toml
 - ./Cargo.toml
 - ./Cargo.lock
 - vendor/mdurl/**
