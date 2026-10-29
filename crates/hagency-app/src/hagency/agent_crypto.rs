@@ -165,12 +165,14 @@ fn store(root: &Path, binding: &Binding) -> Result<(PathBuf, File), NativeError>
         .try_exists()
         .map_err(|_| error("agent_crypto_store_unavailable"))?
     {
-        let mut builder = std::fs::DirBuilder::new();
+        let builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
-        {
+        let builder = {
             use std::os::unix::fs::DirBuilderExt;
+            let mut builder = builder;
             builder.mode(0o700);
-        }
+            builder
+        };
         builder
             .create(&path)
             .map_err(|_| error("agent_crypto_store_unavailable"))?;
