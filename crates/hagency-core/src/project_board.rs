@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 pub const STATES: [&str; 5] = ["todo", "in_progress", "blocked", "in_review", "done"];
 pub const PRIORITIES: [&str; 4] = ["low", "normal", "high", "urgent"];
-pub const CAPABILITY: &str = "project-board-v4";
+pub const CAPABILITY: &str = "project-board-v5";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -290,6 +290,11 @@ impl ConfigureColumns {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BoardAction {
+    Overview,
+    SetProjectArchived {archived: bool, expected_revision: i64},
+    Boards,
+    CreateBoard {idempotency_key: String, name: String},
+    Within {board: String, command: Box<BoardAction>},
     Snapshot {
         query: Query,
     },
@@ -356,10 +361,13 @@ pub enum BoardAction {
     },
 }
 impl BoardAction {
+    pub fn is_upload(&self)->bool {match self {Self::UploadAttachment {..}=>true,Self::Within {command,..}=>command.is_upload(),_=>false}}
+
     pub fn is_read(&self) -> bool {
+        if let Self::Within {command,..} = self {return command.is_read();}
         matches!(
             self,
-            Self::Snapshot { .. }
+            Self::Overview | Self::Boards | Self::Snapshot { .. }
                 | Self::Notifications { .. }
                 | Self::Attachment { .. }
                 | Self::Page { .. }
@@ -433,6 +441,8 @@ pub struct Lane {
     pub wip_limit: Option<i64>,
     pub is_done: bool,
     pub task_count: i64,
+    #[serde(default)]
+    pub all_task_count: Option<i64>,
     pub total: i64,
     pub tasks: Vec<BoardTask>,
     pub next_cursor: Option<String>,
@@ -445,6 +455,10 @@ pub struct Snapshot {
     pub sequence: i64,
     pub lanes: Vec<Lane>,
     pub members: Vec<String>,
+    #[serde(default)]
+    pub label_suggestions: Vec<String>,
+    #[serde(default)]
+    pub has_more_labels: bool,
     #[serde(default)]
     pub member_names: std::collections::HashMap<String, String>,
     pub capability: String,

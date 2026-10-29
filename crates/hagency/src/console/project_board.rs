@@ -42,6 +42,12 @@ pub(super) fn request(
     use reqwest::Method;
     key(project)?;
     let root = format!("/hagency/api/v1/projects/{project}");
+    if let BoardAction::Within {board,command} = action {
+        key(&board)?;
+        if matches!(*command, BoardAction::Within {..}|BoardAction::Overview|BoardAction::SetProjectArchived {..}|BoardAction::Boards|BoardAction::CreateBoard {..}) {return Err(invalid());}
+        let (method,path,body) = request(project,*command)?;
+        return Ok((method,path.replacen(&root,&format!("{root}/boards/{board}"),1),body));
+    }
     let task = match &action {
         BoardAction::Attachment { task, .. }
         | BoardAction::UploadAttachment { task, .. }
@@ -62,6 +68,19 @@ pub(super) fn request(
     let task_root = format!("{root}/tasks/{}", task.unwrap_or_default());
     let serialize = |input| serde_json::to_value(input).map_err(|_| invalid());
     Ok(match action {
+        BoardAction::Overview => (Method::GET,format!("{root}/board/overview"),None),
+        BoardAction::SetProjectArchived {archived,expected_revision} => {
+            if expected_revision<0 {return Err(invalid());}
+            (Method::PUT,format!("{root}/board/project-archive"),Some(serde_json::json!({"archived":archived,"expectedRevision":expected_revision})))
+        }
+        BoardAction::Within {..} => return Err(invalid()),
+        BoardAction::Boards => (Method::GET,format!("{root}/boards"),None),
+        BoardAction::CreateBoard {idempotency_key,name} => {
+            key(&idempotency_key)?;
+            let name=name.trim();
+            if name.is_empty() || name.chars().count()>80 || name.chars().any(char::is_control) {return Err(invalid());}
+            (Method::POST,format!("{root}/boards"),Some(serde_json::json!({"idempotencyKey":idempotency_key,"name":name})))
+        }
         BoardAction::Notifications { before } => {
             if before < 0 {
                 return Err(invalid());
@@ -224,5 +243,20 @@ mod tests {
             )
             .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod multi_board_tests {
+    use super::*;
+    #[test]
+    fn scoped_board_commands_keep_the_real_project_and_reject_nested_or_arbitrary_scopes() {
+        let scoped=|board:&str|BoardAction::Within {board:board.into(),command:Box::new(BoardAction::Detail {task:"task_1".into()})};
+        let (method,path,_)=request("prj_1",scoped("board_2")).unwrap();
+        assert_eq!(method,reqwest::Method::GET);assert_eq!(path,"/hagency/api/v1/projects/prj_1/boards/board_2/tasks/task_1");
+        for board in ["../other","a/b","a?b","https://remote"] {assert!(request("prj_1",scoped(board)).is_err());}
+        assert!(request("prj_1",BoardAction::Within {board:"board_2".into(),command:Box::new(scoped("board_3"))}).is_err());
+        assert!(scoped("board_2").is_read());
+        assert!(!BoardAction::SetProjectArchived {archived:true,expected_revision:1}.is_read());
     }
 }

@@ -572,7 +572,27 @@ mod controls {
             draw_bg +: {size: 16 border_size: 1 border_radius: RINX_CONTROL_RADIUS
                 color: RINX_FIELD color_hover: RINX_HOVER color_down: RINX_PRESSED color_focus: RINX_FIELD color_active: RINX_ACCENT color_disabled: RINX_FIELD
                 border_color: RINX_BORDER border_color_hover: RINX_ACCENT border_color_focus: RINX_ACCENT border_color_down: RINX_ACCENT border_color_active: RINX_ACCENT border_color_disabled: RINX_BORDER
-                mark_color_active: RINX_ON_ACCENT mark_color_active_hover: RINX_ON_ACCENT}
+                mark_color: #0000 mark_color_hover: #0000 mark_color_down: #0000 mark_color_focus: #0000
+                mark_color_active: RINX_ON_ACCENT mark_color_active_hover: RINX_ON_ACCENT
+                pixel: fn() {
+                    let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+                    let center = vec2(self.size * 0.5, self.rect_size.y * 0.5)
+                    let top = center.y - self.size * 0.5
+                    sdf.box(self.border_size, top + self.border_size, self.size - self.border_size * 2.0, self.size - self.border_size * 2.0, self.border_radius * 0.5)
+                    let fill = self.color.mix(self.color_hover, self.hover).mix(self.color_down, self.down)
+                        .mix(self.color_active, self.active).mix(self.color_disabled, self.disabled)
+                    let border = self.border_color.mix(self.border_color_hover, self.hover)
+                        .mix(self.border_color_focus, self.focus).mix(self.border_color_active, self.active)
+                        .mix(self.border_color_disabled, self.disabled)
+                    sdf.fill_keep(fill)
+                    sdf.stroke(border, self.border_size)
+                    let inset = self.size * 0.275
+                    sdf.move_to(inset, center.y)
+                    sdf.line_to(center.x, center.y + self.size * 0.5 - inset)
+                    sdf.line_to(self.size - inset, top + inset)
+                    sdf.stroke(self.mark_color_active.mix(self.mark_color_disabled, self.disabled) * self.active, self.size * 0.09)
+                    return sdf.result
+                }}
             draw_text +: {color: RINX_INK color_hover: RINX_INK color_down: RINX_INK color_focus: RINX_INK color_active: RINX_INK color_disabled: RINX_DISABLED text_style: theme.font_regular{font_size: RINX_UI_SIZE}}
         }
     }

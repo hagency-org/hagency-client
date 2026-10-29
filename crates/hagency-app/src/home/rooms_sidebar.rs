@@ -10,6 +10,7 @@
 use makepad_widgets::*;
 
 use crate::home::rooms_list::RoomsListWidgetExt;
+use crate::home::project_tree::ProjectTreeWidgetExt;
 use crate::home::rooms_list_header::RoomsListHeaderAction;
 use crate::home::joined_spaces::JoinedSpacesWidgetExt;
 use crate::home::navigation_tab_bar::{NavigationBarAction, SelectedTab};
@@ -28,7 +29,7 @@ script_mod! {
             draw_text +: {color: mod.widgets.RINX_INK text_style: theme.font_regular {font_size: mod.widgets.RINX_UI_SIZE}}
         }
     }
-    let RowActions = RinxMoreButton {}
+    let RowActions = RinxMoreButton {visible:false}
     let DesktopNavButton = NavigationBarButton {
         width: Fill height: 40 flow: Right spacing: 10
         align: Align{x: 0 y: 0.5} padding: Inset{left: 12 right: 8}
@@ -71,19 +72,19 @@ script_mod! {
                 }
             }
             primary_navigation := ScrollYView {width: Fill height: 224 flow: Down spacing: 6 padding: Inset{left: 10 right: 10}
-            View {width: Fill height: 40 flow: Right align: Align{y: 0.5}
+            projects_row := View {show_bg:true draw_bg.color:#0000 width: Fill height: 40 flow: Right align: Align{y: 0.5}
                 open_projects := DesktopNavButton {nav_icon.draw_icon.svg: ICON_HIERARCHY tooltip_text: #(crate::i18n::tr("Projects")) label.text: #(crate::i18n::tr("Projects")) label.i18n_text: "Projects"}
-                projects_actions := RowActions {}
+                projects_action_slot := View {width:32 height:32 projects_actions := RowActions {}}
             }
-            View {width: Fill height: 40 flow: Right align: Align{y: 0.5}
+            agents_row := View {show_bg:true draw_bg.color:#0000 width: Fill height: 40 flow: Right align: Align{y: 0.5}
                 open_agents := DesktopNavButton {nav_icon.draw_icon.svg: ICON_ROBOT tooltip_text: #(crate::i18n::tr("Agents")) label.text: #(crate::i18n::tr("Agents")) label.i18n_text: "Agents"}
-                agents_actions := RowActions {}
+                agents_action_slot := View {width:32 height:32 agents_actions := RowActions {}}
             }
-            View {width: Fill height: 40 flow: Right align: Align{y: 0.5}
-                open_chats := DesktopNavButton {nav_icon.draw_icon.svg: ICON_THREADS tooltip_text: #(crate::i18n::tr("Chats")) label.text: #(crate::i18n::tr("Chats")) label.i18n_text: "Chats"}
-                chats_actions := RowActions {}
+            group_chats_row := View {show_bg:true draw_bg.color:#0000 width: Fill height: 40 flow: Right align: Align{y: 0.5}
+                open_group_chats := DesktopNavButton {nav_icon.draw_icon.svg: ICON_THREADS tooltip_text: #(crate::i18n::tr("Group Chats")) label.text: #(crate::i18n::tr("Group Chats")) label.i18n_text: "Group Chats"}
+                group_chats_action_slot := View {width:32 height:32 group_chats_actions := RowActions {}}
             }
-            open_contacts := DesktopNavButton {nav_icon.draw_icon.svg: ICON_PEOPLE tooltip_text: #(crate::i18n::tr("Contacts")) label.text: #(crate::i18n::tr("Contacts")) label.i18n_text: "Contacts"}
+            open_contacts := DesktopNavButton {unread := UnreadBadge {} nav_icon.draw_icon.svg: ICON_PEOPLE tooltip_text: #(crate::i18n::tr("Contacts")) label.text: #(crate::i18n::tr("Contacts")) label.i18n_text: "Contacts"}
             open_miniapps := DesktopNavButton {nav_icon.draw_icon.svg: ICON_SQUARES tooltip_text: #(crate::i18n::tr("Mini apps")) label.text: #(crate::i18n::tr("Mini apps")) label.i18n_text: "Mini apps"}
             }
             more := DesktopNavButton {margin: Inset{left: 10 right: 10} nav_icon.draw_icon.svg: ICON_MORE_VERT tooltip_text: #(crate::i18n::tr("More")) label.text: #(crate::i18n::tr("More")) label.i18n_text: "More"}
@@ -102,7 +103,7 @@ script_mod! {
             width: Fill height: Fill flow: Down
             draw_bg.color: mod.widgets.RINX_SURFACE
             title_bar := MobileTitle {
-                title.text: #(crate::i18n::tr("Chats")) title.i18n_text: "Chats"
+                title.text: #(crate::i18n::tr("Group Chats")) title.i18n_text: "Group Chats"
                 controls.right.visible: true
             }
             SolidView {
@@ -122,8 +123,9 @@ script_mod! {
             ChatViewSwitch {}
             file_transfer_entry := MobileRow {height: 46 title.text: #(crate::i18n::tr("File Transfer")) title.i18n_text: "File Transfer" icon.draw_icon.svg: ICON_FILE}
             conversations := View {
-                width: Fill height: Fill
-                CachedWidget {rooms_list := RoomsList {}}
+                width: Fill height: Fill flow: Down
+                View {width: Fill height: 0 CachedWidget {rooms_list := RoomsList {}}}
+                mobile_groups := ProjectTree {}
             }
             spaces_tree := View {
                 width: Fill height: Fill visible: false
@@ -135,7 +137,7 @@ script_mod! {
 
 /// Global navigation selection survives adaptive variants and room focus changes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum DesktopWorkspace { #[default] Projects, Chats, Other }
+pub enum DesktopWorkspace { #[default] Projects, GroupChats, Other }
 
 #[derive(Debug)]
 pub struct DesktopRailAction;
@@ -146,7 +148,7 @@ pub struct SidebarToggleInTitlebar(pub bool);
 
 /// Shared across adaptive sidebar replacements, but reset when signing out.
 #[derive(Default)]
-struct ChatsViewState {
+struct GroupChatsViewState {
     spaces: bool,
 }
 
@@ -165,6 +167,8 @@ pub struct RoomsSideBar {
     applied_view_mode: ViewModeOverride,
     #[rust] selected_primary: Option<LiveId>,
     #[rust] painted_collapsed: Option<bool>,
+    #[rust] direct_counts: (u64,bool),
+    #[rust] pointer:Option<Vec2d>,
 }
 
 impl ScriptHook for RoomsSideBar {
@@ -204,13 +208,20 @@ impl RoomsSideBar {
 
 impl Widget for RoomsSideBar {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        match event {Event::MouseMove(e)=>self.pointer=Some(e.abs),Event::MouseDown(e)=>self.pointer=Some(e.abs),Event::WindowLostFocus(_)|Event::MouseLeave(_)=>self.pointer=None,_=>()}
+        for (row,action) in [(ids!(projects_row).as_slice(),ids!(projects_actions).as_slice()),(ids!(agents_row).as_slice(),ids!(agents_actions).as_slice()),(ids!(group_chats_row).as_slice(),ids!(group_chats_actions).as_slice())] {
+            let show=self.painted_collapsed!=Some(true) && self.pointer.is_some_and(|p|self.view.view(cx,row).area().rect(cx).contains(p));
+            let button=self.view.button(cx,action);if button.visible()!=show {button.set_visible(cx,show);self.view.redraw(cx);}
+        }
+        if matches!(event,Event::Signal) {let counts=super::mobile::direct_unread(cx);if counts!=self.direct_counts {self.direct_counts=counts;self.view.redraw(cx);}}
+
         // If the main room filter input bar changed keywords, re-emit that action
         // as a MainFilterAction so that other widgets can handle it.
         if let Event::Actions(actions) = event {
             if self.view.navigation_bar_button(cx, ids!(toggle_sidebar)).clicked(actions) {
                 cx.action(DesktopRailAction);
             }
-            for (button, kind) in [(id!(projects_actions), super::sidebar_action_menu::SidebarMenuKind::Projects), (id!(chats_actions), super::sidebar_action_menu::SidebarMenuKind::Chats), (id!(agents_actions), super::sidebar_action_menu::SidebarMenuKind::Agents)] {
+            for (button, kind) in [(id!(projects_actions), super::sidebar_action_menu::SidebarMenuKind::Projects), (id!(group_chats_actions), super::sidebar_action_menu::SidebarMenuKind::GroupChats), (id!(agents_actions), super::sidebar_action_menu::SidebarMenuKind::Agents)] {
                 if self.view.button(cx, &[button]).clicked(actions) {
                     let rect = self.view.widget(cx, &[button]).area().rect(cx);
                     cx.action(super::sidebar_action_menu::SidebarMenuAction::Open {kind, pos: dvec2(rect.pos.x, rect.pos.y + rect.size.y)});
@@ -222,9 +233,9 @@ impl Widget for RoomsSideBar {
             if self.view.navigation_bar_button(cx, ids!(open_settings)).clicked(actions) {
                 cx.action(NavigationBarAction::OpenSettings);
             }
-            if self.view.navigation_bar_button(cx, ids!(open_chats)).clicked(actions) {
+            if self.view.navigation_bar_button(cx, ids!(open_group_chats)).clicked(actions) {
                 cx.action(NavigationBarAction::GoToHome);
-                cx.action(crate::home::main_desktop_ui::MainDesktopUiAction::ShowChats);
+                cx.action(crate::home::main_desktop_ui::MainDesktopUiAction::ShowGroupChats);
             }
             if self.view.navigation_bar_button(cx, ids!(more)).clicked(actions) {
                 let rect = self.view.widget(cx, ids!(more)).area().rect(cx);
@@ -257,7 +268,7 @@ impl Widget for RoomsSideBar {
                 .navigation_bar_button(cx, ids!(all_chats))
                 .clicked(actions)
             {
-                cx.global::<ChatsViewState>().spaces = false;
+                cx.global::<GroupChatsViewState>().spaces = false;
                 cx.action(NavigationBarAction::GoToHome);
                 self.view.redraw(cx);
             }
@@ -266,7 +277,7 @@ impl Widget for RoomsSideBar {
                 .navigation_bar_button(cx, ids!(joined_spaces_tab))
                 .clicked(actions)
             {
-                cx.global::<ChatsViewState>().spaces = true;
+                cx.global::<GroupChatsViewState>().spaces = true;
                 cx.action(NavigationBarAction::GoToHome);
                 self.view.redraw(cx);
             }
@@ -291,14 +302,14 @@ impl Widget for RoomsSideBar {
 
             for action in actions {
                 if let Some(action) = action.downcast_ref::<crate::hagency::ui::HagencyAction>() {
-                    self.selected_primary = Some(match action {crate::hagency::ui::HagencyAction::OpenAgents | crate::hagency::ui::HagencyAction::NewAgent {..} | crate::hagency::ui::HagencyAction::AgentRun {..} => id!(open_agents), crate::hagency::ui::HagencyAction::Close => id!(open_chats), _ => id!(open_projects)});
+                    self.selected_primary = Some(match action {crate::hagency::ui::HagencyAction::OpenAgents | crate::hagency::ui::HagencyAction::NewAgent {..} | crate::hagency::ui::HagencyAction::AgentRun {..} => id!(open_agents), crate::hagency::ui::HagencyAction::Close => id!(open_group_chats), _ => id!(open_projects)});
                 }
                 if let Some(navigation) = action.downcast_ref::<crate::hagency::ui::ProjectRoomNavigation>()
                     && navigation.current() {
                     self.selected_primary = Some(id!(open_projects));
                 }
-                if matches!(action.downcast_ref::<crate::home::main_desktop_ui::MainDesktopUiAction>(), Some(crate::home::main_desktop_ui::MainDesktopUiAction::ShowChats)) {
-                    self.selected_primary = Some(id!(open_chats));
+                if matches!(action.downcast_ref::<crate::home::main_desktop_ui::MainDesktopUiAction>(), Some(crate::home::main_desktop_ui::MainDesktopUiAction::ShowGroupChats)) {
+                    self.selected_primary = Some(id!(open_group_chats));
                 }
                 // Mini apps are hosted separately; opening or closing one
                 // must preserve the underlying Project or Chat selection.
@@ -310,14 +321,14 @@ impl Widget for RoomsSideBar {
                     ..
                 }) = action.downcast_ref()
                 {
-                    cx.global::<ChatsViewState>().spaces = false;
+                    cx.global::<GroupChatsViewState>().spaces = false;
                         self.selected_primary = None;
                 }
                 // A legacy desktop Space shortcut still opens its filtered list.
                 if let Some(NavigationBarAction::TabSelected(SelectedTab::Space { .. })) =
                     action.downcast_ref()
                 {
-                    cx.global::<ChatsViewState>().spaces = false;
+                    cx.global::<GroupChatsViewState>().spaces = false;
                 }
                 // Focus the filter hosted by the currently selected sidebar variant.
                 if let Some(RoomsListHeaderAction::OpenRoomFilterModal) = action.downcast_ref() {
@@ -363,12 +374,17 @@ impl Widget for RoomsSideBar {
             if collapsed {script_apply_eval!(cx, icon, {draw_icon.svg: mod.widgets.ICON_CHEVRON_RIGHT});}
             else {script_apply_eval!(cx, icon, {draw_icon.svg: mod.widgets.ICON_CHEVRON_LEFT});}
         }
-        for id in [id!(open_projects),id!(open_agents),id!(open_chats),id!(open_contacts),id!(open_miniapps),id!(more),id!(open_settings)] {
+        for id in [id!(open_projects),id!(open_agents),id!(open_group_chats),id!(open_contacts),id!(open_miniapps),id!(more),id!(open_settings)] {
             self.view.navigation_bar_button(cx, &[id]).label(cx, ids!(label)).set_visible(cx, !collapsed);
         }
-        for id in [id!(projects_actions),id!(agents_actions),id!(chats_actions)] {
-            self.view.button(cx, &[id]).set_visible(cx, !collapsed);
+        // Hit testing belongs to events: an Area from the preceding draw can
+        // become invalid while rebuilding its parent draw list.
+        if collapsed {
+            for action in [ids!(projects_actions).as_slice(),ids!(agents_actions).as_slice(),ids!(group_chats_actions).as_slice()] {
+                self.view.button(cx,action).set_visible(cx,false);
+            }
         }
+        for slot in [ids!(projects_action_slot).as_slice(),ids!(agents_action_slot).as_slice(),ids!(group_chats_action_slot).as_slice()] {self.view.view(cx,slot).set_visible(cx,!collapsed);}
         // Show every primary entry on a normal desktop window, reserving
         // space for the tree and footer before scrolling on short windows.
         let navigation_height = (height - 260.0).clamp(100.0, 224.0);
@@ -380,19 +396,22 @@ impl Widget for RoomsSideBar {
             if state.selected_tab == SelectedTab::Home {
                 match *cx.global::<DesktopWorkspace>() {
                     DesktopWorkspace::Projects => self.selected_primary=Some(id!(open_projects)),
-                    DesktopWorkspace::Chats => self.selected_primary=Some(id!(open_chats)),
+                    DesktopWorkspace::GroupChats => self.selected_primary=Some(id!(open_group_chats)),
                     DesktopWorkspace::Other => {},
                 }
             }
-            for button in [id!(open_projects), id!(open_agents), id!(open_chats), id!(open_miniapps)] {
+            for button in [id!(open_projects), id!(open_agents), id!(open_group_chats), id!(open_miniapps)] {
                 self.view.navigation_bar_button(cx, &[button]).set_selected(cx, state.selected_tab == SelectedTab::Home && self.selected_primary.unwrap_or(id!(open_projects)) == button);
             }
             for (button, selected) in [(ids!(open_contacts), state.selected_tab == SelectedTab::Contacts), (ids!(open_discover), state.selected_tab == SelectedTab::Discover), (ids!(open_settings), state.selected_tab == SelectedTab::Settings)] {
                 self.view.navigation_bar_button(cx, button).set_selected(cx, selected);
             }
         }
+        let (unread,marked)=super::mobile::direct_unread(cx);
+        use crate::shared::unread_badge::UnreadBadgeWidgetExt;
+        self.view.unread_badge(cx,ids!(open_contacts.unread)).update_counts(marked,0,unread);
         // The desktop Project tree replaces the mobile Space list.
-        let spaces = cx.global::<ChatsViewState>().spaces
+        let spaces = cx.global::<GroupChatsViewState>().spaces
             && !crate::home::home_screen::effective_is_desktop(cx);
         let desktop = crate::home::home_screen::effective_is_desktop(cx);
         self.view
@@ -407,9 +426,10 @@ impl Widget for RoomsSideBar {
         self.view
             .navigation_bar_button(cx, ids!(joined_spaces_tab))
             .set_selected(cx, spaces);
-        self.view
-            .joined_spaces(cx, ids!(joined_spaces))
-            .set_active(cx, spaces);
+        self.view.joined_spaces(cx, ids!(joined_spaces)).set_active(cx, spaces);
+        let groups=self.view.project_tree(cx,ids!(mobile_groups));
+        groups.set_mode(cx,crate::home::project_tree::ProjectTreeMode::GroupChats);
+        groups.set_active(cx,!desktop && !spaces);
         self.view.draw_walk(cx, scope, walk)
     }
 }
@@ -568,13 +588,13 @@ mod layout_tests {
         let sidebar_rect = active[0].area().rect(&cx);
         assert!((sidebar_rect.size.x - 200.0).abs() < 1.0, "Sidebar has fixed width: {sidebar_rect:?}");
         let nav = sidebar.view.view(&cx, ids!(primary_navigation)).area().rect(&cx);
-        for button in [id!(open_projects),id!(open_agents),id!(open_chats),id!(open_contacts),id!(open_miniapps)] {
+        for button in [id!(open_projects),id!(open_agents),id!(open_group_chats),id!(open_contacts),id!(open_miniapps)] {
             let rect = sidebar.view.widget(&cx, &[button]).area().rect(&cx);
             assert!(rect.size.y > 0.0 && rect.pos.y >= nav.pos.y - 1.0 && rect.pos.y + rect.size.y <= nav.pos.y + nav.size.y + 1.0, "Primary entry visible initially: {button:?} {rect:?} within {nav:?}");
         }
         drop(sidebar);
         let consumer = cx.global::<crate::home::rooms_list::RoomsListRef>().widget_uid();
-        for (button, tab) in [(id!(open_contacts), SelectedTab::Contacts), (id!(open_settings), SelectedTab::Settings), (id!(open_chats), SelectedTab::Home)] {
+        for (button, tab) in [(id!(open_contacts), SelectedTab::Contacts), (id!(open_settings), SelectedTab::Settings), (id!(open_group_chats), SelectedTab::Home)] {
             let mut children = Vec::new(); home.children(&mut |_, child| children.push(child));
             let mut found = Vec::new(); collect_sidebars(children, &mut found);
             assert_eq!(found.len(), 1);
@@ -592,7 +612,7 @@ mod layout_tests {
         let mut found = Vec::new(); collect_sidebars(children, &mut found);
         assert_eq!(found.len(), 1);
         let sidebar = found[0].borrow::<RoomsSideBar>().unwrap();
-        for button in [id!(open_projects),id!(open_agents),id!(open_contacts),id!(open_chats),id!(open_miniapps),id!(more)] {
+        for button in [id!(open_projects),id!(open_agents),id!(open_contacts),id!(open_group_chats),id!(open_miniapps),id!(more)] {
             assert!(!sidebar.view.navigation_bar_button(&cx, &[button]).is_empty());
         }
         drop(sidebar);
@@ -643,7 +663,7 @@ mod layout_tests {
         });
         let mut state = AppState::default();
         draw(&mut cx, &mut home, &mut state, 1280.0);
-        for (dots, item, kind) in [(id!(projects_actions), id!(new_project), SidebarMenuKind::Projects), (id!(chats_actions), id!(new_chat), SidebarMenuKind::Chats), (id!(agents_actions), id!(new_agent), SidebarMenuKind::Agents)] {
+        for (dots, item, kind) in [(id!(projects_actions), id!(new_project), SidebarMenuKind::Projects), (id!(group_chats_actions), id!(new_group_chat), SidebarMenuKind::GroupChats), (id!(agents_actions), id!(new_agent), SidebarMenuKind::Agents)] {
             let mut children = Vec::new(); home.children(&mut |_, child| children.push(child));
             let mut found = Vec::new(); collect_sidebars(children, &mut found);
             let sidebar = found[0].borrow::<RoomsSideBar>().unwrap();
@@ -664,7 +684,7 @@ mod layout_tests {
             let emitted = cx.capture_actions(|cx| menu.handle_event(cx, &Event::Actions(clicks), &mut Scope::with_data(&mut state)));
             assert!(emitted.iter().any(|a| match kind {
                 SidebarMenuKind::Projects => matches!(a.downcast_ref(), Some(crate::hagency::ui::HagencyAction::NewProject)),
-                SidebarMenuKind::Chats => matches!(a.downcast_ref(), Some(NavigationBarAction::NewChat)),
+                SidebarMenuKind::GroupChats => matches!(a.downcast_ref(), Some(super::super::space_management::SpaceManagementAction::Open {parent:None})),
                 SidebarMenuKind::Agents => matches!(a.downcast_ref(), Some(crate::hagency::ui::HagencyAction::NewAgent {project_id: None})),
                 SidebarMenuKind::Tools => false,
             }));
@@ -727,10 +747,10 @@ mod layout_tests {
         });
         let mut state = AppState::default();
         draw(&mut cx, &mut home, &mut state, 1280.0);
-        *cx.global::<DesktopWorkspace>()=DesktopWorkspace::Chats;
+        *cx.global::<DesktopWorkspace>()=DesktopWorkspace::GroupChats;
         draw(&mut cx,&mut home,&mut state,1280.0);
         let sidebar=home.widget(&cx,ids!(persistent_sidebar));
-        assert_eq!(sidebar.borrow::<RoomsSideBar>().unwrap().selected_primary,Some(id!(open_chats)),"Restored Chats context selects Chats without a click");
+        assert_eq!(sidebar.borrow::<RoomsSideBar>().unwrap().selected_primary,Some(id!(open_group_chats)),"Restored Chats context selects Chats without a click");
         *cx.global::<DesktopWorkspace>()=DesktopWorkspace::Projects;
         draw(&mut cx,&mut home,&mut state,1280.0);
         assert_eq!(sidebar.borrow::<RoomsSideBar>().unwrap().selected_primary,Some(id!(open_projects)));
@@ -747,10 +767,10 @@ mod layout_tests {
         let actions = cx.capture_actions(|cx| cx.action(crate::home::rooms_list::RoomsListAction::Selected(room)));
         home.handle_event(&mut cx, &Event::Actions(actions), &mut Scope::with_data(&mut state));
         assert_eq!(*cx.global::<DesktopWorkspace>(), DesktopWorkspace::Projects, "Room focus preserves Projects context");
-        for (workspace, visible, chats) in [(DesktopWorkspace::Other, false, false), (DesktopWorkspace::Chats, true, true), (DesktopWorkspace::Projects, true, false)] {
+        for (workspace, visible, chats) in [(DesktopWorkspace::Other, false, false), (DesktopWorkspace::GroupChats, true, true), (DesktopWorkspace::Projects, true, false)] {
             let actions = cx.capture_actions(|cx| match workspace {
                 DesktopWorkspace::Other => cx.action(HagencyAction::OpenAgents),
-                DesktopWorkspace::Chats => cx.action(crate::home::main_desktop_ui::MainDesktopUiAction::ShowChats),
+                DesktopWorkspace::GroupChats => cx.action(crate::home::main_desktop_ui::MainDesktopUiAction::ShowGroupChats),
                 DesktopWorkspace::Projects => cx.action(HagencyAction::OpenProjects),
             });
             home.handle_event(&mut cx, &Event::Actions(actions), &mut Scope::with_data(&mut state));
@@ -766,6 +786,35 @@ mod layout_tests {
         home.handle_event(&mut cx, &Event::Actions(actions), &mut Scope::with_data(&mut state));
         draw(&mut cx, &mut home, &mut state, 1280.0);
         assert!(!home.view(&cx, ids!(workspace_context)).borrow().unwrap().visible);
+    }
+
+    #[test]
+    fn overflow_follows_pointer_between_navigation_rows() {
+        let mut cx=Cx::new(Box::new(|_,_|{}));
+        let mut home=cx.with_vm(|vm| {
+            makepad_widgets::script_mod(vm);crate::app::register_widgets(vm);
+            let value=script_eval!(vm,{mod.widgets.HomeScreen {}});
+            HomeScreen::script_from_value(vm,value)
+        });
+        let mut state=AppState::default();
+        draw(&mut cx,&mut home,&mut state,1280.0);
+        let mut children=Vec::new();home.children(&mut |_,child|children.push(child));
+        let mut sidebars=Vec::new();collect_sidebars(children,&mut sidebars);
+        let sidebar=sidebars[0].clone();
+        for target in [Some(id!(projects_row)),Some(id!(agents_row)),Some(id!(group_chats_row)),None] {
+            let abs=target.map(|row| {
+                let binding=sidebar.borrow::<RoomsSideBar>().unwrap();
+                let rect=binding.view.view(&cx,&[row]).area().rect(&cx);
+                assert!(rect.size.x>0.0 && rect.size.y>0.0,"{row:?}: {rect:?}");
+                rect.pos+rect.size*0.5
+            }).unwrap_or(dvec2(900.0,600.0));
+            home.handle_event(&mut cx,&Event::MouseMove(MouseMoveEvent {abs,lock_delta:DVec2::default(),window_id:WindowId(0,0),modifiers:KeyModifiers::default(),handled:std::cell::Cell::new(Area::Empty),time:1.0}),&mut Scope::with_data(&mut state));
+            draw(&mut cx,&mut home,&mut state,1280.0);
+            let binding=sidebar.borrow::<RoomsSideBar>().unwrap();
+            for (row,button) in [(id!(projects_row),id!(projects_actions)),(id!(agents_row),id!(agents_actions)),(id!(group_chats_row),id!(group_chats_actions))] {
+                assert_eq!(binding.view.button(&cx,&[button]).visible(),target==Some(row),"{row:?}, pointer={:?}",binding.pointer);
+            }
+        }
     }
 
     #[test]
@@ -799,18 +848,19 @@ mod layout_tests {
             let mut children = Vec::new(); home.children(&mut |_, child| children.push(child));
             let mut sidebars = Vec::new(); collect_sidebars(children, &mut sidebars);
             let sidebar = sidebars[0].borrow::<RoomsSideBar>().unwrap();
-            for id in [id!(open_projects),id!(open_agents),id!(open_chats),id!(open_contacts),id!(open_miniapps),id!(more),id!(open_settings)] {
+            for id in [id!(open_projects),id!(open_agents),id!(open_group_chats),id!(open_contacts),id!(open_miniapps),id!(more),id!(open_settings)] {
                 let button = sidebar.view.navigation_bar_button(&cx, &[id]);
                 let rect = button.area().rect(&cx);
                 let icon = button.icon(&cx, ids!(nav_icon)).area().rect(&cx);
                 assert!(icon.size.x > 0.0 && icon.size.y > 0.0 && icon.pos.x >= rect.pos.x && icon.pos.x + icon.size.x <= rect.pos.x + rect.size.x + 0.1, "{id:?} {icon:?} {rect:?}");
                 assert_eq!(button.label(&cx, ids!(label)).visible(), !collapsed);
             }
-            for (action, navigation) in [(id!(projects_actions), id!(open_projects)), (id!(agents_actions), id!(open_agents)), (id!(chats_actions), id!(open_chats))] {
+            for (action, navigation) in [(id!(projects_actions), id!(open_projects)), (id!(agents_actions), id!(open_agents)), (id!(group_chats_actions), id!(open_group_chats))] {
                 let button = sidebar.view.button(&cx, &[action]);
-                assert_eq!(button.visible(), !collapsed);
+                assert!(!button.visible(),"Overflow remains hidden before row hover");
                 if !collapsed {
-                    let rect = button.area().rect(&cx);
+                    let slot=if action==id!(projects_actions){id!(projects_action_slot)}else if action==id!(agents_actions){id!(agents_action_slot)}else{id!(group_chats_action_slot)};
+                    let rect = sidebar.view.view(&cx,&[slot]).area().rect(&cx);
                     let row = sidebar.view.navigation_bar_button(&cx, &[navigation]).area().rect(&cx);
                     assert_eq!(rect.size, dvec2(32.0, 32.0));
                     assert_eq!(rect.pos.y + rect.size.y * 0.5, row.pos.y + row.size.y * 0.5, "overflow must share the navigation row center");

@@ -5708,3 +5708,50 @@ Status 必须属于保存草稿并由 Server 单事务写入，不能仍只作 M
 SDK 恢复 timeline 可包含同一事件多个句柄。保留原始 Vector 的全部位置以应用 VectorDiff，仅发布按事件/事务 ID 唯一化的 UI 投影，锚点和缓存区间随之重映射；禁止按正文去重。真实双端已验证同一个文件一行、两个相同正文的独立事件两行。
 
 全局 Event::Signal 也来自资源/工作池完成，并不意味着本组件内容变化；隐藏面板也可能收到它。项目树、账号栏、聊天信息/移动端/历史页和更新覆盖层无条件重绘会形成约120fps空闲循环。仅实际数据变化刷新，资料缓存批量应用后统一失效；稳定样式/导航缓存不应每事件重建。HAGENCY_UI_IDLE_TRACE=1 可观察 debug 绘制/动画/Actions 计数。最终双端15秒空闲 CPU 时间差约6.3%/8.1%，不是 release 性能结论。
+
+## 2026-10-28：看板筛选反馈与 Label 换行
+
+快捷建卡成功回执不能依赖下一次快照清空的临时 notice；保留原始确认卡片，明确处理与当前筛选的差异，定位权威快照中实际存在的行，不插造任务顺序。项目标签建议要独立于卡片筛选、分页和归档，并明确有限建议之外仍可按名称使用；删除列判断须包括已归档任务。
+
+当前 Makepad77c8039 的 Label 文本布局读取自身 flow 是否 Right{wrap:true}；旧 draw_text.wrap 设置不足以启用真实换行。新解释文字使用明确 flow 并测 text_layout_rect 的宽高。列管理复用任务详情全窗模态输入边界；改变可见子树后同时维护 owner、取消范围、Tab范围和焦点恢复。侧栏 PortalList 只在列/选择/写入状态改变时更新样式，避免每次绘制重绘自身。
+
+## 2026-10-28 — Contacts 与多看板导航约束
+
+- 私聊使用 Contacts 的 RoomScreen，PageFlip 隐藏前必须 hide_displayed_room 释放 TimelineUiState；恢复旧 Dock 私聊时先归还原 timeline，再让联系人面板接管。新建私聊与既有私聊的两条完成分支均应跳 Contacts；邀请也需在 Contacts 可接受，接受后 SDK 的 direct 映射可能稍后才同步，应保留待导航而非立刻丢弃。
+- Makepad DropDown/PortalList/Icon 不要假设 set_visible 可隐藏，用 View 包装。输入框 disabled 样式每个事件重新应用会干扰选择与粘贴，只在状态改变时设置。Board 绘制缓存必须包含 read_only，否则任务快照不变的归档/恢复无法刷新列头写入按钮。
+- Server project-board-v5: 旧 boards.project_id 保持 scope，owner_project_id 才是真实父项目；新板按 /projects/{parent}/boards/{scope}/… 路由，授权始终核对父项目和 scope 归属。归档只读标记须随 changes 返回，不依赖序号变化。新建看板幂等键必须 UUID，不能使用会在进程重启归零的 nonce。
+- Access 与归档依赖实际策略管理权限；邀请、m.space.child 建房间和所选房间管理权限彼此独立。普通成员可能有邀请权限；Agent 归属只能使用已验证服务数据。
+
+## 2026-10-29 紧凑界面与协作验收
+
+- 看板 query 在后台轮询期间改变必须排队重读，不能让 loading guard 静默吞掉 My tasks；新查询回来前不接受旧视图响应。归档只读需要同时约束内层看板写入口和外层新增看板入口。
+- 项目切换需先清空旧 Overview、board catalog/selection 和成员权限，再绑定新项目；不得短暂复用旧统计或 scope。
+- Project Rooms 导航发现允许当前Space成员看见已邀请且child链接正确的私有房间；该发现权限不等于Room已加入，不得复用为Agent执行授权。Space邀请属于Projects、DM邀请属于Contacts。
+- Room settings 每字段新鲜Matrix权限/成员复核，未知保存保留原意图；原值比较可拒绝已观察到的并发编辑，但Matrix状态写没有原子CAS。房间topic/name/powerlevel更新要刷新信息侧栏，不只成员变化。项目成员邀请必须走OpenProject/show_project，不复用含RoomID兜底的普通房间标题。
+
+- 当前嵌入式Palpo独立标签路由与SDK标准user/rooms/tags路由不匹配（404）；收藏通过标准房间account_data/m.tag新鲜读取后写入，并显式更新RoomsList Tags，不能只依赖SDK同步后看到星标。保留其他tag/扩展字段，读失败不覆盖，未知结果明确重试提示。该协议为整份账户数据写入，无法承诺跨设备标签原子合并。
+
+- 2026-10-29：Project Overview/项目菜单不再暴露Open Space；矩阵Space分组留在Group Chats。Group Chats导航要补SDK joined_rooms中的Space，因为普通RoomsList队列主动跳过Space；只用同步的SpaceChild边排列已可访问的非项目/非私聊房间，不能把链接当加入授权。搜索保留祖先和匹配分组的孩子，循环限定深度，未读汇总对RoomID去重。
+- 侧栏透明View可能没有有效area。悬停菜单命中必须使用实际绘制的行背景（或显式透明背景面积），并预留32px槽位避免布局跳动；折叠侧栏时槽位也隐藏。只更改more按钮visible而不正确计算行rect，原生鼠标移入仍不会显示。
+
+- Makepad隐藏子按钮的set_visible只重绘自身，旧Area可能Empty，首次显示应重绘父View。父draw_list重建期间旧Area可能失效，不能在draw开始再次用上一帧Area覆盖事件计算的hover状态；在事件中计算命中，PortalList保存语义Row标识供draw应用，滚动时清除，避免复用item导致菜单串行。对应真实MouseMove回归见rooms_sidebar::layout_tests::overflow_follows_pointer_between_navigation_rows。
+
+- UnreadBadge的青色无数字圆点表示is_marked_unread=true且实际消息/提及计数为0，不能为此伪造1；actual messages>0时即使marked仍显示真实数字。ReadReceiptState只在用户实际交互聊天区域并读到消息后提交回执，侧栏选中不等于已读。原生重启后应等待同步完成再判断计数恢复，不能把初始空列表/徽标误报丢数据。共享badge真实绘制测试见shared::unread_badge::tests；RinxLabel空文本内部可能为空格，断言空状态应trim。
+- **Historical timeline sends, 2026-10-29:** An SDK Event-focused window can
+  accept a send without displaying its local echo. After SDK queue acceptance,
+  forward MessageQueued as an operation across window replacements, request the
+  live window, and rearm tail for echoes arriving later. Queue acceptance is not
+  a delivery receipt. Keep jump navigation in its own timeline gutter and clamp
+  message hover actions to the timeline viewport, above the composer.
+
+- 2026-10-29：房间“管理我的Agent服务”是Members添加的同一Agent的所有者运行入口，不是另一种Agent；同一所有者可绑定多个公开Agent到一个Room，唯一约束是(agent_id,room_id)。个人审批目录放在我的Agents/设置，使用project=None；禁止把Room ID当Project筛选。真实项目审批卡可携带实际Project ID。目录列出已加入且验证归属的私密审批会话，不代表待审批数量。
+
+- 2026-10-29（覆盖先前跳转按钮右侧gutter方案）：历史导航改底部居中浮条，仅离开最新位置显示。PortalList最终at_end在draw结束才可靠，显隐变化要重绘timeline父节点；晚到未读计数只更新badge，不能重开浮条。SDK Event聚焦窗口也可能已含最新消息，以BaseRoom最新event_id与末条事件核对，并保持线程边界独立，不能把!is_live等同于较早消息。前向分页可能重复边界事件，勿用额外探查循环或正文/时间戳猜测是否到最新。
+
+- 2026-10-29：历史浮条必须沿用RINX_CONTROL_RADIUS小圆角，不放大成胶囊。Fit+Right-wrap中的Label align可能只对齐外框，实际字形仍贴顶；将Fit文字放进与按钮同高的固定高度Down容器并设置align.y=0.5。验证字形应读取布局调整后的draw_text.draw_vars.area，text_layout_rect是调整前局部坐标，不能直接与全局按钮位置比较。
+
+- 2026-10-29：管理我的Agent服务面板的Add an Agent应是真正打开原成员添加流程的动作；空状态隐藏已有服务选择/管理，有服务时仍保留继续添加。Makepad DropDown的Widget.set_visible默认不生效，需使用父View控制显示，不能只根据调用setter判断成功。
+
+## 2026-10-29 — 动态资源归档图标
+
+- Makepad 的 script_apply_eval! 动态作用域不能调用 crate_resource。项目归档图标改为在 script_mod! 中注册 ICON_PROJECT_ARCHIVE，运行时引用 mod.widgets 的已注册资源；新增 false→true→false 实际求值无错误回归。此前客户端日志中的变量缺失是实际缺陷，不能仅以编译通过替代运行时验证。

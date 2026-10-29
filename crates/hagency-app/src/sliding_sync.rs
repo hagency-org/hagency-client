@@ -39,6 +39,7 @@ use std::io;
 #[cfg(test)]
 #[path = "sliding_sync/history_tests.rs"]
 mod history_tests;
+mod room_tags;
 use hashbrown::{HashMap, HashSet};
 use crate::{
     app::AppStateAction, app_data_dir, cache_dir, avatar_cache::AvatarUpdate, event_preview::{BeforeText, TextPreview, text_preview_of_raw_timeline_event, text_preview_of_timeline_item}, home::{
@@ -1795,15 +1796,13 @@ async fn matrix_worker_task(
             }
 
             MatrixRequest::SetIsFavorite { room_id, is_favorite } => {
-                let Some(main_timeline) = get_room_timeline(&room_id).await else {
-                    log!("BUG: skipping set favorite flag request for not-yet-known room {room_id}");
-                    continue;
-                };
-                let _set_favorite_task = crate::account_session::spawn(async move {
-                    let result = main_timeline.room().set_is_favourite(is_favorite, None).await;
+                let Some(client)=get_client() else {continue;};
+                crate::account_session::spawn(async move {
+                    let result=tokio::time::timeout(Duration::from_secs(20),room_tags::set_favorite(&client,&room_id,is_favorite)).await;
+                    if !crate::matrix_context::is_current(&client) {return;}
                     match result {
-                        Ok(_) => log!("Set favorite to {} for room {}", is_favorite, room_id),
-                        Err(e) => error!("Failed to set favorite to {} for room {}: {:?}", is_favorite, room_id, e),
+                        Ok(Ok(tags))=>enqueue_rooms_list_update(RoomsListUpdate::Tags {room_id,new_tags:tags}),
+                        _=>enqueue_popup_notification(crate::i18n::tr("Could not confirm the favorite change. Retry to apply it.").to_owned(),PopupKind::Error,None),
                     }
                 });
             }
@@ -1832,7 +1831,7 @@ async fn matrix_worker_task(
                     };
                     // A late result from a previous account must not show up in
                     // the newly selected account's UI.
-                    if current_user_id().as_deref() != client.user_id() { return; }
+                    if !crate::matrix_context::is_current(&client) { return; }
                     match result {
                         Ok(()) => {
                             enqueue_rooms_list_update(RoomsListUpdate::UpdateNotificationMode {room_id, mode});
@@ -2505,7 +2504,10 @@ async fn matrix_worker_task(
                         message.clone().into()
                     };
                     match timeline.send_with_extra_content(content, routing).await {
-                        Ok(_send_handle) => log!("Sent {r_or_m} to {timeline_kind}."),
+                        Ok(_send_handle) => {
+                            let _ = sender.send(TimelineUpdate::MessageQueued);
+                            log!("Queued {r_or_m} to {timeline_kind}.");
+                        }
                         Err(_e) => {
                             error!("Failed to send {r_or_m} to {timeline_kind}: {_e:?}");
                             enqueue_popup_notification(format!("Failed to send {r_or_m}: {_e}"), PopupKind::Error, None);
@@ -2665,6 +2667,8 @@ async fn matrix_worker_task(
                             SignalToUI::set_ui_signal();
                             return false;
                         }
+                        let _ = sender_clone.send(TimelineUpdate::MessageQueued);
+                        SignalToUI::set_ui_signal();
                         true
                     };
                     match Abortable::new(queue_future, abort_registration).await {

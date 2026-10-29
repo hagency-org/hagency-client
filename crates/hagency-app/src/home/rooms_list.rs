@@ -1738,7 +1738,6 @@ impl Widget for RoomsList {
                     notification_mode: jr.notification_mode,
                     room_name_id: jr.room_name_id.clone(),
                     is_favorite: jr.tags.contains_key(&TagName::Favorite),
-                    is_low_priority: jr.tags.contains_key(&TagName::LowPriority),
                     has_unreads: jr.is_marked_unread
                         || jr.num_unread_mentions > 0
                         || jr.num_unread_messages > 0,
@@ -2187,7 +2186,7 @@ impl RoomsListRef {
         let mut rooms:Vec<_> = ordered.into_iter().filter_map(|id| {
             let info = inner.all_joined_rooms.get(id)?;
             let room = client.get_room(id)?;
-            if room.state() != matrix_sdk::RoomState::Joined || room.is_space()
+            if room.state() != matrix_sdk::RoomState::Joined
                 || info.is_tombstoned || crate::moments::is_moments(&room)
                 || super::chat_actions::is_hidden(id) { return None; }
             Some(super::project_tree::TreeRoom {
@@ -2196,14 +2195,20 @@ impl RoomsListRef {
                 marked: info.is_marked_unread,
                 invited: false,
                 is_direct: info.is_direct,
+                is_space:room.is_space(),
                 is_favorite: info.tags.contains_key(&TagName::Favorite),
             })
         }).collect();
         rooms.extend(inner.invited_rooms.borrow().values().filter_map(|info| {
             let room=client.get_room(info.room_name_id.room_id())?;
             if room.state()!=matrix_sdk::RoomState::Invited || crate::moments::is_moments(&room) || super::chat_actions::is_hidden(room.room_id()) {return None;}
-            Some(super::project_tree::TreeRoom{name:info.room_name_id.clone(),unread:0,marked:false,invited:true,is_direct:info.is_direct,is_favorite:false})
+            Some(super::project_tree::TreeRoom{name:info.room_name_id.clone(),unread:0,marked:true,invited:true,is_direct:info.is_direct,is_space:info.is_space,is_favorite:false})
         }));
+        for room in client.joined_rooms().into_iter().filter(|r|r.is_space()) {
+            if rooms.iter().any(|r|r.name.room_id()==room.room_id()) {continue;}
+            let name=room.name().map(matrix_sdk::RoomDisplayName::Named).unwrap_or(matrix_sdk::RoomDisplayName::Empty);
+            rooms.push(super::project_tree::TreeRoom {name:RoomNameId::new(name,room.room_id().to_owned()),unread:0,marked:false,invited:false,is_direct:false,is_space:true,is_favorite:false});
+        }
         rooms
     }
 
@@ -2215,7 +2220,6 @@ impl RoomsListRef {
             notification_mode: room.notification_mode,
             room_name_id: room.room_name_id.clone(),
             is_favorite: room.tags.contains_key(&TagName::Favorite),
-            is_low_priority: room.tags.contains_key(&TagName::LowPriority),
             has_unreads: room.is_marked_unread || room.num_unread_mentions > 0 || room.num_unread_messages > 0,
         })
     }
@@ -2252,7 +2256,9 @@ impl RoomsListRef {
 
     /// Whether a loaded joined room is marked as a direct conversation.
     pub fn is_direct_room(&self, room_id: &OwnedRoomId) -> Option<bool> {
-        self.borrow()?.all_joined_rooms.get(room_id).map(|room| room.is_direct)
+        let inner=self.borrow()?;
+        inner.all_joined_rooms.get(room_id).map(|room| room.is_direct)
+            .or_else(||inner.invited_rooms.borrow().get(room_id).map(|room|room.is_direct))
     }
 
     /// Returns the avatar for the given room, if it is known and fetched.

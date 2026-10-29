@@ -1702,9 +1702,6 @@ impl Widget for RoomScreen {
                 &portal_list,
                 actions,
             );
-            if self.tl_state.as_ref().is_some_and(|tl| !tl.is_live) {
-                self.jump_to_bottom_button(cx, ids!(jump_to_bottom_button)).update_visibility(cx, false);
-            }
             if let Some(tl) = self.tl_state.as_mut() {
                 if !tl.is_live {
                     if clicked_bottom {
@@ -1718,6 +1715,7 @@ impl Widget for RoomScreen {
                     }
                 }
             }
+            self.sync_jump_to_latest_visibility(cx, &portal_list);
         }
 
         // Currently, a Signal event is only used to tell this widget:
@@ -1748,6 +1746,7 @@ impl Widget for RoomScreen {
             }
 
             self.process_timeline_updates(cx, &portal_list);
+            self.sync_jump_to_latest_visibility(cx, &portal_list);
 
             // Ideally we would do this elsewhere on the main thread, because it's not room-specific,
             // but it doesn't hurt to do it here.
@@ -2209,11 +2208,35 @@ impl Widget for RoomScreen {
             }
         }
 
+        // PortalList resolves its final at_end state during drawing. Synchronize
+        // afterwards too, so reaching the bottom needs no further mouse event.
+        let list = self.view.portal_list(cx, ids!(timeline.list));
+        self.sync_jump_to_latest_visibility(cx, &list);
         DrawStep::done()
     }
 }
 
 impl RoomScreen {
+    fn sync_jump_to_latest_visibility(&self, cx: &mut Cx, list: &PortalListRef) {
+        let at_latest = self.tl_state.as_ref().is_none_or(|tl| {
+            // Back pagination can rebase even a short, complete room into an
+            // Event-focused window. Its focus mode alone cannot mean "older".
+            let latest = crate::sliding_sync::get_client()
+                .and_then(|client| client.get_room(tl.kind.room_id()))
+                .filter(|_| tl.kind.thread_root_event_id().is_none())
+                .and_then(|room| (*room).latest_event().event_id());
+            let contains_latest = match latest {
+                Some(latest) => tl.items.iter().rev().find_map(|item| item.as_event()?.event_id()) == Some(&latest),
+                None => tl.forwards_paginated,
+            };
+            tl.items.is_empty() || (list.is_at_end() && (tl.is_live || contains_latest))
+        });
+        if self.jump_to_bottom_button(cx, ids!(jump_to_bottom_button)).update_visibility(cx, at_latest) {
+            // A hidden overlay may have no old area; redraw its parent to both
+            // reveal it and remove the last visible frame when returning live.
+            self.view.widget(cx, ids!(timeline)).redraw(cx);
+        }
+    }
     fn room_id(&self) -> Option<&OwnedRoomId> {
         self.room_name_id.as_ref().map(|r| r.room_id())
     }
@@ -2357,15 +2380,16 @@ impl RoomScreen {
                     done_loading = true;
                 }
                 TimelineUpdate::NewItems { new_items, changed_indices, is_append, clear_cache } => {
-                    // Membership events arrive after the initial information panel fetch.
+                    // Membership and room metadata can change after the information panel fetch.
                     // Refresh only for newly observed changes, retaining invitation state.
-                    let membership_changed = new_items.iter().any(|item| {
+                    let information_changed = new_items.iter().any(|item| {
                         item.as_event().is_some_and(|event| {
-                            matches!(event.content(), TimelineItemContent::MembershipChange(_) | TimelineItemContent::ProfileChange(_))
+                            (matches!(event.content(), TimelineItemContent::MembershipChange(_) | TimelineItemContent::ProfileChange(_))
+                                || matches!(event.content(),TimelineItemContent::OtherState(state) if matches!(state.content(),timeline::AnyOtherStateEventContentChange::RoomName(_) | timeline::AnyOtherStateEventContentChange::RoomTopic(_) | timeline::AnyOtherStateEventContentChange::RoomPowerLevels(_))))
                                 && !tl.items.iter().any(|old| old.as_event().is_some_and(|prior| prior.event_id() == event.event_id()))
                         })
                     });
-                    if membership_changed {
+                    if information_changed {
                         // The composer keeps its own member snapshot. Refresh it
                         // along with the information sidebar when people join,
                         // leave or change their profile in this open Room.
@@ -2374,7 +2398,7 @@ impl RoomScreen {
                             memberships: matrix_sdk::RoomMemberships::JOIN,
                             local_only: true,
                         });
-                        cx.action(crate::home::mobile_chat_info::ChatMembershipChanged {
+                        cx.action(crate::home::mobile_chat_info::ChatInformationChanged {
                             room_id: tl.kind.room_id().to_owned(),
                             epoch: crate::account_session::epoch(),
                         });
@@ -2847,6 +2871,19 @@ impl RoomScreen {
                     self.view.room_input_bar(cx, ids!(room_input_bar))
                         .hide_upload_progress(cx, upload_id);
                 }
+                TimelineUpdate::MessageQueued => {
+                    // A historical window cannot display the new local echo. Return
+                    // to live only after the SDK has accepted the outgoing message.
+                    if !tl.is_live {
+                        submit_async_request(MatrixRequest::FocusTimeline {
+                            timeline_kind: tl.kind.clone(), target: None,
+                        });
+                    }
+                    portal_list.set_first_id_and_scroll(tl.items.len().saturating_sub(1), 0.0);
+                    portal_list.set_tail_range(true);
+                    jump_to_bottom_button.update_visibility(cx, true);
+                    items_changed = true;
+                }
                 TimelineUpdate::AttachmentDownloadFinished(mxc, result) => {
                     if let Some(entry) = tl.pending_downloads.iter_mut().find(|p| p.mxc == mxc) {
                         entry.state = match result {
@@ -3166,12 +3203,28 @@ impl RoomScreen {
         // equals chat_center's — which, unlike the wrapper's, is valid even
         // before the bar's first visible frame.
         let wrapper_rect = self.view.view(cx, ids!(chat_center)).area().rect(cx);
+        let timeline_rect = self.view.portal_list(cx, ids!(timeline.list)).area().rect(cx);
         let mut inner = self.view.view(cx, ids!(message_action_bar.bar_inner));
-        // The bar is 92x32 (fixed in the DSL); place its right edge 8px inside
-        // the message's right edge and its top 2px below the message's top.
+        let top = (rect.pos.y + 2.0)
+            .clamp(timeline_rect.pos.y, (timeline_rect.pos.y + timeline_rect.size.y - 32.0).max(timeline_rect.pos.y));
+        let mut right = rect.pos.x + rect.size.x - 8.0;
+        // A short condensed row can put receipts/status alongside the toolbar.
+        // Leave their actual drawn area clear, including multi-avatar receipts.
+        let list = self.view.portal_list(cx, ids!(timeline.list));
+        for index in details.item_id.saturating_sub(1)..=details.item_id {
+            if let Some((_, item)) = list.get_item(index) {
+                for path in [ids!(avatar_row), ids!(send_status_indicator)] {
+                    let status = item.widget(cx, path).area().rect(cx);
+                    if status.size.x > 0.0 && status.size.y > 0.0
+                        && top < status.pos.y + status.size.y && top + 32.0 > status.pos.y {
+                        right = right.min(status.pos.x - 8.0);
+                    }
+                }
+            }
+        }
         let margin = Inset {
-            top: (rect.pos.y - wrapper_rect.pos.y + 2.0).max(0.0),
-            left: (rect.pos.x + rect.size.x - wrapper_rect.pos.x - 92.0 - 8.0).max(0.0),
+            top: top - wrapper_rect.pos.y,
+            left: (right - wrapper_rect.pos.x - 92.0).max(0.0),
             right: 0.0,
             bottom: 0.0,
         };
@@ -4707,6 +4760,8 @@ pub enum RoomScreenTooltipActions {
 /// A message that is sent from a background async task to a room's timeline view
 /// for the purpose of update the Timeline UI contents or metadata.
 pub enum TimelineUpdate {
+    /// The SDK accepted a message into the send queue; this is not a delivery receipt.
+    MessageQueued,
     /// The backend installed a new browsing window. Old channel results stay isolated.
     FocusChanged { is_live: bool },
     WindowAnchor { target: OwnedEventId, index: usize },
@@ -8461,8 +8516,24 @@ mod hover_action_bar_tests {
             list.begin_always(&mut cx2d);
             overlay.begin(&mut cx2d);
             cx2d.begin_root_turtle(dvec2(1280.0, 900.0), Layout::flow_overlay());
-            screen.view.draw_walk_all(&mut cx2d, &mut Scope::with_data(&mut crate::app::AppState::default()),
-                Walk {width: Size::Fixed(1280.0), height: Size::Fixed(760.0), ..Walk::default()});
+            let mut app_state = crate::app::AppState::default();
+            let mut scope = Scope::with_data(&mut app_state);
+            let walk = Walk {width: Size::Fixed(1280.0), height: Size::Fixed(760.0), ..Walk::default()};
+            while let Some(subview) = screen.view.draw_walk(&mut cx2d, &mut scope, walk).step() {
+                let list_ref = subview.as_portal_list();
+                let mut list = list_ref.borrow_mut().unwrap();
+                list.set_item_range(&mut cx2d, 0, 1);
+                while let Some(index) = list.next_visible_item(&mut cx2d) {
+                    let item = list.item(&mut cx2d, index, id!(CondensedMessage));
+                    item.html_or_plaintext(&cx2d, ids!(message)).show_plaintext(&mut cx2d, "A short message");
+                    let receipts = indexmap::IndexMap::from_iter([
+                        (matrix_sdk::ruma::user_id!("@reader:server").to_owned(), serde_json::from_value(serde_json::json!({})).unwrap()),
+                    ]);
+                    item.avatar_row(&cx2d, ids!(avatar_row)).set_avatar_row(&mut cx2d,
+                        &TimelineKind::MainRoom { room_id: matrix_sdk::ruma::room_id!("!hover:server").to_owned() }, &receipts);
+                    item.draw_all(&mut cx2d, &mut scope);
+                }
+            }
             overlay.end(&mut cx2d);
             cx2d.end_pass_sized_turtle();
             list.end(&mut cx2d);
@@ -8565,6 +8636,51 @@ mod hover_action_bar_tests {
     }
 
     #[test]
+    fn hover_toolbar_leaves_short_message_receipts_uncovered() {
+        let (mut cx, mut screen) = screen();
+        draw_screen(&mut cx, &mut screen);
+        let (_, item) = screen.view.portal_list(&cx, ids!(timeline.list)).get_item(0).unwrap();
+        let message = item.area().rect(&cx);
+        let receipt = item.widget(&cx, ids!(avatar_row)).area().rect(&cx);
+        assert!(receipt.size.x > 0.0 && receipt.size.y > 0.0);
+        screen.show_message_action_bar(&mut cx, &message_details(screen.widget_uid()), message);
+        draw_screen(&mut cx, &mut screen);
+        let bar = screen.view.view(&cx, ids!(message_action_bar.bar_inner)).area().rect(&cx);
+        assert!(bar.pos.x + bar.size.x <= receipt.pos.x - 7.5,
+            "toolbar must leave receipts visible on short rows: {bar:?}, {receipt:?}");
+    }
+
+    #[test]
+    fn history_bar_is_centered_without_a_gutter_or_overlap_with_actions_and_composer() {
+        let (mut cx, mut screen) = screen();
+        screen.room_name_id = Some(RoomNameId::empty(matrix_sdk::ruma::room_id!("!hover:server").to_owned()));
+        screen.jump_to_bottom_button(&cx, ids!(jump_to_bottom_button)).update_visibility(&mut cx, false);
+        draw_screen(&mut cx, &mut screen);
+        let timeline = screen.view.portal_list(&cx, ids!(timeline.list)).area().rect(&cx);
+        let item = screen.view.portal_list(&cx, ids!(timeline.list)).item(&mut cx, 0, id!(CondensedMessage));
+        let message_width = item.area().rect(&cx).size.x;
+        let message_rect = Rect {
+            pos: timeline.pos + dvec2(0.0, timeline.size.y - 15.0),
+            size: dvec2(message_width, 40.0),
+        };
+        screen.show_message_action_bar(&mut cx, &message_details(screen.widget_uid()), message_rect);
+        draw_screen(&mut cx, &mut screen);
+        let bar = screen.view.view(&cx, ids!(message_action_bar.bar_inner)).area().rect(&cx);
+        let jump = screen.view.button(&cx, ids!(jump_to_bottom_button.inner_button)).area().rect(&cx);
+        let history = screen.view.view(&cx, ids!(jump_to_bottom_button.bar)).area().rect(&cx);
+        let composer = screen.view.widget(&cx, ids!(room_input_bar)).area().rect(&cx);
+        assert!(jump.size.x > 0.0 && bar.size.x > 0.0);
+        assert!((message_width - timeline.size.x).abs() < 0.5, "message rows must reclaim the old right gutter");
+        assert!((history.pos.x + history.size.x * 0.5 - timeline.pos.x - timeline.size.x * 0.5).abs() < 0.5,
+            "history bar must be centered in the timeline: {history:?}");
+        assert!(history.pos.x + history.size.x < bar.pos.x,
+            "message actions must not overlap the history bar: {bar:?}, {history:?}");
+        assert!(bar.pos.y + bar.size.y <= timeline.pos.y + timeline.size.y + 0.5,
+            "a partially clipped message must not put actions over the composer: {bar:?}");
+        assert!(jump.pos.y + jump.size.y <= composer.pos.y);
+    }
+
+    #[test]
     fn action_bar_buttons_reuse_the_context_menu_action_chain() {
         let (mut cx, mut screen) = screen();
         screen.room_name_id = Some(RoomNameId::empty(matrix_sdk::ruma::room_id!("!hover:server").to_owned()));
@@ -8638,6 +8754,36 @@ mod skeleton_tests {
         (cx, screen)
     }
 
+    #[test]
+    fn queued_message_rearms_tail_in_live_and_historical_windows() {
+        for is_live in [true, false] {
+            let (mut cx, mut screen) = screen();
+            let mut state = empty_tl_state(matrix_sdk::ruma::room_id!("!queued:server").to_owned());
+            let (sender, receiver) = crate::timeline_updates::channel();
+            state.update_receiver = receiver;
+            screen.tl_state = Some(state);
+            screen.tl_state.as_mut().unwrap().is_live = is_live;
+            let list = screen.view.portal_list(&cx, ids!(timeline.list));
+            list.borrow_mut().unwrap().set_item_range(&mut cx, 0, 100);
+            list.set_tail_range(false);
+            list.set_first_id_and_scroll(20, -12.0);
+            screen.jump_to_bottom_button(&cx, ids!(jump_to_bottom_button)).update_visibility(&mut cx, false);
+            sender.send(TimelineUpdate::MessageQueued).unwrap();
+            screen.process_timeline_updates(&mut cx, &list);
+            assert!(!screen.view.view(&cx, ids!(jump_to_bottom_button)).visible());
+            // Local echo may arrive after the queued outcome. Its next range
+            // must still follow the latest item, even while a focus build runs.
+            list.borrow_mut().unwrap().set_item_range(&mut cx, 0, 101);
+            assert_eq!(list.first_id(), 100);
+            if !is_live {
+                sender.send(TimelineUpdate::FocusChanged { is_live: true }).unwrap();
+                sender.send(TimelineUpdate::FirstUpdate { initial_items: Vector::new() }).unwrap();
+                screen.process_timeline_updates(&mut cx, &list);
+                assert!(screen.tl_state.as_ref().unwrap().is_live);
+            }
+        }
+    }
+
     /// A minimal timeline state as it looks right after a room was opened
     /// (`is_paginating` starts false; the initial pagination sets it).
     fn empty_tl_state(room_id: OwnedRoomId) -> TimelineUiState {
@@ -8682,6 +8828,36 @@ mod skeleton_tests {
             #[cfg(feature = "agent_chat")]
             agent_chat_expiry_deadline_millis: None,
         }
+    }
+
+    #[test]
+    fn contacts_handoff_releases_the_original_timeline_from_a_legacy_saved_dm_tab() {
+        let mut cx=Cx::new(Box::new(|_,_|{}));
+        let desktop=cx.with_vm(|vm| {
+            makepad_widgets::script_mod(vm);crate::app::register_widgets(vm);
+            let value=script_eval!(vm,{mod.widgets.MainDesktopUI {}});
+            WidgetRef::script_from_value(vm,value)
+        });
+        let name=RoomNameId::empty(matrix_sdk::ruma::room_id!("!legacy-contact:s").to_owned());
+        let kind=TimelineKind::MainRoom {room_id:name.room_id().clone()};
+        let selected=crate::app::SelectedRoom::JoinedRoom {room_name_id:name.clone()};
+        let dock=desktop.dock(&cx,ids!(dock));
+        let (bar,after)=dock.find_tab_bar_of_tab(id!(home_tab)).unwrap();
+        let tab=dock.create_and_select_tab(&mut cx,bar,selected.tab_id(),id!(room_screen),"Legacy DM".into(),id!(CloseableTab),Some(after)).unwrap();
+        let original=tab.widget_uid();
+        {
+            let mut room=tab.borrow_mut::<RoomScreen>().unwrap();
+            room.timeline_kind=Some(kind.clone());room.room_name_id=Some(name.clone());
+            room.tl_state=Some(empty_tl_state(name.room_id().clone()));
+        }
+        timeline_state_store::mark_taken(&mut cx,&kind,original);
+        assert!(matches!(timeline_state_store::take(&mut cx,&kind,desktop.widget_uid()),timeline_state_store::TakeResult::AlreadyTaken {..}));
+        crate::home::main_desktop_ui::release_legacy_direct_timeline(&mut cx,&name);
+        assert!(tab.borrow::<RoomScreen>().unwrap().tl_state.is_none());
+        assert!(tab.borrow::<RoomScreen>().unwrap().timeline_kind.is_none());
+        let timeline_state_store::TakeResult::Taken(state)=timeline_state_store::take(&mut cx,&kind,desktop.widget_uid()) else {panic!("Contacts must take the same original timeline after handoff")};
+        assert_eq!(state.kind,kind);
+        timeline_state_store::put_back(desktop.widget_uid(),state);
     }
 
     #[test]

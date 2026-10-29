@@ -25,6 +25,7 @@ script_mod! {
 
     mod.widgets.ProjectTree = #(ProjectTree::register_widget(vm)) {
         width: Fill height: Fill flow: Down
+        archived_projects := RinxCheckBox {text: #(crate::i18n::tr("Archived projects")) i18n_text: "Archived projects" margin: 8}
         status := RinxLabel {
             width: Fill height: Fit padding: 18
             flow: Flow.Right{wrap: true}
@@ -54,13 +55,15 @@ script_mod! {
                     align: Align{y: 0.5} padding: Inset{left: 4 right: 6}
                     draw_bg +: {color_hover: mod.widgets.RINX_HOVER color_active: #0000 border_radius: 5}
                     indent := View {width: 0 height: 1}
+                    board_icon := View {visible: false width: 16 height: 16 Icon {icon_walk: Walk{width: 16 height: 16} draw_icon +: {svg: ICON_SQUARES color: mod.widgets.RINX_ACCENT}}}
+                    room_icon := View {visible: false width: 16 height: 16 Icon {icon_walk: Walk{width: 16 height: 16} draw_icon +: {svg: ICON_THREADS color: mod.widgets.RINX_MUTED}}}
                     name := RinxLabel {
                         width: Fill max_lines: 1 text_overflow: Ellipsis
                         draw_text +: {color: mod.widgets.RINX_INK text_style: theme.font_regular {font_size: mod.widgets.RINX_UI_SIZE}}
                     }
                     unread := UnreadBadge {}
                 }
-                more := RinxMoreButton {}
+                View {width:32 height:32 more := RinxMoreButton {visible:false}}
                 }
 
             }
@@ -71,13 +74,14 @@ script_mod! {
 pub enum ProjectTreeMode {
     #[default]
     Projects,
-    Chats,
+    GroupChats,
 }
 
 /// A refresh error is a non-blocking notice alongside the retained list.
 fn tree_notice(mode: ProjectTreeMode, error: Option<&str>, loading: bool, empty: bool, query: bool) -> (&'static str, bool) {
-    if mode == ProjectTreeMode::Chats {
-        return (if !empty {""} else if query {"No matching chats"} else {"No chats yet. Use the Chats menu to start a conversation."}, empty);
+    if mode == ProjectTreeMode::GroupChats {
+        if error.is_some() || loading {return ("Loading group chat classification…",true);}
+        return (if !empty {""} else if query {"No matching group chats"} else {"No group chats yet. Use the Group Chats menu to create a group."}, empty);
     }
     if let Some(error) = error {
         return (if error == "owner_authorization_required" {"Sign in again to restore Projects for this account"} else {"Hagency Projects could not be loaded. Retrying…"}, true);
@@ -92,6 +96,8 @@ pub struct TreeProject {
     pub space: OwnedRoomId,
     pub name: String,
     pub rooms: Vec<OwnedRoomId>,
+    pub boards: Vec<(String,String)>,
+    pub archived: bool,
 }
 #[derive(Clone, Debug)]
 pub struct ProjectTreeSnapshot {
@@ -100,6 +106,7 @@ pub struct ProjectTreeSnapshot {
     pub revision: u64,
     pub service_identity: String,
     pub projects: Vec<TreeProject>,
+    pub spaces:HashMap<OwnedRoomId,Vec<OwnedRoomId>>,
 }
 #[derive(Clone, Debug)]
 pub(crate) struct TreeRoom {
@@ -108,6 +115,7 @@ pub(crate) struct TreeRoom {
     pub marked: bool,
     pub invited: bool,
     pub is_direct: bool,
+    pub is_space:bool,
     pub is_favorite: bool,
 }
 fn active_records<'a>(
@@ -124,11 +132,13 @@ fn active_records<'a>(
 #[derive(Clone, Debug, PartialEq)]
 enum Row {
     Project(String),
+    Board {project: String, board: String},
     Other,
     Direct,
     Invitations,
     Invite(OwnedRoomId),
     Room(OwnedRoomId),
+    Space(OwnedRoomId),
 }
 fn tree_rows(
     projects: &[TreeProject],
@@ -138,16 +148,17 @@ fn tree_rows(
 ) -> Vec<Row> {
     let joined: HashMap<_, _> = rooms
         .iter()
-        .filter(|room| !room.invited)
+        .filter(|room| !room.is_space)
         .map(|room| (room.name.room_id(), room))
         .collect();
     let mut projects: Vec<_> = projects.iter().collect();
     projects.sort_by_key(|p| (p.name.to_lowercase(), p.id.clone()));
     let mut assigned = HashSet::new();
     let mut result = Vec::new();
+    let project_room_ids:HashSet<_>=projects.iter().flat_map(|p|p.rooms.iter()).collect();
     let mut invites: Vec<_> = rooms
         .iter()
-        .filter(|room| room.invited && room.name.display().to_lowercase().contains(query))
+        .filter(|room| room.invited && !project_room_ids.contains(room.name.room_id()) && room.name.display().to_lowercase().contains(query))
         .collect();
     invites.sort_by_key(|room| {
         (
@@ -185,7 +196,8 @@ fn tree_rows(
         if expanded.contains(&project.id) || !query.is_empty() {
             let mut visible = visible;
             visible.sort_by_key(|id| (joined[*id].name.display().to_lowercase(), (*id).clone()));
-            result.extend(visible.into_iter().map(|id| Row::Room(id.clone())));
+            result.extend(project.boards.iter().map(|(board,_)|Row::Board {project:project.id.clone(),board:board.clone()}));
+            result.extend(visible.into_iter().map(|id| if joined[id].invited {Row::Invite(id.clone())}else{Row::Room(id.clone())}));
         }
     }
     let direct: Vec<_> = rooms
@@ -229,15 +241,67 @@ fn workspace_rows(
     expanded: &HashSet<String>,
     query: &str,
 ) -> Vec<Row> {
-    if mode == ProjectTreeMode::Chats {
-        return tree_rows(&[], rooms, expanded, query);
+    if mode == ProjectTreeMode::GroupChats {
+        let assigned:HashSet<_>=projects.iter().flat_map(|p|p.rooms.iter()).collect();
+        return rooms.iter().filter(|r|!r.is_direct && !r.is_space && !assigned.contains(r.name.room_id()) && r.name.display().to_lowercase().contains(query))
+            .map(|r|if r.invited {Row::Invite(r.name.room_id().clone())} else {Row::Room(r.name.room_id().clone())}).collect();
     }
     let assigned: HashSet<_> = projects.iter().flat_map(|p| p.rooms.iter()).collect();
     tree_rows(projects, rooms, expanded, "")
         .into_iter()
-        .filter(|row| matches!(row, Row::Project(_)) || matches!(row, Row::Room(id) if assigned.contains(id) && rooms.iter().any(|r| r.name.room_id() == id && !r.is_direct)))
+        .filter(|row| matches!(row,Row::Project(_)|Row::Board {..})
+            || matches!(row,Row::Invitations) && rooms.iter().any(|r|r.invited && r.is_space)
+            || matches!(row,Row::Invite(id) if rooms.iter().any(|r|r.name.room_id()==id && !r.is_direct && (r.is_space || assigned.contains(id))))
+            || matches!(row,Row::Room(id) if assigned.contains(id) && rooms.iter().any(|r|r.name.room_id()==id && !r.is_direct)))
         .collect()
 }
+
+/// The Group Chats graph contains only non-project, non-direct accessible rooms.
+/// Space links organize navigation and never grant access to an unjoined room.
+fn group_rows(projects:&[TreeProject],rooms:&[TreeRoom],spaces:&HashMap<OwnedRoomId,Vec<OwnedRoomId>>,expanded:&HashSet<String>,query:&str)->Vec<(Row,usize)> {
+    let assigned:HashSet<_>=projects.iter().flat_map(|p|p.rooms.iter().chain(std::iter::once(&p.space))).collect();
+    let visible:HashMap<_,_>=rooms.iter().filter(|r|!r.is_direct && (!r.is_space || !r.invited) && !assigned.contains(r.name.room_id())).map(|r|(r.name.room_id().clone(),r)).collect();
+    let graph:HashMap<_,Vec<_>>=spaces.iter().filter(|(id,_)|visible.get(*id).is_some_and(|r|r.is_space && !r.invited)).map(|(id,children)|(id.clone(),children.iter().filter(|c|visible.contains_key(*c)).cloned().collect())).collect();
+    let children:HashSet<_>=graph.values().flatten().cloned().collect();
+    fn descendants(graph:&HashMap<OwnedRoomId,Vec<OwnedRoomId>>,id:&OwnedRoomId)->HashSet<OwnedRoomId> {let mut seen=HashSet::new();let mut todo=vec![id.clone()];while let Some(id)=todo.pop(){if seen.insert(id.clone()) && let Some(children)=graph.get(&id){todo.extend(children.iter().cloned());}}seen}
+    let sort=|ids:&mut Vec<OwnedRoomId>|ids.sort_by_key(|id|(!visible[id].is_space,visible[id].name.display().to_lowercase(),id.clone()));
+    let mut roots:Vec<_>=graph.keys().filter(|id|!children.contains(*id)).cloned().collect();sort(&mut roots);
+    let mut covered=HashSet::new();for root in &roots {covered.extend(descendants(&graph,root));}
+    let mut all:Vec<_>=graph.keys().cloned().collect();sort(&mut all);for id in all {if !covered.contains(&id){covered.extend(descendants(&graph,&id));roots.push(id);}}
+    roots.extend(visible.keys().filter(|id|!graph.contains_key(*id) && !children.contains(*id)).cloned());sort(&mut roots);
+    let mut result=Vec::new();
+    fn append(position:(&OwnedRoomId,usize),visible:&HashMap<OwnedRoomId,&TreeRoom>,graph:&HashMap<OwnedRoomId,Vec<OwnedRoomId>>,expanded:&HashSet<String>,filter:(&str,bool),path:&mut HashSet<OwnedRoomId>,result:&mut Vec<(Row,usize)>) {
+        let (id,depth)=position;let (query,inherited)=filter;
+        if depth>16 || !path.insert(id.clone()){return;}
+        let room=visible[id];let matched=inherited || query.is_empty() || descendants(graph,id).iter().any(|id|visible[id].name.display().to_lowercase().contains(query));
+        if matched {
+            result.push((if room.invited {Row::Invite(id.clone())}else if room.is_space {Row::Space(id.clone())}else{Row::Room(id.clone())},depth));
+            if room.is_space && (!query.is_empty() || expanded.contains(&format!("space:{id}"))) && let Some(children)=graph.get(id) {
+                let mut children=children.clone();children.sort_by_key(|id|(!visible[id].is_space,visible[id].name.display().to_lowercase(),id.clone()));
+                for child in children {append((&child,depth+1),visible,graph,expanded,(query,inherited || room.name.display().to_lowercase().contains(query)),path,result);}
+            }
+        }
+        path.remove(id);
+    }
+    for root in roots {append((&root,0),&visible,&graph,expanded,(query,false),&mut HashSet::new(),&mut result);}
+    result
+}
+
+fn group_unread(projects:&[TreeProject],rooms:&[TreeRoom],spaces:&HashMap<OwnedRoomId,Vec<OwnedRoomId>>,root:&OwnedRoomId)->(u64,bool) {
+    let blocked:HashSet<_>=projects.iter().flat_map(|p|p.rooms.iter().chain(std::iter::once(&p.space))).collect();
+    let mut seen=HashSet::new();let mut todo=vec![root.clone()];let mut result=(0u64,false);
+    while let Some(id)=todo.pop(){
+        if blocked.contains(&id) || !seen.insert(id.clone()){continue;}
+        if let Some(room)=rooms.iter().find(|r|r.name.room_id()==&id && !r.is_direct){
+            if !room.is_space {result.0=result.0.saturating_add(room.unread);result.1|=room.marked || room.invited;}
+            else if let Some(children)=spaces.get(&id){todo.extend(children.iter().cloned());}
+        }
+    }
+    result
+}
+
+#[derive(Clone, Debug)]
+pub struct ArchivedProjectsVisibility(pub bool);
 
 #[derive(Clone, Debug)]
 pub struct ProjectTreeChanged {
@@ -253,7 +317,7 @@ struct LoadedProjects {
 
 use crate::theme::Snapshot as TreeAppearance;
 
-type RowStyles = HashMap<WidgetUid, (Vec4f, bool)>;
+type RowStyles = HashMap<WidgetUid, (Vec4f, f64)>;
 
 #[derive(Script, Widget)]
 pub struct ProjectTree {
@@ -263,12 +327,16 @@ pub struct ProjectTree {
     appearance: TreeAppearance,
     #[rust]
     row_styles: RowStyles,
+    #[rust] pointer:Option<Vec2d>,
+    #[rust] hovered_row:Option<Row>,
     #[rust]
     snapshot: Option<ProjectTreeSnapshot>,
     #[rust]
     rooms: Vec<TreeRoom>,
+    #[rust] unclassified_rooms:HashSet<OwnedRoomId>,
     #[rust]
     rows: Vec<Row>,
+    #[rust] depths:Vec<usize>,
     #[rust]
     expanded: HashSet<String>,
     #[rust]
@@ -277,12 +345,14 @@ pub struct ProjectTree {
     mode: ProjectTreeMode,
     #[rust]
     chat_query: String,
+    #[rust] show_archived: bool,
     #[rust]
     active: bool,
     #[rust]
     timer: Timer,
     #[rust]
     pending: bool,
+    #[rust] legacy_selection_checked:bool,
     #[rust]
     refresh_again: bool,
     #[rust]
@@ -350,10 +420,8 @@ impl ProjectTree {
                 continue;
             }
             if item.navigation_bar_button(cx, ids!(disclosure)).clicked(captured) {
-                if clicked.insert(index) && let Some(Row::Project(id)) = self.rows.get(index).cloned() {
-                    if !self.expanded.remove(&id) {
-                        self.expanded.insert(id);
-                    }
+                if clicked.insert(index) && let Some(id)=self.rows.get(index).and_then(|row|match row {Row::Project(id)=>Some(id.clone()),Row::Space(id)=>Some(format!("space:{id}")),_=>None}) {
+                    if !self.expanded.remove(&id) {self.expanded.insert(id);}
                     self.rebuild(cx);
                 }
                 continue;
@@ -369,6 +437,14 @@ impl ProjectTree {
                 continue;
             }
             match self.rows.get(index).cloned() {
+                Some(Row::Space(id))=>{
+                    if self.mode==ProjectTreeMode::GroupChats && let Some(room)=self.rooms.iter().find(|r|r.name.room_id()==&id && r.is_space && !r.invited) {
+                        cx.widget_action(self.widget_uid(),RoomsListAction::Selected(SelectedRoom::Space {space_name_id:room.name.clone()}));
+                    }
+                }
+                Some(Row::Board {project,board}) => {
+                    cx.action(crate::hagency::ui::HagencyAction::ProjectBoard {project_id:project,board_id:board});
+                }
                 Some(Row::Project(id)) => {
                     cx.action(crate::hagency::ui::HagencyAction::ProjectDetails {project_id: id});
                 }
@@ -409,15 +485,18 @@ impl ProjectTree {
     }
     fn clear(&mut self, cx: &mut Cx) {
         self.snapshot = None;
+        self.legacy_selection_checked=false;
         self.pending = false;
         self.refresh_again = false;
         self.identity = None;
         self.error = None;
-        self.rooms.clear();
+        self.rooms.clear();self.unclassified_rooms.clear();
         self.rows.clear();
         self.expanded.clear();
         self.query.clear();
         self.chat_query.clear();
+        self.show_archived=false;
+        self.view.check_box(cx,ids!(archived_projects)).set_active(cx,false,Animate::No);
         self.redraw(cx);
     }
     // Called only after the navigation's full current-account identity is verified.
@@ -518,19 +597,32 @@ impl ProjectTree {
                                 .map_err(|_| "invalid_project_response")
                         })
                         .collect::<Result<Vec<OwnedRoomId>, _>>()?;
+                    let boards=service.execute(Command::ProjectBoard {project_id:id.clone(),action: ::hagency::project_board::BoardAction::Boards}).await?;
+                    let boards=boards["boards"].as_array().ok_or("invalid_board_response")?.iter().map(|b|Ok((b["id"].as_str().ok_or("invalid_board_response")?.to_owned(),b["name"].as_str().ok_or("invalid_board_response")?.to_owned()))).collect::<Result<Vec<_>,String>>()?;
                     projects.push(TreeProject {
                         id,
                         space,
                         name,
                         rooms,
+                        boards,
+                        archived: value["archived"]==true,
                     });
                 }
+                let mut spaces=HashMap::new();
+                for room in client.joined_rooms().into_iter().filter(|r|r.is_space()) {
+                    use matrix_sdk::{deserialized_responses::SyncOrStrippedState,ruma::events::{space::child::SpaceChildEventContent,SyncStateEvent}};
+                    let events=room.get_state_events_static::<SpaceChildEventContent>().await.map_err(|_|"space_navigation_unavailable")?;
+                    let children=events.into_iter().filter_map(|raw|match raw.deserialize(){Ok(SyncOrStrippedState::Sync(SyncStateEvent::Original(event))) if !event.content.via.is_empty()=>Some(event.state_key),_=>None}).collect();
+                    spaces.insert(room.room_id().to_owned(),children);
+                }
+                if !crate::matrix_context::is_current(&client) {return Err("account_changed".into());}
                 Ok(ProjectTreeSnapshot {
                     owner,
                     homeserver,
                     revision: request,
                     service_identity: identity.clone(),
                     projects,
+                    spaces,
                 })
             }
             .await;
@@ -557,22 +649,33 @@ impl ProjectTree {
         } else {
             Vec::new()
         };
-        let rows = workspace_rows(
+        let topology_changed=rooms.len()!=self.rooms.len() || rooms.iter().any(|r|self.rooms.iter().find(|old|old.name.room_id()==r.name.room_id()).is_none_or(|old|old.invited!=r.invited || old.is_space!=r.is_space));
+        if topology_changed {
+            self.unclassified_rooms.extend(rooms.iter().filter(|r|!self.rooms.iter().any(|old|old.name.room_id()==r.name.room_id())).map(|r|r.name.room_id().clone()));
+        }
+        let projects:Vec<_>=self.snapshot.as_ref().map(|s|s.projects.as_slice()).unwrap_or_default().iter().filter(|p|self.mode==ProjectTreeMode::GroupChats || self.show_archived || !p.archived).cloned().collect();
+        let mut rows = workspace_rows(
             self.mode,
-            self.snapshot
-                .as_ref()
-                .map(|s| s.projects.as_slice())
-                .unwrap_or_default(),
+            &projects,
             &rooms,
             &self.expanded,
             &self.query,
         );
+        self.depths=vec![0;rows.len()];
+        if self.mode==ProjectTreeMode::GroupChats {
+            rows.clear();self.depths.clear();
+            if let Some(snapshot)=&self.snapshot {
+                let classified:Vec<_>=rooms.iter().filter(|r|!self.unclassified_rooms.contains(r.name.room_id())).cloned().collect();
+                for (row,depth) in group_rows(&projects,&classified,&snapshot.spaces,&self.expanded,&self.query) {rows.push(row);self.depths.push(depth);}
+            }
+        }
         let changed = rows != self.rows || rooms.len() != self.rooms.len()
             || rooms.iter().zip(&self.rooms).any(|(a, b)| a.name.room_id() != b.name.room_id()
                 || a.name.display() != b.name.display() || a.unread != b.unread || a.marked != b.marked
-                || a.invited != b.invited || a.is_direct != b.is_direct || a.is_favorite != b.is_favorite);
+                || a.invited != b.invited || a.is_space!=b.is_space || a.is_direct != b.is_direct || a.is_favorite != b.is_favorite);
         self.rooms = rooms;
         self.rows = rows;
+        if topology_changed {self.refresh(cx);}
         if changed { self.redraw(cx); }
     }
 }
@@ -584,10 +687,29 @@ fn snapshot_current(snapshot: &ProjectTreeSnapshot) -> bool {
 }
 impl Widget for ProjectTree {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        match event {Event::MouseMove(e)=>self.pointer=Some(e.abs),Event::MouseDown(e)=>self.pointer=Some(e.abs),Event::WindowLostFocus(_)|Event::MouseLeave(_)|Event::Scroll(_)=>self.pointer=None,_=>()}
+        let items=self.view.portal_list(cx,ids!(list)).borrow().map(|list|list.items().iter().map(|(i,item)|(*i,item.widget.clone())).collect::<Vec<_>>()).unwrap_or_default();
+        self.hovered_row=None;
+        for (index,item) in items {
+            let show=matches!(self.rows.get(index),Some(Row::Project(_)|Row::Room(_))) && self.pointer.is_some_and(|p|item.view(cx,ids!(row_surface)).area().rect(cx).contains(p));
+            if show {self.hovered_row=self.rows.get(index).cloned();}
+            let button=item.button(cx,ids!(more));if button.visible()!=show {button.set_visible(cx,show);self.view.redraw(cx);}
+        }
         let captured = cx.capture_actions(|cx| self.view.handle_event(cx, event, scope));
         self.handle_row_actions(cx, &captured);
+        if let Some(show)=self.view.check_box(cx,ids!(archived_projects)).changed(&captured) {
+            self.show_archived=show;
+            cx.action(ArchivedProjectsVisibility(show));
+            self.rebuild(cx);
+        }
         if let Event::Actions(actions) = event {
             for action in actions {
+                if action.downcast_ref::<crate::hagency::ui::HagencyAction>().is_some() {self.legacy_selection_checked=true;}
+                if let Some(ArchivedProjectsVisibility(show))=action.downcast_ref() {
+                    self.show_archived = *show;
+                    self.view.check_box(cx,ids!(archived_projects)).set_active(cx,*show,Animate::No);
+                    self.rebuild(cx);
+                }
                 if matches!(action.downcast_ref::<crate::login::login_screen::LoginAction>(), Some(crate::login::login_screen::LoginAction::LoginSuccess)) {
                     self.refresh(cx);
                 }
@@ -595,6 +717,7 @@ impl Widget for ProjectTree {
                     && navigation.current() {
                     self.expand_navigation(cx, &navigation.identity, &navigation.project_id);
                 }
+                if action.downcast_ref::<super::space_management::SpaceManagementChanged>().is_some_and(|changed|Some(&changed.owner)==current_user_id().as_ref()) {self.refresh(cx);}
                 if let Some(changed) = action.downcast_ref::<ProjectTreeChanged>()
                     && self.identity.as_ref() == Some(&changed.identity)
                 {
@@ -609,6 +732,13 @@ impl Widget for ProjectTree {
                     self.pending = false;
                     match &loaded.result {
                         Ok(snapshot) => {
+                            if !self.legacy_selection_checked {
+                                self.legacy_selection_checked=true;
+                                if self.mode==ProjectTreeMode::Projects && let Some(crate::app::AppState {selected_room:Some(SelectedRoom::Space {space_name_id}),..})=scope.data.get::<crate::app::AppState>() && let Some(project)=snapshot.projects.iter().find(|p|&p.space==space_name_id.room_id()) {
+                                    cx.action(crate::hagency::ui::HagencyAction::ProjectDetails {project_id:project.id.clone()});
+                                }
+                            }
+                            if !self.refresh_again {self.unclassified_rooms.clear();}
                             self.snapshot = Some(snapshot.clone());
                             self.error = None;
                         }
@@ -639,7 +769,7 @@ impl Widget for ProjectTree {
                     self.clear(cx);
                 }
                 if let Some(MainFilterAction::Changed(query)) = action.downcast_ref()
-                    && self.mode == ProjectTreeMode::Chats {
+                    && self.mode == ProjectTreeMode::GroupChats {
                     self.query = query.trim().to_lowercase();
                     self.rebuild(cx);
                 }
@@ -663,6 +793,7 @@ impl Widget for ProjectTree {
         if self.snapshot.as_ref().is_some_and(|s| !snapshot_current(s)) {
             self.clear(cx);
         }
+        self.view.check_box(cx,ids!(archived_projects)).set_visible(cx,self.mode==ProjectTreeMode::Projects);
         let (notice, visible) = tree_notice(self.mode, self.error.as_deref(), self.snapshot.is_none(), self.rows.is_empty(), !self.query.is_empty());
         self.view.label(cx, ids!(status)).set_text(cx, crate::i18n::tr(notice));
         self.view.label(cx, ids!(status)).set_visible(cx, visible);
@@ -699,14 +830,18 @@ impl Widget for ProjectTree {
                 } else {
                     None
                 };
-                let room = if let Row::Room(id) | Row::Invite(id) = row {
+                let room = if let Row::Room(id) | Row::Invite(id) | Row::Space(id) = row {
                     self.rooms.iter().find(|r| r.name.room_id() == id)
                 } else {
                     None
                 };
+                let board=if let Row::Board {project,board}=row {self.snapshot.as_ref().and_then(|s|s.projects.iter().find(|p|p.id==*project)).and_then(|p|p.boards.iter().find(|(id,_)|id==board))} else {None};
+                item.view(cx,ids!(board_icon)).set_visible(cx,board.is_some());
+                item.view(cx,ids!(room_icon)).set_visible(cx,room.is_some_and(|r|!r.is_space));
                 let text = project
-                    .map(|p| p.name.clone())
-                    .or_else(|| room.map(|r| if r.is_favorite {
+                    .map(|p| if p.archived {format!("{} · {}",p.name,crate::i18n::tr("Archived"))} else {p.name.clone()})
+                    .or_else(||board.map(|(_,name)|if name=="Main Board" {crate::i18n::tr(name).into()} else {name.clone()}))
+                    .or_else(|| room.map(|r| if r.invited {format!("{} · {}",r.name.display(),crate::i18n::tr("Invited"))} else if r.is_favorite {
                         format!("★ {}", r.name.display())
                     } else { r.name.display().into_owned() }))
                     .unwrap_or_else(|| {
@@ -718,27 +853,30 @@ impl Widget for ProjectTree {
                             crate::i18n::tr("Other rooms").to_owned()
                         }
                     });
-                let open = project
-                    .is_some_and(|p| self.expanded.contains(&p.id) || !self.query.is_empty());
+                let space=if let Row::Space(id)=row {Some(id)}else{None};
+                let open = project.is_some_and(|p|self.expanded.contains(&p.id) || !self.query.is_empty()) || space.is_some_and(|id|self.expanded.contains(&format!("space:{id}")) || !self.query.is_empty());
                 let mut indent = item.view(cx, ids!(indent));
-                indent.set_visible(cx, room.is_some());
-                let style = (background, room.is_some());
+                let indentation=if self.mode==ProjectTreeMode::GroupChats {self.depths.get(index).copied().unwrap_or(0) as f64*18.0}else if room.is_some() || board.is_some(){18.0}else{0.0};
+                indent.set_visible(cx,indentation>0.0);
+                let style = (background,indentation);
                 if self.row_styles.get(&item.widget_uid()) != Some(&style) {
                     self.row_styles.insert(item.widget_uid(), style);
                     let mut surface = item.view(cx, ids!(row_surface));
                     script_apply_eval!(cx, surface, {draw_bg.color: #(background)});
-                    script_apply_eval!(cx, indent, {width: #(if room.is_some() {18.0} else {0.0})});
+                    script_apply_eval!(cx, indent, {width: #(indentation)});
                 }
                 item.label(cx, ids!(name)).set_text(cx, &text);
-                item.button(cx, ids!(more))
-                    .set_visible(cx, project.is_some() || matches!(row, Row::Room(_)));
+                let show_more=(project.is_some() || matches!(row,Row::Room(_))) && self.hovered_row.as_ref()==Some(row);
+                item.button(cx,ids!(more)).set_visible(cx,show_more);
                 item.view(cx, ids!(closed))
-                    .set_visible(cx, project.is_some() && !open);
+                    .set_visible(cx, ((project.is_some() || space.is_some()) && !open) || room.is_some_and(|r|r.is_space && r.invited));
                 item.view(cx, ids!(opened))
-                    .set_visible(cx, project.is_some() && open);
+                    .set_visible(cx, (project.is_some() || space.is_some()) && open);
                 item.navigation_bar_button(cx, ids!(disclosure))
-                    .set_visible(cx, project.is_some());
-                let (unread, marked) = if let Some(p) = project {
+                    .set_visible(cx, project.is_some() || space.is_some());
+                let (unread, marked) = if let Some(space)=space {
+                    self.snapshot.as_ref().map(|snapshot|group_unread(&snapshot.projects,&self.rooms,&snapshot.spaces,space)).unwrap_or_default()
+                }else if let Some(p) = project {
                     self.rooms
                         .iter()
                         .filter(|r| {
@@ -762,9 +900,9 @@ impl ProjectTreeRef {
     pub fn set_mode(&self, cx: &mut Cx, mode: ProjectTreeMode) {
         if let Some(mut inner) = self.borrow_mut() {
             if inner.mode == mode {return;}
-            if inner.mode == ProjectTreeMode::Chats {inner.chat_query = inner.query.clone();}
+            if inner.mode == ProjectTreeMode::GroupChats {inner.chat_query = inner.query.clone();}
             inner.mode = mode;
-            inner.query = if mode == ProjectTreeMode::Chats {inner.chat_query.clone()} else {String::new()};
+            inner.query = if mode == ProjectTreeMode::GroupChats {inner.chat_query.clone()} else {String::new()};
             inner.rebuild(cx);
         }
     }
@@ -795,7 +933,7 @@ impl ProjectTreeRef {
             {
                 return;
             }
-            let ids: HashSet<_> = snapshot.projects.iter().map(|p| p.id.clone()).collect();
+            let ids: HashSet<_> = snapshot.projects.iter().map(|p| p.id.clone()).chain(snapshot.spaces.keys().map(|id|format!("space:{id}"))).collect();
             inner.expanded.retain(|id| ids.contains(id));
             inner.snapshot = Some(snapshot);
             inner.rebuild(cx);
@@ -816,11 +954,13 @@ mod tests {
             marked: false,
             invited: false,
             is_direct: false,
+            is_space:false,
             is_favorite: false,
         }
     }
     fn project(value: &str, rooms: &[&str]) -> TreeProject {
         TreeProject {
+            boards: Vec::new(), archived: false,
             id: value.into(),
             space: id(&format!("space-{value}")),
             name: value.into(),
@@ -832,7 +972,7 @@ mod tests {
         assert_eq!(tree_notice(ProjectTreeMode::Projects,Some("temporary"),false,false,false),("Hagency Projects could not be loaded. Retrying…",true));
         assert_eq!(tree_notice(ProjectTreeMode::Projects,Some("owner_authorization_required"),false,false,false),("Sign in again to restore Projects for this account",true));
         assert_eq!(tree_notice(ProjectTreeMode::Projects,None,false,false,false),("",false));
-        assert_eq!(tree_notice(ProjectTreeMode::Chats,Some("temporary"),false,false,false),("",false),"Project notices do not leak into chat navigation");
+        assert_eq!(tree_notice(ProjectTreeMode::GroupChats,Some("temporary"),false,false,false),("Loading group chat classification…",true),"Group classification fails closed until Project discovery recovers");
     }
     #[test]
     fn first_project_navigation_initializes_identity_without_late_expansion_override() {
@@ -903,6 +1043,8 @@ mod tests {
         let more = row.button(&cx, ids!(more));
         let navigation = row.navigation_bar_button(&cx, ids!(row));
         assert!(more.borrow().is_some());
+        assert!(!more.visible(),"Overflow starts hidden before hovering the row");
+        more.set_visible(&mut cx,true);
         assert_ne!(more.widget_uid(), navigation.widget_uid());
         let actions = cx.capture_actions(|cx| {
             cx.group_widget_actions(list.widget_uid(), row.widget_uid(), |cx| {
@@ -985,12 +1127,12 @@ mod tests {
         let projects = vec![project("Work", &["Design", "Alice", "Secret"])];
         let expanded = HashSet::from(["Work".into()]);
         assert_eq!(workspace_rows(ProjectTreeMode::Projects, &projects, &rooms, &expanded, "alice"), vec![Row::Project("Work".into()), Row::Room(id("Design"))]);
-        let chats = workspace_rows(ProjectTreeMode::Chats, &projects, &rooms, &expanded, "");
+        let chats = workspace_rows(ProjectTreeMode::GroupChats, &projects, &rooms, &expanded, "");
         assert!(!chats.iter().any(|row| matches!(row, Row::Project(_))));
-        for name in ["Design", "General", "Alice"] {assert!(chats.contains(&Row::Room(id(name))));}
+        assert_eq!(chats,vec![Row::Room(id("General")),Row::Invite(id("Invite"))]);
         assert!(chats.contains(&Row::Invite(id("Invite"))));
         assert!(!chats.contains(&Row::Room(id("Secret"))));
-        assert_eq!(workspace_rows(ProjectTreeMode::Chats, &projects, &rooms, &expanded, "alice"), vec![Row::Direct, Row::Room(id("Alice"))]);
+        assert_eq!(workspace_rows(ProjectTreeMode::GroupChats, &projects, &rooms, &expanded, "alice"), Vec::<Row>::new());
     }
     #[test]
     fn only_registered_projects_form_two_level_tree_and_unjoined_rooms_never_appear() {
@@ -1097,24 +1239,30 @@ mod tests {
         assert!(active_records(&serde_json::json!({"rooms":null}), "rooms").is_err());
     }
     #[test]
-    fn invitations_remain_separate_until_matrix_acceptance() {
+    fn project_room_invitation_remains_under_its_project_until_matrix_acceptance() {
         let projects = vec![project("Work", &["Private"])];
         let mut invited = room("Private");
         invited.invited = true;
         let expanded = HashSet::from(["Work".into()]);
         assert_eq!(
             tree_rows(&projects, &[invited.clone()], &expanded, ""),
-            vec![
-                Row::Invitations,
-                Row::Invite(id("Private")),
-                Row::Project("Work".into())
-            ]
+            vec![Row::Project("Work".into()),Row::Invite(id("Private"))]
         );
         invited.invited = false;
         assert_eq!(
             tree_rows(&projects, &[invited], &expanded, ""),
             vec![Row::Project("Work".into()), Row::Room(id("Private"))]
         );
+    }
+    #[test]
+    fn space_and_project_room_invites_never_leak_into_group_chats_or_disappear() {
+        let projects=vec![project("Work",&["Private"])];let expanded=HashSet::from(["Work".into()]);
+        let mut space=room("New Project");space.invited=true;space.is_space=true;
+        let mut private=room("Private");private.invited=true;
+        let mut other=room("Social");other.invited=true;
+        let rooms=vec![space,private,other];
+        assert_eq!(workspace_rows(ProjectTreeMode::Projects,&projects,&rooms,&expanded,""),vec![Row::Invitations,Row::Invite(id("New Project")),Row::Project("Work".into()),Row::Invite(id("Private"))]);
+        assert_eq!(workspace_rows(ProjectTreeMode::GroupChats,&projects,&rooms,&expanded,""),vec![Row::Invite(id("Social"))]);
     }
     #[test]
     fn removing_room_mapping_returns_chat_to_other_and_project_identity_not_space_name() {
@@ -1136,4 +1284,27 @@ mod tests {
             ]
         );
     }
+    #[test]
+    fn group_spaces_expand_search_and_exclude_projects_directs_and_unknown_rooms() {
+        let mut social=room("Club");social.is_space=true;
+        let mut nested=room("Side");nested.is_space=true;
+        let mut dm=room("Private");dm.is_direct=true;
+        let mut project_space=room("space-Work");project_space.is_space=true;
+        let rooms=vec![social,nested,dm,project_space,room("General"),room("ProjectRoom"),room("Standalone")];
+        let projects=vec![project("Work",&["ProjectRoom"])];
+        let spaces=HashMap::from([(id("Club"),vec![id("Side"),id("General"),id("Private"),id("ProjectRoom"),id("Unknown")]),(id("Side"),vec![]),(id("space-Work"),vec![id("ProjectRoom")])]);
+        assert_eq!(group_rows(&projects,&rooms,&spaces,&HashSet::new(),""),vec![(Row::Space(id("Club")),0),(Row::Room(id("Standalone")),0)]);
+        let expanded=HashSet::from([format!("space:{}",id("Club"))]);
+        assert_eq!(group_rows(&projects,&rooms,&spaces,&expanded,""),vec![(Row::Space(id("Club")),0),(Row::Space(id("Side")),1),(Row::Room(id("General")),1),(Row::Room(id("Standalone")),0)]);
+        assert_eq!(group_rows(&projects,&rooms,&spaces,&HashSet::new(),"general"),vec![(Row::Space(id("Club")),0),(Row::Room(id("General")),1)]);
+        assert_eq!(group_rows(&projects,&rooms,&spaces,&HashSet::new(),"club"),vec![(Row::Space(id("Club")),0),(Row::Space(id("Side")),1),(Row::Room(id("General")),1)]);
+    }
+    #[test]
+    fn group_space_cycles_have_a_reachable_bounded_tree() {
+        let mut a=room("A");a.is_space=true;let mut b=room("B");b.is_space=true;
+        let spaces=HashMap::from([(id("A"),vec![id("B")]),(id("B"),vec![id("A")])]);
+        let expanded=HashSet::from([format!("space:{}",id("A")),format!("space:{}",id("B"))]);
+        assert_eq!(group_rows(&[],&[a,b],&spaces,&expanded,""),vec![(Row::Space(id("A")),0),(Row::Space(id("B")),1)]);
+    }
+
 }

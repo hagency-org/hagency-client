@@ -106,8 +106,7 @@ script_mod! {
                 text: #(crate::i18n::tr("Edit Message")) i18n_text: "Edit Message"
             }
 
-            // TODO: check if the current user is allowed to pin/unpin messages:
-            //       <https://matrix-org.github.io/matrix-rust-sdk/matrix_sdk_base/struct.RoomMember.html#method.can_pin_or_unpin_event>
+            // Visibility is derived from the message's current CanPin/CanUnpin abilities.
             pin_button := mod.widgets.ContextMenuButton {
                 draw_icon +: { svg: (ICON_PIN) }
                 text: "" // set dynamically to "Pin Message" or "Unpin Message"
@@ -503,7 +502,7 @@ impl WidgetMatchEvent for NewMessageContextMenu {
                 details.room_screen_widget_uid, 
                 MessageAction::Redact {
                     details: details.clone(),
-                    // TODO: show a Modal to confirm deletion, and get the reason.
+                    // RoomScreen confirms permanent redaction before submitting it.
                     reason: None,
                 },
             );

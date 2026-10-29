@@ -4,18 +4,18 @@
 use makepad_widgets::*;
 use matrix_sdk::{ruma::OwnedRoomId, notification_settings::RoomNotificationMode};
 use super::rooms_list::RoomNotificationModeUpdated;
-use crate::{home::invite_modal::InviteModalAction, settings::app_preferences::preferred_receipt_type, shared::{context_menu::{ContextMenuClosed, expected_menu_size}, popup_list::{PopupKind, enqueue_popup_notification}}, sliding_sync::{MatrixRequest, submit_async_request}, utils::RoomNameId};
+use crate::{home::invite_modal::InviteModalAction, settings::app_preferences::preferred_receipt_type, shared::{context_menu::{ContextMenuClosed, expected_menu_size}}, sliding_sync::{MatrixRequest, submit_async_request}, utils::RoomNameId};
 
-/// Nothing here is conditionally shown, so keep these matching the DSL below.
-const NUM_BUTTONS: usize = 13;
-const NUM_DIVIDERS: usize = 3;
+// Maximum size includes Invite, which stays hidden until fresh authority arrives.
+const NUM_BUTTONS: usize = 9;
+const NUM_DIVIDERS: usize = 2;
 
 script_mod! {
     use mod.prelude.widgets.*
     use mod.widgets.*
 
     mod.widgets.RoomContextMenu = set_type_default() do #(RoomContextMenu::register_widget(vm)) {
-        ..mod.widgets.SolidView
+        ..mod.widgets.View
 
         visible: false,
         flow: Overlay,
@@ -24,10 +24,7 @@ script_mod! {
         cursor: MouseCursor.Default,
         align: Align{x: 0, y: 0}
 
-        show_bg: true
-        draw_bg +: {
-            color: #0000004d
-        }
+        show_bg: false
 
         main_content := mod.widgets.ContextMenuContent {
             mark_unread_button := mod.widgets.ContextMenuButton {
@@ -38,13 +35,6 @@ script_mod! {
             favorite_button := mod.widgets.ContextMenuButton {
                 draw_icon +: { svg: (ICON_PIN) }
                 text: #(crate::i18n::tr("Favorite")) i18n_text: "Favorite"
-            }
-            hide_chat_button := mod.widgets.ContextMenuButton {text: #(crate::i18n::tr("Hide Chat")) i18n_text: "Hide Chat" draw_icon.svg: ICON_FORBIDDEN}
-            delete_chat_button := mod.widgets.ContextMenuDangerButton {text: #(crate::i18n::tr("Delete Chat")) i18n_text: "Delete Chat" draw_icon.svg: ICON_TRASH}
-
-            priority_button := mod.widgets.ContextMenuButton {
-                draw_icon +: { svg: (ICON_TOMBSTONE) }
-                text: #(crate::i18n::tr("Set Low Priority")) i18n_text: "Set Low Priority"
             }
 
             copy_link_button := mod.widgets.ContextMenuButton {
@@ -62,24 +52,16 @@ script_mod! {
             shared_attachments_button := mod.widgets.ContextMenuButton {text: #(crate::i18n::tr("Shared Attachments")) i18n_text: "Shared Attachments" draw_icon.svg: ICON_COPY}
 
             notifications_button := mod.widgets.ContextMenuButton {
-                // TODO: use a proper bell icon
-                draw_icon +: { svg: (ICON_INFO) }
+                draw_icon.svg: crate_resource("self://resources/icons/bell.svg")
                 text: #(crate::i18n::tr("Notifications")) i18n_text: "Notifications"
             }
 
-            invite_button := mod.widgets.ContextMenuButton {
+            invite_button := mod.widgets.ContextMenuButton {visible:false
                 draw_icon +: { svg: (ICON_ADD_USER) }
                 text: #(crate::i18n::tr("Invite")) i18n_text: "Invite"
             }
 
             divider2 := mod.widgets.ContextMenuDivider { }
-
-            diagnostics_button := mod.widgets.ContextMenuButton {
-                draw_icon +: { svg: (ICON_COPY) }
-                text: #(crate::i18n::tr("Copy Room Diagnostics")) i18n_text: "Copy Room Diagnostics"
-            }
-
-            divider3 := mod.widgets.ContextMenuDivider { }
 
             leave_button := mod.widgets.ContextMenuDangerButton {
                 draw_icon.svg: (ICON_LOGOUT)
@@ -101,21 +83,14 @@ pub struct RoomContextMenuDetails {
     pub notification_mode: Option<RoomNotificationMode>,
     pub room_name_id: RoomNameId,
     pub is_favorite: bool,
-    pub is_low_priority: bool,
     /// Whether the room has any unreads:
     /// messages, mentions, or the marked-unread state.
     pub has_unreads: bool,
 }
 
-/// Actions emitted from the RoomContextMenu widget, as they must be handled
-/// by other widgets with more information (e.g., the RoomsList).
-#[derive(Clone, Default, Debug)]
-pub enum RoomContextMenuAction {
-    Notifications(OwnedRoomId),
-    OpenRoomSettings(OwnedRoomId),
-    #[default]
-    None,
-}
+#[derive(Debug)]
+struct InvitePermission {request:u64,owner:ruma::OwnedUserId,origin:String,epoch:u64,room:OwnedRoomId,allowed:bool}
+fn next_request()->u64 {static NEXT:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(1);NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed)}
 
 #[derive(Script, ScriptHook, Widget)]
 pub struct RoomContextMenu {
@@ -123,6 +98,12 @@ pub struct RoomContextMenu {
     #[source] source: ScriptObjectRef,
     #[rust] details: Option<RoomContextMenuDetails>,
     #[rust] focus_after_draw: bool,
+    #[rust] request:u64,
+    #[rust] invite_allowed:bool,
+    #[rust] notification_choices:bool,
+    #[rust] owner:Option<ruma::OwnedUserId>,
+    #[rust] origin:String,
+    #[rust] epoch:u64,
 }
 
 impl Widget for RoomContextMenu {
@@ -144,6 +125,7 @@ impl Widget for RoomContextMenu {
 
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
         if !self.visible { return; }
+        if !self.current() {self.close(cx);return;}
         self.view.handle_event(cx, event, scope);
 
         // Close logic similar to NewMessageContextMenu
@@ -171,6 +153,12 @@ impl Widget for RoomContextMenu {
 impl WidgetMatchEvent for RoomContextMenu {
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions, _scope: &mut Scope) {
         for action in actions {
+            if let Some(done)=action.downcast_ref::<InvitePermission>()
+                && self.request==done.request && self.owner.as_ref()==Some(&done.owner) && self.origin==done.origin && self.epoch==done.epoch
+                && self.details.as_ref().is_some_and(|d|d.room_name_id.room_id()==&done.room) && self.current() {
+                self.invite_allowed=done.allowed;
+                self.button(cx,ids!(invite_button)).set_visible(cx,done.allowed && !self.notification_choices);
+            }
             if let Some(update) = action.downcast_ref::<RoomNotificationModeUpdated>() {
                 if let Some(details) = self.details.as_mut() {
                     if details.room_name_id.room_id() == &update.room_id {
@@ -232,25 +220,6 @@ impl WidgetMatchEvent for RoomContextMenu {
             });
             close_menu = true;
         }
-        else if self.button(cx, ids!(hide_chat_button)).clicked(actions)
-            || self.button(cx, ids!(delete_chat_button)).clicked(actions)
-        {
-            let room = details.room_name_id.room_id().clone();
-            let timestamp = cx.get_global::<super::rooms_list::RoomsListRef>().latest_timestamp(&room);
-            if self.button(cx, ids!(delete_chat_button)).clicked(actions) {
-                super::chat_actions::confirm_delete(cx, room, timestamp);
-            } else {
-                super::chat_actions::hide(cx, room, timestamp, false);
-            }
-            close_menu = true;
-        }
-        else if self.button(cx, ids!(priority_button)).clicked(actions) {
-            submit_async_request(MatrixRequest::SetIsLowPriority {
-                room_id: details.room_name_id.room_id().clone(),
-                is_low_priority: !details.is_low_priority,
-            });
-            close_menu = true;
-        }
         else if self.button(cx, ids!(copy_link_button)).clicked(actions) {
             submit_async_request(MatrixRequest::GenerateMatrixLink {
                 room_id: details.room_name_id.room_id().clone(),
@@ -261,26 +230,15 @@ impl WidgetMatchEvent for RoomContextMenu {
             close_menu = true;
         }
          else if self.button(cx, ids!(room_settings_button)).clicked(actions) {
-            // TODO: handle/implement this
-            enqueue_popup_notification(
-                "The room settings page is not yet implemented.",
-                PopupKind::Warning,
-                Some(5.0),
-            );
+            cx.action(super::room_settings::RoomSettingsAction::Open(details.room_name_id.clone()));
             close_menu = true;
         }
         else if self.button(cx, ids!(notifications_button)).clicked(actions) {
             self.show_notification_choices(cx, true);
             return;
         }
-        else if self.button(cx, ids!(invite_button)).clicked(actions) {
+        else if self.invite_allowed && self.button(cx, ids!(invite_button)).clicked(actions) {
             cx.action(InviteModalAction::Open(details.room_name_id.clone()));
-            close_menu = true;
-        }
-        else if self.button(cx, ids!(diagnostics_button)).clicked(actions) {
-            submit_async_request(MatrixRequest::GetRoomDiagnostics {
-                room_id: details.room_name_id.room_id().clone(),
-            });
             close_menu = true;
         }
         else if self.button(cx, ids!(leave_button)).clicked(actions) {
@@ -301,13 +259,27 @@ impl WidgetMatchEvent for RoomContextMenu {
 }
 
 impl RoomContextMenu {
+    fn current(&self)->bool {
+        self.epoch==crate::account_session::epoch() && !crate::sliding_sync::account_changing() && self.owner==crate::sliding_sync::current_user_id()
+            && crate::sliding_sync::get_client().is_some_and(|c|c.homeserver().as_str()==self.origin)
+    }
     pub fn is_currently_shown(&self, _cx: &mut Cx) -> bool {
         self.visible
     }
 
     pub fn show(&mut self, cx: &mut Cx, details: RoomContextMenuDetails) -> DVec2 {
+        self.request=next_request();self.invite_allowed=false;
+        self.owner=crate::sliding_sync::current_user_id();self.epoch=crate::account_session::epoch();
+        self.origin=crate::sliding_sync::get_client().map(|c|c.homeserver().to_string()).unwrap_or_default();
         self.show_notification_choices(cx, false);
         self.update_buttons(cx, &details);
+        if let Some(client)=crate::sliding_sync::get_client() && let Some(owner)=self.owner.clone() {
+            let request=self.request;let room=details.room_name_id.room_id().clone();let epoch=self.epoch;let origin=self.origin.clone();
+            crate::sliding_sync::spawn_async_task(async move {
+                let allowed=super::room_settings::can_invite(&client,&room).await.unwrap_or(false);
+                Cx::post_action(InvitePermission {request,room,owner,origin,epoch,allowed});
+            });
+        }
         self.details = Some(details);
         self.visible = true;
         self.focus_after_draw = true;
@@ -316,12 +288,13 @@ impl RoomContextMenu {
 
     fn show_notification_choices(&mut self, cx: &mut Cx, shown: bool) {
         self.focus_after_draw = true;
-        for id in [ids!(hide_chat_button), ids!(delete_chat_button)] { self.button(cx, id).set_visible(cx, !shown); }
-        for id in [ids!(mark_unread_button), ids!(favorite_button), ids!(priority_button), ids!(copy_link_button),
-            ids!(room_settings_button), ids!(search_history_button), ids!(shared_attachments_button), ids!(notifications_button), ids!(invite_button), ids!(diagnostics_button), ids!(leave_button),
-            ids!(divider1), ids!(divider2), ids!(divider3)] {
+        self.notification_choices=shown;
+        for id in [ids!(mark_unread_button), ids!(favorite_button), ids!(copy_link_button),
+            ids!(room_settings_button), ids!(search_history_button), ids!(shared_attachments_button), ids!(notifications_button), ids!(leave_button),
+            ids!(divider1), ids!(divider2)] {
             self.view.widget(cx, id).set_visible(cx, !shown);
         }
+        self.button(cx,ids!(invite_button)).set_visible(cx,!shown && self.invite_allowed);
         for id in [ids!(notify_all), ids!(notify_mentions), ids!(notify_mute), ids!(notify_default), ids!(notify_back)] {
             self.view.button(cx, id).set_visible(cx, shown);
             self.view.button(cx, id).reset_hover(cx);
@@ -353,22 +326,13 @@ impl RoomContextMenu {
              favorite_button.set_text(cx, crate::i18n::tr("Favorite"));
         }
 
-        let priority_button = self.button(cx, ids!(priority_button));
-        if details.is_low_priority {
-            priority_button.set_text(cx, crate::i18n::tr("Un-set Low Priority"));
-        } else {
-            priority_button.set_text(cx, crate::i18n::tr("Set Low Priority"));
-        }
-        
         // Reset hover states
         mark_unread_button.reset_hover(cx);
         favorite_button.reset_hover(cx);
-        priority_button.reset_hover(cx);
         self.button(cx, ids!(copy_link_button)).reset_hover(cx);
         self.button(cx, ids!(room_settings_button)).reset_hover(cx);
         self.button(cx, ids!(notifications_button)).reset_hover(cx);
         self.button(cx, ids!(invite_button)).reset_hover(cx);
-        self.button(cx, ids!(diagnostics_button)).reset_hover(cx);
         self.button(cx, ids!(leave_button)).reset_hover(cx);
 
         self.redraw(cx);
@@ -377,6 +341,7 @@ impl RoomContextMenu {
     fn close(&mut self, cx: &mut Cx) {
         self.visible = false;
         self.details = None;
+        self.request=next_request();self.invite_allowed=false;
         self.focus_after_draw = false;
         cx.revert_key_focus();
         cx.unblock_scrolling();
@@ -395,5 +360,24 @@ impl RoomContextMenuRef {
     pub fn show(&self, cx: &mut Cx, details: RoomContextMenuDetails) -> DVec2 {
         let Some(mut inner) = self.borrow_mut() else { return DVec2::default()};
         inner.show(cx, details)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn notifications_back_restores_only_permitted_actions_and_settings_has_a_real_destination() {
+        let mut cx=Cx::new(Box::new(|_,_|{}));
+        let mut menu=cx.with_vm(|vm| {makepad_widgets::script_mod(vm);crate::app::register_widgets(vm);vm.bx.captured_errors=Some(Vec::new());let value=script_eval!(vm,{mod.widgets.RoomContextMenu {}});let menu=RoomContextMenu::script_from_value(vm,value);assert!(vm.take_errors().is_empty());menu});
+        menu.show_notification_choices(&mut cx,false);assert!(!menu.button(&cx,ids!(invite_button)).visible());
+        menu.invite_allowed=true;menu.show_notification_choices(&mut cx,true);assert!(!menu.button(&cx,ids!(invite_button)).visible());
+        menu.show_notification_choices(&mut cx,false);assert!(menu.button(&cx,ids!(invite_button)).visible());
+        menu.invite_allowed=false;menu.show_notification_choices(&mut cx,false);assert!(!menu.button(&cx,ids!(invite_button)).visible());
+        let room=RoomNameId::empty(ruma::room_id!("!room:test").to_owned());menu.details=Some(RoomContextMenuDetails {room_name_id:room.clone(),notification_mode:None,is_favorite:false,has_unreads:false});
+        let uid=menu.button(&cx,ids!(room_settings_button)).widget_uid();let actions=cx.capture_actions(|cx|cx.widget_action(uid,ButtonAction::Clicked(KeyModifiers::default())));
+        let result=cx.capture_actions(|cx|menu.handle_actions(cx,&actions,&mut Scope::empty()));
+        assert!(result.iter().any(|a|matches!(a.downcast_ref::<super::super::room_settings::RoomSettingsAction>(),Some(super::super::room_settings::RoomSettingsAction::Open(actual)) if actual==&room)));
+        for id in [ids!(hide_chat_button).as_slice(),ids!(delete_chat_button),ids!(priority_button),ids!(diagnostics_button)] {assert!(menu.view.widget(&cx,id).is_empty(),"Ambiguous local clearing/unused priority/debug items are absent from the production room menu");}
     }
 }

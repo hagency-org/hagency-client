@@ -5,7 +5,7 @@ use crate::shared::context_menu::{ContextMenuClosed, expected_menu_size, menu_po
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SidebarMenuKind {
     Projects,
-    Chats,
+    GroupChats,
     Agents,
     Tools,
 }
@@ -65,6 +65,7 @@ struct ProjectPermission {
     target: ProjectMenuTarget,
     request: u64,
     can_invite: bool,
+    can_manage: bool,
     invite: bool,
 }
 fn permission_matches(
@@ -85,6 +86,7 @@ fn project_navigation(
     use crate::hagency::ui::{HagencyAction, ProjectDetailSection};
     let section = match button {
         id!(project_overview) => ProjectDetailSection::Overview,
+        id!(project_access) => ProjectDetailSection::Access,
         id!(project_rooms) => ProjectDetailSection::Rooms,
         id!(project_members) => ProjectDetailSection::Members,
         _ => return None,
@@ -113,9 +115,9 @@ script_mod! {
             project_rooms := mod.widgets.ContextMenuButton {visible: false icon_walk: Walk{width: 0 height: 0} spacing: 0 text: #(crate::i18n::tr("Discussion Rooms")) i18n_text: "Discussion Rooms"}
             project_members := mod.widgets.ContextMenuButton {visible: false icon_walk: Walk{width: 0 height: 0} spacing: 0 text: #(crate::i18n::tr("Project members")) i18n_text: "Project members"}
             project_invite := mod.widgets.ContextMenuButton {visible: false enabled: false icon_walk: Walk{width: 0 height: 0} spacing: 0 text: #(crate::i18n::tr("Invite members")) i18n_text: "Invite members"}
-            project_space := mod.widgets.ContextMenuButton {visible: false icon_walk: Walk{width: 0 height: 0} spacing: 0 text: #(crate::i18n::tr("Open Space")) i18n_text: "Open Space"}
+            project_access := mod.widgets.ContextMenuButton {visible: false icon_walk: Walk{width: 0 height: 0} spacing: 0 text: #(crate::i18n::tr("Access")) i18n_text: "Access"}
             new_project := mod.widgets.ContextMenuButton {icon_walk: Walk{width: 0 height: 0} spacing: 0 text: #(crate::i18n::tr("New project")) i18n_text: "New project"}
-            new_chat := mod.widgets.ContextMenuButton {icon_walk: Walk{width: 0 height: 0} spacing: 0 text: #(crate::i18n::tr("New chat")) i18n_text: "New chat"}
+            new_group_chat := mod.widgets.ContextMenuButton {icon_walk: Walk{width: 0 height: 0} spacing: 0 text: #(crate::i18n::tr("New group chat")) i18n_text: "New group chat"}
             new_agent := mod.widgets.ContextMenuButton {icon_walk: Walk{width: 0 height: 0} spacing: 0 text: #(crate::i18n::tr("New agent")) i18n_text: "New agent"}
             open_discover := mod.widgets.ContextMenuButton {icon_walk: Walk{width: 0 height: 0} spacing: 0 text: #(crate::i18n::tr("Discover")) i18n_text: "Discover"}
             explore_rooms := mod.widgets.ContextMenuButton {icon_walk: Walk{width: 0 height: 0} spacing: 0 text: #(crate::i18n::tr("Explore rooms")) i18n_text: "Explore rooms"}
@@ -148,7 +150,7 @@ impl SidebarActionMenu {
         self.kind = Some(kind);
         for (button, target) in [
             (id!(new_project), SidebarMenuKind::Projects),
-            (id!(new_chat), SidebarMenuKind::Chats),
+            (id!(new_group_chat), SidebarMenuKind::GroupChats),
             (id!(new_agent), SidebarMenuKind::Agents),
         ] {
             let button = self.view.button(cx, &[button]);
@@ -182,15 +184,16 @@ impl SidebarActionMenu {
             id!(project_rooms),
             id!(project_members),
             id!(project_invite),
-            id!(project_space),
         ] {
             let button = self.view.button(cx, &[id]);
             button.set_visible(cx, visible);
             button.reset_hover(cx);
         }
+        self.view.button(cx,ids!(project_access)).set_visible(cx,false);
         self.view
             .button(cx, ids!(project_invite))
             .set_enabled(cx, false);
+        self.view.button(cx,ids!(project_invite)).set_visible(cx,false);
         self.view
             .button(cx, ids!(project_invite))
             .set_disabled(cx, true);
@@ -209,7 +212,9 @@ impl SidebarActionMenu {
                 .room_members(target.space_id.to_string(), true)
                 .await
                 .is_ok_and(|value| value["canInvite"] == true);
+            let can_manage=service.execute(crate::hagency::model::Command::ScopeServiceState {project_id:target.project_id.clone(),room_id:None}).await.is_ok_and(|v|v["canManagePolicy"]==true);
             Cx::post_action(ProjectPermission {
+                can_manage,
                 target,
                 request,
                 can_invite,
@@ -336,6 +341,8 @@ impl Widget for SidebarActionMenu {
                             self.close(cx);
                             return;
                         }
+                        self.view.button(cx,ids!(project_access)).set_visible(cx,permission.can_manage);
+                        self.view.button(cx,ids!(project_invite)).set_visible(cx,permission.can_invite);
                         self.view
                             .button(cx, ids!(project_invite))
                             .set_enabled(cx, permission.can_invite);
@@ -345,11 +352,11 @@ impl Widget for SidebarActionMenu {
                     }
                 }
                 let selected = [
+                    id!(project_access),
                     id!(project_overview),
                     id!(project_rooms),
                     id!(project_members),
                     id!(project_invite),
-                    id!(project_space),
                 ]
                 .into_iter()
                 .find(|id| self.view.button(cx, &[*id]).clicked(actions));
@@ -377,14 +384,6 @@ impl Widget for SidebarActionMenu {
                     }
                     if let Some(action) = project_navigation(&target, button) {
                         cx.action(action);
-                    }
-                    if button == id!(project_space) {
-                        cx.action(crate::app::AppStateAction::NavigateToRoom {
-                            room_to_close: None,
-                            destination_room: crate::room::BasicRoomDetails::RoomId(
-                                crate::utils::RoomNameId::empty(target.space_id),
-                            ),
-                        });
                     }
                     self.close(cx);
                     return;
@@ -444,8 +443,8 @@ impl Widget for SidebarActionMenu {
                 Some(SidebarMenuKind::Projects) => {
                     self.view.button(cx, ids!(new_project)).clicked(actions)
                 }
-                Some(SidebarMenuKind::Chats) => {
-                    self.view.button(cx, ids!(new_chat)).clicked(actions)
+                Some(SidebarMenuKind::GroupChats) => {
+                    self.view.button(cx, ids!(new_group_chat)).clicked(actions)
                 }
                 Some(SidebarMenuKind::Agents) => {
                     self.view.button(cx, ids!(new_agent)).clicked(actions)
@@ -457,8 +456,8 @@ impl Widget for SidebarActionMenu {
                     Some(SidebarMenuKind::Projects) => {
                         cx.action(crate::hagency::ui::HagencyAction::NewProject)
                     }
-                    Some(SidebarMenuKind::Chats) => {
-                        cx.action(super::navigation_tab_bar::NavigationBarAction::NewChat)
+                    Some(SidebarMenuKind::GroupChats) => {
+                        cx.action(super::space_management::SpaceManagementAction::Open {parent:None})
                     }
                     Some(SidebarMenuKind::Agents) => {
                         cx.action(crate::hagency::ui::HagencyAction::NewAgent { project_id: None })
@@ -491,7 +490,7 @@ mod render_tests {
         let permission = ProjectPermission {
             target: target.clone(),
             request: 5,
-            can_invite: true,
+            can_invite: true, can_manage: false,
             invite: true,
         };
         assert!(permission_matches(&target, 5, &permission));
@@ -526,7 +525,7 @@ mod render_tests {
         assert!(project_navigation(&target, id!(project_space)).is_none());
     }
     #[test]
-    fn registered_project_menu_has_five_actions_and_stale_targets_cannot_navigate_or_invite() {
+    fn registered_project_menu_hides_matrix_space_and_stale_targets_and_stale_targets_cannot_navigate_or_invite() {
         let mut cx = Cx::new(Box::new(|_, _| {}));
         let mut menu = cx.with_vm(|vm| {
             makepad_widgets::script_mod(vm);
@@ -549,7 +548,6 @@ mod render_tests {
             id!(project_rooms),
             id!(project_members),
             id!(project_invite),
-            id!(project_space),
         ] {
             menu.show(
                 &mut cx,
@@ -559,7 +557,7 @@ mod render_tests {
             );
             menu.project_buttons(&mut cx, true);
             menu.project = Some(target.clone());
-            assert!(menu.view.button(&cx, &[id]).visible());
+            assert_eq!(menu.view.button(&cx, &[id]).visible(),id!=id!(project_invite));
             assert!(
                 !menu
                     .view
@@ -574,7 +572,7 @@ mod render_tests {
                 cx.action(ProjectPermission {
                     target: target.clone(),
                     request: menu.request,
-                    can_invite: true,
+                    can_invite: true, can_manage: false,
                     invite: true,
                 });
             });
@@ -607,7 +605,6 @@ mod render_tests {
             id!(project_rooms),
             id!(project_members),
             id!(project_invite),
-            id!(project_space),
         ] {
             assert!(
                 !menu.view.button(&cx, &[id]).visible(),

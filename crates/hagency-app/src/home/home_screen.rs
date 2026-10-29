@@ -23,6 +23,7 @@ use crate::{
     utils::RoomNameId,
 };
 
+use super::mobile::MobileHubWidgetExt;
 use super::project_tree::{ProjectTreeWidgetExt, ProjectTreeMode};
 use super::rooms_sidebar::DesktopWorkspace;
 use crate::shared::sidebar_resize::{left_widths, SidebarKind, SidebarResizeHandleWidgetExt};
@@ -529,7 +530,7 @@ impl Widget for HomeScreen {
                 && actions.iter().any(|a| a.downcast_ref::<FocusChatFilterAction>().is_some())
             {
                 let app_state = scope.data.get_mut::<AppState>().unwrap();
-                *cx.global::<DesktopWorkspace>() = DesktopWorkspace::Chats;
+                *cx.global::<DesktopWorkspace>() = DesktopWorkspace::GroupChats;
                 if app_state.selected_tab != SelectedTab::Home {
                     self.switch_to_tab(cx, app_state, SelectedTab::Home);
                 }
@@ -562,10 +563,16 @@ impl Widget for HomeScreen {
                 }
             }
             for action in actions {
+                if let RoomsListAction::Selected(selected)=action.as_widget_action().cast()
+                    && super::mobile::is_direct_selection(cx,&selected) {
+                    let thread=if let SelectedRoom::Thread {thread_root_event_id,..}=&selected {Some(thread_root_event_id.clone())}else{None};
+                    super::mobile::navigate_direct_view(cx,selected.room_name().clone(),thread,None);
+                    continue;
+                }
                 if let Some(action) = action.downcast_ref::<crate::hagency::ui::HagencyAction>() {
                     *cx.global::<DesktopWorkspace>() = match action {
                         crate::hagency::ui::HagencyAction::OpenAgents | crate::hagency::ui::HagencyAction::NewAgent {..} | crate::hagency::ui::HagencyAction::AgentRun {..} => DesktopWorkspace::Other,
-                        crate::hagency::ui::HagencyAction::Close => DesktopWorkspace::Chats,
+                        crate::hagency::ui::HagencyAction::Close => DesktopWorkspace::GroupChats,
                         _ => DesktopWorkspace::Projects,
                     };
                 }
@@ -573,8 +580,8 @@ impl Widget for HomeScreen {
                     && navigation.current() {
                     *cx.global::<DesktopWorkspace>() = DesktopWorkspace::Projects;
                 }
-                if matches!(action.downcast_ref(), Some(crate::home::main_desktop_ui::MainDesktopUiAction::ShowChats)) {
-                    *cx.global::<DesktopWorkspace>() = DesktopWorkspace::Chats;
+                if matches!(action.downcast_ref(), Some(crate::home::main_desktop_ui::MainDesktopUiAction::ShowGroupChats)) {
+                    *cx.global::<DesktopWorkspace>() = DesktopWorkspace::GroupChats;
                 }
                 // A hosted miniapp overlays this workspace. Its close action
                 // must not discard the Project tree or Chat search context.
@@ -584,7 +591,7 @@ impl Widget for HomeScreen {
                 }
                 if effective_is_desktop(cx) && (
                     action.downcast_ref::<crate::hagency::ui::HagencyAction>().is_some()
-                    || matches!(action.downcast_ref::<crate::home::main_desktop_ui::MainDesktopUiAction>(), Some(crate::home::main_desktop_ui::MainDesktopUiAction::ShowChats))
+                    || matches!(action.downcast_ref::<crate::home::main_desktop_ui::MainDesktopUiAction>(), Some(crate::home::main_desktop_ui::MainDesktopUiAction::ShowGroupChats))
                     || matches!(action.downcast_ref::<RoomsListAction>(), Some(RoomsListAction::Selected(_)))
                 ) {
                     self.switch_to_tab(cx, app_state, SelectedTab::Home);
@@ -730,6 +737,10 @@ impl Widget for HomeScreen {
                     }
                     // On desktop, `MainDesktopUI` handles this, so we only need to update this in mobile view mode.
                     RoomsListAction::InviteAccepted { room_name_id, kind } if !effective_is_desktop(cx) => {
+                        if !kind.is_space() && app_state.selected_tab==SelectedTab::Contacts && app_state.selected_room.as_ref().is_some_and(|r|r.room_id()==room_name_id.room_id()) {
+                            super::mobile::navigate_direct(cx,room_name_id);
+                            continue;
+                        }
                         let is_space = kind.is_space();
                         self.upgrade_mobile_invite_to_joined(cx, app_state, &room_name_id, kind);
                         cx.action(AppStateAction::UpgradedInviteToJoinedRoom {
@@ -823,9 +834,9 @@ impl Widget for HomeScreen {
         let tree = self.view.project_tree(cx, ids!(project_tree));
         tree.set_active(cx, show_context);
         if show_context {
-            let chats = workspace == DesktopWorkspace::Chats;
-            tree.set_mode(cx, if chats {ProjectTreeMode::Chats} else {ProjectTreeMode::Projects});
-            self.view.label(cx, ids!(context_title)).set_text(cx, crate::i18n::tr(if chats {"Chats"} else {"Projects"}));
+            let chats = workspace == DesktopWorkspace::GroupChats;
+            tree.set_mode(cx, if chats {ProjectTreeMode::GroupChats} else {ProjectTreeMode::Projects});
+            self.view.label(cx, ids!(context_title)).set_text(cx, crate::i18n::tr(if chats {"Group Chats"} else {"Projects"}));
             self.view.view(cx, ids!(context_search)).set_visible(cx, chats);
         }
         let show_tabs = matches!(app_state.selected_tab, SelectedTab::Home | SelectedTab::Contacts | SelectedTab::Discover | SelectedTab::Me | SelectedTab::Space {..})
@@ -1130,6 +1141,7 @@ impl HomeScreen {
     /// Switches to (selects) the given navigation tab, if it isn't already the selected one.
     fn switch_to_tab(&mut self, cx: &mut Cx, app_state: &mut AppState, new_tab: SelectedTab) {
         if app_state.selected_tab == new_tab { return }
+        if app_state.selected_tab==SelectedTab::Contacts {self.view.mobile_hub(cx,ids!(contacts_page)).suspend_chat(cx);}
         self.previous_selection = std::mem::replace(&mut app_state.selected_tab, new_tab);
         cx.action(NavigationBarAction::TabSelected(app_state.selected_tab.clone()));
         self.update_active_page_from_selection(cx, app_state);
@@ -1386,7 +1398,7 @@ mod responsive_layout_tests {
         // a trigger forces that cycle to run in this headless context.
         cx.send_trigger(Area::Empty, Trigger::default());
         cx.handle_triggers();
-        assert_eq!(*cx.global::<DesktopWorkspace>(), DesktopWorkspace::Chats);
+        assert_eq!(*cx.global::<DesktopWorkspace>(), DesktopWorkspace::GroupChats);
         assert!(home.view.view(&cx, ids!(context_search)).visible());
         assert!(cx.has_key_focus(filter_input(&home, &cx)),
             "pending={} focus={:?}", home.pending_chat_filter_focus, cx.key_focus());

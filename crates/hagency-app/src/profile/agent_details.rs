@@ -330,6 +330,24 @@ impl AgentProfileDetailsRef {
     }
 }
 
+pub(crate) async fn visible_agent_owners(viewer:&UserId)->Result<std::collections::HashMap<OwnedUserId,OwnedUserId>,String> {
+    let service=Service::for_current()?;
+    let owned=service.execute(Command::Agents).await?;
+    let public=service.execute(Command::DiscoverAgents).await?;
+    let mut owners=std::collections::HashMap::new();
+    for (roster,own) in [(&owned,true),(&public,false)] {
+        let ids=roster_agent_ids(roster,viewer,own)?;
+        for target in ids {
+            if let Some(identity)=find_identity(roster,&target,viewer,own)? {
+                if owners.get(&target).is_some_and(|owner|owner!=&identity.owner) {return Err("ambiguous_agent_identity".into());}
+                owners.insert(target,identity.owner);
+            }
+        }
+    }
+    Ok(owners)
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;

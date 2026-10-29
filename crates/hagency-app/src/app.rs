@@ -43,6 +43,7 @@ use crate::article_app::{ArticleAction, ArticlePanelWidgetRefExt};
 use crate::mini_app::{MiniAppAction, MiniAppPanelWidgetRefExt};
 use crate::forwarding::{ForwardAction, ForwardPanelWidgetRefExt};
 use crate::home::sidebar_action_menu::{SidebarMenuAction, SidebarActionMenuWidgetRefExt};
+use crate::home::room_settings::{RoomSettingsAction,RoomSettingsPanelWidgetRefExt};
 use crate::home::room_history::{RoomHistoryAction, RoomHistoryPanelWidgetRefExt};
 use crate::home::space_management::{SpaceManagementAction, SpaceManagementPanelWidgetRefExt};
 
@@ -84,6 +85,7 @@ mod embedded_content {
                     agent_ops_modal := Modal {can_dismiss: false content := AgentOpsPanel {}}
                     moments_modal := Modal {can_dismiss: false content := MomentsPanel {}}
                     room_history_modal := Modal {can_dismiss: false content := RoomHistoryPanel {}}
+                    room_settings_modal := Modal {can_dismiss:false content := RoomSettingsPanel {}}
                 }
 
                 image_viewer_modal := Modal {
@@ -577,6 +579,10 @@ impl MatchEvent for App {
                     self.ui.moments_panel(cx, ids!(moments_modal.content)).action(cx, Some(&modal), action);
                 }
             }
+            if let Some(action)=action.downcast_ref::<RoomSettingsAction>() {
+                let modal=self.ui.modal(cx,ids!(room_settings_modal));
+                self.ui.room_settings_panel(cx,ids!(room_settings_modal.content)).action(cx,modal,action);
+            }
             if let Some(action) = action.downcast_ref::<RoomHistoryAction>() {
                 let modal = self.ui.modal(cx, ids!(room_history_modal));
                 self.ui.room_history_panel(cx, ids!(room_history_modal.content)).action(cx, modal, action);
@@ -754,7 +760,7 @@ impl MatchEvent for App {
                         .and_then(|room| room.name())
                         .map(|name| RoomNameId::new(matrix_sdk::RoomDisplayName::Named(name), target.space_id.clone()))
                         .unwrap_or_else(|| RoomNameId::empty(target.space_id.clone()));
-                    self.ui.invite_modal(cx, ids!(invite_modal.content)).show(cx, destination);
+                    self.ui.invite_modal(cx, ids!(invite_modal.content)).show_project(cx, destination);
                     self.ui.modal(cx, ids!(invite_modal)).open(cx);
                 }
                 continue;
@@ -998,6 +1004,11 @@ impl MatchEvent for App {
                     self.ui.modal(cx, ids!(invite_modal)).open(cx); 
                     continue;
                 }
+                Some(InviteModalAction::OpenProject(project)) => {
+                    self.ui.invite_modal(cx,ids!(invite_modal.content)).show_project(cx,project.clone());
+                    self.ui.modal(cx,ids!(invite_modal)).open(cx);
+                    continue;
+                }
                 Some(InviteModalAction::Close) => {
                     self.ui.modal(cx, ids!(invite_modal)).close(cx);
                     continue;
@@ -1022,11 +1033,8 @@ impl MatchEvent for App {
 
             // Handle DirectMessageRoomActions
             match action.downcast_ref() {
-                Some(DirectMessageRoomAction::FoundExisting { room_name_id, .. }) => {
-                    if crate::home::home_screen::effective_is_desktop(cx) {
-                        cx.action(MainDesktopUiAction::ShowChats);
-                    }
-                    self.navigate_to_room(cx, None, &BasicRoomDetails::RoomId(room_name_id.clone()));
+                Some(DirectMessageRoomAction::FoundExisting { room_name_id, .. } | DirectMessageRoomAction::NewlyCreated {room_name_id,..}) => {
+                    crate::home::mobile::navigate_direct(cx,room_name_id.clone());
                 }
                 Some(DirectMessageRoomAction::DidNotExist { user_profile }) => {
                     let user_profile = user_profile.clone();
@@ -1072,12 +1080,6 @@ impl MatchEvent for App {
                         None,
                     );
                 }
-                Some(DirectMessageRoomAction::NewlyCreated { room_name_id, .. }) => {
-                    if crate::home::home_screen::effective_is_desktop(cx) {
-                        cx.action(MainDesktopUiAction::ShowChats);
-                    }
-                    self.navigate_to_room(cx, None, &BasicRoomDetails::RoomId(room_name_id.clone()));
-                }
                 _ => {}
             }
         }
@@ -1103,6 +1105,7 @@ impl App {
         close_page!(octoscript_apps_modal, mini_apps_panel, MiniAppsAction::Close);
         close_page!(mini_app_modal, mini_app_panel, MiniAppAction::Close);
         close_page!(room_history_modal, room_history_panel, RoomHistoryAction::Close);
+        close_page!(room_settings_modal, room_settings_panel, RoomSettingsAction::Close);
         let modal = self.ui.modal(cx, ids!(moments_modal));
         if modal.is_open() {
             self.ui.moments_panel(cx, ids!(moments_modal.content)).action(cx, Some(&modal), &MomentsAction::Close);
@@ -1144,7 +1147,7 @@ impl App {
         self.lifecycle.last_app_state_save = None;
         self.pending_signup_navigation = None;
         self.ui.image_viewer(cx, ids!(image_viewer_modal.content)).reset(cx);
-        for id in [ids!(image_viewer_modal), ids!(file_upload_modal), ids!(invite_modal), ids!(invite_confirmation_modal), ids!(event_source_modal), ids!(positive_confirmation_modal), ids!(delete_confirmation_modal), ids!(block_user_modal), ids!(join_leave_modal), ids!(room_history_modal), ids!(tsp_verification_modal)] {
+        for id in [ids!(image_viewer_modal), ids!(file_upload_modal), ids!(invite_modal), ids!(invite_confirmation_modal), ids!(event_source_modal), ids!(positive_confirmation_modal), ids!(delete_confirmation_modal), ids!(block_user_modal), ids!(join_leave_modal), ids!(room_history_modal), ids!(room_settings_modal), ids!(tsp_verification_modal)] {
             self.ui.modal(cx, id).close(cx);
         }
         self.close_web_browser(cx);
@@ -1197,7 +1200,7 @@ fn workspace_navigation(action: &Action) -> bool {
         || matches!(action.downcast_ref::<crate::hagency::ui::HagencyAction>(), Some(
             crate::hagency::ui::HagencyAction::OpenProjects | crate::hagency::ui::HagencyAction::OpenAgents
         ))
-        || matches!(action.downcast_ref::<MainDesktopUiAction>(), Some(MainDesktopUiAction::ShowChats))
+        || matches!(action.downcast_ref::<MainDesktopUiAction>(), Some(MainDesktopUiAction::ShowGroupChats))
         || matches!(action.downcast_ref::<AppStateAction>(), Some(AppStateAction::NavigateToRoom {..}))
         || matches!(action.downcast_ref::<RoomsListAction>(), Some(RoomsListAction::Selected(_)))
         || matches!(action.downcast_ref::<ThemeStudioAction>(), Some(ThemeStudioAction::Open))
@@ -1367,6 +1370,8 @@ impl AppMain for App {
                     let modal = self.ui.modal(cx, ids!(approval_inbox_modal));
                     if modal.is_open() {event.back_pressed(); self.ui.approval_inbox(cx, ids!(approval_inbox_modal.content)).action(cx, modal, &ApprovalInboxAction::Close, &self.app_state); return;}
                 }
+                let settings=self.ui.modal(cx,ids!(room_settings_modal));
+                if settings.is_open() && !self.ui.modal(cx,ids!(invite_modal)).is_open() {event.back_pressed();self.ui.room_settings_panel(cx,ids!(room_settings_modal.content)).action(cx,settings,&RoomSettingsAction::Close);return;}
                 let modal = self.ui.modal(cx, ids!(space_management_modal));
                 if modal.is_open() {event.back_pressed(); self.ui.space_management_panel(cx, ids!(space_management_modal.content)).action(cx, modal, &SpaceManagementAction::Close);return;}
                 if self.ui.modal(cx, ids!(web_browser_modal)).is_open() {
@@ -2094,6 +2099,10 @@ impl App {
         // A successful create/join can precede the room-list UI update. Consult
         // the SDK too, so an already joined Room does not prompt to join again.
         let sdk_room = crate::sliding_sync::get_client().and_then(|client| client.get_room(destination_room_id));
+        if sdk_room.as_ref().is_some_and(|r|r.state()==RoomState::Joined && !r.is_space() && !r.direct_targets().is_empty()) {
+            crate::home::mobile::navigate_direct(cx,destination_room.room_name_id().clone());
+            return;
+        }
         let room_state = cx.get_global::<RoomsListRef>().get_room_state(destination_room_id)
             .or_else(|| sdk_room.as_ref().map(|room| room.state()));
         let new_selected_room = match room_state {
@@ -2623,7 +2632,7 @@ mod back_navigation_tests {
         let pages = [
             id!(theme_studio_modal), id!(web_browser_modal), id!(approval_inbox_modal),
             id!(space_management_modal), id!(article_app_modal), id!(octoscript_apps_modal),
-            id!(mini_app_modal), id!(agent_ops_modal), id!(moments_modal), id!(room_history_modal),
+            id!(mini_app_modal), id!(agent_ops_modal), id!(moments_modal), id!(room_history_modal),id!(room_settings_modal),
         ];
         let host = app.ui.widget(&cx, ids!(workspace_pages));
         assert!(!host.is_empty());

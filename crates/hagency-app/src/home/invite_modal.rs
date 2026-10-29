@@ -86,6 +86,7 @@ script_mod! {
 pub enum InviteModalAction {
     /// Open the modal to invite a user to the given room or space.
     Open(RoomNameId),
+    OpenProject(RoomNameId),
     /// Close the modal.
     Close,
 }
@@ -117,6 +118,9 @@ enum InvitePeopleAction {
     Searched { request: u64, query: String, people: Vec<Person> },
 }
 
+#[derive(Debug)]
+struct InviteAuthority {request:u64,owner:OwnedUserId,epoch:u64,origin:String,room:ruma::OwnedRoomId,result:Result<bool,String>}
+fn next_request()->u64 {static NEXT:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(1);NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed)}
 #[derive(Script, ScriptHook, Widget)]
 pub struct InviteModal {
     #[deref] view: View,
@@ -127,10 +131,16 @@ pub struct InviteModal {
     /// Registered agents and people who share a room with the user.
     #[rust] known: Vec<Person>,
     #[rust] request: u64,
+    #[rust] authority_request:u64,
+    #[rust] owner:Option<OwnedUserId>,
+    #[rust] epoch:u64,
+    #[rust] origin:String,
+    #[rust] can_invite:bool,
 }
 
 impl Widget for InviteModal {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        if self.room_name_id.is_some() && !self.current() {return;}
         self.view.handle_event(cx, event, scope);
         self.widget_match_event(cx, event, scope);
     }
@@ -142,7 +152,14 @@ impl Widget for InviteModal {
 
 impl WidgetMatchEvent for InviteModal {
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions, _scope: &mut Scope) {
+        if !self.current() {return;}
         for action in actions {
+            if let Some(done)=action.downcast_ref::<InviteAuthority>() && self.authority_request==done.request && self.owner.as_ref()==Some(&done.owner) && self.epoch==done.epoch && self.origin==done.origin && self.room_name_id.as_ref().is_some_and(|r|r.room_id()==&done.room) {
+                self.can_invite=matches!(done.result,Ok(true));
+                self.view.button(cx,ids!(confirm_button)).set_enabled(cx,self.can_invite);
+                if !self.can_invite {self.status(cx,done.result.as_ref().err().map(String::as_str).unwrap_or("You do not have permission to invite people to this room."),true);}
+                else {self.view.view(cx,ids!(status_label_view)).set_visible(cx,false);}
+            }
             match action.downcast_ref() {
                 Some(InvitePeopleAction::Known { request, people }) if *request == self.request => {
                     for person in people {
@@ -198,7 +215,7 @@ impl WidgetMatchEvent for InviteModal {
         let mut status_label = self.view.label(cx, ids!(status_label_view.status_label));
 
         // Handle return key or invite button click.
-        if let Some(user_id_str) = confirm_button.clicked(actions)
+        if self.can_invite && let Some(user_id_str) = confirm_button.clicked(actions)
             .then(|| user_id_input.text())
             .or_else(|| user_id_input.returned(actions).map(|(t, _)| t))
         {
@@ -340,7 +357,7 @@ impl InviteModal {
 
     /// A typed name: ask the homeserver directory too, then resolve.
     fn search(&mut self, cx: &mut Cx, query: String) {
-        self.request += 1;
+        self.request=next_request();
         let request = self.request;
         self.status(cx, &crate::i18n::format("Searching for {0}…", &[("0", query.clone())]), false);
         let Some(client) = get_client() else {
@@ -358,6 +375,7 @@ impl InviteModal {
                     .collect(),
                 Err(_) => Vec::new(),
             };
+            if !crate::matrix_context::is_current(&client) {return;}
             Cx::post_action(InvitePeopleAction::Searched { request, query, people });
             SignalToUI::set_ui_signal();
         });
@@ -429,18 +447,30 @@ impl InviteModal {
                     }
                 }
             }
+            if !crate::matrix_context::is_current(&client) {return;}
             Cx::post_action(InvitePeopleAction::Known { request, people });
             SignalToUI::set_ui_signal();
         });
     }
 
+    fn current(&self)->bool {self.epoch==crate::account_session::epoch() && !crate::sliding_sync::account_changing() && self.owner==crate::sliding_sync::current_user_id() && get_client().is_some_and(|c|c.homeserver().as_str()==self.origin)}
     pub fn show(&mut self, cx: &mut Cx, room_name_id: RoomNameId) {
+        let Some(client)=get_client() else{return;};
+        self.owner=client.user_id().map(ToOwned::to_owned);self.epoch=crate::account_session::epoch();self.origin=client.homeserver().to_string();self.can_invite=false;
+        self.authority_request=next_request();
+        if let Some(owner)=self.owner.clone() {
+            let request=self.authority_request;let epoch=self.epoch;let origin=self.origin.clone();let room=room_name_id.room_id().clone();
+            spawn_async_task(async move {
+                let result=tokio::time::timeout(std::time::Duration::from_secs(20),super::room_settings::can_invite(&client,&room)).await.map_err(|_|"Permission check timed out. Reopen the invitation.".into()).and_then(|v|v.map_err(|e|e.to_string()));
+                Cx::post_action(InviteAuthority {request,owner,epoch,origin,room,result});
+            });
+        }
         self.view.label(cx, ids!(title)).set_text(
             cx,
             &format!("Invite to {room_name_id}"),
         );
         let settings = crate::agent_access::current();
-        self.request += 1;
+        self.request=next_request();
         self.known = settings
             .agent_registry
             .agents()
@@ -458,7 +488,7 @@ impl InviteModal {
         let okay_button = self.view.button(cx, ids!(okay_button));
         let user_id_input = self.view.text_input(cx, ids!(user_id_input));
         confirm_button.set_visible(cx, true);
-        confirm_button.set_enabled(cx, true);
+        confirm_button.set_enabled(cx, false);
         confirm_button.reset_hover(cx);
         cancel_button.set_visible(cx, true);
         cancel_button.set_enabled(cx, true);
@@ -469,12 +499,18 @@ impl InviteModal {
         user_id_input.set_text(cx, "");
         self.view.view(cx, ids!(status_label_view)).set_visible(cx, false);
         self.view.label(cx, ids!(status_label_view.status_label)).set_text(cx, "");
+        self.status(cx,"Checking invitation permission…",false);
         self.view.redraw(cx);
         user_id_input.set_key_focus(cx);
     }
 }
 
 impl InviteModalRef {
+    pub fn show_project(&self, cx: &mut Cx, project: RoomNameId) {
+        let Some(mut inner) = self.borrow_mut() else {return;};
+        inner.show(cx, project);
+        inner.view.label(cx,ids!(title)).set_text(cx,crate::i18n::tr("Invite to Project"));
+    }
     pub fn show(&self, cx: &mut Cx, room_name_id: RoomNameId) {
         let Some(mut inner) = self.borrow_mut() else { return };
         inner.show(cx, room_name_id);

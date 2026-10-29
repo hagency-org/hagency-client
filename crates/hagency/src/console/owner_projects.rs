@@ -89,7 +89,7 @@ fn board_command(bytes: &[u8]) -> Result<hagency_core::project_board::BoardActio
     }
     let action: BoardAction =
         serde_json::from_slice(bytes).map_err(|_| error(400, "invalid_board_payload"))?;
-    if bytes.len() > 131072 && !matches!(action, BoardAction::UploadAttachment { .. }) {
+    if bytes.len() > 131072 && !action.is_upload() {
         return Err(error(400, "invalid_board_payload"));
     }
     Ok(action)

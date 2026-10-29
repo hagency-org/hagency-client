@@ -72,6 +72,7 @@ fn operation(update: &TimelineUpdate) -> bool {
     matches!(
         update,
         TimelineUpdate::MessageEdited { .. }
+            | TimelineUpdate::MessageQueued
             | TimelineUpdate::PinResult { .. }
             | TimelineUpdate::SendFailedBeforeBeingQueued { .. }
             | TimelineUpdate::FileUploadStarted { .. }
@@ -412,6 +413,21 @@ mod tests {
         producer.join().unwrap();
         while receiver.try_recv().is_ok() { delivered += 1; }
         assert_eq!(delivered, 2000);
+    }
+
+    #[test]
+    fn queued_message_survives_history_window_replacement_in_order() {
+        let (old, old_receiver) = channel();
+        old.send(TimelineUpdate::MessageQueued).unwrap();
+        let (next, next_receiver) = channel();
+        old.forward_operations_to(&next);
+        drop(old_receiver);
+        next.send(snapshot(false)).unwrap();
+        old.send(TimelineUpdate::MessageQueued).unwrap();
+        assert!(matches!(next_receiver.try_recv(), Ok(TimelineUpdate::MessageQueued)));
+        assert!(matches!(next_receiver.try_recv(), Ok(TimelineUpdate::NewItems { .. })));
+        assert!(matches!(next_receiver.try_recv(), Ok(TimelineUpdate::MessageQueued)));
+        assert!(next_receiver.is_empty());
     }
 
     #[test]

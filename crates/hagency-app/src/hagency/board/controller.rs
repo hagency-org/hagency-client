@@ -11,12 +11,22 @@ impl ProjectBoard {
         self.view.label(cx, ids!(notice)).set_text(cx, message);
         self.view.label(cx, ids!(notice)).set_visible(
             cx,
-            !message.is_empty() && !self.view.view(cx, ids!(inspector)).visible(),
+            !message.is_empty() && !self.modal_visible(cx) && self.quick_create_state.is_none(),
         );
+        if let Some(index) = (0..self.column_count()).find(|i| self.quick_create_state.as_deref() == Some(&self.column_state(*i))) {
+            let column = self.view.view(cx, column_path(index));
+            column.label(cx, ids!(quick_notice)).set_text(cx, message);
+            column.label(cx, ids!(quick_notice)).set_visible(cx, !message.is_empty());
+        }
         self.view.redraw(cx);
     }
     pub(super) fn clear_content(&mut self, cx: &mut Cx) {
         self.close_calendar(cx);
+        self.created_card = None;
+        self.created_reveal_pending = false;
+        self.column_rows.clear();
+        self.column_paint_keys.clear();
+        self.label_options.clear();
         self.clear_quick_create(cx);
         self.subtask_after_save = None;
         self.clear_media(cx);
@@ -29,9 +39,8 @@ impl ProjectBoard {
         self.view
             .view(cx, ids!(notifications_panel))
             .set_visible(cx, false);
-        self.view
-            .button(cx, ids!(notifications_button))
-            .set_text(cx, tr("Notifications"));
+        self.view.unread_badge(cx,ids!(notifications_badge)).update_counts(false,0,0);
+        self.view.view(cx,ids!(filters_panel)).set_visible(cx,false);
         self.columns_draft = None;
         self.draft_checklist.clear();
         self.draft_parent = None;
@@ -41,6 +50,7 @@ impl ProjectBoard {
             .view(cx, ids!(column_settings))
             .set_visible(cx, false);
         self.snapshot = None;
+        self.read_only=false;
         self.detail_loaded = false;
         self.selected = None;
         self.creating = false;
@@ -120,6 +130,7 @@ impl ProjectBoard {
             self.epoch = nonce();
             self.reads.clear();
             self.loading = false;
+            self.reload_pending = false;
             self.saving = false;
             self.failed = false;
             self.offline = false;
@@ -136,6 +147,7 @@ impl ProjectBoard {
             self.epoch = nonce();
             self.reads.clear();
             self.loading = false;
+            self.reload_pending = false;
             self.saving = false;
             self.drag = None;
             self.landing = None;
@@ -157,6 +169,8 @@ impl ProjectBoard {
         }
         let identity = self.identity.clone();
         let project = self.project.clone();
+        let parent_project=if self.parent_project.is_empty() {project.clone()} else {self.parent_project.clone()};
+        let action=if parent_project==project {action} else {BoardAction::Within {board:project.clone(),command:Box::new(action)}};
         let epoch = self.epoch;
         let request = nonce();
         if matches!(kind, Read::Snapshot | Read::Changes | Read::Page(_)) {
@@ -180,7 +194,7 @@ impl ProjectBoard {
         crate::sliding_sync::spawn_async_task(async move {
             let result = service
                 .execute(Command::ProjectBoard {
-                    project_id: project.clone(),
+                    project_id: parent_project,
                     action,
                 })
                 .await;
@@ -211,6 +225,8 @@ impl ProjectBoard {
     pub(super) fn load(&mut self, cx: &mut Cx) {
         cx.stop_timer(self.timer);
         self.timer = Timer::default();
+        if self.loading {self.reload_pending=true;return;}
+        self.reload_pending=false;
         self.read(
             cx,
             Read::Snapshot,
@@ -228,9 +244,8 @@ impl ProjectBoard {
         }
     }
     pub(super) fn write(&mut self, cx: &mut Cx, action: BoardAction) {
-        if self.pending.is_some() || self.saving {
-            return;
-        }
+        if self.read_only {self.notice(cx,tr("This Project is archived. Restore it before making changes."));return;}
+        if self.pending.is_some() || self.saving {return;}
         self.pending = Some(action);
         self.retry_write(cx);
     }
@@ -298,6 +313,8 @@ impl ProjectBoard {
         }
         let identity = self.identity.clone();
         let project = self.project.clone();
+        let parent_project=if self.parent_project.is_empty() {project.clone()} else {self.parent_project.clone()};
+        let action=if parent_project==project {action} else {BoardAction::Within {board:project.clone(),command:Box::new(action)}};
         let epoch = self.epoch;
         let request = nonce();
         self.save_request = request;
@@ -307,7 +324,7 @@ impl ProjectBoard {
         crate::sliding_sync::spawn_async_task(async move {
             let result = service
                 .execute(Command::ProjectBoard {
-                    project_id: project.clone(),
+                    project_id: parent_project,
                     action,
                 })
                 .await;
@@ -338,15 +355,7 @@ impl ProjectBoard {
             assignee_mxid: assignee
                 .checked_sub(1)
                 .and_then(|i| self.members.get(i).cloned()),
-            labels: self
-                .view
-                .text_input(cx, ids!(labels))
-                .text()
-                .split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_owned)
-                .collect(),
+            labels: super::labels::parse(&self.view.text_input(cx, ids!(labels)).text()),
             parent_id: self.draft_parent.clone(),
             checklist: self.draft_checklist.clone(),
             due_date: if due.trim().is_empty() {
@@ -452,6 +461,7 @@ impl ProjectBoard {
         );
     }
     pub(super) fn new_task(&mut self, cx: &mut Cx) {
+        if self.read_only {return;}
         if self.pending.is_some()
             || self.dirty
             || self.columns_draft.is_some()
@@ -552,6 +562,8 @@ impl ProjectBoard {
     }
     pub(super) fn sync_controls(&mut self, cx: &mut Cx) {
         self.sync_quick_create(cx);
+        self.sync_filter_feedback(cx);
+        self.sync_label_feedback(cx);
         self.view
             .view(cx, ids!(details_body))
             .set_visible(cx, !self.discussion);
@@ -622,8 +634,9 @@ impl ProjectBoard {
             .is_some_and(|t| t.archived_at.is_some())
             || self.selected_column_archived();
         let writing = self.pending.is_some();
+        let locked=writing || self.read_only;
         let editing = (self.creating || self.selected.is_some() && self.detail_loaded)
-            && !writing
+            && !locked
             && !self.conflict
             && !archived;
         for id in [
@@ -647,10 +660,6 @@ impl ProjectBoard {
             self.close_calendar(cx);
         }
         self.view.widget(cx, ids!(save)).set_disabled(cx, !editing);
-        self.view.button(cx, ids!(new_task)).set_board_enabled(
-            cx,
-            self.snapshot.is_some() && !writing && !self.failed && self.columns_draft.is_none(),
-        );
         self.view
             .button(cx, ids!(refresh))
             .set_board_enabled(cx, !self.loading);
@@ -669,6 +678,8 @@ impl ProjectBoard {
         self.view
             .button(cx, ids!(dialog_retry))
             .set_board_enabled(cx, !self.saving);
+        self.view.button(cx, ids!(columns_retry)).set_visible(cx, writing && !self.saving && self.columns_draft.is_some());
+        self.view.button(cx, ids!(columns_retry)).set_board_enabled(cx, !self.saving);
         self.view.button(cx, ids!(reload_latest)).set_visible(
             cx,
             self.conflict || self.selected.is_some() && !self.detail_loaded,
@@ -680,20 +691,20 @@ impl ProjectBoard {
         for id in [ids!(move_state).as_slice(), ids!(comment_editor.source)] {
             self.view
                 .widget(cx, id)
-                .set_disabled(cx, writing || self.conflict || archived);
+                .set_disabled(cx, locked || self.conflict || archived);
         }
         for (id, enabled) in [
             (
                 ids!(move_top),
-                !writing && !self.conflict && !archived && !self.dirty && self.detail_loaded,
+                !locked && !self.conflict && !archived && !self.dirty && self.detail_loaded,
             ),
             (
                 ids!(move_bottom),
-                !writing && !self.conflict && !archived && !self.dirty && self.detail_loaded,
+                !locked && !self.conflict && !archived && !self.dirty && self.detail_loaded,
             ),
             (
                 ids!(add_comment),
-                !writing && !self.conflict && !archived && self.detail_loaded,
+                !locked && !self.conflict && !archived && self.detail_loaded,
             ),
         ] {
             self.view.button(cx, id).set_board_enabled(cx, enabled);
@@ -701,7 +712,7 @@ impl ProjectBoard {
         }
         self.view.button(cx, ids!(archive)).set_board_enabled(
             cx,
-            !writing && !self.dirty && !self.conflict && !self.selected_column_archived(),
+            !locked && !self.dirty && !self.conflict && !self.selected_column_archived(),
         );
         self.view
             .button(cx, ids!(archive))
@@ -709,17 +720,7 @@ impl ProjectBoard {
         self.view
             .button(cx, ids!(save))
             .set_text(cx, tr(if self.saving { "Saving…" } else { "Save" }));
-        self.view.button(cx, ids!(close_detail)).set_text(
-            cx,
-            tr(if self.discard_armed {
-                "Discard draft"
-            } else {
-                "Close"
-            }),
-        );
-        self.view
-            .widget(cx, ids!(board_loading))
-            .set_visible(cx, self.loading);
+        self.view.label(cx,ids!(sync_status)).set_visible(cx,self.offline || self.read_only || self.saving);
         self.view.label(cx, ids!(sync_status)).set_text(
             cx,
             tr(if self.loading {
@@ -728,6 +729,8 @@ impl ProjectBoard {
                 "Saving…"
             } else if self.offline {
                 "Offline · showing last confirmed board"
+            } else if self.read_only {
+                "Archived · read only"
             } else if self.snapshot.is_some() {
                 "Up to date"
             } else {
@@ -750,7 +753,7 @@ impl ProjectBoard {
         self.sync_markdown_controls(
             cx,
             editing,
-            !writing && !self.conflict && !archived && self.detail_loaded,
+            !locked && !self.conflict && !archived && self.detail_loaded,
         );
         self.view.redraw(cx);
     }
@@ -785,6 +788,13 @@ impl ProjectBoard {
         }
         if matches!(done.kind, Read::Snapshot | Read::Changes | Read::Page(_)) {
             self.loading = false;
+            if self.reload_pending {
+                // Filters may change while a poll is in flight. Its reply no
+                // longer describes the requested view; fetch the latest query.
+                self.reload_pending=false;
+                self.load(cx);
+                return;
+            }
         }
         if matches!(done.kind, Read::OpenTask(..))
             && (done.request != self.open_request || done.detail_generation != self.detail_request)
@@ -845,6 +855,7 @@ impl ProjectBoard {
                                         })
                                 }) =>
                         {
+                            self.read_only=value["readOnly"]==true;
                             let changed = self
                                 .snapshot
                                 .as_ref()
@@ -862,6 +873,8 @@ impl ProjectBoard {
                             self.failed = false;
                             self.sync_members(cx, members);
                             self.sync_column_labels(cx);
+                            self.sync_label_options(cx);
+                            self.reveal_created_card(cx);
                             if let Some(task) = refresh_detail {
                                 self.read(
                                     cx,
@@ -881,7 +894,7 @@ impl ProjectBoard {
                     Read::Changes => {
                         self.refresh_notifications(cx);
                         let seq = value["sequence"].as_i64().unwrap_or(-1);
-                        if self.snapshot.as_ref().is_some_and(|s| s.sequence != seq) {
+                        if self.snapshot.as_ref().is_some_and(|s| s.sequence != seq) || value["readOnly"].as_bool().is_some_and(|read_only|read_only!=self.read_only) {
                             self.load(cx);
                         }
                     }
@@ -1141,14 +1154,17 @@ impl ProjectBoard {
                     }
                 }
                 if was_columns {
-                    self.columns_draft = None;
-                    self.view
-                        .view(cx, ids!(column_settings))
-                        .set_visible(cx, false);
+                    self.close_column_settings(cx);
                     self.query.state = None;
                     self.reset_viewports(cx);
                 }
                 if was_quick {
+                    if let Some(task) = confirmed.clone() {
+                        self.created_filters_cleared = !self.matches_filters(&task);
+                        if self.created_filters_cleared { self.clear_filters(cx); }
+                        self.created_card = Some(task);
+                        self.created_reveal_pending = true;
+                    }
                     self.clear_quick_create(cx);
                 }
                 if let Some((_, parent)) = next_subtask {
@@ -1166,13 +1182,12 @@ impl ProjectBoard {
                         tr("Changes saved")
                     },
                 );
+                self.sync_label_options(cx);
                 self.load(cx);
             }
             Err(code) => {
                 if matches!(self.pending, Some(BoardAction::ConfigureColumns { .. })) {
-                    self.view
-                        .label(cx, ids!(columns_notice))
-                        .set_text(cx, error_message(code));
+                    self.columns_notice(cx, error_message(code));
                 } else {
                     self.notice(cx, error_message(code));
                 }

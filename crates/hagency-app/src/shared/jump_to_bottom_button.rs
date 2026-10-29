@@ -6,100 +6,44 @@ script_mod! {
     use mod.prelude.widgets.*
     use mod.widgets.*
 
-
-    mod.widgets.ICO_JUMP_TO_BOTTOM = crate_resource("self://resources/icon_jump_to_bottom.svg")
-
-    // A jump to bottom button that appears when the timeline is not at the bottom.
     mod.widgets.JumpToBottomButton = #(JumpToBottomButton::register_widget(vm)) {
-        width: Fill,
-        height: Fill,
-        flow: Overlay,
-        align: Align{x: 1.0, y: 1.0},
-        visible: false,
-        View {
-            width: 65, height: 75,
-            align: Align{x: 0.5, y: 1.0},
-            flow: Overlay,
-            inner_button := RinxIconButton {
-                width: RINX_ICON_BUTTON_SIZE height: RINX_ICON_BUTTON_SIZE padding: 0 spacing: 0 icon_walk: Walk{width: 16 height: 16 margin: Inset{top: 2}}
-                align: Align{x: 0.5, y: 0.5},
-                margin: Inset{bottom: 8},
-                draw_icon +: {
-                    svg: (mod.widgets.ICO_JUMP_TO_BOTTOM),
-                    color: mod.widgets.RINX_MUTED,
-                    // TODO: once Makepad button support draw_icon hover/down animated states, reenable this.
-                    // color: #BBB,
-                    // color_hover: #000,
-                    // color_down: #000,
-                    // get_color: fn() -> vec4 {
-                    //     return mix(self.color, self.color_hover, self.hover)
-                    // }
-                },
-                draw_bg +: {
-                    background_color: mod.widgets.RINX_SURFACE,
-                    background_color_hover: mod.widgets.RINX_HOVER,
-                    pixel: fn() {
-                        let sdf = Sdf2d.viewport(self.pos * self.rect_size);
-                        let c = self.rect_size * 0.5;
-                        sdf.circle(c.x, c.x, c.x);
-                        sdf.fill_keep(mix(self.background_color, self.background_color_hover, self.hover));
-                        return sdf.result
-                    }
-                }
-                enable_long_press: true,
+        width: Fill height: Fill flow: Overlay
+        align: Align{x: 0.5, y: 1.0}
+        visible: false
+        bar := RoundedView {
+            width: Fit{max: FitBound.Rel{base: Base.Parent, factor: 0.95}} height: Fit
+            margin: Inset{bottom: 12}
+            padding: 8 spacing: 10 flow: Flow.Right{wrap: true} align: Align{y: 0.5}
+            draw_bg +: {
+                color: mod.widgets.RINX_SURFACE
+                border_color: mod.widgets.RINX_BORDER border_size: 1.0
+                border_radius: mod.widgets.RINX_CONTROL_RADIUS
             }
-
-            // TODO: replace the below with the UnreadBadge widget
-
-            // A badge overlay on the jump to bottom button showing unread messages
-            unread_message_badge := View {
-                visible: false,
-                width: 25, height: 20,
-                align: Align { x: 0.5, y: 0.5 }
-                flow: Overlay,
-
-                green_rounded_label := View {
-                    width: Fill,
-                    height: Fill,
-                    show_bg: true,
-                    draw_bg +: {
-                        color: instance(COLOR_UNREAD_BADGE_MESSAGES)
-                        border_radius: uniform(4.0)
-                        // Adjust this border_size to larger value to make oval smaller
-                        border_size: uniform(2.0)
-
-                        pixel: fn() {
-                            let sdf = Sdf2d.viewport(self.pos * self.rect_size)
-                            sdf.box(
-                                self.border_size,
-                                self.border_size,
-                                self.rect_size.x - (self.border_size * 2.0),
-                                self.rect_size.y - (self.border_size * 2.0),
-                                max(1.0, self.border_radius)
-                            )
-                            sdf.fill_keep(self.color)
-                            return sdf.result;
-                        }
-                    }
+            history_hint_holder := View {
+                width: Fit height: 32 flow: Down align: Align{y: 0.5}
+                history_hint := RinxLabel {
+                    width: Fit height: Fit padding: 0
+                    draw_text +: {color: mod.widgets.RINX_MUTED text_style.font_size: mod.widgets.RINX_UI_SIZE}
+                    text: #(crate::i18n::tr("Viewing older messages")) i18n_text: "Viewing older messages"
                 }
-                // Label that displays the unread message count
+            }
+            unread_message_badge := RoundedView {
+                visible: false width: Fit height: 32 padding: Inset{left: 6 right: 6}
+                flow: Down align: Align{y: 0.5}
+                draw_bg +: {color: mod.widgets.RINX_ACCENT border_radius: mod.widgets.RINX_CONTROL_RADIUS}
                 unread_messages_count := RinxLabel {
-                    padding: 0,
-                    width: Fit,
-                    height: Fit,
-                    flow: Flow.Right { wrap: false },
-                    text: "",
-                    draw_text +: {
-                        color: mod.widgets.RINX_ON_ACCENT,
-                        text_style: theme.font_regular {font_size: (8.0 * mod.widgets.RINX_TEXT_SCALE)}, // style-size: glyph
-                    }
+                    width: Fit height: Fit padding: 0
+                    draw_text +: {color: mod.widgets.RINX_ON_ACCENT text_style.font_size: mod.widgets.RINX_UI_SIZE}
                 }
+            }
+            inner_button := RinxButton {
+                width: Fit height: 32 padding: Inset{left: 12 right: 12 top: 0 bottom: 0}
+                icon_walk: Walk{width: 0 height: 0}
+                text: #(crate::i18n::tr("Jump to latest")) i18n_text: "Jump to latest"
             }
         }
-        
     }
 }
-
 
 #[derive(ScriptHook, Script, Widget)]
 pub struct JumpToBottomButton {
@@ -109,128 +53,51 @@ pub struct JumpToBottomButton {
 
 impl Widget for JumpToBottomButton {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
-        let button_area = self.button(cx, ids!(inner_button)).area();
-        match event.hits(cx, button_area) {
-            Hit::FingerHoverIn(_) | Hit::FingerLongPress(_) => {
-                cx.widget_action(
-                    self.widget_uid(), 
-                    TooltipAction::HoverIn {
-                        text: crate::i18n::tr("Jump to bottom").to_string(),
-                        widget_rect: button_area.rect(cx),
-                        options: CalloutTooltipOptions {
-                            position: TooltipPosition::Left,
-                            ..Default::default()
-                        },
-                    },
-                );
-            }
-            Hit::FingerHoverOut(_) => {
-                cx.widget_action(
-                    self.widget_uid(), 
-                    TooltipAction::HoverOut,
-                );
-            }
-            _ => {}
-        }
-
+        if !self.visible { return; }
         self.view.handle_event(cx, event, scope);
     }
 
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        let wide = cx.peek_walk_turtle(walk).size.x >= 420.0;
+        self.view(cx, ids!(history_hint_holder)).set_visible(cx, wide);
         self.view.draw_walk(cx, scope, walk)
     }
 }
 
 impl JumpToBottomButton {
-    /// Updates the visibility of the jump to bottom button *without* redrawing.
-    ///
-    /// * If `is_at_bottom` is `true`, both the main jump to bottom view and
-    ///   the unread message badge are made invisible, since there's nothing
-    ///   below the viewport to jump to.
-    /// * If `is_at_bottom` is `false`, only the main jump to bottom "parent" view
-    ///   is made visible; the unread message badge is *not* made visible, as that is done
-    ///   via a separate call to [`JumpToBottomButton::show_unread_message_badge()`].
-    pub fn update_visibility(&mut self, cx: &mut Cx, is_at_bottom: bool) {
+    /// Returns whether the parent timeline needs to redraw this visibility change.
+    pub fn update_visibility(&mut self, cx: &mut Cx, is_at_bottom: bool) -> bool {
+        let changed = self.visible == is_at_bottom;
+        self.visible = !is_at_bottom;
         if is_at_bottom {
-            self.visible = false;
             self.view(cx, ids!(unread_message_badge)).set_visible(cx, false);
-        } else {
-            self.visible = true;
         }
+        changed
     }
 
-    /// Sets both the jump to bottom view and its unread message badge to be visible.
-    ///
-    /// This does not automatically redraw any views.
-    /// If unread_message_count is `0`, the unread message badge is hidden.
+    /// Unread results update the badge, never the visibility of the history bar.
+    /// A late response must not bring it back after the user reached the latest.
     pub fn show_unread_message_badge(&mut self, cx: &mut Cx, count: UnreadMessageCount) {
-        match count {
-            UnreadMessageCount::Unknown => {
-                self.visible = true;
-                self.view(cx, ids!(unread_message_badge)).set_visible(cx, true);
-                self.label(cx, ids!(unread_messages_count)).set_text(cx, "");
+        let text = match count {
+            UnreadMessageCount::Unknown => crate::i18n::tr("New messages").to_owned(),
+            UnreadMessageCount::Known(0) => String::new(),
+            UnreadMessageCount::Known(count) => {
+                format!("{}{}", count.min(99), if count > 99 { "+" } else { "" })
             }
-            UnreadMessageCount::Known(0) => {
-                // Only hide the badge, not the entire button.
-                // The button's visibility is controlled by `update_visibility()`
-                // based on whether the portal list is at the end.
-                self.view(cx, ids!(unread_message_badge)).set_visible(cx, false);
-                self.label(cx, ids!(unread_messages_count)).set_text(cx, "");
-            }
-            UnreadMessageCount::Known(unread_message_count) => {
-                self.visible = true;
-                self.view(cx, ids!(unread_message_badge)).set_visible(cx, true);
-                let (border_size, plus_sign) = if unread_message_count > 99 {
-                    (0.0, "+")
-                } else if unread_message_count > 9 {
-                    (1.0, "")
-                } else {
-                    (2.0, "")
-                };
-                self.label(cx, ids!(unread_messages_count)).set_text(
-                    cx,
-                    &format!("{}{plus_sign}", std::cmp::min(unread_message_count, 99))
-                );
-                let mut badge_view = self.view(cx, ids!(unread_message_badge.green_rounded_label));
-                script_apply_eval!(cx, badge_view, {
-                    draw_bg.border_size: #(border_size),
-                });
-            }
-        }
+        };
+        self.view(cx, ids!(unread_message_badge)).set_visible(cx, !text.is_empty());
+        self.label(cx, ids!(unread_messages_count)).set_text(cx, &text);
     }
 
-    /// Updates the visibility of the jump to bottom button and the unread message badge
-    /// based on the given actions and the state of the portal list.
-    ///
-    /// Also handles the click event on the jump to bottom button.
-    ///
-    /// Redraws the jump to bottom button if its visibility changes.
     pub fn update_from_actions(
         &mut self,
         cx: &mut Cx,
         portal_list: &PortalListRef,
         actions: &Actions,
     ) -> bool {
-        let clicked = self.button(cx, ids!(inner_button)).clicked(actions);
-        let was_visible = self.visible;
-        // Note: here, we could choose to set visibility ONLY IF the portallist was scrolled.
-        //       However, we intentionally skip that check, as it's actually more expensive
-        //       to check if the portallist has been scrolled than to just directly
-        //       query the portallist's `at_end` state and set the visibility accordingly.
-
+        let clicked = self.visible && self.button(cx, ids!(inner_button)).clicked(actions);
         if clicked {
-            portal_list.smooth_scroll_to_end(
-                cx,
-                SCROLL_TO_BOTTOM_SPEED,
-                None,
-            );
-            self.update_visibility(cx, false);
-        } else {
-            self.update_visibility(cx, portal_list.is_at_end());
-        }
-
-        if self.visible != was_visible {
-            self.redraw(cx);
+            portal_list.smooth_scroll_to_end(cx, SCROLL_TO_BOTTOM_SPEED, None);
         }
         clicked
     }
@@ -239,10 +106,8 @@ impl JumpToBottomButton {
 
 impl JumpToBottomButtonRef {
     /// See [`JumpToBottomButton::update_visibility()`].
-    pub fn update_visibility(&self, cx: &mut Cx, is_at_bottom: bool) {
-        if let Some(mut inner) = self.borrow_mut() {
-            inner.update_visibility(cx, is_at_bottom);
-        }
+    pub fn update_visibility(&self, cx: &mut Cx, is_at_bottom: bool) -> bool {
+        self.borrow_mut().is_some_and(|mut inner| inner.update_visibility(cx, is_at_bottom))
     }
 
     /// See [`JumpToBottomButton::show_unread_message_badge()`].
@@ -270,4 +135,86 @@ pub enum UnreadMessageCount {
     Unknown,
     /// There are unread messages, and we know exactly how many.
     Known(u64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use makepad_widgets::makepad_draw::cx_draw::CxDraw;
+
+    fn widget() -> (Cx, JumpToBottomButton) {
+        let mut cx = Cx::new(Box::new(|_,_|{}));
+        let widget = cx.with_vm(|vm| {
+            makepad_widgets::script_mod(vm);crate::app::register_widgets(vm);
+            vm.bx.captured_errors = Some(Vec::new());
+            let value = script_eval!(vm,{mod.widgets.JumpToBottomButton {}});
+            let widget = JumpToBottomButton::script_from_value(vm,value);
+            assert!(vm.take_errors().is_empty());widget
+        });
+        (cx,widget)
+    }
+
+    fn draw(cx: &mut Cx, widget: &mut JumpToBottomButton, width: f64) {
+        cx.redraw_all();
+        let pass = DrawPass::new(cx);pass.set_size(cx,dvec2(width,400.0));
+        let mut list = DrawList2d::new(cx);
+        let event = DrawEvent::default();
+        let mut draw = CxDraw::new(cx,&event);let mut cx2d = Cx2d::new(&mut draw);
+        cx2d.begin_pass(&pass,None);list.begin_always(&mut cx2d);
+        cx2d.begin_root_turtle(dvec2(width,400.0),Layout::flow_overlay());
+        widget.draw_walk_all(&mut cx2d,&mut Scope::empty(),Walk::fill());
+        cx2d.end_pass_sized_turtle();list.end(&mut cx2d);cx2d.end_pass(&pass);
+    }
+
+    #[test]
+    fn late_unread_results_never_reopen_the_bar_and_hidden_buttons_cannot_jump() {
+        let (mut cx,mut widget) = widget();
+        assert!(!widget.visible);
+        widget.update_visibility(&mut cx,false);
+        draw(&mut cx,&mut widget,900.0);
+        let button = widget.button(&cx,ids!(inner_button));
+        let actions = cx.capture_actions(|cx|cx.widget_action(button.widget_uid(),ButtonAction::Clicked(KeyModifiers::default())));
+        assert!(widget.update_from_actions(&mut cx,&PortalListRef::default(),&actions));
+        assert!(widget.update_visibility(&mut cx,true));
+        for count in [UnreadMessageCount::Known(2),UnreadMessageCount::Unknown] {
+            widget.show_unread_message_badge(&mut cx,count);
+            assert!(!widget.visible,"late unread counts must not reopen navigation at the latest message");
+        }
+        assert!(!widget.update_from_actions(&mut cx,&PortalListRef::default(),&actions));
+        assert!(!widget.update_visibility(&mut cx,true),"a stable hidden state must not request another parent redraw");
+        assert!(!widget.view(&cx,ids!(unread_message_badge)).visible());
+        assert!(widget.update_visibility(&mut cx,false));
+        widget.show_unread_message_badge(&mut cx,UnreadMessageCount::Known(105));
+        assert_eq!(widget.label(&cx,ids!(unread_messages_count)).text(),"99+");
+    }
+
+    #[test]
+    fn centered_history_bar_fits_wide_and_narrow_timelines() {
+        let (mut cx,mut widget) = widget();
+        widget.update_visibility(&mut cx,false);
+        for width in [900.0,310.0] {
+            for count in [UnreadMessageCount::Known(0),UnreadMessageCount::Unknown,UnreadMessageCount::Known(105)] {
+                widget.show_unread_message_badge(&mut cx,count);
+                draw(&mut cx,&mut widget,width);
+                let bar = widget.view(&cx,ids!(bar)).area().rect(&cx);
+                let button = widget.button(&cx,ids!(inner_button)).area().rect(&cx);
+                assert!(bar.size.x > 0.0 && bar.size.y > 0.0);
+                assert!((bar.pos.x + bar.size.x * 0.5 - width * 0.5).abs() < 0.5,"{bar:?}");
+                assert!(bar.pos.x >= 0.0 && bar.pos.x + bar.size.x <= width + 0.5,"{bar:?}");
+                assert!(bar.pos.y + bar.size.y <= 400.0 && button.size.x > 0.0);
+                assert_eq!(widget.view(&cx,ids!(history_hint_holder)).visible(),width >= 420.0);
+                if width >= 420.0 {
+                    let hint = widget.label(&cx,ids!(history_hint));
+                    let hint_rect = widget.view(&cx,ids!(history_hint_holder)).area().rect(&cx);
+                    let text = hint.borrow().unwrap().draw_text.draw_vars.area.rect(&cx);
+                    let center_y = button.pos.y + button.size.y * 0.5;
+                    assert!((hint_rect.pos.y + hint_rect.size.y * 0.5 - center_y).abs() < 0.5,
+                        "hint and button must share one vertical center: {hint_rect:?}, {button:?}");
+                    assert!((text.pos.y + text.size.y * 0.5 - center_y).abs() < 1.0,
+                        "hint text must be centered within the control row: {text:?}, {button:?}");
+                }
+            }
+        }
+        cx.with_vm(|vm|assert!(vm.take_errors().is_empty()));
+    }
 }

@@ -53,17 +53,17 @@ script_mod! {
         width: Fill height: Fill flow: Down spacing: 16 padding: Inset{top: 20 left: 24 right: 24 bottom: 20} draw_bg.color: mod.widgets.RINX_PAGE
         View {width: Fill height: Fit flow: Flow.Right{wrap: true} spacing: 12 align: Align{y: 0.5}
             close := RinxBackButton {}
-            RinxPageTitle {text: #(crate::i18n::tr("Approval rooms")) i18n_text: "Approval rooms"}
+            RinxPageTitle {text: #(crate::i18n::tr("Agent approval chats")) i18n_text: "Agent approval chats"}
         }
-        RinxLabel {width: Fill height: Fit flow: Flow.Right{wrap: true} draw_text.color: mod.widgets.RINX_MUTED text: #(crate::i18n::tr("Find verified private rooms where your agents send approval requests. Open a room to review its requests and respond there. This list contains rooms, not a count of pending approvals.")) i18n_text: "Find verified private rooms where your agents send approval requests. Open a room to review its requests and respond there. This list contains rooms, not a count of pending approvals."}
-        refresh := RinxButton {text: #(crate::i18n::tr("Refresh approval rooms")) i18n_text: "Refresh approval rooms"}
+        explanation := RinxLabel {width: Fill height: Fit flow: Flow.Right{wrap: true} draw_text.color: mod.widgets.RINX_MUTED text: #(crate::i18n::tr("Your Agents use private approval chats to ask for permission before carrying out actions that require your approval. Open a chat to review and respond. These chats belong to your account, across Rooms and Projects. This page lists chats, not pending requests.")) i18n_text: "Your Agents use private approval chats to ask for permission before carrying out actions that require your approval. Open a chat to review and respond. These chats belong to your account, across Rooms and Projects. This page lists chats, not pending requests."}
+        refresh := RinxButton {text: #(crate::i18n::tr("Refresh approval chats")) i18n_text: "Refresh approval chats"}
         status := RinxLabel {width: Fill height: Fit flow: Flow.Right{wrap: true} draw_text.color: mod.widgets.RINX_INK}
         empty_state := RoundedView {
             visible: false width: Fill{max: 880} height: Fit flow: Down padding: 20 spacing: 12
             draw_bg +: {color: mod.widgets.RINX_SURFACE border_color: mod.widgets.RINX_BORDER border_size: 1 border_radius: mod.widgets.RINX_CONTROL_RADIUS}
-            empty_title := RinxLabel {width: Fill height: Fit flow: Flow.Right{wrap: true} text: #(crate::i18n::tr("No approval rooms found")) i18n_text: "No approval rooms found" draw_text.text_style: theme.font_bold {font_size: mod.widgets.RINX_HEADING_SIZE}}
+            empty_title := RinxLabel {width: Fill height: Fit flow: Flow.Right{wrap: true} text: #(crate::i18n::tr("No approval chats found")) i18n_text: "No approval chats found" draw_text.text_style: theme.font_bold {font_size: mod.widgets.RINX_HEADING_SIZE}}
             empty_description := RinxLabel {width: Fill height: Fit flow: Flow.Right{wrap: true} draw_text.color: mod.widgets.RINX_MUTED}
-            empty_help := RinxHint {width: Fill height: Fit flow: Flow.Right{wrap: true} text: #(crate::i18n::tr("Only joined rooms with valid approval-room markers for your account are listed. A regular chat is not an approval room. Join your agent's approval room, then refresh this list.")) i18n_text: "Only joined rooms with valid approval-room markers for your account are listed. A regular chat is not an approval room. Join your agent's approval room, then refresh this list."}
+            empty_help := RinxHint {width: Fill height: Fit flow: Flow.Right{wrap: true} text: #(crate::i18n::tr("Only private approval chats you have joined and that are verified for your account appear here. Ordinary group chats do not appear. If you receive an invitation to an Agent approval chat, join it and refresh.")) i18n_text: "Only private approval chats you have joined and that are verified for your account appear here. Ordinary group chats do not appear. If you receive an invitation to an Agent approval chat, join it and refresh."}
         }
         rooms := PortalList {width: Fill height: Fill
             Row := View {width: Fill height: Fit flow: Down padding: 8 spacing: 8
@@ -110,29 +110,29 @@ fn nonce() -> u64 {
 impl ApprovalInbox {
     fn sync_status(&mut self, cx: &mut Cx) {
         let status = if self.loading {
-            crate::i18n::tr("Checking approval rooms…").to_owned()
+            crate::i18n::tr("Checking approval chats…").to_owned()
         } else if let Some((scanned, failed)) = self.summary {
             crate::i18n::format(
-                "Found {count} approval rooms. Checked {scanned} rooms; {failed} checks unavailable.",
+                "Found {count} approval chats. Checked {scanned} rooms; {failed} checks unavailable.",
                 &[("count", self.candidates.len().to_string()), ("scanned", scanned.to_string()), ("failed", failed.to_string())],
             )
         } else {
-            crate::i18n::tr("Sign in to check your approval rooms.").to_owned()
+            crate::i18n::tr("Sign in to check your approval chats.").to_owned()
         };
         self.view.label(cx, ids!(status)).set_text(cx, &status);
-        self.view.button(cx, ids!(refresh)).set_text(cx, crate::i18n::tr(if self.loading {"Checking approval rooms…"} else {"Refresh approval rooms"}));
+        self.view.button(cx, ids!(refresh)).set_text(cx, crate::i18n::tr(if self.loading {"Checking approval chats…"} else {"Refresh approval chats"}));
         self.view.button(cx, ids!(refresh)).set_enabled(cx, !self.loading && self.owner.is_some());
         let empty = !self.loading && self.summary.is_some() && self.candidates.is_empty();
         self.view.view(cx, ids!(empty_state)).set_visible(cx, empty);
         self.view.portal_list(cx, ids!(rooms)).set_visible(cx, !self.candidates.is_empty());
         let incomplete = self.summary.is_some_and(|(_, failed)| failed > 0);
-        self.view.label(cx, ids!(empty_title)).set_text(cx, crate::i18n::tr(if incomplete {"No verified approval rooms available"} else {"No approval rooms found"}));
+        self.view.label(cx, ids!(empty_title)).set_text(cx, crate::i18n::tr(if incomplete {"No verified approval chats available"} else {"No approval chats found"}));
         self.view.label(cx, ids!(empty_description)).set_text(cx, crate::i18n::tr(if incomplete {
             "Some rooms could not be checked. Refresh to try again; unchecked rooms may contain approvals."
         } else if self.project.is_some() {
-            "No verified approval room was found for this project. This does not indicate an agent startup error."
+            "No verified approval chats were found for this project. This does not mean an Agent failed to start."
         } else {
-            "Your joined rooms do not currently include a verified approval room. This does not indicate an agent startup error."
+            "You have not joined any verified approval chats yet. This does not mean an Agent failed to start."
         }));
         self.view.redraw(cx);
     }
@@ -484,16 +484,16 @@ mod tests {
         inbox.summary = Some((5, 0));
         inbox.sync_status(&mut cx);
         assert!(inbox.view.view(&cx, ids!(empty_state)).visible());
-        assert_eq!(inbox.view.label(&cx, ids!(empty_title)).text(), "No approval rooms found");
-        assert!(inbox.view.label(&cx, ids!(empty_description)).text().contains("does not indicate an agent startup error"));
+        assert_eq!(inbox.view.label(&cx, ids!(empty_title)).text(), "No approval chats found");
+        assert!(inbox.view.label(&cx, ids!(empty_description)).text().contains("does not mean an Agent failed to start"));
         inbox.summary = Some((5, 2));
         inbox.sync_status(&mut cx);
-        assert_eq!(inbox.view.label(&cx, ids!(empty_title)).text(), "No verified approval rooms available");
+        assert_eq!(inbox.view.label(&cx, ids!(empty_title)).text(), "No verified approval chats available");
         assert!(inbox.view.label(&cx, ids!(empty_description)).text().contains("unchecked rooms may contain approvals"));
         inbox.loading = true;
         inbox.sync_status(&mut cx);
         assert!(!inbox.view.view(&cx, ids!(empty_state)).visible());
-        assert_eq!(inbox.view.button(&cx, ids!(refresh)).text(), "Checking approval rooms…");
+        assert_eq!(inbox.view.button(&cx, ids!(refresh)).text(), "Checking approval chats…");
         inbox.loading = false;
         inbox.summary = Some((5, 0));
         inbox.sync_status(&mut cx);
@@ -517,6 +517,9 @@ mod tests {
             cx2d.end_pass(&pass);
         }
         let help = inbox.view.label(&cx, ids!(empty_help)).area().rect(&cx);
+        let explanation = inbox.view.label(&cx, ids!(explanation)).area().rect(&cx);
+        assert!(explanation.size.y > 30.0 && explanation.pos.x + explanation.size.x <= 310.0,
+            "account-wide approval guidance must wrap within the page: {explanation:?}");
         assert!(help.size.y > 30.0, "long empty-state guidance must wrap on narrow pages: {help:?}");
         assert!(help.pos.x + help.size.x <= 310.0);
         let cancelled = Arc::new(AtomicBool::new(false));

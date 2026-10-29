@@ -64,25 +64,31 @@ script_mod! {
         }
         services_panel := View {visible: false width: Fill height: Fit flow: Down padding: Inset{left: 16 right: 16 bottom: 12} spacing: 10
             services_back := RinxBackButton {}
-            RinxLabel {width: Fill height: Fit text: #(crate::i18n::tr("Room Agent services")) i18n_text: "Room Agent services"
+            RinxLabel {width: Fill height: Fit text: #(crate::i18n::tr("Manage my Agent services")) i18n_text: "Manage my Agent services"
                 draw_text +: {color: mod.widgets.RINX_INK text_style: theme.font_bold{font_size: mod.widgets.RINX_BODY_SIZE}}}
             RinxLabel {width: Fill height: Fit flow: Flow.Right{wrap: true}
-                text: #(crate::i18n::tr("Only your Agents connected to this Room are shown. Service settings apply to the selected Agent across its connected Rooms."))
-                i18n_text: "Only your Agents connected to this Room are shown. Service settings apply to the selected Agent across its connected Rooms."
+                text: #(crate::i18n::tr("Service settings apply across all Rooms connected to the selected Agent."))
+                i18n_text: "Service settings apply across all Rooms connected to the selected Agent."
                 draw_text +: {color: mod.widgets.RINX_MUTED text_style: theme.font_regular{font_size: mod.widgets.RINX_META_SIZE}}}
             services_status := RinxHint {width: Fill height: Fit flow: Flow.Right{wrap: true}}
-            room_services := RobrixSettingsDropDown {width: Fill height: mod.widgets.RINX_CONTROL_HEIGHT margin: 0 labels: ["Choose an Agent"]
-                popup_menu_position: PopupMenuPosition.BelowInput
-                popup_menu: RobrixSettingsPopupMenu {width: 256 menu_item: RobrixSettingsPopupMenuItem {height: mod.widgets.RINX_CONTROL_HEIGHT}}}
             View {width: Fill height: 36 flow: Right spacing: 8
-                configure_service := RobrixNeutralIconButton {
+                services_add_agent := RobrixNeutralIconButton {
                     height: RINX_BUTTON_HEIGHT padding: Inset{left: 12 right: 12 top: 0 bottom: 0}
-                    text: #(crate::i18n::tr("Open Service")) i18n_text: "Open Service" width: Fill icon_walk: Walk{width: 0 height: 0}
+                    text: #(crate::i18n::tr("Add an Agent")) i18n_text: "Add an Agent" width: Fill icon_walk: Walk{width: 0 height: 0}
                 }
                 refresh_services := RobrixNeutralIconButton {
                     height: RINX_BUTTON_HEIGHT padding: Inset{left: 12 right: 12 top: 0 bottom: 0}
                     text: #(crate::i18n::tr("Refresh")) icon_walk: Walk{width: 0 height: 0}
                 }
+            }
+            service_picker := View {width: Fill height: Fit
+                room_services := RobrixSettingsDropDown {width: Fill height: mod.widgets.RINX_CONTROL_HEIGHT margin: 0 labels: ["Choose an Agent"]
+                    popup_menu_position: PopupMenuPosition.BelowInput
+                    popup_menu: RobrixSettingsPopupMenu {width: 256 menu_item: RobrixSettingsPopupMenuItem {height: mod.widgets.RINX_CONTROL_HEIGHT}}}
+            }
+            configure_service := RobrixNeutralIconButton {
+                height: RINX_BUTTON_HEIGHT padding: Inset{left: 12 right: 12 top: 0 bottom: 0}
+                text: #(crate::i18n::tr("Manage service")) i18n_text: "Manage service" width: Fill icon_walk: Walk{width: 0 height: 0}
             }
         }
         member_controls := View {visible: false width: Fill height: Fit flow: Down padding: Inset{left: 12 right: 12 bottom: 12} spacing: 8
@@ -94,7 +100,7 @@ script_mod! {
                 }
                 invite_my_agent := RinxCompactButton {
                     height: RINX_ICON_BUTTON_SIZE padding: Inset{left: 12 right: 12 top: 0 bottom: 0}
-                    text: #(crate::i18n::tr("Add agent")) i18n_text: "Add agent" width: Fill spacing: 5
+                    text: #(crate::i18n::tr("Add an Agent")) i18n_text: "Add an Agent" width: Fill spacing: 5
                     icon_walk: Walk{width: 14 height: 14} draw_icon.svg: ICON_ROBOT
                 }
             }
@@ -113,6 +119,10 @@ script_mod! {
                     RinxLabel {width: Fill text: #(crate::i18n::tr("Room details")) draw_text +: {color: mod.widgets.RINX_INK text_style: theme.font_bold{font_size: mod.widgets.RINX_BODY_SIZE}}}
                     topic := RinxLabel {width: Fill height: Fit flow: Flow.Right{wrap: true}
                         draw_text +: {color: mod.widgets.RINX_INK text_style: theme.font_regular{font_size: mod.widgets.RINX_UI_SIZE}}}
+                    settings := NavigationBarButton {width:Fill height:32 padding:0 spacing:6 tooltip_text:#(crate::i18n::tr("Room settings"))
+                        Icon {icon_walk:Walk{width:16 height:16} draw_icon +: {svg:ICON_SETTINGS color:mod.widgets.RINX_MUTED}}
+                        RinxLabel {width:Fill text:#(crate::i18n::tr("Room settings")) i18n_text:"Room settings"}
+                    }
                     View {width: Fill height: 28 flow: Right spacing: 6 align: Align{y: 0.5}
                         room_id := RinxLabel {width: Fill height: Fit max_lines: 1 text_overflow: Ellipsis
                             draw_text +: {color: mod.widgets.RINX_MUTED text_style: theme.font_regular{font_size: mod.widgets.RINX_META_SIZE}}}
@@ -169,7 +179,7 @@ script_mod! {
         }
         agent_picker_modal := Modal {
             content := SmallModal {
-                title := ModalTitle {text: #(crate::i18n::tr("Add agent")) i18n_text: "Add agent"}
+                title := ModalTitle {text: #(crate::i18n::tr("Add an Agent")) i18n_text: "Add an Agent"}
                 agent_room := ModalBody {margin: Inset{bottom: 12}}
                 my_agents := RobrixSettingsDropDown {width: Fill height: mod.widgets.RINX_CONTROL_HEIGHT margin: 0 labels: ["Choose my Agent"]
                     draw_bg.border_radius: mod.widgets.RINX_CONTROL_RADIUS
@@ -184,7 +194,7 @@ script_mod! {
                     }
                     invite_selected_agent := RobrixPositiveIconButton {
                         width: Fit{min: FitBound.Abs(120.0)} align: Align{x: 0.5 y: 0.5} padding: 12
-                        text: #(crate::i18n::tr("Add agent")) i18n_text: "Add agent"
+                        text: #(crate::i18n::tr("Add an Agent")) i18n_text: "Add an Agent"
                         draw_icon.svg: ICON_ROBOT icon_walk: Walk{width: 16 height: 16 margin: Inset{left: -2 right: -1}}
                     }
                 }
@@ -201,27 +211,28 @@ script_mod! {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum InfoTab { #[default] Overview, Members }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum InfoRow { Overview, Member(usize), Notifications, Mode(usize), Back, AgentServices, Approvals, Filler }
-fn info_rows(tab: InfoTab, members: usize, choosing: bool, approvals: bool) -> usize {
-    match tab {InfoTab::Members => members, InfoTab::Overview if choosing => 6, InfoTab::Overview => 3 + usize::from(approvals)}
+enum InfoRow { Overview, Member(usize), Notifications, Mode(usize), Back, AgentServices, Filler }
+fn info_rows(tab: InfoTab, members: usize, choosing: bool) -> usize {
+    match tab {InfoTab::Members => members, InfoTab::Overview if choosing => 6, InfoTab::Overview => 3}
 }
-fn info_row(tab: InfoTab, members: usize, choosing: bool, approvals: bool, index: usize) -> InfoRow {
-    if index >= info_rows(tab, members, choosing, approvals) {return InfoRow::Filler;}
+fn info_row(tab: InfoTab, members: usize, choosing: bool, index: usize) -> InfoRow {
+    if index >= info_rows(tab, members, choosing) {return InfoRow::Filler;}
     match tab {
         InfoTab::Members => InfoRow::Member(index),
         InfoTab::Overview if index == 0 => InfoRow::Overview,
         InfoTab::Overview if choosing => if index <= 4 {InfoRow::Mode(index - 1)} else {InfoRow::Back},
-        InfoTab::Overview => match index {1 => InfoRow::Notifications, 2 => InfoRow::AgentServices, _ => InfoRow::Approvals},
+        InfoTab::Overview => match index {1 => InfoRow::Notifications, 2 => InfoRow::AgentServices, _ => InfoRow::Filler},
     }
 }
 #[derive(Clone, Debug)]
-pub(crate) struct ChatMembershipChanged {
+pub(crate) struct ChatInformationChanged {
     pub room_id: OwnedRoomId,
     pub epoch: u64,
 }
 
 #[derive(Clone, Debug)]
 struct ChatInfoData {
+    can_invite: bool,
     room: RoomNameId,
     topic: String,
     members: Vec<UserProfile>,
@@ -474,6 +485,7 @@ impl MobileChatInfo {
                     .members(RoomMemberships::JOIN)
                     .await
                     .map_err(|e| e.to_string())?;
+                let can_invite=members.iter().any(|m|m.user_id()==owner && m.can_invite());
                 let mut members: Vec<_> = members
                     .into_iter()
                     .map(|member| UserProfile {
@@ -486,6 +498,7 @@ impl MobileChatInfo {
                     .collect();
                 members.sort_by_key(|p| (p.displayable_name().to_lowercase(), p.user_id.clone()));
                 Ok(ChatInfoData {
+                    can_invite,
                     room: RoomNameId::from_room(&room).await,
                     topic: room.topic().unwrap_or_default(),
                     members,
@@ -629,6 +642,8 @@ impl Widget for MobileChatInfo {
         }
         if let Event::Actions(actions) = event {
             for action in actions {
+                if let Some(changed)=action.downcast_ref::<super::room_settings::RoomSettingsChanged>()
+                    && self.room.as_ref().is_some_and(|r|r.room_id()==changed.0.room_id()) && self.pin_is_current() {self.load(cx,changed.0.clone());}
                 if let Some(loaded) = action.downcast_ref::<RoomServicesLoaded>()
                     && self.pin_is_current() && self.services_response_matches(loaded) {
                     self.services_busy = false;
@@ -639,14 +654,14 @@ impl Widget for MobileChatInfo {
                             self.view.drop_down(cx, ids!(room_services)).set_labels(cx, labels);
                             let selected = usize::from(!self.services.is_empty());
                             self.view.drop_down(cx, ids!(room_services)).set_selected_item(cx, selected);
-                            let status = self.services.first().map(room_service_status).unwrap_or_else(||crate::i18n::tr("None of your Agents is bound to this Room. Add one in Members.").into());
+                            let status = self.services.first().map(room_service_status).unwrap_or_else(||crate::i18n::tr("You have no Agents in this Room.").into());
                             self.view.label(cx, ids!(services_status)).set_text(cx, &status);
                         }
                         Err(_) => {self.view.label(cx, ids!(services_status)).set_text(cx, crate::i18n::tr("Could not load Agent services. Refresh to retry."));}
                     }
                     self.view.redraw(cx);
                 }
-                if let Some(update) = action.downcast_ref::<ChatMembershipChanged>()
+                if let Some(update) = action.downcast_ref::<ChatInformationChanged>()
                     && update.epoch == self.epoch && self.pin_is_current()
                     && self.room.as_ref().is_some_and(|room| room.room_id() == &update.room_id)
                     && let Some(room) = self.room.clone()
@@ -662,7 +677,7 @@ impl Widget for MobileChatInfo {
                         self.agent_busy=false;
                         match &loaded.result {
                             Ok(value) if loaded.binding=> {
-                                self.view.label(cx,ids!(agent_status)).set_text(cx,if value["commandState"] == "pending" {crate::i18n::tr("Binding saved. Check its Room service in Overview.")} else {crate::i18n::tr("Agent added. Open Agent services in Overview to start responding.")});
+                                self.view.label(cx,ids!(agent_status)).set_text(cx,if value["commandState"] == "pending" {crate::i18n::tr("Binding saved. Check its status in Manage my Agent services in Overview.")} else {crate::i18n::tr("Agent added. You can add another, or open Manage my Agent services in Overview to start it.")});
                             }
                             Ok(value)=> {
                                 self.agent_project=value["projectId"].as_str().unwrap_or("").into();
@@ -731,6 +746,13 @@ impl Widget for MobileChatInfo {
             if self.view.button(cx, ids!(overview_tab)).clicked(actions) {self.select_tab(cx, InfoTab::Overview);return;}
             if self.view.button(cx, ids!(members_tab)).clicked(actions) {self.select_tab(cx, InfoTab::Members);return;}
             if self.tab == InfoTab::Overview && self.services_open && self.view.button(cx, ids!(refresh_services)).clicked(actions) {self.load_services(cx);return;}
+            if self.tab == InfoTab::Overview && self.services_open
+                && self.view.button(cx, ids!(services_add_agent)).clicked(actions)
+                && self.pin_is_current() && !self.services_busy && !self.agent_busy {
+                self.select_tab(cx, InfoTab::Members);
+                self.request_agents(cx, false);
+                return;
+            }
             if self.view.drop_down(cx, ids!(room_services)).changed(actions).is_some()
                 && let Some(index) = self.view.drop_down(cx, ids!(room_services)).selected_item().checked_sub(1)
                 && let Some(service) = self.services.get(index) {
@@ -750,7 +772,7 @@ impl Widget for MobileChatInfo {
                 return;
             }
             if self.tab == InfoTab::Members && self.view.button(cx, ids!(invite_people)).clicked(actions) {
-                if self.pin_is_current() && let Some(data)=self.data.as_ref() {cx.action(InviteModalAction::Open(data.room.clone()));}
+                if self.pin_is_current() && let Some(data)=self.data.as_ref().filter(|d|d.can_invite) {cx.action(InviteModalAction::Open(data.room.clone()));}
                 return;
             }
             if self.view.button(cx, ids!(close_agent_picker)).clicked(actions)
@@ -777,6 +799,10 @@ impl Widget for MobileChatInfo {
                     }
                     continue;
                 }
+                if widget.navigation_bar_button(cx,ids!(settings)).clicked(actions) {
+                    if self.pin_is_current() && self.tab==self.drawn_tab && self.rendered_rows.get(&widget.widget_uid())==Some(&InfoRow::Overview) && let Some(data)=&self.data {cx.action(super::room_settings::RoomSettingsAction::Open(data.room.clone()));}
+                    continue;
+                }
                 if list.was_scrolling()
                     || !(widget.navigation_bar_button(cx, ids!(row)).clicked(actions) || widget.button(cx, ids!(row)).clicked(actions))
                 {
@@ -797,10 +823,6 @@ impl Widget for MobileChatInfo {
                     }
                     InfoRow::Back => self.choosing_notifications = false,
                     InfoRow::AgentServices => {self.services_open = !self.services_open;if self.services_open {self.load_services(cx);}},
-                    InfoRow::Approvals => {
-                        #[cfg(feature="agent_chat")]
-                        cx.action(crate::agent_chat::approval_inbox::ApprovalInboxAction::Open {project:Some(data.room.room_id().clone())});
-                    }
                     InfoRow::Overview | InfoRow::Filler => continue,
                 }
                 self.view.redraw(cx);
@@ -819,19 +841,25 @@ impl Widget for MobileChatInfo {
         let direct = self.room.as_ref().is_some_and(|room|
             cx.get_global_ref::<RoomsListRef>().is_some_and(|rooms|
                 rooms.is_direct_room(room.room_id()) == Some(true)));
+        if direct {self.services_open=false;}
         let members = self.tab == InfoTab::Members;
         self.view.label(cx,ids!(ownership_status)).set_visible(cx,members && self.ownership_unavailable);
         self.view.view(cx, ids!(services_panel)).set_visible(cx, !members && self.services_open);
         self.view.view(cx, ids!(information_list)).set_visible(cx, members || !self.services_open);
         let service_selected = self.view.drop_down(cx, ids!(room_services)).selected_item().checked_sub(1).is_some_and(|i| i < self.services.len());
+        self.view.view(cx, ids!(service_picker)).set_visible(cx, !self.services.is_empty());
+        self.view.button(cx, ids!(configure_service)).set_visible(cx, !self.services.is_empty());
         self.view.button(cx, ids!(configure_service)).set_enabled(cx, service_selected && !self.services_busy && self.pin_is_current());
+        self.view.button(cx, ids!(services_add_agent)).set_enabled(cx, !direct && self.pin_is_current() && !self.services_busy && !self.agent_busy);
         self.view.button(cx, ids!(refresh_services)).set_enabled(cx, !self.services_busy);
         self.view.view(cx, ids!(member_controls)).set_visible(cx, members);
         self.view.button(cx,ids!(invite_my_agent)).set_visible(cx,members && !direct);
         if !members || direct || !self.agent_picker_open {
             self.close_agent_picker(cx);
         }
-        self.view.button(cx, ids!(invite_people)).set_enabled(cx, self.data.is_some() && self.owner.is_some());
+        let can_invite=self.data.as_ref().is_some_and(|d|d.can_invite);
+        self.view.button(cx, ids!(invite_people)).set_visible(cx,members && can_invite);
+        self.view.button(cx, ids!(invite_people)).set_enabled(cx,can_invite && self.owner.is_some());
         self.view.label(cx, ids!(members_empty)).set_visible(cx, members && self.data.as_ref().is_some_and(|d|d.members.is_empty()));
         let summary_room = self.data.as_ref().map(|data|&data.room).or(self.room.as_ref());
         self.view.label(cx, ids!(summary_name)).set_text(cx, &summary_room.map_or_else(|| crate::i18n::tr("Chat information").to_owned(), |room|room.display().into_owned()));
@@ -856,14 +884,14 @@ impl Widget for MobileChatInfo {
         self.rendered_rows.clear(); self.rendered_members.clear();
         while let Some(item) = self.view.draw_walk(cx, scope, walk).step() {
             if let Some(mut list) = item.borrow_mut::<PortalList>() {
-                let count = self.data.as_ref().map_or(0, |d| info_rows(self.tab, d.members.len(), self.choosing_notifications, cfg!(feature="agent_chat")));
+                let count = self.data.as_ref().map_or(0, |d| if direct && self.tab==InfoTab::Overview && !self.choosing_notifications {2} else {info_rows(self.tab, d.members.len(), self.choosing_notifications)});
                 list.set_item_range(cx, 0, count);
                 while let Some(index) = list.next_visible_item(cx) {
                     let Some(data) = self.data.as_mut().filter(|_| index < count) else {
                         list.item(cx, index, id!(Filler)).draw_all(cx, scope);
                         continue;
                     };
-                    let row = info_row(self.tab, data.members.len(), self.choosing_notifications, cfg!(feature="agent_chat"), index);
+                    let row = info_row(self.tab, data.members.len(), self.choosing_notifications, index);
                     let widget = match row {
                         InfoRow::Overview => {
                             let widget = list.item(cx, index, id!(Header));
@@ -920,8 +948,7 @@ impl Widget for MobileChatInfo {
                                     Some(RoomNotificationMode::MentionsAndKeywordsOnly) => crate::i18n::tr("Mentions"),
                                     None => crate::i18n::tr("Default"),
                                 }),
-                                InfoRow::AgentServices => (crate::i18n::tr("Room Agent services"), ""),
-                                InfoRow::Approvals => (crate::i18n::tr("Approval rooms"), ""),
+                                InfoRow::AgentServices => (crate::i18n::tr("Manage my Agent services"), ""),
                                 _ => ("", ""),
                             };
                             widget.label(cx, ids!(title)).set_text(cx, title);
@@ -989,18 +1016,19 @@ mod information_target_tests {
     }
     #[test]
     fn agents_follow_only_their_present_human_owner_without_losing_members() {
-        let mut members=vec![member("@alice:s","Alice"),member("@bob:s","Bob"),member("@a:s","Z agent"),member("@b:s","A agent"),member("@orphan:s","Orphan"),member("@external:s","External"),member("@_hagency_service:s","Hagency service")];
+        let mut members=vec![member("@alice:s","Alice"),member("@bob:s","Bob"),member("@a:s","Z agent"),member("@a2:s","Second agent"),member("@b:s","A agent"),member("@orphan:s","Orphan"),member("@external:s","External"),member("@_hagency_service:s","Hagency service")];
         let mut owners=HashMap::new();let mut conflicts=HashSet::new();
         add_member_owners(&mut owners,&mut conflicts,&serde_json::json!([
             {"puppetMxid":"@a:s","ownerMxid":"@alice:s"},
+            {"puppetMxid":"@a2:s","ownerMxid":"@alice:s"},
             {"puppetMxid":"@b:s","ownerMxid":"@bob:s"},
             {"puppetMxid":"@orphan:s","ownerMxid":"@missing:s"},
             {"puppetMxid":"@_hagency_service:s","ownerMxid":"@alice:s"}
         ]),None);
         let indented=group_members(&mut members,&owners);
         let ids:Vec<_>=members.iter().map(|p|p.user_id.as_str()).collect();
-        assert_eq!(ids,vec!["@alice:s","@a:s","@bob:s","@b:s","@external:s","@_hagency_service:s","@orphan:s"]);
-        assert_eq!(indented.len(),2);
+        assert_eq!(ids,vec!["@alice:s","@a2:s","@a:s","@bob:s","@b:s","@external:s","@_hagency_service:s","@orphan:s"]);
+        assert_eq!(indented.len(),3);
         assert!(indented.contains(&OwnedUserId::try_from("@a:s").unwrap()));
         assert!(!indented.contains(&OwnedUserId::try_from("@orphan:s").unwrap()));
         assert_eq!(group_members(&mut members,&owners),indented,"refresh preserves grouping");
@@ -1010,7 +1038,7 @@ mod information_target_tests {
             let value=script_eval!(vm,{mod.widgets.MobileChatInfo {}});
             MobileChatInfo::script_from_value(vm,value)
         });
-        info.data=Some(ChatInfoData {room:RoomNameId::empty(OwnedRoomId::try_from("!r:s").unwrap()),topic:String::new(),members,mode:None});
+        info.data=Some(ChatInfoData {can_invite:true,room:RoomNameId::empty(OwnedRoomId::try_from("!r:s").unwrap()),topic:String::new(),members,mode:None});
         info.indented_members=indented;
         info.select_tab(&mut cx,InfoTab::Members);draw_information(&mut info,&mut cx);
         let list=info.view.portal_list(&cx,ids!(list));
@@ -1019,9 +1047,11 @@ mod information_target_tests {
         assert_eq!(parent.size,dvec2(32.0,32.0));assert_eq!(child.size,parent.size);
         assert_eq!(child.pos.x-parent.pos.x,20.0);
         assert_eq!(child.pos.y-parent.pos.y,48.0,"Agent sits closer to its owner");
-        let next_owner=list.item(&mut cx,2,id!(Member)).avatar(&cx,ids!(avatar)).area().rect(&cx);
-        assert_eq!(next_owner.pos.y-child.pos.y,56.0,"keep the gap before the next owner");
-        for index in [0,1] {
+        let second_child=list.item(&mut cx,2,id!(Member)).avatar(&cx,ids!(avatar)).area().rect(&cx);
+        assert_eq!(second_child.pos.x,child.pos.x,"multiple Agents share their owner's indentation");
+        let next_owner=list.item(&mut cx,3,id!(Member)).avatar(&cx,ids!(avatar)).area().rect(&cx);
+        assert_eq!(next_owner.pos.y-second_child.pos.y,56.0,"keep the gap before the next owner");
+        for index in [0,1,2] {
             let widget=list.item(&mut cx,index,id!(Member));
             let name=widget.label(&cx,ids!(name)).area().rect(&cx);
             let user_id=widget.label(&cx,ids!(user_id)).area().rect(&cx);
@@ -1105,18 +1135,17 @@ mod information_target_tests {
     fn overview_actions_and_member_indices_never_share_notification_or_profile_targets() {
         for members in [0, 1, 5, 200] {
             for choosing in [false, true] {
-                assert_eq!(info_row(InfoTab::Members, members, choosing, true, members), InfoRow::Filler);
-                for index in 0..members {assert_eq!(info_row(InfoTab::Members, members, choosing, true, index), InfoRow::Member(index));}
-                assert_eq!(info_row(InfoTab::Overview, members, choosing, false, 0), InfoRow::Overview);
+                assert_eq!(info_row(InfoTab::Members, members, choosing, members), InfoRow::Filler);
+                for index in 0..members {assert_eq!(info_row(InfoTab::Members, members, choosing, index), InfoRow::Member(index));}
+                assert_eq!(info_row(InfoTab::Overview, members, choosing, 0), InfoRow::Overview);
                 if choosing {
-                    for mode in 0..4 {assert_eq!(info_row(InfoTab::Overview, members, true, true, mode+1), InfoRow::Mode(mode));}
-                    assert_eq!(info_row(InfoTab::Overview, members, true, true, 5), InfoRow::Back);
-                    assert_eq!(info_row(InfoTab::Overview, members, true, true, 6), InfoRow::Filler);
+                    for mode in 0..4 {assert_eq!(info_row(InfoTab::Overview, members, true, mode+1), InfoRow::Mode(mode));}
+                    assert_eq!(info_row(InfoTab::Overview, members, true, 5), InfoRow::Back);
+                    assert_eq!(info_row(InfoTab::Overview, members, true, 6), InfoRow::Filler);
                 } else {
-                    assert_eq!(info_row(InfoTab::Overview, members, false, true, 1), InfoRow::Notifications);
-                    assert_eq!(info_row(InfoTab::Overview, members, false, true, 2), InfoRow::AgentServices);
-                    assert_eq!(info_row(InfoTab::Overview, members, false, true, 3), InfoRow::Approvals);
-                    assert_eq!(info_row(InfoTab::Overview, members, false, false, 3), InfoRow::Filler);
+                    assert_eq!(info_row(InfoTab::Overview, members, false, 1), InfoRow::Notifications);
+                    assert_eq!(info_row(InfoTab::Overview, members, false, 2), InfoRow::AgentServices);
+                    assert_eq!(info_row(InfoTab::Overview, members, false, 3), InfoRow::Filler);
                 }
             }
         }
@@ -1147,7 +1176,7 @@ mod information_target_tests {
             let info=MobileChatInfo::script_from_value(vm,value);assert!(vm.take_errors().is_empty());info
         });
         let room=RoomNameId::new(matrix_sdk::RoomDisplayName::Named("Room A".into()),matrix_sdk::ruma::room_id!("!a:server").to_owned());
-        info.room=Some(room.clone());info.data=Some(ChatInfoData{room,topic:"A topic".into(),members:vec![],mode:None});
+        info.room=Some(room.clone());info.data=Some(ChatInfoData{can_invite:true,room,topic:"A topic".into(),members:vec![],mode:None});
         info.agent_command=Some(("exact-original-input".into(),"original-key".into()));
         draw_information(&mut info,&mut cx);
         assert_eq!(info.view.label(&cx,ids!(summary_name)).text(),"Room A");
@@ -1184,6 +1213,17 @@ mod information_target_tests {
         assert!(info.view.view(&cx,ids!(services_panel)).visible());
         assert!(!info.view.view(&cx,ids!(information_list)).visible());
         assert_eq!(info.view.button(&cx,ids!(services_back)).text(),crate::i18n::tr("Back"));
+        assert_eq!(info.view.button(&cx,ids!(services_add_agent)).text(),crate::i18n::tr("Add an Agent"));
+        assert!(info.view.button(&cx,ids!(services_add_agent)).visible());
+        assert!(!info.view.view(&cx,ids!(service_picker)).visible(), "empty state must offer adding instead of an empty selector");
+        assert!(!info.view.button(&cx,ids!(configure_service)).visible());
+        info.services=vec![serde_json::json!({"agentId":"a"}),serde_json::json!({"agentId":"b"})];
+        info.view.drop_down(&cx,ids!(room_services)).set_labels(&mut cx,vec!["Choose an Agent".into(),"Agent A".into(),"Agent B".into()]);
+        info.view.drop_down(&cx,ids!(room_services)).set_selected_item(&mut cx,1);
+        draw_information(&mut info,&mut cx);
+        assert!(info.view.view(&cx,ids!(service_picker)).visible());
+        assert!(info.view.button(&cx,ids!(configure_service)).visible());
+        assert!(info.view.button(&cx,ids!(services_add_agent)).visible(), "an existing Agent must not remove the add-another action");
         info.select_tab(&mut cx,InfoTab::Members);draw_information(&mut info,&mut cx);
         assert!(!info.services_open);
         assert!(!info.view.view(&cx,ids!(services_panel)).visible());
@@ -1237,6 +1277,7 @@ mod information_target_tests {
             room_id: room_a.clone(),
             request: 10,
             result: Ok(ChatInfoData {
+                can_invite: true,
                 room: RoomNameId::empty(room_a),
                 topic: String::new(),
                 members: vec![],

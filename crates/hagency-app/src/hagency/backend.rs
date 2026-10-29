@@ -522,13 +522,14 @@ impl Service {
                 && m.membership() == &matrix_sdk::ruma::events::room::member::MembershipState::Join
                 && m.can_invite()
         });
+        let service_server=client.user_id().ok_or("matrix_account_changed")?.server_name();
         let mut members = members.iter().map(|m| {
             let power = match m.power_level() {
                 matrix_sdk::ruma::events::room::power_levels::UserPowerLevel::Int(v) => v.to_string(),
                 _ => "Creator".into(),
             };
             serde_json::json!({"userId":m.user_id().as_str(),"name":m.display_name().unwrap_or(m.user_id().as_str()),
-                "membership":m.membership().as_str(),"role":format!("{:?}",m.suggested_role_for_power_level()),"power":power})
+                "service":m.user_id().localpart()=="_hagency_service" && m.user_id().server_name()==service_server,"membership":m.membership().as_str(),"role":format!("{:?}",m.suggested_role_for_power_level()),"power":power})
         }).collect::<Vec<_>>();
         members.sort_by_key(|m| {
             (
@@ -536,9 +537,15 @@ impl Service {
                 m["userId"].as_str().unwrap_or("").to_owned(),
             )
         });
+        let viewer=matrix_sdk::ruma::UserId::parse(&self.0.owner).map_err(|_|"matrix_account_changed")?;
+        let agents=crate::profile::agent_details::visible_agent_owners(&viewer).await;
+        if let Ok(owners)=&agents {for member in &mut members {
+            if let Ok(id)=matrix_sdk::ruma::UserId::parse(member["userId"].as_str().unwrap_or_default())
+                && let Some(owner)=owners.get(&id) {member["agentOwner"]=serde_json::json!(owner.as_str());}
+        }}
         self.check()?;
         Ok(
-            serde_json::json!({"roomId":room_id,"space":space,"canInvite":can_invite,"members":members}),
+            serde_json::json!({"roomId":room_id,"space":space,"canInvite":can_invite,"agentMetadataUnavailable":agents.is_err(),"members":members}),
         )
     }
     /// Resolve only an existing, visible Project/Room association. This never

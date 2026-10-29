@@ -19,6 +19,7 @@ impl Widget for ProjectBoard {
             cx.stop_timer(self.timer);
             return;
         }
+        self.toolbar_tooltips(cx,event);
         self.handle_column_drag(cx, event);
         match event {
             Event::WindowLostFocus(_) => {
@@ -34,7 +35,7 @@ impl Widget for ProjectBoard {
             }
             Event::KeyDown(e)
                 if e.key_code == KeyCode::Escape
-                    && !self.view.view(cx, ids!(inspector)).visible() =>
+                    && !self.modal_visible(cx) =>
             {
                 self.close_calendar(cx);
                 if self.pending.is_none() {
@@ -131,6 +132,7 @@ impl Widget for ProjectBoard {
         self.handle_markdown(cx, actions);
         self.handle_calendar(cx, actions);
         self.handle_quick_create(cx, actions);
+        self.handle_labels(cx, actions);
         self.handle_collaboration(cx, actions);
         self.media_actions(cx, actions);
         for action in actions {
@@ -146,6 +148,7 @@ impl Widget for ProjectBoard {
                         CardAction::Open => self.select(cx, &task),
                         CardAction::Start(abs)
                             if self.pending.is_none()
+                                && !self.read_only
                                 && !self.dirty
                                 && self.landing.is_none()
                                 && self.columns_draft.is_none()
@@ -300,98 +303,7 @@ impl Widget for ProjectBoard {
             self.dirty = true;
             self.discard_armed = false;
         }
-        if self.view.button(cx, ids!(clear_filters)).clicked(actions) && !self.loading {
-            self.query = Query::default();
-            self.view.text_input(cx, ids!(search)).set_text(cx, "");
-            self.view
-                .text_input(cx, ids!(filter_label))
-                .set_text(cx, "");
-            self.view
-                .drop_down(cx, ids!(filter_state))
-                .set_selected_item(cx, 0);
-            self.view
-                .drop_down(cx, ids!(filter_assignee))
-                .set_selected_item(cx, 0);
-            self.view
-                .check_box(cx, ids!(overdue))
-                .set_active(cx, false, Animate::No);
-            self.view
-                .check_box(cx, ids!(archived))
-                .set_active(cx, false, Animate::No);
-            self.reset_viewports(cx);
-            self.load(cx);
-        }
-        if self.view.button(cx, ids!(refresh)).clicked(actions) {
-            self.failed = false;
-            self.load(cx);
-        }
-        if self.view.button(cx, ids!(retry)).clicked(actions)
-            || self.view.button(cx, ids!(dialog_retry)).clicked(actions)
-        {
-            self.retry_write(cx);
-        }
-        if self.view.button(cx, ids!(new_task)).clicked(actions) {
-            self.new_task(cx);
-        }
-        if self.view.button(cx, ids!(apply_filters)).clicked(actions)
-            || self
-                .view
-                .text_input(cx, ids!(search))
-                .returned(actions)
-                .is_some()
-            || self
-                .view
-                .check_box(cx, ids!(overdue))
-                .changed(actions)
-                .is_some()
-            || self
-                .view
-                .check_box(cx, ids!(archived))
-                .changed(actions)
-                .is_some()
-        {
-            if !self.loading {
-                let search = self.view.text_input(cx, ids!(search)).text();
-                let label = self.view.text_input(cx, ids!(filter_label)).text();
-                let member = self
-                    .view
-                    .drop_down(cx, ids!(filter_assignee))
-                    .selected_item();
-                self.query = Query {
-                    state: self
-                        .view
-                        .drop_down(cx, ids!(filter_state))
-                        .selected_item()
-                        .checked_sub(1)
-                        .map(|i| self.status_state(i)),
-                    query: if search.trim().is_empty() {
-                        None
-                    } else {
-                        Some(search.trim().into())
-                    },
-                    label: if label.trim().is_empty() {
-                        None
-                    } else {
-                        Some(label.trim().into())
-                    },
-                    assignee: member
-                        .checked_sub(1)
-                        .and_then(|i| self.members.get(i).cloned()),
-                    overdue: self.view.check_box(cx, ids!(overdue)).active(cx),
-                    archived: self.view.check_box(cx, ids!(archived)).active(cx),
-                    ..Default::default()
-                };
-                if self.query.validate().is_ok() {
-                    self.reset_viewports(cx);
-                    self.load(cx);
-                } else {
-                    self.notice(
-                        cx,
-                        tr("Keep searches under 120 characters and labels under 32 characters."),
-                    );
-                }
-            }
-        }
+        self.handle_filters(cx, actions);
         if self.view.button(cx, ids!(close_detail)).clicked(actions) {
             self.request_close_inspector(cx);
         }
@@ -509,7 +421,8 @@ impl Widget for ProjectBoard {
                     inspector,
                     self.dirty,
                     self.pending.is_some(),
-                    self.creating
+                    self.creating,
+                    self.read_only
                 ),
                 (
                     &self.draft_checklist,
@@ -528,6 +441,9 @@ impl Widget for ProjectBoard {
         );
         if self.layout_key != layout_key {
             self.layout_key = layout_key;
+            let mut toolbar_row=self.view.view(cx,ids!(toolbar_row));
+            if width<600.0 {script_apply_eval!(cx,toolbar_row,{flow:Down});}
+            else {script_apply_eval!(cx,toolbar_row,{flow:Right});}
             self.view.view(cx, ids!(board_scroll)).set_visible(cx, true);
             self.prepare_extension_draw(cx);
             for index in 0..12 {
@@ -569,9 +485,11 @@ impl Widget for ProjectBoard {
                     }
                 }
 
+                column.button(cx,ids!(add)).set_visible(cx,!self.read_only);
                 column.button(cx, ids!(add)).set_board_enabled(
                     cx,
                     self.snapshot.is_some()
+                        && !self.read_only
                         && self.pending.is_none()
                         && !self.dirty
                         && !self.query.archived,
@@ -583,7 +501,7 @@ impl Widget for ProjectBoard {
                         .map(|l| {
                             l.wip_limit.map_or_else(
                                 || l.total.to_string(),
-                                |limit| format!("WIP {}/{}", l.task_count, limit),
+                                |limit| format!("{}/{}{}", l.task_count, limit, if l.task_count >= limit { format!(" · {}", tr("Full")) } else { String::new() }),
                             )
                         })
                         .unwrap_or_else(|| "—".into()),

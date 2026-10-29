@@ -210,3 +210,52 @@ impl UnreadBadgeRef {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use makepad_widgets::makepad_draw::cx_draw::CxDraw;
+
+    #[test]
+    fn real_badge_distinguishes_messages_manual_unread_mentions_and_clear() {
+        let mut cx=Cx::new(Box::new(|_,_|{}));
+        let badge=cx.with_vm(|vm| {
+            makepad_widgets::script_mod(vm);crate::app::register_widgets(vm);
+            let value=script_eval!(vm,{mod.widgets.UnreadBadge {}});
+            WidgetRef::script_from_value(vm,value)
+        });
+        let pass=DrawPass::new(&mut cx);
+        pass.set_size(&mut cx,dvec2(60.0,40.0));
+        let mut list=DrawList2d::new(&mut cx);
+        for (marked,mentions,messages,text,visible) in [
+            (false,0,0,"",false),
+            (false,0,1,"1",true),
+            (false,0,2,"2",true),
+            (true,0,2,"2",true),
+            (true,0,0,"",true),
+            (false,0,0,"",false),
+            (false,1,3,"@1",true),
+            (false,0,99,"99",true),
+            (false,0,100,"99+",true),
+            (true,100,101,"@99+",true),
+        ] {
+            badge.as_unread_badge().update_counts(marked,mentions,messages);
+            cx.redraw_all();
+            let event=DrawEvent::default();
+            let mut draw=CxDraw::new(&mut cx,&event);
+            let mut cx2d=Cx2d::new(&mut draw);
+            cx2d.begin_pass(&pass,None);list.begin_always(&mut cx2d);
+            cx2d.begin_root_turtle(dvec2(60.0,40.0),Layout::flow_overlay());
+            badge.draw_walk_all(&mut cx2d,&mut Scope::empty(),Walk {width:Size::Fixed(30.0),height:Size::Fixed(20.0),..Walk::default()});
+            cx2d.end_pass_sized_turtle();list.end(&mut cx2d);cx2d.end_pass(&pass);
+            drop(cx2d);drop(draw);
+            assert_eq!(badge.visible(),visible);
+            if visible {
+                let label=badge.label(&cx,ids!(label_count));
+                assert_eq!(label.text().trim(),text,"marked={marked}, mentions={mentions}, messages={messages}");
+                let rect=label.area().rect(&cx);let outer=badge.area().rect(&cx);
+                assert!(rect.pos.x>=outer.pos.x && rect.pos.x+rect.size.x<=outer.pos.x+outer.size.x,"{text}: {rect:?} outside {outer:?}");
+            }
+        }
+    }
+}

@@ -6,6 +6,7 @@ makepad_widgets::script_mod! {
     use mod.widgets.*
     let Text = RinxLabel {width: Fill height: Fit draw_text +: {color: mod.widgets.RINX_INK text_style: theme.font_regular{font_size: mod.widgets.RINX_BODY_SIZE}}}
     let Small = Text {draw_text +: {color: mod.widgets.RINX_MUTED text_style: theme.font_regular{font_size: mod.widgets.RINX_META_SIZE}}}
+    let Hint = Small {flow:Flow.Right{wrap:true}}
     let Input = RobrixTextInput {width: Fill height: 38 margin: 0 padding: Inset{left: 12 right: 12 top: 9 bottom: 9}}
     let Select = RobrixSettingsDropDown {width: Fill height: 38 margin: 0}
     let Action = RinxButton {height: 36 padding: Inset{left: 14 right: 14 top: 0 bottom: 0}}
@@ -112,6 +113,7 @@ makepad_widgets::script_mod! {
         }
         quick_add := RinxGhostButton {width:Fill height:36 align:Align{x:0.0 y:0.5} text:#(crate::i18n::tr("+ Add a card")) i18n_text:"+ Add a card"}
         quick_form := View {visible:false width:Fill height:Fit flow:Down spacing:8
+            quick_notice := Hint {visible:false}
             quick_title := Input {height:64 is_multiline:true submit_on_enter:true empty_text:#(crate::i18n::tr("Enter a title…")) i18n_empty_text:"Enter a title…"}
             View {width:Fill height:34 spacing:8
                 quick_save := RinxPrimaryButton {height:34 text:#(crate::i18n::tr("Add card")) i18n_text:"Add card"}
@@ -122,30 +124,47 @@ makepad_widgets::script_mod! {
     mod.widgets.ProjectBoard = #(ProjectBoard::register_widget(vm)) {
         skip_widget_tree_search: true
         draw_dialog_bg +: {color:#0008}
-        width: Fill height: Fill flow: Down spacing: 14
-        toolbar := RoundedView {width: Fill height: Fit flow: Down spacing: 10 padding: 12
-            draw_bg +: {color: mod.widgets.RINX_SURFACE border_color: mod.widgets.RINX_BORDER border_size: 1.0 border_radius: 12.0}
-            View {width: Fill height: Fit flow: Flow.Right{wrap: true} spacing: 8 align: Align{y: 0.5}
-                search := Input {width: 240 empty_text: #(crate::i18n::tr("Search tasks…")) i18n_empty_text: "Search tasks…"}
-                filter_state := Select {width: 150 labels: [#(crate::i18n::tr("All statuses")) #(crate::i18n::tr("To do")) #(crate::i18n::tr("In progress")) #(crate::i18n::tr("Blocked")) #(crate::i18n::tr("In review")) #(crate::i18n::tr("Done"))]}
-                filter_assignee := Select {width: 170 labels: [#(crate::i18n::tr("All members"))]}
-                filter_label := Input {width: 130 empty_text: #(crate::i18n::tr("Label")) i18n_empty_text: "Label"}
-                apply_filters := Action {text: #(crate::i18n::tr("Filter")) i18n_text: "Filter"}
-                clear_filters := RinxGhostButton {height:36 visible:false text:#(crate::i18n::tr("Clear filters")) i18n_text:"Clear filters"}
-                refresh := RinxGhostButton {height:36 text: #(crate::i18n::tr("Refresh")) i18n_text: "Refresh"}
-                new_column := RinxGhostButton {text:#(crate::i18n::tr("New column")) i18n_text:"New column"}
-                manage_columns := RinxGhostButton {height:36 text:#(crate::i18n::tr("Columns & WIP")) i18n_text:"Columns & WIP"}
-                new_task := RinxPrimaryButton {height: 38 padding: Inset{left:18 right:18} text: #(crate::i18n::tr("New task")) i18n_text: "New task"}
+        width: Fill height: Fill flow: Down spacing: 8
+        toolbar := View {width: Fill height: Fit flow: Down spacing: 6
+            toolbar_row := View {width:Fill height:Fit flow:Right spacing:6 align:Align{y:0.5}
+                board_navigation := View {visible:false width:Fit height:32 spacing:6 align:Align{y:0.5}
+                    boards := Select {width:220 height:32 labels:[#(crate::i18n::tr("Main Board"))]}
+                    toggle_board_creation := RinxIconButton {width:32 height:32 draw_icon.svg:ICON_ADD}
+                }
+            toolbar_actions := View {width: Fill{min:270} height: Fit flow: Flow.Right{wrap: true} spacing: 6 align: Align{x:1.0 y: 0.5}
+                filters_toggle := RinxIconButton {width:32 height:32 draw_icon.svg:crate_resource("self://resources/icons/filter.svg")}
+                clear_filters := RinxGhostButton {height:32 visible:false text:#(crate::i18n::tr("Clear filters")) i18n_text:"Clear filters"}
+                my_tasks := RinxGhostButton {height:32 text:#(crate::i18n::tr("My tasks")) i18n_text:"My tasks"}
+                notifications_holder := View {width:Fit height:32 spacing:0 align:Align{y:0.5}
+                    notifications_button := RinxIconButton {width:32 height:32 draw_icon.svg:crate_resource("self://resources/icons/bell.svg")}
+                    notifications_badge := UnreadBadge {}
+                }
+                refresh := RinxIconButton {width:32 height:32 draw_icon.svg:crate_resource("self://resources/icons/article_refresh.svg")}
+                manage_columns := RinxIconButton {width:32 height:32 draw_icon.svg:ICON_SETTINGS}
+                sync_status := Small {visible:false width:Fit}
             }
-            View {width: Fill height: Fit flow: Flow.Right{wrap: true} spacing: 12 align: Align{y: 0.5}
-                summary := Small {width: Fit text: #(crate::i18n::tr("Shared with Project members")) i18n_text: "Shared with Project members"}
-                notifications_button := RinxGhostButton {height:30 text:#(crate::i18n::tr("Notifications")) i18n_text:"Notifications"}
-                my_tasks := RinxGhostButton {height:30 text:#(crate::i18n::tr("My tasks")) i18n_text:"My tasks"}
-                overdue := RinxCheckBox {text: #(crate::i18n::tr("Overdue")) i18n_text: "Overdue"}
-                archived := RinxCheckBox {text: #(crate::i18n::tr("Archived tasks")) i18n_text: "Archived tasks"}
-                board_loading := LoadingSpinner {visible: false width: 16 height: 16 draw_bg +: {color: mod.widgets.RINX_ACCENT stroke_width: 2.0}}
-                sync_status := Small {width: Fit}
             }
+            board_creation_controls := View {visible:false width:Fill height:Fit flow:Flow.Right{wrap:true} spacing:6
+                board_name := Input {width:200 height:32 empty_text:#(crate::i18n::tr("Board name")) i18n_empty_text:"Board name"}
+                create_board := Action {height:32 text:#(crate::i18n::tr("New Board")) i18n_text:"New Board"}
+            }
+            filters_panel := RoundedView {visible:false width:Fill height:Fit padding:10 spacing:8 flow:Flow.Right{wrap:true} align:Align{y:0.5}
+                draw_bg +: {color:mod.widgets.RINX_SURFACE border_color:mod.widgets.RINX_BORDER border_size:1 border_radius:8}
+                search := Input {width:220 height:32 empty_text:#(crate::i18n::tr("Search tasks…")) i18n_empty_text:"Search tasks…"}
+                filter_state := Select {width:150 height:32 labels:[#(crate::i18n::tr("All statuses"))]}
+                filter_assignee := Select {width:160 height:32 labels:[#(crate::i18n::tr("All members"))]}
+                filter_label := Input {width:140 height:32 empty_text:#(crate::i18n::tr("Filter by label")) i18n_empty_text:"Filter by label"}
+                filter_label_choice := Select {width:160 height:32 labels:[#(crate::i18n::tr("Existing labels"))]}
+                overdue := RinxCheckBox {text:#(crate::i18n::tr("Overdue")) i18n_text:"Overdue"}
+                archived := RinxCheckBox {text:#(crate::i18n::tr("Archived tasks")) i18n_text:"Archived tasks"}
+                apply_filters := Action {height:32 text:#(crate::i18n::tr("Apply")) i18n_text:"Apply"}
+                filters_close := RinxIconButton {width:32 height:32 draw_icon.svg:ICON_CLOSE}
+            }
+        }
+        filter_summary := Hint {visible:false}
+        created_feedback := View {visible:false width:Fill height:Fit flow:Flow.Right{wrap:true} spacing:10 align:Align{y:0.5}
+            created_message := Text {width:Fill max_lines:2 flow:Flow.Right{wrap:true}}
+            open_created := RinxGhostButton {height:32 text:#(crate::i18n::tr("Open card")) i18n_text:"Open card"}
         }
         notice := Text {visible: false draw_text.color: mod.widgets.RINX_MUTED}
         retry := Action {visible: false text: #(crate::i18n::tr("Retry original save")) i18n_text: "Retry original save"}
@@ -166,29 +185,6 @@ makepad_widgets::script_mod! {
             }
             notifications_older := Action {visible:false text:#(crate::i18n::tr("Older notifications")) i18n_text:"Older notifications"}
         }
-        column_settings := RoundedView {visible:false width:Fill height:Fit padding:14 flow:Down spacing:10
-            draw_bg +: {color:mod.widgets.RINX_SURFACE border_radius:10.0 border_size:1.0 border_color:mod.widgets.RINX_BORDER}
-            View {width:Fill height:Fit align:Align{y:0.5} spacing:10
-                Text {width:Fill text:#(crate::i18n::tr("Columns & WIP")) i18n_text:"Columns & WIP" draw_text.text_style:theme.font_bold{font_size:mod.widgets.RINX_BODY_SIZE}}
-                save_columns := RinxPrimaryButton {height:34 text:#(crate::i18n::tr("Save columns")) i18n_text:"Save columns"}
-                cancel_columns := Action {text:#(crate::i18n::tr("Cancel")) i18n_text:"Cancel"}
-            }
-            View {width:Fill height:Fit flow:Flow.Right{wrap:true} align:Align{y:0.5} spacing:10
-                edit_column := Select {width:160}
-                column_name := Input {width:200 empty_text:#(crate::i18n::tr("Column name")) i18n_empty_text:"Column name"}
-                column_wip := Input {width:115 empty_text:#(crate::i18n::tr("WIP · no limit")) i18n_empty_text:"WIP · no limit"}
-                column_done := RinxCheckBox {text:#(crate::i18n::tr("Completed column")) i18n_text:"Completed column"}
-                column_left := Action {text:"←"}
-                column_right := Action {text:"→"}
-                add_column := Action {text:#(crate::i18n::tr("Add column")) i18n_text:"Add column"}
-                archive_column := Action {text:#(crate::i18n::tr("Archive column")) i18n_text:"Archive column"}
-                remove_column := Action {text:#(crate::i18n::tr("Delete column")) i18n_text:"Delete column"}
-            }
-            Small {text:#(crate::i18n::tr("WIP counts all active tasks. Delete only empty columns, including archived tasks. Changes apply when saved.")) i18n_text:"WIP counts all active tasks. Delete only empty columns, including archived tasks. Changes apply when saved."}
-            Small {text:#(crate::i18n::tr("Archived columns keep their cards. Restore them here.")) i18n_text:"Archived columns keep their cards. Restore them here."}
-            rebase_columns := Action {visible:false text:#(crate::i18n::tr("Use latest board revision")) i18n_text:"Use latest board revision"}
-            columns_notice := Small {}
-        }
         workspace := View {width: Fill height: Fill spacing: 14
             board_scroll := ScrollXView {width: Fill height: Fill flow: Right spacing: 12
                 todo := Column {}
@@ -208,13 +204,60 @@ makepad_widgets::script_mod! {
         }
         // Kept out of normal layout; the board draws it in a pass-wide modal overlay.
         inspector_host := View {visible:false
+            column_settings := RoundedView {visible:false width:760 height:620 padding:20 flow:Down spacing:14
+                draw_bg +: {color:mod.widgets.RINX_SURFACE border_radius:12.0 border_size:1.0 border_color:mod.widgets.RINX_BORDER}
+                View {width:Fill height:40 spacing:10 align:Align{y:0.5}
+                    Text {width:Fill text:#(crate::i18n::tr("Manage columns")) i18n_text:"Manage columns" draw_text.text_style:theme.font_bold{font_size:mod.widgets.RINX_SECTION_SIZE}}
+                    save_columns := RinxPrimaryButton {height:36 text:#(crate::i18n::tr("Save changes")) i18n_text:"Save changes"}
+                    cancel_columns := Action {text:#(crate::i18n::tr("Cancel")) i18n_text:"Cancel"}
+                }
+                Hint {text:#(crate::i18n::tr("Choose a column to edit. Changes apply together when saved.")) i18n_text:"Choose a column to edit. Changes apply together when saved."}
+                columns_notice := Text {visible:false flow:Flow.Right{wrap:true}}
+                columns_retry := Action {visible:false text:#(crate::i18n::tr("Retry original save")) i18n_text:"Retry original save"}
+                rebase_columns := Action {visible:false text:#(crate::i18n::tr("Use latest board revision")) i18n_text:"Use latest board revision"}
+                View {width:Fill height:Fill spacing:20
+                    View {width:210 height:Fill flow:Down spacing:10
+                        column_list := PortalList {width:Fill height:Fill capture_overload:false
+                            Item := View {width:Fill height:64 padding:Inset{right:12 bottom:6} flow:Down spacing:2
+                                choose_column := RinxGhostButton {width:Fill height:32 align:Align{x:0.0 y:0.5}}
+                                column_summary := Hint {width:Fill max_lines:1 text_overflow:Ellipsis}
+                            }
+                        }
+                        add_column := Action {width:Fill text:#(crate::i18n::tr("+ Add column")) i18n_text:"+ Add column"}
+                    }
+                    ScrollYView {width:Fill height:Fill flow:Down spacing:12
+                        View {visible:false edit_column := Select {}}
+                        Text {text:#(crate::i18n::tr("Column name")) i18n_text:"Column name"}
+                        column_name := Input {}
+                        View {width:Fill height:Fit flow:Flow.Right{wrap:true} spacing:8
+                            column_left := Action {text:#(crate::i18n::tr("Move earlier")) i18n_text:"Move earlier"}
+                            column_right := Action {text:#(crate::i18n::tr("Move later")) i18n_text:"Move later"}
+                        }
+                        column_done := RinxCheckBox {text:#(crate::i18n::tr("Tasks in this column are complete")) i18n_text:"Tasks in this column are complete"}
+                        column_done_hint := Hint {text:#(crate::i18n::tr("Completed tasks are excluded from overdue results and count toward subtask progress.")) i18n_text:"Completed tasks are excluded from overdue results and count toward subtask progress."}
+                        column_limit_enabled := RinxCheckBox {text:#(crate::i18n::tr("Limit the number of tasks in this column")) i18n_text:"Limit the number of tasks in this column"}
+                        column_limit_form := View {visible:false width:Fill height:Fit flow:Down spacing:6
+                            Text {text:#(crate::i18n::tr("Maximum tasks")) i18n_text:"Maximum tasks"}
+                            column_wip := Input {width:130 empty_text:#(crate::i18n::tr("e.g. 3")) i18n_empty_text:"e.g. 3"}
+                            column_limit_hint := Hint {text:#(crate::i18n::tr("Counts every member's unarchived tasks in this column. When full, new tasks and incoming moves are blocked.")) i18n_text:"Counts every member's unarchived tasks in this column. When full, new tasks and incoming moves are blocked."}
+                        }
+                        View {width:Fill height:1 margin:Inset{top:8 bottom:8} show_bg:true draw_bg.color:mod.widgets.RINX_BORDER}
+                        Text {text:#(crate::i18n::tr("Archive column")) i18n_text:"Archive column"}
+                        Hint {text:#(crate::i18n::tr("Hide this column and keep its cards. Select an archived column here to restore it.")) i18n_text:"Hide this column and keep its cards. Select an archived column here to restore it."}
+                        archive_column := Action {text:#(crate::i18n::tr("Archive column")) i18n_text:"Archive column"}
+                        Hint {text:#(crate::i18n::tr("Delete is available only for empty columns, including archived tasks.")) i18n_text:"Delete is available only for empty columns, including archived tasks."}
+                        remove_column := RinxGhostButton {height:36 text:#(crate::i18n::tr("Delete empty column")) i18n_text:"Delete empty column"}
+                    }
+                }
+            }
+
             inspector := RoundedView {visible: false width: 760 height: 700 padding: 18 flow: Down spacing: 12
                 draw_bg +: {color: mod.widgets.RINX_SURFACE border_radius: 12.0 border_size: 1.0 border_color: mod.widgets.RINX_BORDER}
                 View {width: Fill height: 40 spacing: 8 align: Align{y: 0.5}
                     detail_heading := Text {width: Fill max_lines:1 text_overflow:Ellipsis draw_text.text_style: theme.font_bold{font_size: mod.widgets.RINX_SECTION_SIZE}}
                     save := RinxPrimaryButton {width: 82 height: 38 text: #(crate::i18n::tr("Save")) i18n_text: "Save"}
                     archive := RinxButton {height:38 text:#(crate::i18n::tr("Archive")) i18n_text:"Archive"}
-                    close_detail := RinxGhostButton {height:36 text: #(crate::i18n::tr("Close")) i18n_text: "Close"}
+                    close_detail := RinxIconButton {icon_walk: Walk{width:16 height:16} draw_icon.svg: ICON_CLOSE}
                 }
                 dialog_notice := Text {visible:false}
                 dialog_retry := Action {visible:false text:#(crate::i18n::tr("Retry original save")) i18n_text:"Retry original save"}
@@ -256,7 +299,10 @@ makepad_widgets::script_mod! {
                     }
                     assignee := Select {labels: [#(crate::i18n::tr("Unassigned"))]}
                     Text {text: #(crate::i18n::tr("Labels")) i18n_text: "Labels"}
-                    labels := Input {empty_text: #(crate::i18n::tr("Comma-separated labels")) i18n_empty_text: "Comma-separated labels"}
+                    labels := Input {empty_text:#(crate::i18n::tr("e.g. Design, Follow-up")) i18n_empty_text:"e.g. Design, Follow-up"}
+                    label_feedback := Hint {}
+                    label_choice := Select {labels:[#(crate::i18n::tr("Add existing label…"))]}
+                    label_help := Hint {text:#(crate::i18n::tr("Separate labels with commas. Remove a name to remove its label. Up to 12 labels, 32 characters each.")) i18n_text:"Separate labels with commas. Remove a name to remove its label. Up to 12 labels, 32 characters each."}
                     Text {text: #(crate::i18n::tr("Due date")) i18n_text: "Due date"}
                     View {width:Fill height:38 spacing:6
                         due_date := Input {empty_text:#(crate::i18n::tr("No due date")) i18n_empty_text:"No due date"}

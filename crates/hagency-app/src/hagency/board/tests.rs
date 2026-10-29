@@ -30,6 +30,8 @@ fn populate(board: &mut ProjectBoard) {
     board.members = vec!["@alice:test".into(), "@bob:test".into()];
     board.snapshot = Some(Snapshot {
         member_names: Default::default(),
+        label_suggestions: vec!["design".into(), "desktop".into()],
+        has_more_labels: false,
         project_id: "p1".into(),
         sequence: 1,
         capability: CAPABILITY.into(),
@@ -43,6 +45,7 @@ fn populate(board: &mut ProjectBoard) {
                 wip_limit: None,
                 is_done: *state == "done",
                 task_count: 1,
+                all_task_count: Some(1),
                 total: 1,
                 tasks: vec![task(&format!("task_{state}"), state)],
                 next_cursor: None,
@@ -787,10 +790,10 @@ fn kanban_priority_badges_and_loading_feedback_follow_visual_state() {
 
     board.loading = true;
     board.sync_controls(&mut cx);
-    assert!(board.view.widget(&cx, ids!(board_loading)).visible());
+    assert!(board.view.widget(&cx, ids!(board_loading)).is_empty());
     board.loading = false;
     board.sync_controls(&mut cx);
-    assert!(!board.view.widget(&cx, ids!(board_loading)).visible());
+    assert!(board.view.widget(&cx, ids!(board_loading)).is_empty());
 }
 
 #[test]
@@ -1362,4 +1365,202 @@ fn unchanged_parent_binding_cannot_keep_a_hidden_or_visible_board_redrawing() {
         board.bind(&mut cx, "account", Some("p1"), active);
         assert!(!cx.new_draw_event.redraw_all && cx.new_draw_event.draw_lists.is_empty());
     }
+}
+
+#[test]
+fn quick_creation_reveals_a_confirmed_card_hidden_by_filters_and_keeps_feedback() {
+    let (mut cx, mut board) = panel();
+    populate(&mut board);
+    board.query.assignee = Some("@bob:test".into());
+    board.query.label = Some("unrelated".into());
+    board.query.query = Some("old search".into());
+    board.quick_create_state = Some("todo".into());
+    board.quick_save_key = Some("quick".into());
+    board.pending = Some(BoardAction::Create { input: Create {
+        idempotency_key:"quick".into(), state:"todo".into(), fields:task("new", "todo").fields()
+    }});
+    board.apply_saved(&mut cx, &Saved {identity:"account".into(),project:"p1".into(),epoch:1,request:0,
+        result:Ok(json!({"task":task_value("new", "todo")}))});
+    assert!(board.query.assignee.is_none() && board.query.label.is_none() && board.query.query.is_none());
+    assert!(board.created_filters_cleared);
+    assert_eq!(board.created_card.as_ref().unwrap().id, "new");
+    board.sync_controls(&mut cx);
+    assert!(board.view.view(&cx, ids!(created_feedback)).visible());
+    assert!(board.view.label(&cx, ids!(created_message)).text().contains("Filters cleared"));
+    assert!(!board.view.label(&cx, ids!(filter_summary)).visible());
+}
+
+#[test]
+fn filters_are_visible_and_invalid_filter_edits_do_not_replace_applied_query() {
+    let (mut cx, mut board) = panel(); populate(&mut board);
+    board.query.label = Some("design".into());
+    board.query.assignee = Some("@bob:test".into());
+    board.sync_controls(&mut cx);
+    assert!(board.view.label(&cx, ids!(filter_summary)).text().contains("design"));
+    assert!(board.view.label(&cx, ids!(filter_summary)).text().contains("bob"));
+    board.view.text_input(&cx, ids!(filter_label)).set_text(&mut cx, &"x".repeat(33));
+    let actions = cx.capture_actions(|cx| cx.widget_action(board.view.button(cx, ids!(apply_filters)).widget_uid(), ButtonAction::Clicked(KeyModifiers::default())));
+    board.handle_filters(&mut cx, &actions);
+    assert_eq!(board.query.label.as_deref(), Some("design"));
+}
+
+#[test]
+fn labels_roundtrip_chinese_separators_existing_choices_removal_and_filter_enter() {
+    let (mut cx, mut board) = panel(); populate(&mut board);
+    board.creating = true;
+    board.view.text_input(&cx, ids!(labels)).set_text(&mut cx, "design，design、中文; desktop");
+    assert_eq!(board.fields(&mut cx).labels, vec!["design", "desktop", "中文"]);
+    board.snapshot.as_mut().unwrap().label_suggestions.push("not-on-loaded-page".into());
+    board.sync_label_options(&mut cx);
+    assert!(board.label_options.contains(&"not-on-loaded-page".into()));
+    let index = board.label_options.iter().position(|s| s == "not-on-loaded-page").unwrap() + 1;
+    let actions = cx.capture_actions(|cx| cx.widget_action(board.view.drop_down(cx, ids!(label_choice)).widget_uid(), DropDownAction::Select(index)));
+    board.handle_labels(&mut cx, &actions);
+    assert!(board.fields(&mut cx).labels.contains(&"not-on-loaded-page".into()));
+    assert!(board.dirty);
+    board.view.text_input(&cx, ids!(labels)).set_text(&mut cx, "中文");
+    let fields = board.fields(&mut cx);
+    board.fill_editor(&mut cx, fields);
+    assert_eq!(board.fields(&mut cx).labels, vec!["中文"]);
+    board.view.text_input(&cx, ids!(filter_label)).set_text(&mut cx, "中文");
+    let uid = board.view.text_input(&cx, ids!(filter_label)).widget_uid();
+    let actions = cx.capture_actions(|cx| cx.widget_action(uid, TextInputAction::Returned("中文".into(), KeyModifiers::default())));
+    board.handle_filters(&mut cx, &actions);
+    assert_eq!(board.query.label.as_deref(), Some("中文"));
+}
+
+#[test]
+fn column_management_is_modal_and_cancel_preserves_unsaved_changes_until_discard() {
+    let (mut cx, mut board) = panel(); populate(&mut board);
+    let actions = cx.capture_actions(|cx| cx.widget_action(board.view.button(cx, ids!(manage_columns)).widget_uid(), ButtonAction::Clicked(KeyModifiers::default())));
+    board.handle_extensions(&mut cx, &actions);
+    draw(&mut cx, &mut board, 1100.0, 800.0);
+    assert!(board.modal_visible(&cx));
+    let rect = board.view.view(&cx, ids!(column_settings)).area().rect(&cx);
+    assert!((rect.size.x - 760.0).abs() < 1.0);
+    assert!(!board.column_rows.is_empty());
+    board.view.text_input(&cx, ids!(column_name)).set_text(&mut cx, "Renamed");
+    board.request_close_columns(&mut cx);
+    assert!(board.modal_visible(&cx));
+    assert!(board.discard_armed);
+    assert!(board.view.label(&cx, ids!(columns_notice)).visible());
+    board.request_close_columns(&mut cx);
+    assert!(!board.modal_visible(&cx));
+    assert!(board.columns_draft.is_none());
+}
+
+#[test]
+fn deleting_columns_checks_archived_tasks_and_limit_toggle_is_explicit() {
+    let (mut cx, mut board) = panel(); populate(&mut board);
+    let actions = cx.capture_actions(|cx| cx.widget_action(board.view.button(cx, ids!(manage_columns)).widget_uid(), ButtonAction::Clicked(KeyModifiers::default())));
+    board.handle_extensions(&mut cx, &actions);
+    board.snapshot.as_mut().unwrap().lanes[0].all_task_count = Some(1);
+    board.snapshot.as_mut().unwrap().lanes[0].task_count = 0;
+    board.sync_column_actions(&mut cx);
+    assert!(!board.view.button(&cx, ids!(remove_column)).borrow().unwrap().enabled());
+    board.view.check_box(&cx, ids!(column_limit_enabled)).set_active(&mut cx, true, Animate::No);
+    board.view.text_input(&cx, ids!(column_wip)).set_text(&mut cx, "0");
+    assert!(!board.capture_column_form(&mut cx));
+    board.view.text_input(&cx, ids!(column_wip)).set_text(&mut cx, "3");
+    assert!(board.capture_column_form(&mut cx));
+    assert_eq!(board.columns_draft.as_ref().unwrap()[0].wip_limit, Some(3));
+    board.view.check_box(&cx, ids!(column_limit_enabled)).set_active(&mut cx, false, Animate::No);
+    assert!(board.capture_column_form(&mut cx));
+    assert_eq!(board.columns_draft.as_ref().unwrap()[0].wip_limit, None);
+}
+
+#[test]
+fn confirmed_quick_card_reveals_its_actual_loaded_row_without_mutating_task_order() {
+    let (mut cx, mut board) = panel(); populate(&mut board);
+    let lane = &mut board.snapshot.as_mut().unwrap().lanes[2];
+    lane.tasks.push(task("older", "blocked"));
+    lane.tasks.push(task("newest", "blocked"));
+    lane.total = 3;
+    board.created_card = Some(task("newest", "blocked"));
+    board.created_reveal_pending = true;
+    board.reveal_created_card(&mut cx);
+    assert_eq!(board.view.view(&cx, ids!(blocked)).portal_list(&cx, ids!(cards)).first_id(), 2);
+    assert!(!board.created_reveal_pending);
+    assert_eq!(board.scroll_x, 584.0);
+    assert_eq!(board.snapshot.as_ref().unwrap().lanes[2].tasks[0].id, "task_blocked");
+}
+
+#[test]
+fn column_limit_help_wraps_within_the_settings_panel() {
+    let (mut cx, mut board) = panel(); populate(&mut board);
+    let actions = cx.capture_actions(|cx| cx.widget_action(board.view.button(cx, ids!(manage_columns)).widget_uid(), ButtonAction::Clicked(KeyModifiers::default())));
+    board.handle_extensions(&mut cx, &actions);
+    board.view.view(&cx, ids!(column_limit_form)).set_visible(&mut cx, true);
+    for width in [600.0, 1100.0] {
+        draw(&mut cx, &mut board, width, 800.0);
+        let label = board.view.label(&cx, ids!(column_limit_hint));
+        let text = label.borrow().unwrap().text_layout_rect;
+        assert!(text.size.y > 20.0, "help must wrap rather than clipping: {text:?}");
+        assert!(text.size.x <= label.area().rect(&cx).size.x + 1.0);
+    }
+}
+
+#[test]
+fn archived_project_has_no_write_controls_or_false_unconfirmed_save_notice() {
+    let (mut cx,mut board)=panel();populate(&mut board);
+    draw(&mut cx,&mut board,1300.0,800.0);
+    assert!(board.view.view(&cx,column_path(0)).button(&cx,ids!(add)).visible());
+    board.read_only=true;
+    board.sync_controls(&mut cx);
+    draw(&mut cx,&mut board,1300.0,800.0);
+    assert!(!board.view.view(&cx,column_path(0)).button(&cx,ids!(add)).visible(),"The cached lane header must react to read-only changes even when tasks are identical");
+    assert!(board.view.button(&cx,ids!(new_task)).is_empty());
+    assert!(!board.view.button(&cx,ids!(manage_columns)).visible());
+    assert!(board.view.button(&cx,ids!(new_column)).is_empty(),"Column creation belongs to the column manager");
+    assert!(!board.view.button(&cx,ids!(retry)).visible());
+    assert_eq!(board.view.label(&cx,ids!(sync_status)).text(),tr("Archived · read only"));
+    board.new_task(&mut cx);assert!(!board.creating);
+    board.write(&mut cx,BoardAction::Create {input:Create {idempotency_key:"readonly".into(),state:"todo".into(),fields:Fields {title:"Refused".into(),..Default::default()}}});
+    assert!(board.pending.is_none());
+    board.read_only=false;board.sync_controls(&mut cx);
+    draw(&mut cx,&mut board,1300.0,800.0);
+    assert!(board.view.view(&cx,column_path(0)).button(&cx,ids!(add)).visible());
+    assert!(board.view.button(&cx,ids!(new_task)).is_empty());
+}
+
+#[test]
+fn compact_toolbar_keeps_filters_on_demand_and_preserves_applied_filters_when_closed() {
+    let (mut cx,mut board)=panel();populate(&mut board);board.sync_controls(&mut cx);
+    draw(&mut cx,&mut board,1100.0,800.0);
+    assert!(board.view.view(&cx,ids!(toolbar)).area().rect(&cx).size.y<=38.0);
+    assert!(board.view.view(&cx,ids!(todo)).area().rect(&cx).pos.y<90.0);
+    assert!(!board.view.view(&cx,ids!(filters_panel)).visible());
+    assert!(board.view.button(&cx,ids!(new_task)).is_empty());
+    board.view.view(&cx,ids!(board_navigation)).set_visible(&mut cx,true);
+    draw(&mut cx,&mut board,1100.0,800.0);
+    let selector=board.view.drop_down(&cx,ids!(boards)).area().rect(&cx);
+    let filter=board.view.button(&cx,ids!(filters_toggle)).area().rect(&cx);
+    let columns=board.view.button(&cx,ids!(manage_columns)).area().rect(&cx);
+    assert!((selector.pos.y-filter.pos.y).abs()<1.0,"Selector and tools share one row: {selector:?} {filter:?}");
+    assert!(filter.pos.x>selector.pos.x+selector.size.x);
+    assert!((columns.pos.x+columns.size.x-1100.0).abs()<2.0,"Tools align to the right edge: {columns:?}");
+    let click=|cx:&mut Cx,board:&mut ProjectBoard,id:&[LiveId]| {let uid=board.view.button(cx,id).widget_uid();let actions=cx.capture_actions(|cx|cx.widget_action(uid,ButtonAction::Clicked(KeyModifiers::default())));board.handle_filters(cx,&actions);};
+    click(&mut cx,&mut board,ids!(filters_toggle));
+    assert!(board.view.view(&cx,ids!(filters_panel)).visible());
+    board.query.query=Some("Release".into());board.view.text_input(&cx,ids!(search)).set_text(&mut cx,"Release");
+    click(&mut cx,&mut board,ids!(filters_close));board.sync_filter_feedback(&mut cx);
+    assert!(!board.view.view(&cx,ids!(filters_panel)).visible());
+    assert_eq!(board.query.query.as_deref(),Some("Release"));assert!(board.view.label(&cx,ids!(filter_summary)).visible());
+    click(&mut cx,&mut board,ids!(filters_toggle));
+    assert_eq!(board.view.text_input(&cx,ids!(search)).text(),"Release");
+    for width in [375.0,760.0,1100.0] {draw(&mut cx,&mut board,width,800.0);let panel=board.view.view(&cx,ids!(filters_panel)).area().rect(&cx);assert!(panel.size.x<=width+1.0);}
+}
+
+#[test]
+fn filter_change_during_poll_queues_snapshot_and_discards_obsolete_reply() {
+    let (mut cx,mut board)=panel();populate(&mut board);
+    board.loading=true;board.reads.insert(77);
+    board.query.assignee=Some("@bob:test".into());
+    board.load(&mut cx);
+    assert!(board.reload_pending);
+    let before=board.snapshot.as_ref().unwrap().sequence;
+    board.apply_read(&mut cx,&Completed {identity:"account".into(),project:"p1".into(),epoch:1,request:77,kind:Read::Changes,detail_generation:0,result:Ok(json!({"sequence":999}))});
+    assert!(!board.reload_pending);
+    assert_eq!(board.query.assignee.as_deref(),Some("@bob:test"));
+    assert_eq!(board.snapshot.as_ref().unwrap().sequence,before,"Obsolete poll must not replace the filtered view");
 }

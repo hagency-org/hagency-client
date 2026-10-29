@@ -71,7 +71,7 @@ pub(crate) fn route_task_dialog_input(
         cx.global::<TaskDialogOwner>().0 = None;
         return false;
     };
-    if !board.view.view(cx, ids!(inspector)).visible() {
+    if !board.modal_visible(cx) {
         cx.global::<TaskDialogOwner>().0 = None;
         return false;
     }
@@ -80,8 +80,24 @@ pub(crate) fn route_task_dialog_input(
 }
 
 impl ProjectBoard {
-    pub(super) fn open_inspector(&mut self, cx: &mut Cx) {
-        self.view.view(cx, ids!(inspector)).set_visible(cx, true);
+    pub(super) fn modal_visible(&self, cx: &Cx) -> bool {
+        self.view.view(cx, ids!(inspector)).visible() || self.view.view(cx, ids!(column_settings)).visible()
+    }
+    pub(super) fn open_column_settings(&mut self, cx: &mut Cx) {
+        self.view.view(cx, ids!(column_settings)).set_visible(cx, true);
+        self.begin_dialog_scope(cx);
+        self.discard_armed = false;
+        self.redraw_dialog(cx);
+    }
+    pub(super) fn close_column_settings(&mut self, cx: &mut Cx) {
+        self.columns_draft = None;
+        self.column_rows.clear();
+        self.column_paint_keys.clear();
+        self.discard_armed = false;
+        self.view.view(cx, ids!(column_settings)).set_visible(cx, false);
+        self.hide_inspector(cx);
+    }
+    fn begin_dialog_scope(&mut self, cx: &mut Cx) {
         if self.dialog_cancel_scope.is_none() {
             self.dialog_return_focus = cx.key_focus();
             self.dialog_cancel_scope = Some(cx.begin_cancel_scope());
@@ -89,6 +105,10 @@ impl ProjectBoard {
             cx.set_key_focus(Area::Empty);
         }
         cx.global::<TaskDialogOwner>().0 = Some(self.widget_uid());
+    }
+    pub(super) fn open_inspector(&mut self, cx: &mut Cx) {
+        self.view.view(cx, ids!(inspector)).set_visible(cx, true);
+        self.begin_dialog_scope(cx);
         self.redraw_dialog(cx);
     }
 
@@ -178,7 +198,8 @@ impl ProjectBoard {
         event: &Event,
         scope: &mut Scope,
     ) {
-        let inspector = self.view.view(cx, ids!(inspector));
+        let columns = self.view.view(cx, ids!(column_settings)).visible();
+        let inspector = self.view.view(cx, if columns { ids!(column_settings) } else { ids!(inspector) });
         if !inspector.visible() {
             self.view.handle_event(cx, event, scope);
             return;
@@ -198,7 +219,7 @@ impl ProjectBoard {
                 if self.calendar_month.is_some() {
                     self.close_calendar(cx);
                 } else {
-                    self.request_close_inspector(cx);
+                    if columns { self.request_close_columns(cx); } else { self.request_close_inspector(cx); }
                 }
                 return;
             }
@@ -210,7 +231,7 @@ impl ProjectBoard {
                 .is_some_and(|s| cx.owns_cancel(s))
             && event.back_pressed()
         {
-            self.request_close_inspector(cx);
+            if columns { self.request_close_columns(cx); } else { self.request_close_inspector(cx); }
             return;
         }
         inspector.handle_event(cx, event, scope);
@@ -231,15 +252,16 @@ impl ProjectBoard {
             size,
         });
         cx.begin_root_turtle(size, Layout::flow_overlay());
-        let inspector = self.view.view(cx, ids!(inspector));
+        let columns = self.view.view(cx, ids!(column_settings)).visible();
+        let inspector = self.view.view(cx, if columns { ids!(column_settings) } else { ids!(inspector) });
         if inspector.visible() {
             if self.dialog_cancel_scope.is_none() {
-                self.open_inspector(cx);
+                self.begin_dialog_scope(cx);
             }
             self.draw_dialog_bg.draw_abs(cx, bounds);
             let margin = if bounds.size.x < 600.0 { 12.0 } else { 32.0 };
             let width = (bounds.size.x - margin * 2.0).clamp(1.0, 760.0);
-            let height = (bounds.size.y - margin * 2.0).clamp(1.0, 900.0);
+            let height = (bounds.size.y - margin * 2.0).clamp(1.0, if columns { 680.0 } else { 900.0 });
             let walk = Walk::abs_rect(Rect {
                 pos: bounds.pos + (bounds.size - dvec2(width, height)) * 0.5,
                 size: dvec2(width, height),
@@ -252,9 +274,8 @@ impl ProjectBoard {
             if self.dialog_focus_pending {
                 self.dialog_focus_pending = false;
                 cx.set_key_focus(inspector.area());
-                if self.creating {
-                    self.view.text_input(cx, ids!(title)).take_key_focus(cx);
-                }
+                if columns { self.view.text_input(cx, ids!(column_name)).take_key_focus(cx); }
+                else if self.creating { self.view.text_input(cx, ids!(title)).take_key_focus(cx); }
             }
             cx.block_scrolling_except_within(inspector.area());
         }

@@ -76,15 +76,17 @@ impl CreateRoomConfig {
     }
 }
 
-struct FreshState {
-    space: bool,
-    name: RoomNameId,
-    topic: String,
-    levels: matrix_sdk::ruma::events::room::power_levels::RoomPowerLevels,
+pub(super) struct FreshState {
+    pub(super) space: bool,
+    pub(super) name: RoomNameId,
+    pub(super) topic: String,
+    pub(super) levels: matrix_sdk::ruma::events::room::power_levels::RoomPowerLevels,
     children: HashSet<OwnedRoomId>,
+    pub(super) joined:HashSet<OwnedUserId>,
+    pub(super) encrypted:bool,
 }
 
-async fn fresh_state(client: &Client, room: &Room) -> Result<FreshState> {
+pub(super) async fn fresh_state(client: &Client, room: &Room) -> Result<FreshState> {
     use matrix_sdk::ruma::events::room::{
         create::RoomCreateEventContent,
         power_levels::{RoomPowerLevels, RoomPowerLevelsEventContent, RoomPowerLevelsSource},
@@ -156,7 +158,10 @@ async fn fresh_state(client: &Client, room: &Room) -> Result<FreshState> {
                 .and_then(|id| OwnedRoomId::try_from(id).ok())
         })
         .collect();
+    let joined=events.iter().filter(|e|e["type"]=="m.room.member" && e["content"]["membership"]=="join").filter_map(|e|e["state_key"].as_str().and_then(|id|OwnedUserId::try_from(id).ok())).collect();
+    let encrypted=find("m.room.encryption").is_some_and(|e|e["content"]["algorithm"].as_str().is_some_and(|a|!a.is_empty()));
     Ok(FreshState {
+        joined,encrypted,
         space: creation.room_type == Some(RoomType::Space),
         name: RoomNameId::new(
             matrix_sdk::RoomDisplayName::Named(name.into()),

@@ -176,9 +176,14 @@ impl ProjectBoard {
                 "Archive column"
             }),
         );
-        self.view.label(cx, ids!(columns_notice)).set_text(cx, "");
+        self.view.check_box(cx, ids!(column_limit_enabled)).set_active(cx, column.wip_limit.is_some(), Animate::No);
+        self.view.view(cx, ids!(column_limit_form)).set_visible(cx, column.wip_limit.is_some());
+        self.discard_armed = false;
+        self.view.button(cx, ids!(cancel_columns)).set_text(cx, tr("Cancel"));
+        self.columns_notice(cx, "");
+        self.sync_column_actions(cx);
     }
-    fn capture_column_form(&mut self, cx: &mut Cx) -> bool {
+    pub(super) fn capture_column_form(&mut self, cx: &mut Cx) -> bool {
         let Some(column) = self
             .columns_draft
             .as_mut()
@@ -187,16 +192,13 @@ impl ProjectBoard {
             return false;
         };
         let raw = self.view.text_input(cx, ids!(column_wip)).text();
-        let limit = if raw.trim().is_empty() {
+        let limit = if !self.view.check_box(cx, ids!(column_limit_enabled)).active(cx) {
             None
         } else {
             match raw.trim().parse::<i64>() {
                 Ok(n) if (1..=10000).contains(&n) => Some(n),
                 _ => {
-                    self.view.label(cx, ids!(columns_notice)).set_text(
-                        cx,
-                        tr("Enter a WIP limit between 1 and 10000, or leave it empty."),
-                    );
+                    self.columns_notice(cx, tr("Enter a maximum between 1 and 10000, or turn off the limit."));
                     return false;
                 }
             }
@@ -211,9 +213,8 @@ impl ProjectBoard {
         true
     }
     pub(super) fn handle_extensions(&mut self, cx: &mut Cx, actions: &Actions) {
-        if (self.view.button(cx, ids!(manage_columns)).clicked(actions)
-            || self.view.button(cx, ids!(new_column)).clicked(actions))
-            && self.pending.is_none()
+        if self.view.button(cx, ids!(manage_columns)).clicked(actions)
+            && !self.read_only && self.pending.is_none()
         {
             if self.dirty || self.quick_create_state.is_some() {
                 self.notice(
@@ -238,16 +239,23 @@ impl ProjectBoard {
                 self.columns_sequence = snapshot.sequence;
                 self.hide_inspector(cx);
                 self.column_edit = 0;
-                self.view
-                    .view(cx, ids!(column_settings))
-                    .set_visible(cx, true);
+                self.open_column_settings(cx);
                 self.show_column_form(cx);
-                if self.view.button(cx, ids!(new_column)).clicked(actions) {
-                    self.append_column(cx);
-                }
             }
         }
         if self.columns_draft.is_some() && self.pending.is_none() {
+            if self.view.check_box(cx, ids!(column_limit_enabled)).changed(actions).is_some() {
+                let enabled = self.view.check_box(cx, ids!(column_limit_enabled)).active(cx);
+                self.view.view(cx, ids!(column_limit_form)).set_visible(cx, enabled);
+                if enabled && self.view.text_input(cx, ids!(column_wip)).text().trim().is_empty() {
+                    self.view.text_input(cx, ids!(column_wip)).set_text(cx, "3");
+                }
+            }
+            let chosen = self.column_rows.iter().find(|(_, row)| row.button(cx, ids!(choose_column)).clicked(actions)).map(|(i, _)| *i);
+            if let Some(index) = chosen && self.capture_column_form(cx) {
+                self.column_edit = index;
+                self.show_column_form(cx);
+            }
             if self.view.button(cx, ids!(archive_column)).clicked(actions)
                 && self.capture_column_form(cx)
             {
@@ -263,15 +271,10 @@ impl ProjectBoard {
             if self.view.button(cx, ids!(rebase_columns)).clicked(actions) {
                 if let Some(snapshot) = &self.snapshot {
                     self.columns_sequence = snapshot.sequence;
-                    self.view
-                        .label(cx, ids!(columns_notice))
-                        .set_text(cx, tr("Review your column changes, then save again."));
+                    self.columns_notice(cx, tr("Review your column changes, then save again."));
                 }
             } else if self.view.button(cx, ids!(cancel_columns)).clicked(actions) {
-                self.columns_draft = None;
-                self.view
-                    .view(cx, ids!(column_settings))
-                    .set_visible(cx, false);
+                self.request_close_columns(cx);
             } else if let Some(index) = self.view.drop_down(cx, ids!(edit_column)).changed(actions)
             {
                 if self.capture_column_form(cx) {
@@ -291,10 +294,7 @@ impl ProjectBoard {
                     };
                     match input.validate() {
                         Ok(()) => self.write(cx, BoardAction::ConfigureColumns { input }),
-                        Err(e) => self
-                            .view
-                            .label(cx, ids!(columns_notice))
-                            .set_text(cx, error_message(e.0)),
+                        Err(e) => self.columns_notice(cx, error_message(e.0)),
                     }
                 }
             } else if self.view.button(cx, ids!(add_column)).clicked(actions)
@@ -305,7 +305,7 @@ impl ProjectBoard {
                 && self.capture_column_form(cx)
             {
                 let columns = self.columns_draft.as_mut().unwrap();
-                if columns.len() > 2 {
+                if columns.len() > 2 && self.view.button(cx, ids!(remove_column)).borrow().is_some_and(|b| b.enabled()) {
                     columns.remove(self.column_edit);
                     self.column_edit = self.column_edit.saturating_sub(1);
                     self.show_column_form(cx);
@@ -440,7 +440,8 @@ impl ProjectBoard {
         self.sync_extension_controls(cx);
     }
     pub(super) fn sync_extension_controls(&mut self, cx: &mut Cx) {
-        let writing = self.pending.is_some();
+        self.view.button(cx,ids!(manage_columns)).set_visible(cx,!self.read_only);
+        let writing = self.pending.is_some() || self.read_only;
         let editable = (self.creating || self.selected.is_some() && self.detail_loaded)
             && !writing
             && !self.conflict
@@ -473,9 +474,9 @@ impl ProjectBoard {
             ids!(save_columns),
             ids!(cancel_columns),
             ids!(add_column),
-            ids!(remove_column),
             ids!(column_left),
             ids!(column_right),
+            ids!(archive_column),
         ] {
             self.view.button(cx, id).set_board_enabled(cx, !writing);
         }
@@ -484,9 +485,11 @@ impl ProjectBoard {
             ids!(column_name),
             ids!(column_wip),
             ids!(column_done),
+            ids!(column_limit_enabled),
         ] {
             self.view.widget(cx, id).set_disabled(cx, writing);
         }
+        self.sync_column_actions(cx);
         for id in [
             ids!(checklist_new),
             ids!(checklist_add),
@@ -561,6 +564,7 @@ impl ProjectBoard {
         scope: &mut Scope,
         step: &WidgetRef,
     ) -> bool {
+        if self.draw_column_list(cx, scope, step) { return true; }
         let checklist = step.widget_uid()
             == self
                 .view

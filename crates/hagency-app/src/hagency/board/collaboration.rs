@@ -145,9 +145,7 @@ impl ProjectBoard {
                         .unwrap_or(0);
                 }
                 let unread = value["unread"].as_i64().unwrap_or(0);
-                self.view
-                    .button(cx, ids!(notifications_button))
-                    .set_text(cx, &format!("{} · {}", tr("Notifications"), unread));
+                self.view.unread_badge(cx,ids!(notifications_badge)).update_counts(false,0,unread.max(0) as u64);
                 self.view
                     .button(cx, ids!(notifications_older))
                     .set_visible(cx, value["hasMore"] == true);

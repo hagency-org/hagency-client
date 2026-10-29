@@ -321,9 +321,9 @@ script_mod! {
             draw_bg.color: mod.widgets.RINX_PAGE
             chats_tab := mod.widgets.MobileTabButton {
                 icon.draw_icon.svg: crate_resource("self://resources/icons/double_chat.svg")
-                label.text: #(crate::i18n::tr("Chats")) label.i18n_text: "Chats"
+                label.text: #(crate::i18n::tr("Group Chats")) label.i18n_text: "Group Chats"
             }
-            contacts_tab := mod.widgets.MobileTabButton {icon.draw_icon.svg: ICON_PEOPLE label.text: #(crate::i18n::tr("Contacts")) label.i18n_text: "Contacts"}
+            contacts_tab := mod.widgets.MobileTabButton {unread := UnreadBadge {} icon.draw_icon.svg: ICON_PEOPLE label.text: #(crate::i18n::tr("Contacts")) label.i18n_text: "Contacts"}
             discover_tab := mod.widgets.MobileTabButton {icon.draw_icon.svg: ICON_GLOBE label.text: #(crate::i18n::tr("Discover")) label.i18n_text: "Discover"}
             me_tab := mod.widgets.MobileTabButton {icon.draw_icon.svg: crate_resource("self://resources/icons/person.svg") label.text: #(crate::i18n::tr("Me")) label.i18n_text: "Me"}
         }
@@ -724,6 +724,9 @@ impl Widget for NavigationTabBar {
             self.selected_tab = state.selected_tab.clone();
         }
         self.apply_selected_tab(cx, None);
+        let (unread,marked)=super::mobile::direct_unread(cx);
+        use crate::shared::unread_badge::UnreadBadgeWidgetExt;
+        self.view.unread_badge(cx,ids!(contacts_tab.unread)).update_counts(marked,0,unread);
         let step = self.view.draw_walk(cx, scope, walk);
         // AdaptiveView creates its variant during draw. Apply again after that
         // first draw so a new mobile bar doesn't remain visually unselected

@@ -25,6 +25,7 @@ impl ProjectBoard {
         for index in 0 .. 12 {
             let column = self.view.view(cx, column_path(index));
             column.text_input(cx, ids!(quick_title)).set_text(cx, "");
+            column.label(cx, ids!(quick_notice)).set_visible(cx, false);
             column.view(cx, ids!(quick_form)).set_visible(cx, false);
             column.button(cx, ids!(quick_add)).set_visible(cx, true);
         }
@@ -34,6 +35,7 @@ impl ProjectBoard {
         if !self.can_quick_create() || self.quick_create_state.is_some() {
             return;
         }
+        self.created_card = None;
         self.quick_create_state = Some(self.column_state(index));
         self.quick_focus = true;
         let column = self.view.view(cx, column_path(index));
@@ -43,6 +45,7 @@ impl ProjectBoard {
 
     fn can_quick_create(&self) -> bool {
         self.snapshot.is_some()
+            && !self.read_only
             && self.pending.is_none()
             && !self.failed
             && !self.dirty
@@ -55,7 +58,7 @@ impl ProjectBoard {
             let column = self.view.view(cx, column_path(index));
             let open = self.quick_create_state.as_deref() == Some(&self.column_state(index));
             column.view(cx, ids!(quick_form)).set_visible(cx, open);
-            column.button(cx, ids!(quick_add)).set_visible(cx, !open);
+            column.button(cx, ids!(quick_add)).set_visible(cx, !open && !self.read_only);
             column.button(cx, ids!(quick_add)).set_board_enabled(
                 cx,
                 self.can_quick_create() && self.quick_create_state.is_none(),
@@ -72,6 +75,7 @@ impl ProjectBoard {
             column
                 .button(cx, ids!(quick_save))
                 .set_board_enabled(cx, enabled && valid);
+            column.button(cx, ids!(quick_save)).set_text(cx, tr(if open && self.is_quick_save() && self.saving { "Adding…" } else { "Add card" }));
         }
     }
 

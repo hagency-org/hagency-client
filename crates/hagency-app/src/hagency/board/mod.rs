@@ -1,6 +1,7 @@
 //! A Project-scoped shared board. Every async reply is pinned to account, Project
 //! and view generation; writes retain their original intent until acknowledged.
 use makepad_widgets::*;
+use crate::shared::unread_badge::UnreadBadgeWidgetExt;
 use ::hagency::native_owner::Command;
 use ::hagency::project_board::*;
 use super::backend::Service;
@@ -23,6 +24,8 @@ mod media;
 use media::MediaState;
 mod extensions;
 mod lists;
+mod labels;
+mod filters;
 use extensions::column_title;
 pub use view::script_mod;
 
@@ -198,6 +201,10 @@ pub struct ProjectBoard {
     #[rust]
     identity: String,
     #[rust]
+    parent_project: String,
+    #[rust]
+    read_only: bool,
+    #[rust]
     project: String,
     #[rust]
     active: bool,
@@ -215,6 +222,8 @@ pub struct ProjectBoard {
     reads: HashSet<u64>,
     #[rust]
     loading: bool,
+    #[rust]
+    reload_pending: bool,
     #[rust]
     detail_request: u64,
     #[rust]
@@ -281,6 +290,18 @@ pub struct ProjectBoard {
     columns_draft: Option<Vec<ColumnDefinition>>,
     #[rust]
     columns_sequence: i64,
+    #[rust]
+    column_rows: HashMap<usize, WidgetRef>,
+    #[rust]
+    column_paint_keys: HashMap<WidgetUid, String>,
+    #[rust]
+    label_options: Vec<String>,
+    #[rust]
+    created_card: Option<BoardTask>,
+    #[rust]
+    created_filters_cleared: bool,
+    #[rust]
+    created_reveal_pending: bool,
     #[rust]
     column_edit: usize,
     #[rust]
@@ -367,6 +388,7 @@ fn timestamp(value: &Value) -> String {
 }
 fn error_message(code: &str) -> &str {
     tr(match code {
+        "project_archived" => "This Project is archived. Restore it before making changes.",
         "board_unsupported" => "This server does not support project boards yet.",
         "board_version_conflict" | "board_snapshot_changed" | "board_neighbours_changed" => {
             "The board changed on another device. Refreshed the board; your draft is preserved."
@@ -382,10 +404,10 @@ fn error_message(code: &str) -> &str {
             "Project access has expired. Sign in again or check your membership."
         }
         "invalid_board_columns" => {
-            "Use 2–12 unique column names, at least two active columns including a completed column, and a WIP limit between 1 and 10000."
+            "Keep 2–12 uniquely named columns, at least two active columns and one completed column. Task limits must be between 1 and 10000."
         }
         "board_wip_limit_reached" => {
-            "This column has reached its WIP limit. Finish or move a task before adding another."
+            "This column is full. Move or archive a task, or increase its task limit."
         }
         "board_column_archived" => "Restore this column before editing its cards.",
         "board_column_not_empty" => {
@@ -397,9 +419,9 @@ fn error_message(code: &str) -> &str {
         "invalid_board_checklist" => {
             "Use up to 100 checklist items, with 1–160 characters per item."
         }
+        "invalid_board_labels" => "Use up to 12 labels, each with 1–32 characters and no control characters.",
         "invalid_board_fields"
         | "invalid_board_date"
-        | "invalid_board_labels"
         | "invalid_board_payload" => "Check the title, labels and date before saving.",
         "board_assignee_not_member" => {
             "The assignee is no longer a Project member. Choose another member."
@@ -474,6 +496,19 @@ fn column_path(index: usize) -> &'static [LiveId] {
     }
 }
 impl ProjectBoardRef {
+    pub fn controls(&self,cx:&Cx)->WidgetRef {self.borrow().map(|b|b.view.widget(cx,ids!(toolbar))).unwrap_or_default()}
+    pub fn is_loading(&self)->bool {self.borrow().is_some_and(|b|b.active && (b.loading || b.saving))}
+    pub fn read_only_for(&self,project:&str)->bool {self.borrow().is_some_and(|b|b.parent_project==project && b.read_only)}
+    pub fn bind_scope(&self,cx:&mut Cx,identity:&str,project:Option<&str>,board:Option<&str>,active:bool) {
+        if active {dialog::bind_dialog_widget(cx,&self.0);}
+        if let Some(mut inner)=self.borrow_mut() {
+            inner.parent_project=project.unwrap_or_default().into();
+            inner.bind(cx,identity,board.or(project),active);
+        }
+    }
+    pub fn can_switch(&self,cx:&Cx)->bool {
+        self.borrow().is_none_or(|b| !b.dirty && b.pending.is_none() && !b.modal_visible(cx))
+    }
     pub fn bind(&self, cx: &mut Cx, identity: &str, project: Option<&str>, active: bool) {
         if active {
             dialog::bind_dialog_widget(cx, &self.0);
