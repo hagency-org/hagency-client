@@ -1,3 +1,12 @@
+- **Quality hardening, 2026-10-29:** Article image isolation must audit all DNS
+  answers and pin them to each connection; redirects need a new audited hop and
+  proxy bypass must be explicit. A Signal alone cannot retry a draw-time cache
+  lookup: budget timers need account-bound retry-due state that causes an actual
+  redraw even before the completion queue has an account epoch. Cache LRU tests
+  need ordered timestamps instead of relying on equal-time BTreeMap key order.
+  Board quick-create drafts retain original unknown-save keys across navigation;
+  capacity must refuse new drafts explicitly instead of evicting unsaved input.
+
 - **Encrypted owner chain, 2026-10-27:** Deliver through the current runtime,
   not a second execution engine. Distinct encrypted run permits require original
   local input and fresh newly-started Server receipts; compare ciphertext history

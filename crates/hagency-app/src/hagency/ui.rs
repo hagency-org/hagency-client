@@ -1191,7 +1191,7 @@ script_mod! {
                         }
                         Section {width: Fill height: Fit flow: Down spacing: 8
                             Text {text: #(crate::i18n::tr("Agent encryption identity")) i18n_text: "Agent encryption identity" draw_text.text_style: theme.font_bold{font_size: mod.widgets.RINX_TITLE_SIZE}}
-                            Text {text: #(crate::i18n::tr("Encrypted Agent tasks and files are not available yet.")) i18n_text: "Encrypted Agent tasks and files are not available yet." draw_text.color: mod.widgets.RINX_MUTED}
+                            Text {text: #(crate::i18n::tr("Verified owner private Rooms support encrypted tasks, replies and files. Shared requester trust and cross-host key recovery remain unavailable.")) i18n_text: "Verified owner private Rooms support encrypted tasks, replies and files. Shared requester trust and cross-host key recovery remain unavailable." draw_text.color: mod.widgets.RINX_MUTED}
                             crypto_status := Text {}
                             crypto_identity := Text {}
                             crypto_confirm := RinxCheckBox {text: #(crate::i18n::tr("I checked the complete master key and device fingerprints for this Agent.")) i18n_text: "I checked the complete master key and device fingerprints for this Agent."}

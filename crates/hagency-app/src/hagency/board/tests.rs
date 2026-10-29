@@ -988,6 +988,185 @@ fn quick_card_retries_original_intent_and_does_not_replace_open_detail() {
     assert!(!column.view(&cx, ids!(quick_form)).visible());
 }
 
+fn quick_click(cx: &mut Cx, board: &mut ProjectBoard, index: usize, id: &[LiveId]) {
+    let uid = board.view.view(cx, column_path(index)).button(cx, id).widget_uid();
+    let actions = cx.capture_actions(|cx| {
+        cx.widget_action(uid, ButtonAction::Clicked(KeyModifiers::default()))
+    });
+    board.handle_quick_create(cx, &actions);
+}
+
+fn deliver_quick_snapshot(cx: &mut Cx, board: &mut ProjectBoard, snapshot: &Snapshot) {
+    let request = nonce();
+    let lanes: Vec<_> = snapshot.lanes.iter().map(|lane| {
+        let tasks: Vec<_> = lane.tasks.iter().map(|task| {
+            let mut value = task_value(&task.id, &task.state);
+            value["projectId"] = task.project_id.clone().into();
+            value
+        }).collect();
+        json!({"state":lane.state,"title":lane.title,"archived":lane.archived,
+            "wipLimit":lane.wip_limit,"isDone":lane.is_done,"taskCount":lane.task_count,
+            "allTaskCount":lane.all_task_count,"total":lane.total,"tasks":tasks,
+            "nextCursor":lane.next_cursor,"sequence":lane.sequence})
+    }).collect();
+    let value = json!({"projectId":snapshot.project_id,"sequence":snapshot.sequence,
+        "capability":snapshot.capability,"members":snapshot.members,"lanes":lanes});
+    board.reads.insert(request);
+    board.apply_read(cx, &Completed {
+        identity: board.identity.clone(),
+        project: board.project.clone(),
+        epoch: board.epoch,
+        request,
+        kind: Read::Snapshot,
+        detail_generation: 0,
+        result: Ok(value),
+    });
+}
+
+#[test]
+fn quick_draft_survives_board_project_and_hidden_navigation_before_snapshot_arrives() {
+    let (mut cx, mut board) = panel();
+    populate(&mut board);
+    let mut original = board.snapshot.clone().unwrap();
+    quick_click(&mut cx, &mut board, 1, ids!(quick_add));
+    board.view.view(&cx, column_path(1)).text_input(&cx, ids!(quick_title))
+        .set_text(&mut cx, "  尚未提交的卡片  ");
+    // The same bind boundary handles the dropdown, sidebar and parent routes.
+    board.bind(&mut cx, "account", Some("p2"), false);
+    assert!(board.pending.is_none());
+    board.bind(&mut cx, "account", Some("p1"), false);
+    board.bind(&mut cx, "account", Some("p3"), false);
+    board.bind(&mut cx, "account", Some("p1"), false);
+    // Restoration follows the authoritative state, not the old lane index.
+    original.lanes.swap(0, 1);
+    deliver_quick_snapshot(&mut cx, &mut board, &original);
+    let column = board.view.view(&cx, column_path(0));
+    assert_eq!(board.quick_create_state.as_deref(), Some("in_progress"));
+    assert_eq!(column.text_input(&cx, ids!(quick_title)).text(), "  尚未提交的卡片  ");
+    assert!(column.view(&cx, ids!(quick_form)).visible());
+    assert!(board.pending.is_none(), "restoring a draft must never submit it");
+    board.bind(&mut cx, "account", Some("p1"), true);
+    board.bind(&mut cx, "account", Some("p1"), false);
+    assert_eq!(column.text_input(&cx, ids!(quick_title)).text(), "  尚未提交的卡片  ");
+}
+
+#[test]
+fn quick_draft_cancel_and_account_change_cannot_resurrect_old_input() {
+    let (mut cx, mut board) = panel();
+    populate(&mut board);
+    let snapshot = board.snapshot.clone().unwrap();
+    quick_click(&mut cx, &mut board, 0, ids!(quick_add));
+    board.view.view(&cx, column_path(0)).text_input(&cx, ids!(quick_title))
+        .set_text(&mut cx, "discard this");
+    quick_click(&mut cx, &mut board, 0, ids!(quick_cancel));
+    board.bind(&mut cx, "account", Some("p2"), false);
+    board.bind(&mut cx, "account", Some("p1"), false);
+    deliver_quick_snapshot(&mut cx, &mut board, &snapshot);
+    assert!(board.quick_create_state.is_none());
+    quick_click(&mut cx, &mut board, 0, ids!(quick_add));
+    board.view.view(&cx, column_path(0)).text_input(&cx, ids!(quick_title))
+        .set_text(&mut cx, "private account draft");
+    board.bind(&mut cx, "account", Some("p2"), false);
+    board.bind(&mut cx, "another-account", Some("p1"), false);
+    deliver_quick_snapshot(&mut cx, &mut board, &snapshot);
+    assert!(board.quick_drafts.is_empty() && board.quick_restore.is_none());
+    assert!(board.quick_create_state.is_none());
+    assert_eq!(board.view.view(&cx, column_path(0)).text_input(&cx, ids!(quick_title)).text(), "");
+    board.bind(&mut cx, "account", Some("p1"), false);
+    deliver_quick_snapshot(&mut cx, &mut board, &snapshot);
+    assert!(board.quick_create_state.is_none());
+}
+
+#[test]
+fn quick_draft_unconfirmed_save_keeps_original_key_across_navigation_and_clears_on_receipt() {
+    let (mut cx, mut board) = panel();
+    populate(&mut board);
+    let snapshot = board.snapshot.clone().unwrap();
+    quick_click(&mut cx, &mut board, 1, ids!(quick_add));
+    board.view.view(&cx, column_path(1)).text_input(&cx, ids!(quick_title))
+        .set_text(&mut cx, "Original pending card");
+    quick_click(&mut cx, &mut board, 1, ids!(quick_save));
+    let intent = serde_json::to_value(&board.pending).unwrap();
+    let late = Saved {
+        identity: board.identity.clone(), project: board.project.clone(),
+        epoch: board.epoch, request: board.save_request,
+        result: Ok(json!({"task":task_value("confirmed", "in_progress")})),
+    };
+    board.bind(&mut cx, "account", Some("p2"), false);
+    board.bind(&mut cx, "account", Some("p1"), false);
+    deliver_quick_snapshot(&mut cx, &mut board, &snapshot);
+    assert!(board.is_quick_save());
+    assert_eq!(serde_json::to_value(&board.pending).unwrap(), intent);
+    board.apply_saved(&mut cx, &late);
+    assert!(board.is_quick_save(), "late receipt from the old view cannot clear restored pending work");
+    assert_eq!(serde_json::to_value(&board.pending).unwrap(), intent);
+    let done = Saved {
+        identity: board.identity.clone(), project: board.project.clone(),
+        epoch: board.epoch, request: board.save_request,
+        result: Ok(json!({"task":task_value("confirmed", "in_progress")})),
+    };
+    board.apply_saved(&mut cx, &done);
+    assert!(board.pending.is_none() && board.quick_create_state.is_none());
+    board.bind(&mut cx, "account", Some("p2"), false);
+    board.bind(&mut cx, "account", Some("p1"), false);
+    deliver_quick_snapshot(&mut cx, &mut board, &snapshot);
+    assert!(board.quick_create_state.is_none() && board.pending.is_none());
+}
+
+#[test]
+fn quick_draft_from_removed_list_remains_editable_without_automatically_creating_a_card() {
+    let (mut cx, mut board) = panel();
+    populate(&mut board);
+    let mut snapshot = board.snapshot.clone().unwrap();
+    quick_click(&mut cx, &mut board, 1, ids!(quick_add));
+    board.view.view(&cx, column_path(1)).text_input(&cx, ids!(quick_title))
+        .set_text(&mut cx, "Keep this when the list changes");
+    board.bind(&mut cx, "account", Some("p2"), false);
+    board.bind(&mut cx, "account", Some("p1"), false);
+    snapshot.lanes.remove(1);
+    deliver_quick_snapshot(&mut cx, &mut board, &snapshot);
+    let column = board.view.view(&cx, column_path(0));
+    assert_eq!(board.quick_create_state.as_deref(), Some("todo"));
+    assert_eq!(column.text_input(&cx, ids!(quick_title)).text(), "Keep this when the list changes");
+    assert!(column.label(&cx, ids!(quick_notice)).text().contains("original list is unavailable"));
+    assert!(board.pending.is_none());
+}
+
+#[test]
+fn quick_draft_capacity_preserves_existing_input_and_navigation_until_a_draft_is_canceled() {
+    let (mut cx, mut board) = panel();
+    populate(&mut board);
+    let mut template = board.snapshot.clone().unwrap();
+    for lane in &mut template.lanes { lane.tasks.clear(); }
+    for index in 0..32 {
+        let project = format!("draft-board-{index}");
+        board.bind(&mut cx, "account", Some(&project), false);
+        template.project_id = project;
+        deliver_quick_snapshot(&mut cx, &mut board, &template);
+        quick_click(&mut cx, &mut board, 0, ids!(quick_add));
+        board.view.view(&cx, column_path(0)).text_input(&cx, ids!(quick_title))
+            .set_text(&mut cx, &format!("Draft {index}"));
+    }
+    board.bind(&mut cx, "account", Some("new-board"), false);
+    template.project_id = "new-board".into();
+    deliver_quick_snapshot(&mut cx, &mut board, &template);
+    quick_click(&mut cx, &mut board, 0, ids!(quick_add));
+    assert!(board.quick_create_state.is_none());
+    assert_eq!(board.quick_drafts.len(), 32);
+    assert!(board.view.label(&cx, ids!(notice)).text().contains("Save or cancel"));
+    board.bind(&mut cx, "account", Some("draft-board-0"), false);
+    template.project_id = "draft-board-0".into();
+    deliver_quick_snapshot(&mut cx, &mut board, &template);
+    assert_eq!(board.view.view(&cx, column_path(0)).text_input(&cx, ids!(quick_title)).text(), "Draft 0");
+    quick_click(&mut cx, &mut board, 0, ids!(quick_cancel));
+    board.bind(&mut cx, "account", Some("new-board"), false);
+    template.project_id = "new-board".into();
+    deliver_quick_snapshot(&mut cx, &mut board, &template);
+    quick_click(&mut cx, &mut board, 0, ids!(quick_add));
+    assert_eq!(board.quick_create_state.as_deref(), Some("todo"));
+    assert_eq!(board.quick_drafts.len(), 31);
+}
+
 #[test]
 fn activity_describes_assignment_and_attachment_changes() {
     let text = collaboration::activity_text(

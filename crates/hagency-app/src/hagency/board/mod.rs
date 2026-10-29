@@ -17,6 +17,7 @@ mod drag;
 mod markdown;
 mod calendar;
 mod quick_create;
+use quick_create::QuickCreateDraft;
 mod dialog;
 pub(crate) use dialog::route_task_dialog_input;
 mod collaboration;
@@ -246,6 +247,10 @@ pub struct ProjectBoard {
     calendar_month: Option<chrono::NaiveDate>,
     #[rust]
     quick_create_state: Option<String>,
+    #[rust]
+    quick_drafts: HashMap<String, QuickCreateDraft>,
+    #[rust]
+    quick_restore: Option<QuickCreateDraft>,
     #[rust]
     quick_save_key: Option<String>,
     #[rust]

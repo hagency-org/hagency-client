@@ -10,7 +10,18 @@ Projects, Matrix chat and locally executed Agents are available in this release.
 The client version is 0.6.0, following consolidation of the native app and the local engine.
 Existing installations may need to install this version manually.
 
-Agent encrypted-Room execution is deferred; ordinary encrypted Matrix chat remains available.
+Current source supports encrypted owner-private-chat tasks, Codex programming,
+encrypted replies and file transfers after exact Agent identity verification from
+a verified owner device. New owner chats are encrypted by default; existing
+plaintext chats require an explicit upgrade. Existing budgets, tool policies and
+explicit service start still apply. Ordinary encrypted Matrix chat remains available.
+
+Encrypted execution for other requesters in shared Projects and cross-host key
+recovery are not delivered. The [recorded macOS end-to-end acceptance](https://github.com/hagency-org/hagency-client/blob/main/dev-vibe/agent-encrypted-codex-validation-2026-10-27.zh.md)
+uses an isolated OAuth test bridge; it does not complete manual desktop,
+production OAuth or other-platform qualification, or establish that every
+previously published package contains this source path. Pasion browser sign-in
+remains the supported login path.
 Windows ARM64, mobile store packages, automatic updates and install-and-launch verification on every OS are not included.
 Provider runtimes and accounts must be installed/configured on the execution device.
 

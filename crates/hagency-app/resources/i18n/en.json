@@ -2713,5 +2713,8 @@
   "Fix the MCP configuration before saving.": "Fix the MCP configuration before saving.",
   "Apply or cancel the server edit before saving.": "Apply or cancel the server edit before saving.",
   "Hide JSON": "Hide JSON",
-  "JSON draft is invalid. Validate it for details.": "JSON draft is invalid. Validate it for details."
+  "JSON draft is invalid. Validate it for details.": "JSON draft is invalid. Validate it for details.",
+  "Verified owner private Rooms support encrypted tasks, replies and files. Shared requester trust and cross-host key recovery remain unavailable.": "Verified owner private Rooms support encrypted tasks, replies and files. Shared requester trust and cross-host key recovery remain unavailable.",
+  "Your card draft was restored in another list because its original list is unavailable. Review the list before adding it.": "Your card draft was restored in another list because its original list is unavailable. Review the list before adding it.",
+  "Save or cancel an existing card draft before starting another. You can return to its Board without losing your draft.": "Save or cancel an existing card draft before starting another. You can return to its Board without losing your draft."
 }

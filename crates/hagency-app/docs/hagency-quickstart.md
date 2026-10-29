@@ -144,8 +144,32 @@ new requests, exact action details and an expiry countdown. Failed refreshes dis
 decisions. A submitted decision is not proof of successful execution; check the
 Room reply and runtime status. An uncertain submission must not be resent.
 Approval is for the exact
-request or tool shown, not an unrestricted server resource grant. Agent encrypted
-Room execution is deferred; ordinary Matrix encrypted chat remains available.
+request or tool shown, not an unrestricted server resource grant.
+
+### Encrypted owner private chat
+
+The current runtime implements encrypted tasks, Codex programming, encrypted
+replies and file transfers in the owner's private chat. To use this path:
+
+1. Configure local Codex and the Agent workspace on the assigned execution device.
+   Enable Codex programming if the task needs commands or file changes, and save
+   the applicable budgets and tool policies.
+2. In **Agent encryption identity**, initialize the identity if needed. From a
+   verified owner device, check the full Agent master key and device fingerprints,
+   then use **Verify exact Agent identity**. If private signing keys are missing,
+   follow the recovery guidance; a cached verified label is not sufficient.
+3. Use the owner's private chat. Newly created owner chats enable encryption by
+   default; an existing plaintext chat needs an explicit upgrade. Check its actual
+   encryption state, then explicitly start the service for that scope.
+4. Send the task or attachment in that encrypted chat. Existing approvals still
+   apply to commands and files; check actual reply and file-delivery results.
+
+Shared Project requester trust and cross-host key recovery are not delivered.
+The [existing end-to-end acceptance](../../../dev-vibe/agent-encrypted-codex-validation-2026-10-27.zh.md)
+proves the owner path on macOS with an isolated OAuth test bridge and same-host
+service reopens. Manual desktop operation, production OAuth and other-platform
+qualification remain open; Pasion browser sign-in is still the supported login
+path. Ordinary encrypted Matrix chat remains available independently.
 
 ### Restart recovery
 
@@ -165,7 +189,9 @@ Agent Unlimited does not bypass finite Room/member limits or explicit request de
 | Unknown cost/side effects or ledger recovery required | Preserve the hold and restore the same owner's complete state. Do not reset balances or replay the model. |
 | Puppet/owner membership lost | Restore real permissions, wait for confirmed departure, then explicitly rebind/re-adopt. Old dispatches stay fenced. |
 | Ordinary service pause | Clear the applicable pause and explicitly resume when permitted. |
-| Encrypted Agent Room | Use an unencrypted authorized scope; Agent crypto is deferred. |
+| Encrypted owner private chat unavailable | Check the exact Agent identity, verified owner device, encryption state and current execution-device authorization; start only after those checks succeed. |
+| Encrypted shared Project request | Shared requester trust is not delivered. Keep the refusal; use the verified owner private path for the owner's tasks. |
+| Cross-host encrypted key recovery | Not delivered. Same-host service restart evidence does not authorize a fresh host or reconstruct its keys. |
 
 ## Other retained pages
 
