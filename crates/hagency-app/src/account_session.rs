@@ -66,7 +66,19 @@ pub(crate) async fn close() {
     {
         // Serialize the epoch boundary against an OAuth session commit/refresh.
         // Persistence never takes TASKS while holding this lock.
-        let _session_io = crate::persistence::SESSION_IO.lock().unwrap();
+        // A user-selected Save As publication can already be in an OS rename
+        // on a slow filesystem. Keep its original strong commit fence, but do
+        // not block a Tokio worker while waiting for that original IO to return.
+        let _session_io = loop {
+            match crate::persistence::SESSION_IO.try_lock() {
+                Ok(guard) => break guard,
+                Err(std::sync::TryLockError::WouldBlock) => {}
+                Err(std::sync::TryLockError::Poisoned(error)) => {
+                    panic!("Session IO lock poisoned: {error}")
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        };
         let mut scope = TASKS.lock().unwrap();
         scope.open = false;
         EPOCH.fetch_add(1, Ordering::AcqRel);
@@ -99,8 +111,10 @@ pub(crate) async fn close_for_update() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    static TRANSITION_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     #[tokio::test]
     async fn transition_drains_old_work_and_rejects_launches_until_next_account() {
+        let _serial = TRANSITION_TESTS.lock().await;
         open();
         let old_epoch = epoch();
         let (started, running) = oneshot::channel();
@@ -120,5 +134,44 @@ mod tests {
         assert!(rejected.await.unwrap_err().is_cancelled());
         open();
         assert_eq!(spawn(async { "new account" }).await.unwrap(), "new account");
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn closing_yields_current_thread_runtime_while_original_publication_holds_session_io() {
+        let _serial = TRANSITION_TESTS.lock().await;
+        open();
+        let (entered, holding) = std::sync::mpsc::sync_channel(1);
+        let (progress, heartbeat) = std::sync::mpsc::sync_channel(1);
+        let original_io = std::thread::spawn(move || {
+            let _original = crate::persistence::SESSION_IO.lock().unwrap();
+            entered.send(()).unwrap();
+            // A broken blocking close cannot deadlock this test: the original
+            // holder releases after 250ms and reports that no heartbeat ran.
+            heartbeat
+                .recv_timeout(std::time::Duration::from_millis(250))
+                .is_ok()
+        });
+        holding
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        let (started, closing) = tokio::sync::oneshot::channel();
+        let close_task = tokio::spawn(async move {
+            let _ = started.send(());
+            close().await;
+        });
+        let heartbeat_task = tokio::spawn(async move {
+            closing.await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            let _ = progress.send(());
+        });
+        heartbeat_task.await.unwrap();
+        assert!(
+            original_io.join().unwrap(),
+            "close blocked the single Tokio thread instead of yielding while original IO retained its commit fence"
+        );
+        tokio::time::timeout(std::time::Duration::from_millis(250), close_task)
+            .await
+            .unwrap()
+            .unwrap();
+        open();
     }
 }

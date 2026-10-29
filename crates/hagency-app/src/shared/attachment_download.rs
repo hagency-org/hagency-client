@@ -9,7 +9,9 @@ use matrix_sdk::ruma::{OwnedMxcUri, events::room::MediaSource};
 use robius_share::ShareSheet;
 use crate::{
     home::room_screen::TimelineUpdate,
-    shared::popup_list::{PopupKind, enqueue_popup_notification},
+    shared::popup_list::{
+        PopupKind, enqueue_popup_notification, enqueue_scoped_popup_notification,
+    },
     sliding_sync::{MatrixRequest, submit_async_request},
     temp_storage::{ShareScope, ShareTicket},
 };
@@ -18,7 +20,7 @@ pub type TimelineUpdateSenderOption = Option<crate::timeline_updates::Sender>;
 
 /// The result of a download request.
 pub enum MediaDownloadResult {
-    Downloaded(Vec<u8>),
+    Downloaded(crate::attachment_transport::DownloadedFile),
     Failed(String),
     Cancelled,
 }
@@ -133,6 +135,7 @@ pub fn start_theme_preview(
     update_sender: TimelineUpdateSenderOption,
 ) {
     let owner = crate::sliding_sync::current_user_id();
+    let epoch = crate::account_session::epoch();
     if info
         .size
         .is_some_and(|s| s > octosense_theme_contract::MAX_BYTES as u64)
@@ -145,24 +148,34 @@ pub fn start_theme_preview(
         );
         return;
     }
-    download_media(info, update_sender, move |_title, mxc, bytes, sender| {
-        if owner != crate::sliding_sync::current_user_id()
-            || crate::logout::logout_state_machine::is_logout_in_progress()
-        {
-            finish_download_indicator(&sender, Some(&mxc), DownloadOutcome::Cancelled);
-            return;
-        }
-        let result = octosense_theme_contract::ThemePackage::parse(&bytes);
-        let outcome = if result.is_ok() {
-            DownloadOutcome::Succeeded
-        } else {
-            DownloadOutcome::Failed
-        };
-        makepad_widgets::Cx::post_action(
-            crate::settings::theme_studio::ThemeStudioAction::Imported { owner, result },
-        );
-        finish_download_indicator(&sender, Some(&mxc), outcome);
-    });
+    download_preview(
+        info,
+        update_sender,
+        crate::attachment_transport::THEME_LIMIT,
+        move |_title, mxc, bytes, sender| {
+            if epoch != crate::account_session::epoch()
+                || owner != crate::sliding_sync::current_user_id()
+                || crate::logout::logout_state_machine::is_logout_in_progress()
+            {
+                finish_download_indicator(&sender, Some(&mxc), DownloadOutcome::Cancelled);
+                return;
+            }
+            let result = octosense_theme_contract::ThemePackage::parse(&bytes).map(Box::new);
+            let outcome = if result.is_ok() {
+                DownloadOutcome::Succeeded
+            } else {
+                DownloadOutcome::Failed
+            };
+            makepad_widgets::Cx::post_action(
+                crate::settings::theme_studio::ThemeStudioAction::Imported {
+                    owner,
+                    epoch,
+                    result,
+                },
+            );
+            finish_download_indicator(&sender, Some(&mxc), outcome);
+        },
+    );
 }
 
 pub fn is_markdown_attachment(filename: &str, mimetype: Option<&str>) -> bool {
@@ -197,53 +210,70 @@ pub fn start_markdown_preview(
     update_sender: TimelineUpdateSenderOption,
 ) {
     let account = crate::sliding_sync::current_user_id();
+    let epoch = crate::account_session::epoch();
     let attachment = Some(info.clone());
-    download_media(info, update_sender, move |title, mxc, bytes, sender| {
-        if account != crate::sliding_sync::current_user_id()
-            || crate::logout::logout_state_machine::is_logout_in_progress()
-        {
-            finish_download_indicator(&sender, Some(&mxc), DownloadOutcome::Cancelled);
-            return;
-        }
-        match markdown_source(bytes) {
-            Ok(source) => {
-                makepad_widgets::Cx::post_action(
-                    crate::shared::web_browser::WebBrowserAction::OpenMarkdown {
-                        title,
-                        source,
-                        account,
-                        attachment,
-                    },
-                );
-                finish_download_indicator(&sender, Some(&mxc), DownloadOutcome::Succeeded);
+    download_preview(
+        info,
+        update_sender,
+        crate::attachment_transport::MARKDOWN_LIMIT,
+        move |title, mxc, bytes, sender| {
+            if epoch != crate::account_session::epoch()
+                || account != crate::sliding_sync::current_user_id()
+                || crate::logout::logout_state_machine::is_logout_in_progress()
+            {
+                finish_download_indicator(&sender, Some(&mxc), DownloadOutcome::Cancelled);
+                return;
             }
-            Err(error) => {
-                enqueue_popup_notification(error, PopupKind::Error, None);
-                finish_download_indicator(&sender, Some(&mxc), DownloadOutcome::Failed);
+            match markdown_source(bytes) {
+                Ok(source) => {
+                    makepad_widgets::Cx::post_action(
+                        crate::shared::web_browser::WebBrowserAction::OpenMarkdown {
+                            epoch,
+                            title,
+                            source,
+                            account,
+                            attachment,
+                        },
+                    );
+                    finish_download_indicator(&sender, Some(&mxc), DownloadOutcome::Succeeded);
+                }
+                Err(error) => {
+                    enqueue_scoped_popup_notification(epoch, error, PopupKind::Error, None);
+                    finish_download_indicator(&sender, Some(&mxc), DownloadOutcome::Failed);
+                }
             }
-        }
-    });
+        },
+    );
 }
 
-/// Fetches the attachment via the media cache and then calls `on_downloaded`.
-fn download_media(
+/// Fetches an authenticated attachment into a verified private file.
+fn download_file(
     info: DownloadableAttachment,
     update_sender: TimelineUpdateSenderOption,
-    on_downloaded: impl FnOnce(String, OwnedMxcUri, Vec<u8>, TimelineUpdateSenderOption)
-    + Send
+    max_bytes: u64,
+    on_downloaded: impl FnOnce(
+        String,
+        OwnedMxcUri,
+        crate::attachment_transport::DownloadedFile,
+        TimelineUpdateSenderOption,
+        u64,
+    ) + Send
     + 'static,
 ) {
+    let epoch = crate::account_session::epoch();
     let mxc = media_source_mxc(&info.media_source).clone();
     let filename = info.filename.clone();
     submit_async_request(MatrixRequest::DownloadMedia {
         media_source: info.media_source,
         filename: info.filename,
+        max_bytes,
         on_download_result: Box::new(move |result| match result {
             MediaDownloadResult::Downloaded(bytes) => {
-                on_downloaded(filename, mxc, bytes, update_sender)
+                on_downloaded(filename, mxc, bytes, update_sender, epoch)
             }
             MediaDownloadResult::Failed(e) => {
-                enqueue_popup_notification(
+                enqueue_scoped_popup_notification(
+                    epoch,
                     format!("Failed to download \"{filename}\": {e}"),
                     PopupKind::Error,
                     None,
@@ -257,14 +287,54 @@ fn download_media(
     });
 }
 
+/// Preview conversion happens only after the actual byte-limited transfer and
+/// on a finite owned filesystem worker, never on the UI or Tokio runtime.
+fn download_preview(
+    info: DownloadableAttachment,
+    sender: TimelineUpdateSenderOption,
+    limit: u64,
+    ready: impl FnOnce(String, OwnedMxcUri, Vec<u8>, TimelineUpdateSenderOption) + Send + 'static,
+) {
+    download_file(
+        info,
+        sender,
+        limit,
+        move |title, mxc, file, sender, epoch| {
+            let failed_mxc = mxc.clone();
+            let failed_sender = sender.clone();
+            if let Err(error) = crate::attachment_transport::io_worker::submit(move || {
+                match file.read_small(limit) {
+                    Ok(bytes) => ready(title, mxc, bytes, sender),
+                    Err(error) => {
+                        enqueue_scoped_popup_notification(epoch, error, PopupKind::Error, None);
+                        finish_download_indicator(&sender, Some(&mxc), DownloadOutcome::Failed);
+                    }
+                }
+            }) {
+                enqueue_scoped_popup_notification(epoch, error, PopupKind::Error, None);
+                finish_download_indicator(
+                    &failed_sender,
+                    Some(&failed_mxc),
+                    DownloadOutcome::Failed,
+                );
+            }
+        },
+    );
+}
+
 /// Downloads the attachment and shows the native save dialog for it.
 pub fn start_attachment_download(
     info: DownloadableAttachment,
     update_sender: TimelineUpdateSenderOption,
 ) {
-    download_media(info, update_sender, |filename, mxc, bytes, sender| {
-        show_save_dialog(filename, bytes, Some(mxc), sender);
-    });
+    download_file(
+        info,
+        update_sender,
+        crate::attachment_transport::MAX_FILE_BYTES,
+        |filename, mxc, file, sender, epoch| {
+            show_file_save_dialog(filename, file, Some(mxc), sender, epoch);
+        },
+    );
 }
 
 /// Saves an attachment already in memory directly to storage, without showing any dialog.
@@ -287,9 +357,14 @@ pub fn start_attachment_share(
         return;
     };
     let mime = info.kind.basic_mime_type();
-    download_media(info, update_sender, move |filename, mxc, bytes, sender| {
-        prepare_attachment_share(scope, filename, mxc, bytes.into(), mime, sender);
-    });
+    download_file(
+        info,
+        update_sender,
+        crate::attachment_transport::MAX_FILE_BYTES,
+        move |filename, mxc, file, sender, _epoch| {
+            prepare_attachment_share(scope, filename, mxc, ShareInput::File(file), mime, sender);
+        },
+    );
 }
 
 pub fn share_loaded_attachment(info: &DownloadableAttachment, bytes: Arc<[u8]>) {
@@ -300,7 +375,7 @@ pub fn share_loaded_attachment(info: &DownloadableAttachment, bytes: Arc<[u8]>) 
         scope,
         info.filename.clone(),
         media_source_mxc(&info.media_source).clone(),
-        bytes,
+        ShareInput::Bytes(bytes),
         info.kind.basic_mime_type(),
         None,
     );
@@ -329,11 +404,15 @@ pub(crate) fn take_download<T>(
     tasks.lock().unwrap().remove(mxc)
 }
 
+enum ShareInput {
+    Bytes(Arc<[u8]>),
+    File(crate::attachment_transport::DownloadedFile),
+}
 fn prepare_attachment_share(
     scope: ShareScope,
     filename: String,
     mxc: OwnedMxcUri,
-    bytes: Arc<[u8]>,
+    source: ShareInput,
     mime: Option<&'static str>,
     sender: TimelineUpdateSenderOption,
 ) {
@@ -341,35 +420,38 @@ fn prepare_attachment_share(
     let callback_mxc = mxc.clone();
     let callback_sender = sender.clone();
     let title = format!("Share {filename}");
-    let staged = crate::temp_storage::stage_share(
-        scope.clone(),
-        filename,
-        bytes,
-        Box::new(move |result| {
-            // Runs on the dedicated tracked disk worker. Windows StorageFile and
-            // macOS path preparation must finish here, never under SESSION_IO/UI.
-            let payload = result.and_then(|ticket| {
-                let sheet = ShareSheet::new().set_title(title);
-                let sheet = match mime {
-                    Some(mime) => sheet.add_file_with_mime_type(&ticket.path, mime),
-                    None => sheet.add_file(&ticket.path),
-                };
-                match sheet.prepare() {
-                    Ok(prepared) => Ok((ticket, prepared)),
-                    Err(error) => {
-                        ticket.discard();
-                        Err(format!("Could not prepare share sheet: {error}"))
-                    }
+    let ready = Box::new(move |result: Result<Arc<ShareTicket>, String>| {
+        // Runs on the dedicated tracked disk worker. Windows StorageFile and
+        // macOS path preparation must finish here, never under SESSION_IO/UI.
+        let payload = result.and_then(|ticket| {
+            let sheet = ShareSheet::new().set_title(title);
+            let sheet = match mime {
+                Some(mime) => sheet.add_file_with_mime_type(&ticket.path, mime),
+                None => sheet.add_file(&ticket.path),
+            };
+            match sheet.prepare() {
+                Ok(prepared) => Ok((ticket, prepared)),
+                Err(error) => {
+                    ticket.discard();
+                    Err(format!("Could not prepare share sheet: {error}"))
                 }
-            });
-            makepad_widgets::Cx::post_action(PreparedAttachmentShare {
-                scope: callback_scope,
-                mxc: callback_mxc,
-                sender: callback_sender,
-                payload: Mutex::new(Some(payload)),
-            });
-        }),
-    );
+            }
+        });
+        makepad_widgets::Cx::post_action(PreparedAttachmentShare {
+            scope: callback_scope,
+            mxc: callback_mxc,
+            sender: callback_sender,
+            payload: Mutex::new(Some(payload)),
+        });
+    });
+    let staged = match source {
+        ShareInput::Bytes(bytes) => {
+            crate::temp_storage::stage_share(scope.clone(), filename, bytes, ready)
+        }
+        ShareInput::File(file) => {
+            crate::temp_storage::stage_share_file(scope.clone(), filename, file, ready)
+        }
+    };
     if let Err(error) = staged {
         if scope.is_current() {
             enqueue_popup_notification(error, PopupKind::Error, None);
@@ -462,6 +544,121 @@ enum DownloadOutcome {
     Cancelled,
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+static SAVE_DIALOGS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+fn submit_save_operation(operation: impl FnOnce() + Send + 'static) -> Result<(), String> {
+    let permit = SAVE_DIALOGS
+        .try_acquire()
+        .map_err(|_| "Attachment save dialogs are busy".to_owned())?;
+    crate::attachment_transport::io_worker::submit(move || {
+        let _original = permit;
+        operation();
+    })
+}
+
+/// The permit belongs to the original native operation, not an abortable async
+/// observer. Win/Linux use our owned consumer thread. macOS dispatches only the
+/// native selection to main and returns its actual result to that same worker.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+fn show_file_save_dialog(
+    filename: String,
+    file: crate::attachment_transport::DownloadedFile,
+    mxc: Option<OwnedMxcUri>,
+    sender: TimelineUpdateSenderOption,
+    epoch: u64,
+) {
+    let failure_sender = sender.clone();
+    let failure_mxc = mxc.clone();
+    if let Err(error) = submit_save_operation(move || {
+        if !file.is_current() {
+            finish_download_indicator(&sender, mxc.as_ref(), DownloadOutcome::Cancelled);
+            return;
+        }
+        let select_file = file.clone();
+        let select = move || {
+            if !select_file.is_current() {
+                return None;
+            }
+            let mut dialog = rfd::FileDialog::new().set_file_name(&filename);
+            if let Some(downloads) = robius_directories::UserDirs::new()
+                .and_then(|dirs| dirs.download_dir().map(std::path::Path::to_owned))
+            {
+                dialog = dialog.set_directory(downloads);
+            }
+            dialog.save_file()
+        };
+        #[cfg(target_os = "macos")]
+        let selected = {
+            let (send, receive) = std::sync::mpsc::sync_channel(1);
+            dispatch2::DispatchQueue::main().exec_async(move || {
+                let selected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(select))
+                    .unwrap_or_default();
+                let _ = send.send(selected);
+            });
+            // This is the original owned worker, never UI/Tokio. Retirement
+            // cannot drop this receiver/permit while the OS request is alive.
+            receive.recv().unwrap_or_default()
+        };
+        #[cfg(not(target_os = "macos"))]
+        let selected = select();
+        // Linux portal transport failure can also yield None (and rfd may
+        // try zenity). This proves no target/file saved, not OS cancellation
+        // or closure of every external portal window. No plaintext was sent.
+        let Some(selected) = selected else {
+            finish_download_indicator(&sender, mxc.as_ref(), DownloadOutcome::Cancelled);
+            return;
+        };
+        if !file.is_current() {
+            finish_download_indicator(&sender, mxc.as_ref(), DownloadOutcome::Cancelled);
+            return;
+        }
+        match file.save_to(&selected) {
+            Ok(()) => {
+                enqueue_scoped_popup_notification(
+                    epoch,
+                    "Downloaded attachment.",
+                    PopupKind::Success,
+                    Some(DOWNLOAD_RESULT_DURATION_SECS),
+                );
+                finish_download_indicator(&sender, mxc.as_ref(), DownloadOutcome::Succeeded);
+            }
+            Err(error) => {
+                enqueue_scoped_popup_notification(
+                    epoch,
+                    format!("Failed to save attachment: {error}"),
+                    PopupKind::Error,
+                    None,
+                );
+                finish_download_indicator(&sender, mxc.as_ref(), DownloadOutcome::Failed);
+            }
+        }
+    }) {
+        enqueue_scoped_popup_notification(epoch, error, PopupKind::Error, None);
+        finish_download_indicator(
+            &failure_sender,
+            failure_mxc.as_ref(),
+            DownloadOutcome::Failed,
+        );
+    }
+}
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+fn show_file_save_dialog(
+    _filename: String,
+    _file: crate::attachment_transport::DownloadedFile,
+    mxc: Option<OwnedMxcUri>,
+    sender: TimelineUpdateSenderOption,
+    epoch: u64,
+) {
+    enqueue_scoped_popup_notification(
+        epoch,
+        "File-source Save As is not available on this platform",
+        PopupKind::Error,
+        None,
+    );
+    finish_download_indicator(&sender, mxc.as_ref(), DownloadOutcome::Failed);
+}
+
 /// Shows the native save-file dialog and writes `data` to the user-chosen location.
 fn show_save_dialog<D: AsRef<[u8]> + Send + 'static>(
     filename: String,
@@ -469,6 +666,7 @@ fn show_save_dialog<D: AsRef<[u8]> + Send + 'static>(
     mxc: Option<OwnedMxcUri>,
     update_sender: TimelineUpdateSenderOption,
 ) {
+    let epoch = crate::account_session::epoch();
     use robius_file_picker::{PickedFile, FileDialog, StartLocation};
     let filename2 = filename.clone();
     let mxc2 = mxc.clone();
@@ -476,7 +674,8 @@ fn show_save_dialog<D: AsRef<[u8]> + Send + 'static>(
     let on_done = move |result: robius_file_picker::Result<Option<PickedFile>>| {
         match result {
             Ok(Some(_)) => {
-                enqueue_popup_notification(
+                enqueue_scoped_popup_notification(
+                    epoch,
                     format!("Downloaded \"{filename2}\"."),
                     PopupKind::Success,
                     Some(DOWNLOAD_RESULT_DURATION_SECS),
@@ -490,7 +689,8 @@ fn show_save_dialog<D: AsRef<[u8]> + Send + 'static>(
                 finish_download_indicator(&update_sender, mxc.as_ref(), DownloadOutcome::Cancelled);
             }
             Err(e) => {
-                enqueue_popup_notification(
+                enqueue_scoped_popup_notification(
+                    epoch,
                     format!("Failed to save \"{filename2}\": {e}"),
                     PopupKind::Error,
                     None,
@@ -505,7 +705,8 @@ fn show_save_dialog<D: AsRef<[u8]> + Send + 'static>(
         .set_start_location(StartLocation::Downloads)
         .save_data(data, on_done);
     if let Err(e) = res {
-        enqueue_popup_notification(
+        enqueue_scoped_popup_notification(
+            epoch,
             format!("Failed to open save dialog: {e}"),
             PopupKind::Error,
             None,
@@ -637,5 +838,60 @@ mod download_callback_tests {
                 "callback remains single-use"
             );
         }
+    }
+}
+
+#[cfg(all(
+    test,
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
+))]
+mod original_save_request_tests {
+    use super::*;
+    #[test]
+    fn original_native_request_keeps_slot_when_observer_and_account_retire() {
+        let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        let entered = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let account = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let mut observers = Vec::new();
+        for _ in 0..4 {
+            let gate = gate.clone();
+            let entered = entered.clone();
+            let account = account.clone();
+            let (done, observer) = std::sync::mpsc::sync_channel(1);
+            observers.push(observer);
+            submit_save_operation(move || {
+                if account.load(std::sync::atomic::Ordering::Acquire) {
+                    entered.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                    let mut release = gate.0.lock().unwrap();
+                    while !*release {
+                        release = gate.1.wait(release).unwrap();
+                    }
+                }
+                let _ = done.send(());
+            })
+            .unwrap();
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while entered.load(std::sync::atomic::Ordering::Acquire) < 2 {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        drop(observers);
+        account.store(false, std::sync::atomic::Ordering::Release);
+        assert!(
+            submit_save_operation(|| {}).is_err(),
+            "dropping observers/retiring accounts cannot release actual native slots"
+        );
+        *gate.0.lock().unwrap() = true;
+        gate.1.notify_all();
+        while SAVE_DIALOGS.available_permits() != 4 {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            entered.load(std::sync::atomic::Ordering::Acquire),
+            2,
+            "retired queued requests must not invoke native UI"
+        );
     }
 }

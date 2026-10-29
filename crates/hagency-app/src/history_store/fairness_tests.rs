@@ -231,6 +231,8 @@ async fn large_backlog_yields_to_small_room_edit_and_redaction_then_finishes() {
     let observed = completed.clone();
     let current = Arc::new(AtomicBool::new(true));
     let checker = current.clone();
+    let progress_room = fixture.large.clone();
+    let (committed_page, mut commits) = mpsc::channel(LARGE_PAGES + 1);
     let worker = tokio::spawn(drive_history_updates(
         source(receiver),
         move |room| {
@@ -238,8 +240,15 @@ async fn large_backlog_yields_to_small_room_edit_and_redaction_then_finishes() {
             let paths = worker_paths.clone();
             let current = current.clone();
             let observed = observed.clone();
+            let progress_room = progress_room.clone();
+            let committed_page = committed_page.clone();
             async move {
                 let more = page(client, room.clone(), paths, current).await?;
+                // page() returns only after the real SQLite page transaction
+                // has committed. A reopened index supplies every next cursor.
+                if room == progress_room {
+                    committed_page.send(()).await.expect("progress observer must outlive the original history worker");
+                }
                 if !more {
                     observed.lock().unwrap().push(room);
                 }
@@ -288,11 +297,22 @@ async fn large_backlog_yields_to_small_room_edit_and_redaction_then_finishes() {
     drop(small);
     fixture.release.notify_one();
     drop(sender);
-    tokio::time::timeout(std::time::Duration::from_secs(5), worker)
+    // Fairness above retains its strict two-second bound. Completing twelve
+    // encrypted, synchronous-FULL SQLite pages is a progress property, not a
+    // five-second aggregate throughput requirement shared with parallel builds.
+    // Keep the original five-second stall bound and reject extra/fake progress:
+    // twelve populated pages plus the final empty page are the only 13 turns.
+    let mut committed = 0;
+    while tokio::time::timeout(std::time::Duration::from_secs(5), commits.recv())
         .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
+        .expect("large-room catch-up made no committed progress for five seconds")
+        .is_some()
+    {
+        committed += 1;
+        assert!(committed <= LARGE_PAGES + 1, "large-room catch-up exceeded its actual page budget");
+    }
+    worker.await.unwrap().unwrap();
+    assert_eq!(committed, LARGE_PAGES + 1);
     let large = Index::open(&paths[&fixture.large], &[8; 32], fixture.large.as_str()).unwrap();
     assert_eq!(large.stats().unwrap(), (LARGE_PAGES * 100 + 2, 0));
     assert_eq!(

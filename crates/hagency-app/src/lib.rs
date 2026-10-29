@@ -42,12 +42,17 @@ pub fn view_from_live_ptr(
 
 /// The top-level main application module.
 pub mod app;
+pub mod attachment_transport;
+mod transfer_budget;
+mod upload_source;
 pub mod desktop_integration;
 pub mod updates;
 pub mod render_maintenance;
 pub mod speech;
 pub mod accounts;
 mod account_session;
+/// Capture when starting an account-scoped UI action; consumers recheck it.
+pub use account_session::epoch as current_session_epoch;
 mod session_auth;
 /// Rinx as an OctoSense app module.
 #[cfg(feature = "octosense-module")]
@@ -131,6 +136,7 @@ pub mod room_preview_cache;
 pub mod media_cache;
 pub mod memory_budget;
 mod media_transport;
+mod media_cache_reader;
 pub mod verification;
 
 pub mod utils;

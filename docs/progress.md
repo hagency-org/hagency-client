@@ -15335,6 +15335,37 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 
 - Second-batch full lifecycle7pass/0fail/0skip/0uncertain, including boundaries and six bound selectors. Python/actionlint results remain separate from the Cargo-only lifecycle.
 
+## 2026-10-30 — Third quality batch in progress
+
+- Opened PR19 at873afe74 after full App752/0/2 and lifecycle7/0/0/0.
+  Hosted spelling found one inherited Robius Windows comment aceept; fixed only
+  that comment in de4a704e and advanced PR19. The new-head spelling passes;
+  engine/App platform CI is running. PR18 Windows engine including real media
+  restoration and release build passed. Selective retry of its unacquired macOS
+  job accepted after the original workflow ended; still pending, no merge yet.
+- Third branch codex/quality-attachments starts from de4a704e. Active contract
+  covers actual streamed ordinary downloads, App-side64MiB upload-source checks,
+  existing media action wording and a real dhat/RSS workload. SDK local media
+  cache lacked any bounded read; a separate exact919a38b fork branch is adding
+  compatible bounded Memory/SQLite API, without altering Cargo checkout caches.
+- R14 initial new tests failed to compile (Actions is a slice and temporary
+  WidgetAction borrowing); corrected fixture ownership. Next run1pass/2fail
+  revealed the PortalList fixture's single-frame measurement/visibility and row
+  retention assumptions; fixture now retains its one row and measures then
+  redraws. Not yet rerun; original output remains .run/quality-attachments.
+- Independent review is repairing original IO custody on cancellation, SQLite
+  interact continuation, TTL/file-count bounds, joined worker shutdown, common
+  per-process4GiB disk reservations including Save As/share copies, and private
+  crash journal identity. Native Save As uses original owned synchronous
+  consumers and actual macOS main-thread construction; Linux external portal
+  unknown outcomes remain an explicit limitation, not a closed-popup claim.
+- SDK isolated source tests reported SQLite31/31, encryption12/12 and base2/2,
+  plus strict Clippy with actual crypto-store features and actionlint. Parent
+  and independent agent reviewed source, including bounded borrowed decoding.
+  SDK PR/current-head three-platform CI and Clientpin remain pending. Memory
+  probe driver negative checks pass but actual8-case measurement has not run.
+  No paid inference, real credentials or production accounts were modified.
+
 - PR19 platform follow-up in isolated quality-platform-ci worktree: original
   Windows739pass/7fail/2ignore and Linux751/1/2 remain recorded. Windows private
   share cleanup retained the original cap-std directory after removing a clone;
@@ -15361,3 +15392,27 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   or unrestricted request allowance. Focused approvals6/6 and own all-target
   strict Clippy pass; lifecycle lint/boundary-only pass is reported separately
   from the previous complete7-scenario run. New hosted head remains required.
+
+- Third attachment batch frozen on SDK a70f68e: complete App802/0/2 in77.15s,
+  own all-target strict Clippy including examples, full lifecycle7/0/0/0,
+  styles320/0, i18n2729/0missing, theme/layout31 and actionlint pass.
+  Four private-create fault cases preserve original ID/parent and pending
+  cleanup including concurrent retries; scoped popup queue and visible native
+  entries cannot survive the original account epoch/logout. Shared original
+  SDK cache worker1+queue16 and32MiB owned write-clone budget cover preview
+  and local file cache; retain ordinary129MiB Rust admission through Vec write.
+  Three original MediaStoreLock fixtures failed because SDK lease is reentrant;
+  controlled actual MediaStore futures now prove original async custody, while
+  SQLite real read/format/type/native tests are separate. All originals retained.
+- Eight production remote-memory subprocesses pass fixed32MiB peak/8MiB growth,
+  real1/4 concurrency x32/256MiB plain/encrypted, verified contents and zero
+  original custody/actual private files. Maximum Rust heap3482524B, sampled
+  process RSS31522816B. SDK init outside Rust window; HTTP fixture does not
+  qualify whole App/TLS/native SQLite. Final binary and all relevant source
+  fingerprints retained. Whole dependency strict Clippy still hits27 original
+  article-makepad lints; own App check is explicitly narrower.
+- PR19 b3 Linux both architectures and Windows build/library/installer passed;
+  Mac ARM build original runner-capacity cancellation preserved, only that job
+  rerun on unchanged head after workflow completion. EngineMac/Win and IntelApp
+  still running; no merge before all individual final-head jobs pass. SDK2
+  a70f three native suites+strict passed, last benchmark jobs still required.

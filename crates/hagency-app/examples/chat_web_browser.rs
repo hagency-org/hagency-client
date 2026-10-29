@@ -115,6 +115,7 @@ impl MatchEvent for App {
                 ));
             }
             cx.action(WebBrowserAction::OpenMarkdown {
+                epoch: hagency_app::current_session_epoch(),
                 title: format!("Shared notes {}.md", self.markdown_count),
                 source: source.into(),
                 account: None,

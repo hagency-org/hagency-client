@@ -122,6 +122,17 @@ impl RunDirectory {
         bytes: &[u8],
         ttl: Duration,
     ) -> Result<StagedFile, StageError> {
+        self.stage_from(filename, ttl, |file| {
+            file.write_all(bytes)?;
+            Ok(bytes.len() as u64)
+        })
+    }
+    pub fn stage_from(
+        &self,
+        filename: &str,
+        ttl: Duration,
+        copy: impl FnOnce(&mut File) -> io::Result<u64>,
+    ) -> Result<StagedFile, StageError> {
         let name = format!("share_{}", uuid::Uuid::new_v4());
         let directory = private_child(&self.directory, &self.path, &name)?;
         let mut filename = sanitize_filename::sanitize(filename);
@@ -132,7 +143,7 @@ impl RunDirectory {
         let file_path = self.path.join(&name).join(&filename);
         let staged: io::Result<StagedFile> = (|| {
             let mut file = create_file(&directory, Path::new(&filename))?;
-            file.write_all(bytes)?;
+            let bytes = usize::try_from(copy(&mut file)?).map_err(io::Error::other)?;
             file.sync_all()?;
             drop(file);
             let file = open_file(&directory, Path::new(&filename))?;
@@ -145,7 +156,7 @@ impl RunDirectory {
                 filename,
                 identity: Some(same_file::Handle::from_file(file)?),
                 expires: Instant::now() + ttl,
-                bytes: bytes.len(),
+                bytes,
             })
         })();
         match staged {

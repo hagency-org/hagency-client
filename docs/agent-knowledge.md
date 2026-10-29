@@ -5819,3 +5819,32 @@ SDK 恢复 timeline 可包含同一事件多个句柄。保留原始 Vector 的�
   Release source gates must include compiled Markdown Agent templates, packaging
   resources, configuration and toolchains. Existing qualification placeholders
   must continue refusing public release.
+
+- **Attachment quality work, 2026-10-30:** SDK get_media_file and
+  AttachmentSource::File still use full Vec buffers; verify actual internals.
+  SQLite deadpool interact survives observer cancellation, so quota must travel
+  with original IO, not the observing future. MessagePack decoding also needs
+  bounded borrowed bytes rather than arbitrary sequence allocation hints. Matrix
+  AES-CTR media hash validates ciphertext; a syntactically valid wrong key is
+  not detected by that hash. Do not invent a failing-key integrity guarantee.
+  Native async dialog futures can leave original OS requests alive after Drop;
+  keep the original callback/worker custody, and construct macOS UI on main.
+
+### 2026-10-30 attachment review: SDK cache and native event links
+- SDK MediaStoreLock is a shared cross-process lease, not an exclusive mutex
+  between operations of the same Client. Cancellation tests must hold an actual
+  MediaStore method future or actual SQLite operation, not a same-client lease.
+- SQLite bounded reads must check lazy BLOB type/byte length before UPDATE;
+  updating last_access first can copy the entire oversized BLOB natively. The
+  accepted-row native buffers/page cache are additional to Rust scratch; actual
+  SDK bundled measurement at64MiB observed268599296 extra native highwater bytes.
+- Keep ordinary local read admission through its returned Vec's file write;
+  serializing only SDK reads does not bound caller-owned completed results.
+- R13 native event routing must reuse jump_to_history_event/jump_to_event:
+  focus_timeline_window requires the target registered in backwards_paginate.
+  A thread reply needs its authenticated decrypted m.thread root and explicit
+  SelectedRoom::Thread before event focus; SDK Automatic focus alone cannot
+  safely change the App composer/TimelineKind. Carry via through explicit join.
+- Makepad77c8039 exposes NativeDeepLink, but only Android emission was found;
+  macOS plist registration alone does not establish desktop OS URL delivery.
+  App-contained Matrix links and OS launch qualification are separate evidence.

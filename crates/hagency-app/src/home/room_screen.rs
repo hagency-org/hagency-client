@@ -6892,11 +6892,11 @@ fn populate_audio_message_content(
         .or_else(|| audio.caption().map(|c| format!("{}<br>", htmlize::escape_text(c))))
         .unwrap_or_default();
 
-    // TODO: add an audio to play the audio file
+    // The existing attachment controls provide authenticated download/share.
 
     message_content_widget.show_html(
         cx,
-        crate::i18n::format("<b>Audio: </b>{caption}File: <i>{filename}</i>{size}{mime}{duration}<br> → <i>Video playback not yet supported.</i>", &[("caption", (caption).to_string()), ("filename", (filename).to_string()), ("size", (size).to_string()), ("mime", (mime).to_string()), ("duration", (duration).to_string())]),
+        crate::i18n::format("<b>Audio: </b>{caption}File: <i>{filename}</i>{size}{mime}{duration}<br> → <i>In-app audio playback is unavailable. Download to play in another app, or Share the file.</i>", &[("caption", (caption).to_string()), ("filename", (filename).to_string()), ("size", (size).to_string()), ("mime", (mime).to_string()), ("duration", (duration).to_string())]),
     );
     true
 }
@@ -6936,11 +6936,11 @@ fn populate_video_message_content(
         .or_else(|| video.caption().map(|c| format!("{}<br>", htmlize::escape_text(c))))
         .unwrap_or_default();
 
-    // TODO: populate a video widget here, once makepad supports that
+    // The existing attachment controls provide authenticated download/share.
 
     message_content_widget.show_html(
         cx,
-        crate::i18n::format("<b>Video: </b>{caption}File: <i>{filename}</i>{size}{mime}{duration}{dimensions}<br> → <i>Video playback not yet supported.</i>", &[("caption", (caption).to_string()), ("filename", (filename).to_string()), ("size", (size).to_string()), ("mime", (mime).to_string()), ("duration", (duration).to_string()), ("dimensions", (dimensions).to_string())]),
+        crate::i18n::format("<b>Video: </b>{caption}File: <i>{filename}</i>{size}{mime}{duration}{dimensions}<br> → <i>In-app video playback is unavailable. Download to play in another app, or Share the file.</i>", &[("caption", (caption).to_string()), ("filename", (filename).to_string()), ("size", (size).to_string()), ("mime", (mime).to_string()), ("duration", (duration).to_string()), ("dimensions", (dimensions).to_string())]),
     );
     true
 }
@@ -8325,6 +8325,9 @@ mod input_bar_focus {
         }
     }
 }
+
+#[cfg(test)]
+mod media_attachment_actions_tests;
 
 #[cfg(test)]
 mod desktop_information_columns_tests {

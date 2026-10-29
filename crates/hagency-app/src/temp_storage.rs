@@ -93,12 +93,26 @@ impl ShareTicket {
 }
 type Callback = Box<dyn FnOnce(Result<Arc<ShareTicket>, String>) + Send>;
 struct Job {
+    quota: crate::transfer_budget::Reservation,
     scope: ShareScope,
     filename: String,
-    bytes: Arc<[u8]>,
+    bytes: ShareSource,
     ready: Callback,
 }
+enum ShareSource {
+    Bytes(Arc<[u8]>),
+    File(crate::attachment_transport::DownloadedFile),
+}
+impl ShareSource {
+    fn len(&self) -> usize {
+        match self {
+            Self::Bytes(bytes) => bytes.len(),
+            Self::File(file) => file.len() as usize,
+        }
+    }
+}
 struct Stored {
+    quota: Option<crate::transfer_budget::Reservation>,
     ticket: Arc<ShareTicket>,
     file: files::StagedFile,
 }
@@ -115,6 +129,7 @@ struct State {
     cleanup_failures: usize,
     orphan_failures: usize,
     poisoned: bool,
+    orphan_quotas: Vec<crate::transfer_budget::Reservation>,
     observations: VecDeque<(Arc<ShareTicket>, robius_share::PendingShare)>,
     native_observations: usize,
     presenting: usize,
@@ -223,6 +238,23 @@ pub(crate) fn stage_share(
     bytes: Arc<[u8]>,
     ready: Callback,
 ) -> Result<(), String> {
+    stage_share_source(scope, filename, ShareSource::Bytes(bytes), ready)
+}
+
+pub(crate) fn stage_share_file(
+    scope: ShareScope,
+    filename: String,
+    file: crate::attachment_transport::DownloadedFile,
+    ready: Callback,
+) -> Result<(), String> {
+    stage_share_source(scope, filename, ShareSource::File(file), ready)
+}
+fn stage_share_source(
+    scope: ShareScope,
+    filename: String,
+    bytes: ShareSource,
+    ready: Callback,
+) -> Result<(), String> {
     if !scope.is_current() {
         return Err("Share account is no longer active".into());
     }
@@ -233,8 +265,13 @@ pub(crate) fn stage_share(
     if WORKER.stopped.load(Ordering::Acquire) || !state.admits(bytes.len()) {
         return Err("Private share staging is busy or exceeds its storage limit".into());
     }
+    let quota = crate::transfer_budget::temporary_budget().reserve(
+        bytes.len() as u64,
+        crate::transfer_budget::MAX_TEMPORARY_BYTES,
+    )?;
     state.used_bytes += bytes.len();
     state.queue.push_back(Job {
+        quota,
         scope,
         filename,
         bytes,
@@ -247,6 +284,7 @@ pub(crate) fn stage_share(
 /// Called after the existing account close/drain barrier, before opening a new
 /// account. Queued/running jobs still check their original epoch after disk IO.
 pub fn retire_account_shares() {
+    crate::attachment_transport::retire();
     let mut state = WORKER.state.lock().unwrap();
     state.retire_before = state.retire_before.max(crate::account_session::epoch());
     state.retire_dirty = true;
@@ -256,6 +294,7 @@ pub fn retire_account_shares() {
 /// UI shutdown only: observe/join the original worker, with a bounded wait.
 /// A timeout/failure is reported; it is not represented as completed deletion.
 pub fn shutdown_temp_storage() {
+    crate::attachment_transport::shutdown();
     let state = WORKER.state.lock().unwrap();
     // The predicate and notification share the worker's wait mutex. Otherwise
     // stop can be signalled between its predicate check and Condvar sleep.
@@ -300,6 +339,7 @@ impl StageFailure {
     }
 }
 
+#[cfg(test)]
 fn stage_checked(
     root: &files::RunDirectory,
     scope: &ShareScope,
@@ -307,12 +347,33 @@ fn stage_checked(
     bytes: &[u8],
     valid: impl Fn(&ShareScope) -> bool,
 ) -> Result<Stored, StageFailure> {
+    stage_source_checked(
+        root,
+        scope,
+        filename,
+        &ShareSource::Bytes(bytes.into()),
+        valid,
+    )
+}
+fn stage_source_checked(
+    root: &files::RunDirectory,
+    scope: &ShareScope,
+    filename: &str,
+    source: &ShareSource,
+    valid: impl Fn(&ShareScope) -> bool,
+) -> Result<Stored, StageFailure> {
     if !valid(scope) {
         return Err(StageFailure::Rejected(
             "Share account is no longer active".into(),
         ));
     }
-    let file = root.stage(filename, bytes, SHARE_TTL).map_err(|error| {
+    let staged = match source {
+        ShareSource::Bytes(bytes) => root.stage(filename, bytes, SHARE_TTL),
+        ShareSource::File(file) => {
+            root.stage_from(filename, SHARE_TTL, |target| file.read_to(target))
+        }
+    };
+    let file = staged.map_err(|error| {
         makepad_widgets::error!("Private share preparation failed: {error}");
         StageFailure::Storage(error)
     })?;
@@ -323,7 +384,11 @@ fn stage_checked(
         expires: file.expires,
         live: AtomicBool::new(valid(scope)),
     });
-    Ok(Stored { ticket, file })
+    Ok(Stored {
+        ticket,
+        file,
+        quota: None,
+    })
 }
 
 fn cleanup_entries(
@@ -489,7 +554,7 @@ fn run_worker(worker: Arc<Worker>, cache: PathBuf) {
                         StageFailure::Rejected("Private share storage is unavailable".to_owned())
                     })
                     .and_then(|root| {
-                        stage_checked(
+                        stage_source_checked(
                             root,
                             &job.scope,
                             &job.filename,
@@ -499,7 +564,8 @@ fn run_worker(worker: Arc<Worker>, cache: PathBuf) {
                     })
             };
             match result {
-                Ok(entry) => {
+                Ok(mut entry) => {
+                    entry.quota = Some(job.quota);
                     let ready =
                         entry.ticket.live.load(Ordering::Acquire) && entry.file.verify().is_ok();
                     let ticket = entry.ticket.clone();
@@ -522,6 +588,9 @@ fn run_worker(worker: Arc<Worker>, cache: PathBuf) {
                     {
                         let mut state = worker.state.lock().unwrap();
                         record_stage_failure(&mut state, bytes, error.cleanup_unknown());
+                        if error.cleanup_unknown() {
+                            state.orphan_quotas.push(job.quota);
+                        }
                     }
                     (job.ready)(Err(error.message()));
                 }
@@ -530,7 +599,10 @@ fn run_worker(worker: Arc<Worker>, cache: PathBuf) {
         }
         if stop {
             let state = worker.state.lock().unwrap();
-            if !state.queue.is_empty() || !state.observations.is_empty() || !observations.is_empty()
+            if !state.queue.is_empty()
+                || !state.observations.is_empty()
+                || !observations.is_empty()
+                || !stored.is_empty()
             {
                 drop(state);
                 std::thread::sleep(OBSERVATION_INTERVAL);

@@ -516,10 +516,11 @@ impl MatchEvent for App {
                 continue;
             }
 
+            if matches!(action.downcast_ref::<LoginAction>(),Some(LoginAction::SessionExpired {scope,..}) if !scope.is_current()) {continue;}
             // If a login failure occurs mid-session (e.g., an expired/revoked token detected
             // by `handle_session_changes`), navigate back to the login screen.
             // When not yet logged in, the login_screen widget handles displaying the failure modal.
-            if let Some(LoginAction::LoginFailure(_)) = action.downcast_ref() {
+            if matches!(action.downcast_ref::<LoginAction>(),Some(LoginAction::LoginFailure(_) | LoginAction::SessionExpired {..})) {
                 crate::article_app::invalidate_sessions();
                 crate::octoscript_apps::invalidate_sessions();
                 self.close_mini_apps(cx);

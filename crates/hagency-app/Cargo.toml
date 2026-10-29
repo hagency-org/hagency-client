@@ -245,6 +245,10 @@ log_space_service_diffs = []
 
 
 [[example]]
+name = "attachment_memory_soak"
+required-features = ["heap-profile", "agent_chat"]
+
+[[example]]
 name = "palpo_action_room"
 required-features = ["palpo-instrument"]
 

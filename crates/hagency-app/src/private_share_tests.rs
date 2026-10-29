@@ -181,9 +181,12 @@ fn production_admission_bounds_queued_running_files_and_total_bytes() {
     for _ in 0..MAX_JOBS {
         assert!(state.admits(1));
         state.queue.push_back(Job {
+            quota: crate::transfer_budget::temporary_budget()
+                .reserve(1, crate::transfer_budget::MAX_TEMPORARY_BYTES)
+                .unwrap(),
             scope: scope(),
             filename: "fixture".into(),
-            bytes: Arc::from([0u8]),
+            bytes: ShareSource::Bytes(Arc::from([0u8])),
             ready: Box::new(|_| {}),
         });
     }
