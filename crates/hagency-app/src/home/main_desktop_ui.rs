@@ -703,6 +703,24 @@ impl WidgetMatchEvent for MainDesktopUI {
                 self.redraw(cx);
                 continue;
             }
+            if let Some(crate::matrix_links::LinkAction::Navigate(navigation)) = action.downcast_ref() {
+                if !navigation.is_current() {continue;}
+                if crate::sliding_sync::get_client().and_then(|client|client.get_room(navigation.selected.room_id()))
+                    .is_some_and(|room|!room.direct_targets().is_empty()) {
+                    super::mobile::navigate_matrix_direct(cx, navigation.clone());
+                    continue;
+                }
+                if matches!(navigation.selected, SelectedRoom::Space {..}) {
+                    cx.widget_action(self.widget_uid(), RoomsListAction::Selected(navigation.selected.clone()));
+                    continue;
+                }
+                let tab = navigation.selected.tab_id();
+                self.focus_or_create_tab(cx, navigation.selected.clone());
+                if let Some(event) = &navigation.event {
+                    self.view.dock(cx, ids!(dock)).item(tab).as_room_screen()
+                        .jump_to_matrix_event(cx, event.clone(), navigation.ticket.clone());
+                }
+            }
             if let Some(super::room_history::RoomHistoryAction::Jump {room, event}) = action.downcast_ref() {
                 if crate::sliding_sync::get_client().and_then(|c|c.get_room(room.room_id())).is_some_and(|r|!r.direct_targets().is_empty()) {
                     super::mobile::navigate_direct_view(cx,room.clone(),None,Some(event.clone()));continue;
@@ -1441,8 +1459,30 @@ mod dock_state_repair {
 }
 
 #[cfg(test)]
-mod persistent_navigation_tests {
+pub(crate) mod persistent_navigation_tests {
     use super::*;
+    pub(crate) fn matrix_link_navigation(navigation: crate::matrix_links::Navigation) {
+        let mut cx=Cx::new(Box::new(|_,_|{}));
+        let mut ui=cx.with_vm(|vm| {
+            makepad_widgets::script_mod(vm);crate::app::register_widgets(vm);
+            let value=script_eval!(vm,{mod.widgets.MainDesktopUI {}});
+            MainDesktopUI::script_from_value(vm,value)
+        });
+        let mut state=AppState::default();
+        super::super::mobile::new_chat_tests::draw_with_state(&mut cx,&mut ui,1280.0,&mut state);
+        let actions=cx.capture_actions(|cx|cx.action(crate::matrix_links::LinkAction::Navigate(navigation.clone())));
+        ui.handle_event(&mut cx,&Event::Actions(actions),&mut Scope::with_data(&mut state));
+        super::super::mobile::new_chat_tests::draw_with_state(&mut cx,&mut ui,1280.0,&mut state);
+        let screen=ui.view.dock(&cx,ids!(dock)).item(navigation.selected.tab_id()).as_room_screen();
+        {
+            let mut target=screen.borrow_mut().expect("selected native RoomScreen");
+            super::super::mobile::new_chat_tests::draw_with_state(&mut cx,&mut *target,1280.0,&mut state);
+        }
+        screen.assert_matrix_link_target(&cx,&navigation);
+        navigation.ticket.cancel();
+        screen.handle_event(&mut cx,&Event::Signal,&mut Scope::with_data(&mut state));
+        screen.assert_matrix_link_cancelled();
+    }
     fn room(name: &str) -> SelectedRoom {
         SelectedRoom::JoinedRoom {room_name_id: RoomNameId::new(matrix_sdk::RoomDisplayName::Named(name.into()), format!("!{name}:example.org").try_into().unwrap())}
     }

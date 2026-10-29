@@ -365,7 +365,9 @@ struct Inner {
 #[derive(Clone)]
 pub struct Service(Arc<Inner>);
 impl Service {
-    /// Observation must not create an owner or replay saved startup intentions.
+    /// Read-only observation of an already-established owner for this account.
+    /// This never creates an owner, acquires its lease or replays saved runtime
+    /// startup intentions. Passive rendering and response checks must use this.
     pub fn existing_current() -> Option<Self> {
         let service = CURRENT.lock().ok()?.as_ref()?.clone();
         service.check().ok()?;
@@ -375,6 +377,10 @@ impl Service {
     pub(crate) fn startup_bootstrap_count() -> usize {
         STARTUP_BOOTSTRAPS.load(std::sync::atomic::Ordering::Acquire)
     }
+    /// Establish the current account owner, creating local state when absent.
+    /// This factory may also restore previously enabled runtime startup intent.
+    /// Reserve it for explicit user actions or the authorized login/start event;
+    /// passive rendering and observation must use `existing_current` instead.
     pub fn for_current() -> Result<Self, String> {
         if crate::logout::logout_state_machine::is_logout_in_progress() {
             return Err("matrix_account_changing".into());

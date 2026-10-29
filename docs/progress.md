@@ -15484,3 +15484,30 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   source basenames plus only complete original strings; run typos as its own
   checked process. The earlier local-pass statement is withdrawn, and83c
   spelling remains failed evidence. No content assertion or source bytes change.
+
+
+### 2026-10-30 — R13 native Matrix room/event link navigation
+- Implemented in a separate managed `quality-matrix-links` worktree on
+  `codex/quality-matrix-links`, exact base361d4e34. Original primary and PR19
+  platform-fix worktrees remain unchanged by this batch. Contract:
+  `crates/hagency-app/specs/task-client-quality-matrix-links.spec.md`.
+- Original SDK room/alias/event/via resolution, explicit native join consent,
+  authenticated Megolm thread relation, main/thread/direct composer identity,
+  nonce/WeakClient/epoch scopes, deferred UI cancellation and scoped errors are
+  connected through existing native navigation/focus paths. Legacy join/leave
+  modal takeover retires original Confirm/Dismiss/Finished callbacks.
+- Initial lifecycle6pass/2fail exposed real passive owner bootstrap. Preserved
+  original logs and traced actual widget draw / completed contact observations;
+  fixed only passive read/validation entry points, with original Service capture
+  before async work. Explicit LoginSuccess recovery and mutations retain factory.
+- Final agent-spec1.4 lifecycle8/8pass, quality1.0, no fail/skip/uncertain/pending.
+  Exact App CI features(agent_chat,octosense-module,macos-sparkle), App+miniapp
+  core all-target strict Clippy29.36s pass; full App821pass/0fail/2originalignore
+  in77.39s. Earlier820/0/2 and all original failure evidence retained locally.
+  i18n2755entries/2025calls/missing0 and theme literal guard pass.
+  Existing CI no-default+agent_chat check, with Sparkle env removed, passes51.67s.
+- Report: `dev-vibe/client-quality-matrix-links-2026-10-30.zh.md`. Application
+  NativeDeepLink consumption does not qualify macOS/Windows OS delivery. SDK
+  event512KiB inspection occurs after HTTP buffering; no early network cap claim.
+  No real account/provider inference/deployment. Independent review and final
+  multi-platform PR CI remain required; this branch has not been pushed.

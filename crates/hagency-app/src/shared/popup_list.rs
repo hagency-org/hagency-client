@@ -504,6 +504,11 @@ impl Widget for RobrixPopupNotification {
 }
 
 impl RobrixPopupNotification {
+    #[cfg(test)]
+    pub(crate) fn matrix_link_visible_messages(&self, cx: &Cx) -> Vec<String> {
+        self.popups.iter().map(|popup|popup.view.label(cx,ids!(popup_label)).text()).collect()
+    }
+
     fn push_pending(&mut self, cx: &mut Cx, pending: PendingPopup) {
         self.push(cx, pending.item);
         if let Some(entry) = self.popups.last_mut() {

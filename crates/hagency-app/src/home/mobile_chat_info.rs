@@ -239,9 +239,9 @@ fn group_members(members: &mut Vec<UserProfile>, owners: &HashMap<OwnedUserId, O
     *members = ordered;
     grouped
 }
-async fn fetch_member_owners(room: &str, owner: &OwnedUserId) -> Result<(HashMap<OwnedUserId, OwnedUserId>, bool), String> {
-    use crate::hagency::{backend::Service,model::Command};
-    let service = Service::for_current()?;
+async fn fetch_member_owners(original_service: Option<crate::hagency::backend::Service>, room: &str, owner: &OwnedUserId) -> Result<(HashMap<OwnedUserId, OwnedUserId>, bool), String> {
+    use crate::hagency::model::Command;
+    let service = original_service.ok_or("local_service_not_running")?;
     let roster = service.execute(Command::Agents).await?;
     if roster["ownerMxid"].as_str() != Some(owner.as_str()) {return Err("matrix_account_changed".into());}
     let rows=roster["agents"].as_array().ok_or("room_discovery_unavailable")?;
@@ -387,8 +387,9 @@ impl MobileChatInfo {
         self.member_owners.clear();self.indented_members.clear();self.ownership_unavailable=false;
         if let Some(data)=self.data.as_mut() {group_members(&mut data.members,&self.member_owners);}
         let ownership_owner=owner.clone();let ownership_origin=origin.clone();let ownership_room=room_id.clone();
+        let ownership_service=crate::hagency::backend::Service::existing_current();
         spawn_async_task(async move {
-            let result=tokio::time::timeout(std::time::Duration::from_secs(30),fetch_member_owners(ownership_room.as_str(),&ownership_owner)).await.unwrap_or_else(|_|Err("room_discovery_unavailable".into()));
+            let result=tokio::time::timeout(std::time::Duration::from_secs(30),fetch_member_owners(ownership_service,ownership_room.as_str(),&ownership_owner)).await.unwrap_or_else(|_|Err("room_discovery_unavailable".into()));
             Cx::post_action(MemberOwnershipLoaded {owner:ownership_owner,origin:ownership_origin,epoch,room_id:ownership_room,request,result});
         });
         self.status = crate::i18n::tr("Loading chat information…").into();

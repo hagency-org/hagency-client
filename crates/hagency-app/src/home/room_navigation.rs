@@ -133,10 +133,18 @@ pub struct RoomNavigation {
     #[rust] announced:bool,
 }
 impl RoomNavigation {
-    fn current(&self)->bool {self.pin.as_ref().is_some_and(Pin::current) && Service::for_current().is_ok_and(|s|s.identity()==self.identity)}
+    fn current(&self)->bool {self.pin.as_ref().is_some_and(Pin::current) && Service::existing_current().is_some_and(|s|s.identity()==self.identity)}
     fn request(&mut self,cx:&mut Cx,command:Option<crate::hagency::model::Command>) {
-        let (Some(pin),Some(client),Ok(service))=(self.pin.clone(),get_client(),Service::for_current()) else {return;};
+        let (Some(pin),Some(client))=(self.pin.clone(),get_client()) else {return;};
         if !pin.current() {return;}
+        // Only an explicit mutation may establish the local owner. Rendering,
+        // refresh and response validation observe an already-running service.
+        let service=if command.is_some() {Service::for_current().ok()} else {Service::existing_current()};
+        let Some(service)=service else {
+            self.request=self.request.wrapping_add(1);self.identity.clear();self.busy=false;self.data=None;
+            self.view.label(cx,ids!(status)).set_text(cx,crate::i18n::tr("The local service is not running for this account."));
+            self.view.label(cx,ids!(status)).set_visible(cx,true);self.sync(cx);self.view.redraw(cx);return;
+        };
         static NEXT:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(1);
         self.request=NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed);let request=self.request;
         self.identity=service.identity();let identity=self.identity.clone();self.busy=true;
@@ -212,13 +220,14 @@ impl Widget for RoomNavigation {
                 }
             }
             if self.view.button(cx,ids!(refresh)).clicked(actions) && !self.busy {self.request(cx,None);}
-            if !self.current() {return;}
+            if !self.pin.as_ref().is_some_and(Pin::current) {return;}
             for (id,action) in [(ids!(search),RoomNavigationAction::Search),(ids!(media),RoomNavigationAction::Media),(ids!(info),RoomNavigationAction::Info)] {
                 if self.view.navigation_bar_button(cx,id).clicked(actions) {cx.widget_action(self.widget_uid(),action);}
             }
             if self.view.button(cx,ids!(back)).clicked(actions) {
                 if self.data.as_ref().is_some_and(|d|d.project.is_some()) {cx.action(HagencyAction::OpenProjects);}else{cx.action(super::main_desktop_ui::MainDesktopUiAction::ShowGroupChats);}
             }
+            if !self.current() {return;}
             let Some(data)=&self.data else {return;};
             if let Some(index)=self.view.drop_down(cx,ids!(rooms)).selected(actions)
                 && let Some(room)=data.rooms.get(index) && Some(room.room_id())!=self.pin.as_ref().map(|p|&p.room)

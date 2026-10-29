@@ -722,7 +722,7 @@ impl Widget for WebBrowser {
             {
                 if let Some(tab) = self.active() {
                     if let Some(url) = &tab.original_url {
-                        crate::utils::open_url(url.as_str());
+                        crate::utils::open_url_external(url.as_str());
                     }
                 }
             }

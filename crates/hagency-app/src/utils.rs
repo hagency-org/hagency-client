@@ -39,6 +39,12 @@ pub(crate) async fn invite_room_member(
 
 /// Opens the given URL or shows an error popup.
 pub fn open_url(url: &str) {
+    if crate::matrix_links::open(url) {return;}
+    open_url_external(url);
+}
+
+/// Explicit external-open action; ordinary links use native Matrix routing.
+pub fn open_url_external(url: &str) {
     if let Some(id) = crate::miniapps::palpo::route(url) {
         Cx::post_action(crate::miniapps::MiniAppsAction::OpenPalpo(id));
         return;

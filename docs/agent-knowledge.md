@@ -5878,3 +5878,26 @@ SDK 恢复 timeline 可包含同一事件多个句柄。保留原始 Vector 的�
   and upstream hagency-rs. Always pass `--repo hagency-org/hagency-client` to gh
   PR/check/run commands: implicit gh selection can read upstream PR numbers.
   No upstream PR action is authorized by client remediation.
+
+
+### 2026-10-30 R13 native Matrix link implementation
+- Matrix URI parsing and typed via/action handling live in App matrix_links;
+  a recognized error remains native. Guard URL length before the legacy user
+  profile parser as well as the common URL entry. Event inspection's512KiB cap
+  occurs after the original SDK has buffered its HTTP response.
+- SDK Megolm compatibility may copy unauthenticated outer m.relates_to into
+  missing inner content. Strip that outer field before SDK decrypt, require
+  authenticated inner m.thread for a thread destination, and reject an outer
+  thread hint with no authenticated inner root. Verify actual root accessibility.
+- Select exact SelectedRoom/TimelineKind before the existing event focus, and
+  retain the original WeakClient/epoch/Arc request identity into the native
+  join modal, direct-contact deferred draw, pending target and scoped popup.
+- Actual RoomScreen draw and completed Contacts badge observation exposed
+  passive Service::for_current calls in notice, profile, project tree, room
+  header and member ownership. Use existing_current only for those reads and
+  capture the original Service before spawning them. for_current is a factory
+  that may create an owner and replay enabled runtime startup; the explicit
+  LoginSuccess recovery and explicit mutations still use it.
+- A Dock-created RoomScreen is not necessarily painted by the first outer
+  frame. Native link tests explicitly draw the selected original RoomScreen
+  too; do not infer absence of startup side effects from an unpainted widget.

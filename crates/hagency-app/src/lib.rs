@@ -130,6 +130,7 @@ mod timeline_changes;
 mod timeline_projection;
 pub mod timeline_updates;
 mod matrix_context;
+mod matrix_links;
 pub mod space_service_sync;
 pub mod avatar_cache;
 pub mod room_preview_cache;

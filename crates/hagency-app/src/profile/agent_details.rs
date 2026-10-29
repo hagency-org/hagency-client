@@ -108,9 +108,10 @@ fn roster_agent_ids(
 
 /// Batch lookup for contact rows, never one request per visible/recycled row.
 pub(crate) async fn visible_agent_ids(
+    original_service: Option<Service>,
     viewer: &UserId,
 ) -> Result<std::collections::HashSet<OwnedUserId>, String> {
-    let service = Service::for_current()?;
+    let service = original_service.ok_or("local_service_not_running")?;
     let owned = service.execute(Command::Agents).await?;
     let mut ids = roster_agent_ids(&owned, viewer, true)?;
     if let Ok(public) = service.execute(Command::DiscoverAgents).await {
@@ -218,15 +219,17 @@ impl AgentProfileDetails {
         self.request = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let request = self.request;
         self.status(cx, true);
-        let Ok(service) = Service::for_current() else {
+        let Some(service) = Service::existing_current() else {
             self.status(cx, false);
+            self.view.label(cx,ids!(status.text)).set_text(cx,
+                crate::i18n::tr("Agent information is unavailable for this account."));
             return;
         };
         spawn_async_task(async move {
             let target = pin.target.clone();
             let viewer = pin.viewer.clone();
-            // Dropping a timed-out JoinHandle detaches the read. Owner bootstrap
-            // must finish its authorization bookkeeping even if this UI moved on.
+            // Dropping a timed-out JoinHandle detaches the existing-owner read.
+            // Its authorization bookkeeping must finish even if this UI moved on.
             let work = tokio::spawn(async move {
                 let owned = service.execute(Command::Agents).await?;
                 if let Some(identity) = find_identity(&owned, &target, &viewer, true)? {

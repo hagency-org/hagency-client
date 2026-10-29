@@ -354,14 +354,24 @@ struct GroupsLoaded {
 }
 
 #[derive(Clone)]
-struct DirectNavigation {epoch:u64,room:utils::RoomNameId,started:std::time::Instant,thread:Option<OwnedEventId>,jump:Option<OwnedEventId>}
+struct DirectNavigation {epoch:u64,room:utils::RoomNameId,started:std::time::Instant,thread:Option<OwnedEventId>,jump:Option<OwnedEventId>,ticket:Option<crate::matrix_links::Ticket>}
 #[derive(Default)]
 struct PendingDirectChat(Option<DirectNavigation>);
 pub(crate) fn navigate_direct(cx:&mut Cx,room:utils::RoomNameId) {navigate_direct_view(cx,room,None,None);}
 pub(crate) fn navigate_direct_view(cx:&mut Cx,room:utils::RoomNameId,thread:Option<OwnedEventId>,jump:Option<OwnedEventId>) {
-    cx.global::<PendingDirectChat>().0=Some(DirectNavigation {epoch:crate::account_session::epoch(),room,started:std::time::Instant::now(),thread,jump});
+    cx.global::<PendingDirectChat>().0=Some(DirectNavigation {epoch:crate::account_session::epoch(),room,started:std::time::Instant::now(),thread,jump,ticket:None});
     cx.action(NavigationBarAction::GoToTab(SelectedTab::Contacts));
     cx.redraw_all();
+}
+
+pub(crate) fn navigate_matrix_direct(cx: &mut Cx, navigation: crate::matrix_links::Navigation) {
+    if !navigation.is_current() {return;}
+    let thread = match &navigation.selected {
+        SelectedRoom::Thread {thread_root_event_id, ..} => Some(thread_root_event_id.clone()),
+        _ => None,
+    };
+    navigate_direct_view(cx, navigation.selected.room_name().clone(), thread, navigation.event);
+    if let Some(pending) = cx.global::<PendingDirectChat>().0.as_mut() {pending.ticket = Some(navigation.ticket);}
 }
 
 #[derive(Debug)]
@@ -492,9 +502,10 @@ impl MobileHub {
         let badge_owner = owner.clone();
         let origin = client.homeserver().to_string();
         let epoch = crate::account_session::epoch();
+        let badge_service=crate::hagency::backend::Service::existing_current();
         spawn_async_task(async move {
             let viewer = badge_owner.clone();
-            let read = tokio::spawn(async move {crate::profile::agent_details::visible_agent_ids(&viewer).await});
+            let read = tokio::spawn(async move {crate::profile::agent_details::visible_agent_ids(badge_service,&viewer).await});
             let agents = match tokio::time::timeout(std::time::Duration::from_secs(25), read).await {
                 Ok(Ok(Ok(ids))) => ids,
                 _ => std::collections::HashSet::new(),
@@ -841,7 +852,12 @@ impl Widget for MobileHub {
         }
         if self.kind==0 && scope.data.get::<crate::app::AppState>().is_some_and(|a|a.selected_tab==SelectedTab::Contacts)
             && let Some(pending)=cx.global::<PendingDirectChat>().0.clone() {
-            if pending.epoch!=crate::account_session::epoch() || self.open_direct_view(cx,pending.room,pending.thread,pending.jump) {cx.global::<PendingDirectChat>().0=None;}
+            if pending.epoch!=crate::account_session::epoch() || pending.ticket.as_ref().is_some_and(|ticket|!ticket.is_current()) {
+                cx.global::<PendingDirectChat>().0=None;
+            } else if self.open_direct_view(cx,pending.room,pending.thread,pending.jump) {
+                if let Some(ticket)=pending.ticket {self.view.room_screen(cx,ids!(contact_chat)).attach_matrix_link_ticket(ticket);}
+                cx.global::<PendingDirectChat>().0=None;
+            }
             else if pending.started.elapsed()>std::time::Duration::from_secs(30) {
                 cx.global::<PendingDirectChat>().0=None;
                 self.status=crate::i18n::tr("Could not open this private chat. Reopen Contacts and retry.").into();
@@ -963,10 +979,42 @@ impl MobileHubRef {
 }
 
 #[cfg(test)]
-mod new_chat_tests {
+pub(crate) mod new_chat_tests {
     use super::*;
     use makepad_widgets::makepad_draw::cx_draw::CxDraw;
 
+    pub(crate) async fn matrix_link_navigation(navigation: crate::matrix_links::Navigation, cancel: bool) {
+        let completed=std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let expected=std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let observer=completed.clone();let request=expected.clone();
+        let mut cx=Cx::new(Box::new(move |_,event| {
+            if let Event::Actions(actions)=event
+                && actions.iter().filter_map(|action|action.downcast_ref::<ContactAgentsLoaded>())
+                    .any(|loaded|loaded.request==request.load(std::sync::atomic::Ordering::Acquire)) {
+                observer.store(true,std::sync::atomic::Ordering::Release);
+            }
+        }));
+        let mut hub=hub(&mut cx);
+        let mut state=crate::app::AppState {selected_tab:SelectedTab::Contacts,..Default::default()};
+        navigate_matrix_direct(&mut cx,navigation.clone());
+        if cancel {navigation.ticket.cancel();}
+        hub.handle_event(&mut cx,&Event::Signal,&mut Scope::with_data(&mut state));
+        draw_with_state(&mut cx,&mut hub,375.0,&mut state);
+        expected.store(hub.request,std::sync::atomic::Ordering::Release);
+        tokio::time::timeout(std::time::Duration::from_secs(5),async {
+            loop {
+                cx.handle_action_receiver();
+                if completed.load(std::sync::atomic::Ordering::Acquire) {break;}
+                tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+            }
+        }).await.expect("original contact badge lookup must actually complete before asserting no bootstrap");
+        assert!(cx.global::<PendingDirectChat>().0.is_none());
+        if cancel {assert!(hub.selected_conversation.is_none());}
+        else {
+            assert_eq!(hub.selected_conversation.as_ref(),Some(navigation.selected.room_id()));
+            hub.view.room_screen(&cx,ids!(contact_chat)).assert_matrix_link_target(&cx,&navigation);
+        }
+    }
     fn hub(cx: &mut Cx) -> MobileHub {
         cx.with_vm(|vm| {
             makepad_widgets::script_mod(vm);
@@ -981,6 +1029,9 @@ mod new_chat_tests {
     }
 
     fn draw(cx: &mut Cx, widget: &mut impl Widget, width: f64) {
+        draw_with_state(cx,widget,width,&mut crate::app::AppState::default());
+    }
+    pub(crate) fn draw_with_state(cx: &mut Cx, widget: &mut impl Widget, width: f64, state: &mut crate::app::AppState) {
         cx.redraw_all();
         let pass = DrawPass::new(cx);
         pass.set_size(cx, dvec2(width, 760.0));
@@ -993,7 +1044,7 @@ mod new_chat_tests {
         list.begin_always(&mut cx2d);
         overlay.begin(&mut cx2d);
         cx2d.begin_root_turtle(dvec2(width, 760.0), Layout::flow_overlay());
-        widget.draw_walk_all(&mut cx2d, &mut Scope::with_data(&mut crate::app::AppState::default()),
+        widget.draw_walk_all(&mut cx2d, &mut Scope::with_data(state),
             Walk {width: Size::Fixed(width), height: Size::Fixed(760.0), ..Walk::default()});
         cx2d.end_pass_sized_turtle();
         overlay.end(&mut cx2d);

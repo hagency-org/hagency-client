@@ -5,6 +5,7 @@
 #[cfg(feature = "agent_chat")]
 use crate::agent_chat::approval_inbox::{ApprovalInboxAction, ApprovalInboxWidgetRefExt};
 use crate::agent_access::AgentAccessAction;
+use crate::matrix_links::Controller as MatrixLinkController;
 use crate::desktop_integration::DesktopIntegration;
 use crate::updates::Integration as UpdateIntegration;
 use std::{
@@ -274,6 +275,8 @@ pub struct App {
     /// This can be either a room we're waiting to join, or one we're waiting to be invited to.
     /// Also includes an optional room ID to be closed once the awaited room has been loaded.
     #[rust] waiting_to_navigate_to_room: Option<(BasicRoomDetails, Option<OwnedRoomId>)>,
+    /// One native Matrix link retains its original account and user intent.
+    #[rust] matrix_link_navigation: MatrixLinkController,
     /// Preserve the exact signup event while its invitation is accepted/synced.
     #[rust] pending_signup_navigation: Option<(crate::miniapps::palpo::SignupApprovalTarget, std::time::Instant)>,
 }
@@ -403,6 +406,17 @@ impl MatchEvent for App {
         }
 
         for action in actions {
+            let effects = self.matrix_link_navigation.observe_navigation(action);
+            self.apply_matrix_link_effects(cx, effects);
+            if let Some(action) = action.downcast_ref::<crate::matrix_links::LinkAction>() {
+                let effects = self.matrix_link_navigation.action(action);
+                self.apply_matrix_link_effects(cx, effects);
+                continue;
+            }
+            if let Some(link) = action.downcast_ref::<makepad_widgets::makepad_platform::event::NativeDeepLink>() {
+                crate::matrix_links::open(&link.url);
+                continue;
+            }
             if workspace_navigation(action) {
                 self.close_workspace_pages(cx);
             }
@@ -1143,7 +1157,28 @@ impl App {
         self.close_hosted_window(cx, HostedWindow::MiniApps, true);
     }
 
+    fn apply_matrix_link_effects(&mut self, cx: &mut Cx, effects: Vec<crate::matrix_links::Effect>) {
+        use crate::matrix_links::Effect;
+        for effect in effects {
+            match effect {
+                Effect::CloseJoin => self.ui.modal(cx, ids!(join_leave_modal)).close(cx),
+                Effect::Join {ticket, details, is_space} if ticket.is_current() => {
+                    self.ui.join_leave_room_modal(cx, ids!(join_leave_modal.content)).set_kind(cx,
+                        JoinLeaveModalKind::JoinMatrixLink {details: *details, is_space, ticket}, false);
+                    self.ui.modal(cx, ids!(join_leave_modal)).open(cx);
+                }
+                Effect::Navigate(navigation) if navigation.is_current() => {
+                    cx.action(NavigationBarAction::GoToHome);
+                    cx.action(crate::matrix_links::LinkAction::Navigate(navigation));
+                }
+                Effect::Error(epoch,error) => crate::matrix_links::publish_error(epoch,error),
+                _ => (),
+            }
+        }
+    }
     fn clear_session_ui(&mut self, cx: &mut Cx) {
+        self.matrix_link_navigation.cancel();
+        self.ui.modal(cx, ids!(join_leave_modal)).close(cx);
         self.close_workspace_pages(cx);
         cx.global::<crate::shared::workspace_pages::WorkspacePageBounds>().0 = None;
         self.lifecycle.last_app_state_save = None;
@@ -1191,7 +1226,7 @@ impl App {
     }
 }
 
-fn workspace_navigation(action: &Action) -> bool {
+pub(crate) fn workspace_navigation(action: &Action) -> bool {
     let navigation = matches!(action.downcast_ref::<NavigationBarAction>(), Some(
         NavigationBarAction::GoToTab(_) | NavigationBarAction::NewChat | NavigationBarAction::GoToHome
         | NavigationBarAction::GoToAddRoom | NavigationBarAction::CloseAddRoom
@@ -1344,6 +1379,12 @@ impl AppMain for App {
     }
 
     fn handle_event(&mut self, cx: &mut Cx, event: &Event) {
+        let effects = self.matrix_link_navigation.poll();
+        self.apply_matrix_link_effects(cx, effects);
+        if matches!(event, Event::BackPressed {..} | Event::KeyDown(KeyEvent {key_code:KeyCode::Escape,..}))
+            && self.matrix_link_navigation.cancel_loading() {
+            event.back_pressed(); return;
+        }
         if matches!(event, Event::LiveEdit | Event::ScriptReapply) {
             self.titlebar_sidebar_state.replace(None);
         }

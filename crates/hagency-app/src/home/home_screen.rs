@@ -596,6 +596,28 @@ impl Widget for HomeScreen {
                 ) {
                     self.switch_to_tab(cx, app_state, SelectedTab::Home);
                 }
+                if let Some(crate::matrix_links::LinkAction::Navigate(navigation)) = action.downcast_ref() {
+                    if !effective_is_desktop(cx) && navigation.is_current() {
+                        if crate::sliding_sync::get_client().and_then(|client|client.get_room(navigation.selected.room_id()))
+                            .is_some_and(|room|!room.direct_targets().is_empty()) {
+                            super::mobile::navigate_matrix_direct(cx, navigation.clone());
+                            continue;
+                        }
+                        if matches!(navigation.selected, SelectedRoom::Space {..}) {
+                            cx.widget_action(self.widget_uid(), RoomsListAction::Selected(navigation.selected.clone()));
+                            continue;
+                        }
+                        if !matches!(app_state.selected_room.as_ref(), Some(selected) if selected == &navigation.selected) {
+                            self.push_selected_screen_view(cx, app_state, navigation.selected.clone());
+                        }
+                        let stack = self.view.stack_navigation(cx, ids!(view_stack));
+                        if let Some(view) = stack.destination_view().or_else(||stack.current_view())
+                            && let Some(event) = &navigation.event {
+                            stack.view_by_id(cx, view).room_screen(cx, ids!(room_screen))
+                                .jump_to_matrix_event(cx, event.clone(), navigation.ticket.clone());
+                        }
+                    }
+                }
                 if let Some(super::room_history::RoomHistoryAction::Jump {room, event}) = action.downcast_ref() {
                     if !effective_is_desktop(cx) {
                         if self.mobile_chat_info.is_some() {
@@ -1235,10 +1257,31 @@ impl HomeScreen {
 }
 
 #[cfg(test)]
-mod responsive_layout_tests {
+pub(crate) mod responsive_layout_tests {
     use super::*;
     use makepad_widgets::makepad_draw::cx_draw::CxDraw;
 
+    pub(crate) fn matrix_link_navigation(navigation: crate::matrix_links::Navigation) {
+        let (mut cx,mut home,mut state)=home();
+        state.selected_tab=SelectedTab::Home;
+        draw_pane(&mut cx,&mut home,&mut state,375.0);
+        assert!(!effective_is_desktop(&mut cx));
+        let actions=cx.capture_actions(|cx|cx.action(crate::matrix_links::LinkAction::Navigate(navigation.clone())));
+        home.handle_event(&mut cx,&Event::Actions(actions),&mut Scope::with_data(&mut state));
+        draw_pane(&mut cx,&mut home,&mut state,375.0);
+        let stack=home.view.stack_navigation(&cx,ids!(view_stack));
+        let target=stack.destination_view().or_else(||stack.current_view()).unwrap();
+        let screen=stack.view_by_id(&mut cx,target).room_screen(&cx,ids!(room_screen));
+        {
+            let mut target=screen.borrow_mut().expect("selected compact RoomScreen");
+            super::super::mobile::new_chat_tests::draw_with_state(&mut cx,&mut *target,375.0,&mut state);
+        }
+        screen.assert_matrix_link_target(&cx,&navigation);
+        assert_eq!(state.selected_room.as_ref(),Some(&navigation.selected));
+        navigation.ticket.cancel();
+        screen.handle_event(&mut cx,&Event::Signal,&mut Scope::with_data(&mut state));
+        screen.assert_matrix_link_cancelled();
+    }
     fn home() -> (Cx, HomeScreen, AppState) {
         let mut cx = Cx::new(Box::new(|_, _| {}));
         // OctoSense's outer window stays wide while only the Rinx tile resizes.

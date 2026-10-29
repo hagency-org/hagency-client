@@ -80,6 +80,9 @@ pub enum ProjectTreeMode {
 
 /// A refresh error is a non-blocking notice alongside the retained list.
 fn tree_notice(mode: ProjectTreeMode, error: Option<&str>, loading: bool, empty: bool, query: bool) -> (&'static str, bool) {
+    if error == Some("local_service_not_running") {
+        return ("The local service is not running for this account.", true);
+    }
     if mode == ProjectTreeMode::GroupChats {
         if error.is_some() || loading {return ("Loading group chat classification…",true);}
         return (if !empty {""} else if query {"No matching group chats"} else {"No group chats yet. Use the Group Chats menu to create a group."}, empty);
@@ -265,7 +268,7 @@ pub(crate) enum ProjectSelection {Project,Board(String),Room(OwnedRoomId)}
 #[derive(Clone,Debug,PartialEq,Eq)]
 pub(crate) struct ProjectSelectionChanged {pub identity:String,pub project_id:String,pub target:ProjectSelection}
 impl ProjectSelectionChanged {
-    fn current(&self)->bool {crate::hagency::backend::Service::for_current().is_ok_and(|s|s.identity()==self.identity)}
+    fn current(&self)->bool {crate::hagency::backend::Service::existing_current().is_some_and(|s|s.identity()==self.identity)}
     fn matches(&self,row:&Row)->bool {match (&self.target,row) {
         (ProjectSelection::Project,Row::Project(p))=>p==&self.project_id,
         (ProjectSelection::Board(id),Row::Board {project,board})=>project==&self.project_id && id==board,
@@ -542,7 +545,7 @@ impl ProjectTree {
     // the account. Observe readiness again without waiting for the periodic poll.
     fn refresh_ready_account(&mut self, cx: &mut Cx) {
         if !self.active { return; }
-        if let Ok(service) = crate::hagency::backend::Service::for_current()
+        if let Some(service) = crate::hagency::backend::Service::existing_current()
             && self.identity.as_deref() != Some(service.identity().as_str()) {
             self.refresh(cx);
         }
@@ -552,13 +555,13 @@ impl ProjectTree {
         if !self.active {
             return;
         }
-        let service = match crate::hagency::backend::Service::for_current() {
-            Ok(service) => service,
-            Err(_) => {
+        let service = match crate::hagency::backend::Service::existing_current() {
+            Some(service) => service,
+            None => {
                 self.snapshot = None;
                 self.identity = None;
                 self.pending = false;
-                self.error = Some("owner_authorization_required".into());
+                self.error = Some(if get_client().is_some() {"local_service_not_running"} else {"owner_authorization_required"}.into());
                 self.rebuild(cx);
                 return;
             }
@@ -712,8 +715,8 @@ impl ProjectTree {
 fn snapshot_current(snapshot: &ProjectTreeSnapshot) -> bool {
     Some(&snapshot.owner) == current_user_id().as_ref()
         && get_client().is_some_and(|client| client.homeserver().as_str() == snapshot.homeserver)
-        && crate::hagency::backend::Service::for_current()
-            .is_ok_and(|service| service.identity() == snapshot.service_identity)
+        && crate::hagency::backend::Service::existing_current()
+            .is_some_and(|service| service.identity() == snapshot.service_identity)
 }
 impl Widget for ProjectTree {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
@@ -767,8 +770,8 @@ impl Widget for ProjectTree {
                 if let Some(loaded) = action.downcast_ref::<LoadedProjects>()
                     && loaded.request == self.request
                     && self.identity.as_ref() == Some(&loaded.identity)
-                    && crate::hagency::backend::Service::for_current()
-                        .is_ok_and(|service| service.identity() == loaded.identity)
+                    && crate::hagency::backend::Service::existing_current()
+                        .is_some_and(|service| service.identity() == loaded.identity)
                 {
                     self.pending = false;
                     match &loaded.result {
@@ -1050,6 +1053,9 @@ mod tests {
         assert_eq!(tree_notice(ProjectTreeMode::Projects,Some("temporary"),false,false,false),("Hagency Projects could not be loaded. Retrying…",true));
         assert_eq!(tree_notice(ProjectTreeMode::Projects,Some("owner_authorization_required"),false,false,false),("Sign in again to restore Projects for this account",true));
         assert_eq!(tree_notice(ProjectTreeMode::Projects,None,false,false,false),("",false));
+        for mode in [ProjectTreeMode::Projects,ProjectTreeMode::GroupChats] {
+            assert_eq!(tree_notice(mode,Some("local_service_not_running"),false,false,false),("The local service is not running for this account.",true));
+        }
         assert_eq!(tree_notice(ProjectTreeMode::GroupChats,Some("temporary"),false,false,false),("Loading group chat classification…",true),"Group classification fails closed until Project discovery recovers");
     }
     #[test]

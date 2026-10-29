@@ -38,7 +38,7 @@ use std::{borrow::Cow, cmp::{max, min}, future::Future, hash::{BuildHasherDefaul
 use std::io;
 #[cfg(test)]
 #[path = "sliding_sync/history_tests.rs"]
-mod history_tests;
+pub(crate) mod history_tests;
 mod room_tags;
 use hashbrown::{HashMap, HashSet};
 use crate::{
@@ -5749,7 +5749,7 @@ const LOG_ROOM_LIST_DIFFS: bool = cfg!(feature = "log_room_list_diffs");
 /// to deliver the resulting diffs before taking the snapshot.
 const LATE_DECRYPTION_REFRESH_DELAY: Duration = Duration::from_millis(250);
 
-async fn build_focused_timeline(room: &Room, kind: &TimelineKind, target: &Option<OwnedEventId>) -> Result<Timeline, String> {
+pub(crate) async fn build_focused_timeline(room: &Room, kind: &TimelineKind, target: &Option<OwnedEventId>) -> Result<Timeline, String> {
         let focus = match (&target, kind.thread_root_event_id()) {
             (Some(event), Some(root)) if event == root => TimelineFocus::Event {
                 target: event.clone(), num_context_events: 50, thread_mode: TimelineEventFocusThreadMode::ForceThread,
@@ -5798,12 +5798,18 @@ async fn build_in_timeline_window<F: std::future::Future>(
     mut requests: watch::Receiver<TimelineRequest>,
     build: F,
     timeout: std::time::Duration,
+    target: Option<OwnedEventId>,
 ) -> Option<Result<F::Output, tokio::time::error::Elapsed>> {
     tokio::select! {
         result = tokio::time::timeout(timeout, build) => Some(result),
         () = async {
             loop {
-                if !requests.borrow_and_update().is_timeline_open { return; }
+                let cancelled = {
+                    let request = requests.borrow_and_update();
+                    !request.is_timeline_open || target.as_ref().is_some_and(|target|
+                        !request.backwards_paginate.iter().any(|pending|&pending.target_event_id == target))
+                };
+                if cancelled { return; }
                 if requests.changed().await.is_err() { return; }
             }
         } => None,
@@ -5827,6 +5833,7 @@ fn focus_timeline_window(kind: TimelineKind, target: Option<OwnedEventId>, rebas
         let Some(result) = build_in_timeline_window(
             old_requests.subscribe(), build_focused_timeline(&room, &kind, &target),
             std::time::Duration::from_secs(30),
+            if rebase {None} else {target.clone()},
         ).await else { return; };
         let result = result.unwrap_or_else(|error| Err(error.to_string()));
         if !crate::matrix_context::is_current(&client) { return }
@@ -6827,7 +6834,7 @@ mod focus_lifetime_tests {
         let held = Arc::new(());
         let weak = Arc::downgrade(&held);
         let build = async move { let _held = held; std::future::pending::<()>().await };
-        let task = tokio::spawn(build_in_timeline_window(receiver, build, std::time::Duration::from_secs(5)));
+        let task = tokio::spawn(build_in_timeline_window(receiver, build, std::time::Duration::from_secs(5), None));
         requests.send_modify(|request| request.is_timeline_open = false);
         assert!(task.await.unwrap().is_none());
         assert!(weak.upgrade().is_none());
@@ -6836,7 +6843,7 @@ mod focus_lifetime_tests {
         let build = async move { let _held = held; std::future::pending::<()>().await };
         // Keep the watch sender alive to exercise the deadline, not disconnection.
         let (requests, receiver) = watch::channel(TimelineRequest { backwards_paginate: Vec::new(), is_timeline_open: true });
-        assert!(matches!(build_in_timeline_window(receiver, build, std::time::Duration::from_millis(1)).await, Some(Err(_))));
+        assert!(matches!(build_in_timeline_window(receiver, build, std::time::Duration::from_millis(1), None).await, Some(Err(_))));
         assert!(weak.upgrade().is_none());
         drop(requests);
     }
