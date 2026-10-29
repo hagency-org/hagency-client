@@ -5901,3 +5901,12 @@ SDK 恢复 timeline 可包含同一事件多个句柄。保留原始 Vector 的�
 - A Dock-created RoomScreen is not necessarily painted by the first outer
   frame. Native link tests explicitly draw the selected original RoomScreen
   too; do not infer absence of startup side effects from an unpainted widget.
+
+- R13 review follow-up: Never whitelist unscoped GoHome/Contacts as internal
+  delivery. Ticket-bound EnterHome/EnterContacts must survive each queue/frame
+  boundary; ordinary navigation always replaces the intent. A lazy desktop
+  queues LoadDock during its first draw, so post the original target only after
+  that draw. Preserve permalink initialization provenance until the original
+  LoadDock consumes it, even when its Ticket is stale; retirement cannot grant
+  permission to enter the management factory. Explicit Home/Projects remain
+  separate authorized factory paths.

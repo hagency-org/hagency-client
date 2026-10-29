@@ -1168,8 +1168,8 @@ impl App {
                     self.ui.modal(cx, ids!(join_leave_modal)).open(cx);
                 }
                 Effect::Navigate(navigation) if navigation.is_current() => {
-                    cx.action(NavigationBarAction::GoToHome);
-                    cx.action(crate::matrix_links::LinkAction::Navigate(navigation));
+                    self.close_workspace_pages(cx);
+                    crate::matrix_links::publish_navigation(cx,navigation);
                 }
                 Effect::Error(epoch,error) => crate::matrix_links::publish_error(epoch,error),
                 _ => (),

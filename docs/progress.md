@@ -15511,3 +15511,21 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   event512KiB inspection occurs after HTTP buffering; no early network cap claim.
   No real account/provider inference/deployment. Independent review and final
   multi-platform PR CI remain required; this branch has not been pushed.
+
+
+### 2026-10-30 — R13 root-navigation review follow-up
+- Fixed real Delivering-phase root-selection replacement race with original
+  Ticket-bound EnterHome/EnterContacts packets; unscoped navigation always
+  retires the old intent, including queued delivery, context and Contacts draw.
+- Actual1280 Settings→Home→Room/Space proved lazy LoadDock could overwrite the
+  selected target. Preserve at most one original navigation until child draw
+  finishes; initialize dock before target delivery. Original12pass/1fail retained.
+- Preserve permalink initialization provenance through delayed stale LoadDock;
+  never interpret an expired Ticket as authority for implicit OpenProjects.
+  Actual same-original-widget stale queue regression keeps CURRENTNone,
+  startup0/no owner dir. Explicit Home/Projects factory code remains available.
+- Current follow-up:13/13 focusedMatrix,5/5 originalHome,5/5 originalDesktop;
+  exactCI features App+miniapp-core all-targets strictClippy15.06s pass.
+  Earlier a699 full821/0/2 and lifecycle8/8 are retained prior-source evidence.
+  Parent owns final composed-branch wholeApp/exactCI/lifecycle verification;
+  no duplicate full-suite claim for this follow-up. No push/PR from this branch.

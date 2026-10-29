@@ -370,8 +370,9 @@ pub(crate) fn navigate_matrix_direct(cx: &mut Cx, navigation: crate::matrix_link
         SelectedRoom::Thread {thread_root_event_id, ..} => Some(thread_root_event_id.clone()),
         _ => None,
     };
-    navigate_direct_view(cx, navigation.selected.room_name().clone(), thread, navigation.event);
-    if let Some(pending) = cx.global::<PendingDirectChat>().0.as_mut() {pending.ticket = Some(navigation.ticket);}
+    cx.global::<PendingDirectChat>().0=Some(DirectNavigation {epoch:crate::account_session::epoch(),room:navigation.selected.room_name().clone(),started:std::time::Instant::now(),thread,jump:navigation.event,ticket:Some(navigation.ticket.clone())});
+    cx.action(crate::matrix_links::LinkAction::EnterContacts(navigation.ticket));
+    cx.redraw_all();
 }
 
 #[derive(Debug)]
@@ -983,7 +984,16 @@ pub(crate) mod new_chat_tests {
     use super::*;
     use makepad_widgets::makepad_draw::cx_draw::CxDraw;
 
+    pub(crate) fn assert_matrix_link_in_contacts(hub:&MobileHubRef,cx:&Cx,navigation:&crate::matrix_links::Navigation) {
+        let inner=hub.borrow().expect("actual Contacts widget");
+        assert_eq!(inner.selected_conversation.as_ref(),Some(navigation.selected.room_id()));
+        inner.view.room_screen(cx,ids!(contact_chat)).assert_matrix_link_target(cx,navigation);
+    }
     pub(crate) async fn matrix_link_navigation(navigation: crate::matrix_links::Navigation, cancel: bool) {
+        let ticket=navigation.ticket.clone();
+        matrix_link_navigation_after_queue(navigation,move |_| {if cancel {ticket.cancel();}}).await;
+    }
+    pub(crate) async fn matrix_link_navigation_after_queue(navigation: crate::matrix_links::Navigation, replace: impl FnOnce(&mut Cx)) {
         let completed=std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let expected=std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         let observer=completed.clone();let request=expected.clone();
@@ -997,7 +1007,8 @@ pub(crate) mod new_chat_tests {
         let mut hub=hub(&mut cx);
         let mut state=crate::app::AppState {selected_tab:SelectedTab::Contacts,..Default::default()};
         navigate_matrix_direct(&mut cx,navigation.clone());
-        if cancel {navigation.ticket.cancel();}
+        replace(&mut cx);
+        let cancel=!navigation.is_current();
         hub.handle_event(&mut cx,&Event::Signal,&mut Scope::with_data(&mut state));
         draw_with_state(&mut cx,&mut hub,375.0,&mut state);
         expected.store(hub.request,std::sync::atomic::Ordering::Release);

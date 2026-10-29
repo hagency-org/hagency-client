@@ -23,6 +23,8 @@ Windows is outside this batch and remains unqualified.
 - Cancel superseded or dismissed navigation and discard late responses without claiming an already issued join was undone.
 - Use actual native widget actions and SDK loopback HTTP/context fixtures; keep fixture evidence distinct from actual desktop OS URL delivery.
 - Scope queued and already visible failure popups to the original input epoch.
+- Carry the original Ticket on internal Home and Contacts routing; any ordinary user navigation replaces the old intent even while delivery or context remains pending.
+- Finish the original lazy Home child draw before posting target delivery, and retain permalink initialization provenance through a stale delayed LoadDock without entering the management factory.
 - Keep passive Room and Contacts observation free of owner creation and saved runtime startup; retain explicit login and mutation factory calls.
 
 ### Must Not

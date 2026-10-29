@@ -22,19 +22,29 @@
 
 明确的 `LoginSuccess` 恢复入口和显式启动、创建、绑定等操作保留原工厂。Backend API 文档说明了两者副作用，临时回溯代码已移除。
 
+## 父审查后的根导航补充
+
+`a699903c` 后复核确认，Delivering 阶段将普通 GoHome/Contacts 视为内部跳转，会让人类替代导航后的旧 Ticket 继续存活。内部步骤现改为携带原 Ticket 的 `EnterHome` / `EnterContacts`；所有普通导航都取消旧意图，每一轮 UI 消费和延迟绘制重新校验。
+
+真实1280 HomeScreen 从 Settings 切回 Home 的正例又检出初始 dock 顺序错误：Navigate 先排队，首次绘制才排队的 LoadDock 随后覆盖已选 tab（`root-routing-focused-third.log`，12 pass/1 fail）。Home 现只保留最多一个原导航，等待子树绘制结束、原 LoadDock 先排队后再投递目标；普通 Room 和真实 SDK Space 均必须跨后续动作/绘制保持选中，未放松断言。
+
+初始化中的隐式 OpenProjects 会调用 owner 工厂，新增实际 NoBootstrap 失败保留在 fifth log。原 Desktop 现在记录 permalink 初始化的来源，直到原 LoadDock 实际消费，Ticket 失效不会变成创建 owner 的权限。真实1280负例先确认原 LoadDock 已排队，再转 Settings 退休 Ticket，把延迟事件交同一原 Desktop 实例处理，确认标记消费且 CURRENT None、startup0、没有 owner 目录。显式 Home/Projects 仍沿原工厂路径；未修改 HagencyPanel 的显式 action。
+
 ## 验证证据
 
 所有测试从本分支实际编辑路径构建。Cargo 显式使用 Data 卷共享 target；每个有 SDK 全局状态的新增测试在独立子进程、私有临时 App profile 和 loopback server 中运行，并检查子进程确实执行了一个 selector。
 
 | 验证 | 证据与结果 |
 |---|---|
-| 精确 App CI 特性 Clippy | `agent_chat,octosense-module,macos-sparkle`；App + mini app core、全部 targets、测试及 examples，`--no-deps -D warnings` 最终通过，29.36 秒（前次20.91秒记录保留） |
-| 同特性完整 App 库测试 | `final-ci-profile-app-suite-second.log`：821 pass、0 fail、2 ignored，77.39 秒；原820/0/2首轮记录保留，新增实际旧模态回调回归；保留原两项 ignore |
+| a699 原精确 App CI 特性 Clippy | `agent_chat,octosense-module,macos-sparkle`；App + mini app core、全部 targets、测试及 examples，`--no-deps -D warnings` 最终通过，29.36 秒（前次20.91秒记录保留） |
+| a699 原同特性完整 App 库测试 | `final-ci-profile-app-suite-second.log`：821 pass、0 fail、2 ignored，77.39 秒；原820/0/2首轮记录保留，新增实际旧模态回调回归；保留原两项 ignore |
 | 原生 UI 和 SDK 行为 | 实际确认按钮动作、未确认零 join、确认保留 via；实际 alias/event/context HTTP；真实 Megolm 内外关系；桌面1280/compact375/Contacts实际控件及 composer；原 Client 替换、取消、epoch、旧弹窗 |
 | 深层零 bootstrap | 所选真实 RoomScreen 单独实际 draw，Contacts badge 原后台请求完成后再断言；CURRENT None、startup count0、native-owner 目录不存在；原第七波2/2通过 |
-| 无默认特性编译 | 显式移除Sparkle SDK环境，`--no-default-features --features agent_chat`，51.67秒通过 |
+| a699 原无默认特性编译 | 显式移除Sparkle SDK环境，`--no-default-features --features agent_chat`，51.67秒通过 |
 | 本地化与主题 | 2755 个词条，2025 个已翻译调用点、missing0；Theme literal guard 通过 |
-| Task Contract | `final-lifecycle.json`：agent-spec1.4，8/8 pass、quality1.0；0 fail/skip/uncertain/pending，含边界和7个场景；默认Cargo profile，精确CI特性另测 |
+| a699 原 Task Contract | `final-lifecycle.json`：agent-spec1.4，8/8 pass、quality1.0；0 fail/skip/uncertain/pending，含边界和7个场景；默认Cargo profile，精确CI特性另测 |
+
+根导航补充源码验证为 `root-routing-focused-seventh.log`：**13/13通过，4.84秒**；就近既有 Home responsive **5/5**、MainDesktop persistent **5/5**；同精确CI特性的 App + mini app core all-targets 严格 Clippy最终 **15.06秒通过**。上述821项完整测试和8/8生命周期属于补充前的 a699 完整验证，**不冒称当前补充源码已跑完整套件**。父任务将在合成最终分支后统一运行完整精确CI profile与完整生命周期。
 
 SDK 夹具复用项目已有 loopback sync/context 服务，开启真实 SDK threading 支持。主线和线程的实际 focused timeline 都必须包含原目标；错误 main/thread 归属必须拒绝。取消测试使用原 production build/watch helper 和受控 pending future 的 Drop 观察，确认原 future 确实释放；这项不冒充底层 SQLite/OS IO 的中断测量。
 

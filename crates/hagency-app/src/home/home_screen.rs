@@ -484,6 +484,8 @@ pub struct HomeScreen {
     /// Set by [`FocusChatFilterAction`]; consumed in `draw_walk()` once the
     /// chat filter pane's visibility for this frame is known.
     #[rust] pending_chat_filter_focus: bool,
+    /// One original permalink waits for the Home child/dock to finish its first draw.
+    #[rust] pending_matrix_link: Option<crate::matrix_links::Navigation>,
 }
 
 impl ScriptHook for HomeScreen {
@@ -596,6 +598,20 @@ impl Widget for HomeScreen {
                 ) {
                     self.switch_to_tab(cx, app_state, SelectedTab::Home);
                 }
+                if let Some(crate::matrix_links::LinkAction::EnterHome(navigation)) = action.downcast_ref()
+                    && navigation.is_current() {
+                    self.pending_new_chat=false;
+                    let already_home=app_state.selected_tab==SelectedTab::Home;
+                    self.switch_to_tab(cx,app_state,SelectedTab::Home);
+                    if already_home {cx.action(NavigationBarAction::TabSelected(SelectedTab::Home));}
+                    self.pending_matrix_link=Some(navigation.clone());
+                    self.view.redraw(cx);
+                }
+                if let Some(crate::matrix_links::LinkAction::EnterContacts(ticket)) = action.downcast_ref()
+                    && ticket.is_current() {
+                    self.pending_new_chat=false;
+                    self.switch_to_tab(cx,app_state,SelectedTab::Contacts);
+                }
                 if let Some(crate::matrix_links::LinkAction::Navigate(navigation)) = action.downcast_ref() {
                     if !effective_is_desktop(cx) && navigation.is_current() {
                         if crate::sliding_sync::get_client().and_then(|client|client.get_room(navigation.selected.room_id()))
@@ -604,7 +620,7 @@ impl Widget for HomeScreen {
                             continue;
                         }
                         if matches!(navigation.selected, SelectedRoom::Space {..}) {
-                            cx.widget_action(self.widget_uid(), RoomsListAction::Selected(navigation.selected.clone()));
+                            self.push_selected_screen_view(cx, app_state, navigation.selected.clone());
                             continue;
                         }
                         if !matches!(app_state.selected_room.as_ref(), Some(selected) if selected == &navigation.selected) {
@@ -916,6 +932,11 @@ impl Widget for HomeScreen {
             let rect = area.rect(cx);
             cx.global::<crate::shared::workspace_pages::WorkspacePageBounds>().0 =
                 (rect.size.x > 0.0 && rect.size.y > 0.0).then_some(rect);
+            // A lazy desktop child queues LoadDockFromAppState while drawing.
+            // Post only after that original draw, so initialization precedes
+            // the ticket-bound target on the next action turn.
+            if let Some(navigation)=self.pending_matrix_link.take()
+                && navigation.is_current() {cx.action(crate::matrix_links::LinkAction::Navigate(navigation));}
             if settings && (rect.size.x <= 0.0 || rect.size.y <= 0.0) {
                 self.view.redraw(cx);
             }
@@ -1261,6 +1282,94 @@ pub(crate) mod responsive_layout_tests {
     use super::*;
     use makepad_widgets::makepad_draw::cx_draw::CxDraw;
 
+    pub(crate) fn matrix_link_root_delivery(navigation: crate::matrix_links::Navigation, direct: bool, width:f64, observe: &mut impl FnMut(&Action)) {
+        let (mut cx,mut home,mut state)=home();
+        state.selected_tab=SelectedTab::Settings;
+        draw_pane(&mut cx,&mut home,&mut state,width);
+        let mut actions=cx.capture_actions(|cx|crate::matrix_links::publish_navigation(cx,navigation.clone()));
+        for _ in 0..4 {
+            for action in &actions {observe(action);}
+            actions=cx.capture_actions(|cx| {
+                home.handle_event(cx,&Event::Actions(actions),&mut Scope::with_data(&mut state));
+                draw_pane(cx,&mut home,&mut state,width);
+            });
+        }
+        draw_pane(&mut cx,&mut home,&mut state,width);
+        assert!(navigation.is_current(),"tagged internal root switches must preserve the exact original ticket");
+        assert_eq!(state.selected_tab,if direct {SelectedTab::Contacts}else{SelectedTab::Home});
+        if direct {
+            super::super::mobile::new_chat_tests::assert_matrix_link_in_contacts(&home.view.mobile_hub(&cx,ids!(contacts_page)),&cx,&navigation);
+        } else if width>=760.0 {
+            let dock=home.view.dock(&cx,ids!(dock));
+            let tab=navigation.selected.tab_id();
+            assert!(dock.clone_state().expect("actual desktop dock").values().any(|item|matches!(item,DockItem::Tabs {tabs,selected,..} if tabs.get(*selected)==Some(&tab))),"the original target must remain selected in the restored Home dock after subsequent action/frame turns");
+            let item=dock.item(tab);
+            if matches!(navigation.selected,SelectedRoom::Space {..}) {
+                use crate::home::space_lobby::SpaceLobbyScreenWidgetRefExt;
+                assert!(item.as_space_lobby_screen().borrow().is_some());
+                assert_eq!(item.label(&cx,ids!(header.parent_space_row.parent_name)).text(),navigation.selected.room_name().display());
+            } else {item.as_room_screen().assert_matrix_link_target(&cx,&navigation);}
+        } else {
+            assert_eq!(state.selected_room.as_ref(),Some(&navigation.selected));
+            let stack=home.view.stack_navigation(&cx,ids!(view_stack));
+            let target=stack.destination_view().or_else(||stack.current_view()).unwrap();
+            stack.view_by_id(&mut cx,target).room_screen(&cx,ids!(room_screen)).assert_matrix_link_target(&cx,&navigation);
+        }
+    }
+    pub(crate) fn matrix_link_stale_desktop_initialization(navigation: crate::matrix_links::Navigation, observe: &mut impl FnMut(&Action)) {
+        use crate::home::main_desktop_ui::MainDesktopUIWidgetRefExt;
+        let (mut cx,mut home,mut state)=home();state.selected_tab=SelectedTab::Settings;
+        draw_pane(&mut cx,&mut home,&mut state,1280.0);
+        let enter=cx.capture_actions(|cx|crate::matrix_links::publish_navigation(cx,navigation.clone()));
+        for action in &enter {observe(action);}
+        let queued=cx.capture_actions(|cx| {home.handle_event(cx,&Event::Actions(enter),&mut Scope::with_data(&mut state));draw_pane(cx,&mut home,&mut state,1280.0);});
+        assert!(queued.iter().any(|action|matches!(action.downcast_ref(),Some(crate::home::main_desktop_ui::MainDesktopUiAction::LoadDockFromAppState))),"the original lazy desktop initialization must really be queued before retirement");
+        let mut original=None;
+        home.view.widget(&cx,ids!(home_page)).children(&mut |_,widget| {if widget.as_main_desktop_ui().borrow().is_some() {original=Some(widget);}});
+        let original=original.expect("actual original desktop child");
+        assert!(crate::home::main_desktop_ui::persistent_navigation_tests::has_matrix_link_initialization(&original));
+        let replacement=cx.capture_actions(|cx|cx.action(NavigationBarAction::OpenSettings));
+        for action in &replacement {observe(action);}
+        home.handle_event(&mut cx,&Event::Actions(replacement),&mut Scope::with_data(&mut state));
+        assert!(!navigation.is_current());
+        for action in &queued {observe(action);}
+        let delayed=Event::Actions(queued);
+        home.handle_event(&mut cx,&delayed,&mut Scope::with_data(&mut state));
+        // Hidden PageFlip children can defer events. Deliver to the same retained
+        // original child if needed; never instantiate a replacement test widget.
+        if crate::home::main_desktop_ui::persistent_navigation_tests::has_matrix_link_initialization(&original) {
+            original.handle_event(&mut cx,&delayed,&mut Scope::with_data(&mut state));
+        }
+        assert!(!crate::home::main_desktop_ui::persistent_navigation_tests::has_matrix_link_initialization(&original));
+        draw_pane(&mut cx,&mut home,&mut state,1280.0);
+        assert_eq!(state.selected_tab,SelectedTab::Settings);
+        assert!(state.selected_room.is_none());
+    }
+    pub(crate) fn matrix_link_root_replacement(navigation: crate::matrix_links::Navigation, contacts: bool, before_root: bool, observe: &mut impl FnMut(&Action)) {
+        let (mut cx,mut home,mut state)=home();
+        state.selected_tab=SelectedTab::Settings;
+        draw_pane(&mut cx,&mut home,&mut state,375.0);
+        let queued=cx.capture_actions(|cx|crate::matrix_links::publish_navigation(cx,navigation.clone()));
+        {
+        let mut dispatch=|cx:&mut Cx,actions:Vec<Action>| {
+            // The real App observes the entire batch before forwarding it to Home.
+            for action in &actions {observe(action);}
+            cx.capture_actions(|cx| {
+                home.handle_event(cx,&Event::Actions(actions),&mut Scope::with_data(&mut state));
+                draw_pane(cx,&mut home,&mut state,375.0);
+            })
+        };
+        let queued=if before_root {queued} else {dispatch(&mut cx,queued)};
+        let replacement=cx.capture_actions(|cx|cx.action(if contacts {NavigationBarAction::GoToTab(SelectedTab::Contacts)} else {NavigationBarAction::GoToHome}));
+        dispatch(&mut cx,replacement);
+        let late=dispatch(&mut cx,queued);
+        dispatch(&mut cx,late);
+        }
+        draw_pane(&mut cx,&mut home,&mut state,375.0);
+        assert!(!navigation.is_current());
+        assert_eq!(state.selected_tab,if contacts {SelectedTab::Contacts} else {SelectedTab::Home});
+        assert!(state.selected_room.is_none(),"late original delivery must not open the linked room after replacement");
+    }
     pub(crate) fn matrix_link_navigation(navigation: crate::matrix_links::Navigation) {
         let (mut cx,mut home,mut state)=home();
         state.selected_tab=SelectedTab::Home;

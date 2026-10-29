@@ -200,7 +200,14 @@ pub(crate) enum LinkAction {
     Confirm(Ticket),
     Dismiss(Ticket),
     Finished(Ticket, Result<Outcome, String>),
+    EnterHome(Navigation),
+    EnterContacts(Ticket),
     Navigate(Navigation),
+}
+
+/// Both queued UI steps retain the original intent, including their root switch.
+pub(crate) fn publish_navigation(cx: &mut Cx, navigation: Navigation) {
+    cx.action(LinkAction::EnterHome(navigation));
 }
 #[derive(Clone, Debug)]
 pub(crate) struct ResolvedRoom {
@@ -229,7 +236,6 @@ struct Pending {
     ticket: Ticket,
     phase: Phase,
     room: Option<ResolvedRoom>,
-    destination: Option<SelectedRoom>,
 }
 #[derive(Default)]
 pub(crate) struct Controller {
@@ -299,40 +305,14 @@ impl Controller {
                 action.as_widget_action().cast(),
                 crate::home::rooms_list::RoomsListAction::Selected(_)
             );
-        if !pending.ticket.is_current() || is_navigation && pending.phase != Phase::Delivering {
+        // Ordinary navigation is always a replacement intent. Internal root
+        // switches and delivery carry the original Ticket in LinkAction instead.
+        if !pending.ticket.is_current() || is_navigation {
             return if self.cancel() {
                 vec![Effect::CloseJoin]
             } else {
                 Vec::new()
             };
-        }
-        if pending.phase == Phase::Delivering && is_navigation {
-            let expected = match action.as_widget_action().cast() {
-                crate::home::rooms_list::RoomsListAction::Selected(selected) => {
-                    matches!(selected, SelectedRoom::Space { .. })
-                        && pending.destination.as_ref() == Some(&selected)
-                }
-                _ => {
-                    matches!(
-                        action.downcast_ref(),
-                        Some(crate::home::navigation_tab_bar::NavigationBarAction::GoToHome)
-                    ) || matches!(
-                        action.downcast_ref(),
-                        Some(
-                            crate::home::navigation_tab_bar::NavigationBarAction::GoToTab(
-                                crate::home::navigation_tab_bar::SelectedTab::Contacts
-                            )
-                        )
-                    ) && pending.destination.as_ref().is_some_and(|selected| {
-                        crate::sliding_sync::get_client()
-                            .and_then(|client| client.get_room(selected.room_id()))
-                            .is_some_and(|room| !room.direct_targets().is_empty())
-                    })
-                }
-            };
-            if !expected {
-                self.cancel();
-            }
         }
         Vec::new()
     }
@@ -380,7 +360,6 @@ impl Controller {
                     ticket: ticket.clone(),
                     phase: Phase::Resolving,
                     room: None,
-                    destination: None,
                 });
                 self.spawn(client, ticket, async move |client, ticket| {
                     resolve(&client, link, ticket).await
@@ -399,7 +378,6 @@ impl Controller {
                 match result {
                     Ok(Outcome::Ready(navigation)) => {
                         pending.phase = Phase::Delivering;
-                        pending.destination = Some(navigation.selected.clone());
                         effects.push(Effect::Navigate(navigation.clone()));
                     }
                     Ok(Outcome::Confirmation {

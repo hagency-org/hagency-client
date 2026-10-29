@@ -110,7 +110,13 @@ impl Server {
     async fn room_with_store(&self, store: Option<&std::path::Path>) -> Room {
         self.room_configured(store,false).await
     }
+    pub(crate) async fn space_for_links(&self) -> Room {
+        self.room_configured_kind(None,true,true).await
+    }
     async fn room_configured(&self, store: Option<&std::path::Path>, threading: bool) -> Room {
+        self.room_configured_kind(store,threading,false).await
+    }
+    async fn room_configured_kind(&self, store: Option<&std::path::Path>, threading: bool, space:bool) -> Room {
         let builder = Client::builder()
             .http_client(
                 matrix_sdk::reqwest::Client::builder()
@@ -147,6 +153,10 @@ impl Server {
             .await
             .unwrap();
         let room_id = ruma::room_id!("!room:example.org");
+        if space {
+            let room=client.get_room(room_id).expect("actual SDK sync must establish the Space");
+            assert!(room.is_space());return room;
+        }
         let (cache, _handles) = client.event_cache().room(room_id).await.unwrap();
         tokio::time::timeout(Duration::from_secs(2), async {
             loop {

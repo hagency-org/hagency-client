@@ -160,7 +160,6 @@ fn controller_for(ticket: &Ticket, phase: Phase, room: Option<ResolvedRoom>) -> 
             ticket: ticket.clone(),
             phase,
             room,
-            destination: None,
         }),
         job: None,
     }
@@ -731,29 +730,7 @@ async fn navigation_direct_contact_view_keeps_thread_ticket_and_drops_retired_in
     if !isolated("navigation_direct_contact_view_keeps_thread_ticket_and_drops_retired_intents") {
         return;
     }
-    let server = Server::with_handler(
-        false,
-        Arc::new(|path| {
-            if path.contains("/sync?") {
-                return Some((
-                    200,
-                    serde_json::json!({"next_batch":"s1",
-                "account_data":{"events":[{"type":"m.direct","content":{"@bob:example.org":["!room:example.org"]}}]},
-                "rooms":{"join":{"!room:example.org":{
-                    "state":{"events":[{"type":"m.room.create","state_key":"","event_id":"$create","sender":"@alice:example.org","origin_server_ts":1,"content":{"creator":"@alice:example.org","room_version":"10"}},
-                        {"type":"m.room.member","state_key":"@alice:example.org","event_id":"$member","sender":"@alice:example.org","origin_server_ts":2,"content":{"membership":"join"}}]},
-                    "timeline":{"events":[event("$recent",None)],"limited":false,"prev_batch":"older"}}}}}),
-                ));
-            }
-            if path.contains("/event/") {
-                if path.ends_with("$root") || path.ends_with("%24root") {
-                    return Some((200, event("$root", None)));
-                }
-                return Some((200, event("$reply", Some("$root"))));
-            }
-            None
-        }),
-    );
+    let server = direct_fixture();
     let room = server.room_for_links().await;
     install_link_client(Some(room.client()));
     assert!(
@@ -930,6 +907,203 @@ async fn scope_legacy_membership_modal_retires_original_native_callbacks() {
             .iter()
             .any(|path| path.contains("/join/"))
     );
+    assert_no_owner_startup();
+    install_link_client(None);
+}
+
+fn direct_fixture() -> Server {
+    Server::with_handler(
+        false,
+        Arc::new(|path| {
+            if path.contains("/sync?") {
+                return Some((
+                    200,
+                    serde_json::json!({"next_batch":"s1",
+                "account_data":{"events":[{"type":"m.direct","content":{"@bob:example.org":["!room:example.org"]}}]},
+                "rooms":{"join":{"!room:example.org":{
+                    "state":{"events":[{"type":"m.room.create","state_key":"","event_id":"$create","sender":"@alice:example.org","origin_server_ts":1,"content":{"creator":"@alice:example.org","room_version":"10"}},
+                        {"type":"m.room.member","state_key":"@alice:example.org","event_id":"$member","sender":"@alice:example.org","origin_server_ts":2,"content":{"membership":"join"}}]},
+                    "timeline":{"events":[event("$recent",None)],"limited":false,"prev_batch":"older"}}}}}),
+                ));
+            }
+            if path.contains("/event/") {
+                if path.ends_with("$root") || path.ends_with("%24root") {
+                    return Some((200, event("$root", None)));
+                }
+                return Some((200, event("$reply", Some("$root"))));
+            }
+            None
+        }),
+    )
+}
+
+#[tokio::test]
+async fn scope_human_root_navigation_retires_queued_delivery_and_contact_draw() {
+    if !isolated("scope_human_root_navigation_retires_queued_delivery_and_contact_draw") {
+        return;
+    }
+    use crate::home::navigation_tab_bar::{NavigationBarAction, SelectedTab};
+    let server = direct_fixture();
+    let room = server.room_for_links().await;
+    install_link_client(Some(room.client()));
+    let ticket = Ticket::new(&room.client());
+    let navigation = conversation(&room, Some("$reply".try_into().unwrap()), ticket.clone())
+        .await
+        .unwrap();
+    let mut controller = controller_for(&ticket, Phase::Delivering, None);
+    crate::home::home_screen::responsive_layout_tests::matrix_link_root_delivery(
+        navigation,
+        true,
+        375.0,
+        &mut |action| {
+            controller.observe_navigation(action);
+        },
+    );
+    assert!(ticket.is_current());
+    controller.cancel();
+    for contacts in [false, true] {
+        for before_root in [false, true] {
+            let ticket = Ticket::new(&room.client());
+            let navigation =
+                conversation(&room, Some("$reply".try_into().unwrap()), ticket.clone())
+                    .await
+                    .unwrap();
+            let mut controller = controller_for(&ticket, Phase::Delivering, None);
+            crate::home::home_screen::responsive_layout_tests::matrix_link_root_replacement(
+                navigation,
+                contacts,
+                before_root,
+                &mut |action| {
+                    controller.observe_navigation(action);
+                },
+            );
+            assert!(controller.pending.is_none());
+        }
+        // The direct-room request is already queued but the actual Contacts
+        // widget has not drawn it yet. A human root selection must still retire it.
+        let ticket = Ticket::new(&room.client());
+        let navigation = conversation(&room, Some("$reply".try_into().unwrap()), ticket.clone())
+            .await
+            .unwrap();
+        let mut controller = controller_for(&ticket, Phase::Delivering, None);
+        crate::home::mobile::new_chat_tests::matrix_link_navigation_after_queue(navigation, |cx| {
+            let human = cx.capture_actions(|cx| {
+                cx.action(if contacts {
+                    NavigationBarAction::GoToTab(SelectedTab::Contacts)
+                } else {
+                    NavigationBarAction::GoToHome
+                })
+            });
+            for action in &human {
+                controller.observe_navigation(action);
+            }
+        })
+        .await;
+        assert!(controller.pending.is_none());
+    }
+    install_link_client(None);
+    let server = fixture();
+    let room = server.room_for_links().await;
+    install_link_client(Some(room.client()));
+    let ticket = Ticket::new(&room.client());
+    let navigation = conversation(&room, Some("$ancient".try_into().unwrap()), ticket.clone())
+        .await
+        .unwrap();
+    let mut controller = controller_for(&ticket, Phase::Delivering, None);
+    crate::home::home_screen::responsive_layout_tests::matrix_link_root_delivery(
+        navigation,
+        false,
+        375.0,
+        &mut |action| {
+            controller.observe_navigation(action);
+        },
+    );
+    assert!(ticket.is_current());
+    controller.cancel();
+    let ticket = Ticket::new(&room.client());
+    let navigation = conversation(&room, Some("$ancient".try_into().unwrap()), ticket.clone())
+        .await
+        .unwrap();
+    let mut controller = controller_for(&ticket, Phase::Delivering, None);
+    crate::home::main_desktop_ui::persistent_navigation_tests::matrix_link_navigation_then(
+        navigation,
+        |cx| {
+            let human = cx.capture_actions(|cx| cx.action(NavigationBarAction::GoToHome));
+            for action in &human {
+                controller.observe_navigation(action);
+            }
+        },
+    );
+    assert!(controller.pending.is_none());
+    assert_no_owner_startup();
+    install_link_client(None);
+}
+
+#[tokio::test]
+async fn scope_root_delivery_restores_actual_desktop_home_dock_for_room_and_space() {
+    if !isolated("scope_root_delivery_restores_actual_desktop_home_dock_for_room_and_space") {
+        return;
+    }
+    let server = fixture();
+    let room = server.room_for_links().await;
+    install_link_client(Some(room.client()));
+    let ticket = Ticket::new(&room.client());
+    let navigation = conversation(&room, Some("$ancient".try_into().unwrap()), ticket.clone())
+        .await
+        .unwrap();
+    let mut controller = controller_for(&ticket, Phase::Delivering, None);
+    crate::home::home_screen::responsive_layout_tests::matrix_link_root_delivery(
+        navigation,
+        false,
+        1280.0,
+        &mut |action| {
+            controller.observe_navigation(action);
+        },
+    );
+    assert!(ticket.is_current());
+    controller.cancel();
+    let ticket = Ticket::new(&room.client());
+    let navigation = conversation(&room, Some("$ancient".try_into().unwrap()), ticket.clone())
+        .await
+        .unwrap();
+    let mut controller = controller_for(&ticket, Phase::Delivering, None);
+    crate::home::home_screen::responsive_layout_tests::matrix_link_stale_desktop_initialization(
+        navigation,
+        &mut |action| {
+            controller.observe_navigation(action);
+        },
+    );
+    assert!(controller.pending.is_none());
+    assert_no_owner_startup();
+    let server = Server::with_handler(
+        false,
+        Arc::new(|path| {
+            path.contains("/sync?").then(||(200,serde_json::json!({"next_batch":"s1","rooms":{"join":{"!room:example.org":{
+            "state":{"events":[{"type":"m.room.create","state_key":"","event_id":"$create","sender":"@alice:example.org","origin_server_ts":1,"content":{"creator":"@alice:example.org","room_version":"10","type":"m.space"}},
+                {"type":"m.room.member","state_key":"@alice:example.org","event_id":"$member","sender":"@alice:example.org","origin_server_ts":2,"content":{"membership":"join"}}]},
+            "timeline":{"events":[],"limited":false,"prev_batch":"older"}}}}})))
+        }),
+    );
+    let space = server.space_for_links().await;
+    assert!(
+        space.is_space(),
+        "the actual SDK sync must identify a Space"
+    );
+    install_link_client(Some(space.client()));
+    let ticket = Ticket::new(&space.client());
+    let navigation = conversation(&space, None, ticket.clone()).await.unwrap();
+    assert!(matches!(navigation.selected, SelectedRoom::Space { .. }));
+    let mut controller = controller_for(&ticket, Phase::Delivering, None);
+    crate::home::home_screen::responsive_layout_tests::matrix_link_root_delivery(
+        navigation,
+        false,
+        1280.0,
+        &mut |action| {
+            controller.observe_navigation(action);
+        },
+    );
+    assert!(ticket.is_current());
+    controller.cancel();
     assert_no_owner_startup();
     install_link_client(None);
 }
