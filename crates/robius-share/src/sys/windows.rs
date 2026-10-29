@@ -227,7 +227,7 @@ fn first_url(options: &ShareOptions) -> Option<&String> {
 }
 
 /// Converts a `std::fs::canonicalize` result into a normal absolute path that the
-/// WinRT `StorageFile` API can aceept.
+/// WinRT `StorageFile` API can accept.
 ///
 /// On Windows, `canonicalize` returns an extended-length (verbatim) path,
 /// which has a weird `\\?\` prefix.
