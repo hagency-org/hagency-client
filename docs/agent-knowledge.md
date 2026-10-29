@@ -5755,3 +5755,9 @@ SDK 恢复 timeline 可包含同一事件多个句柄。保留原始 Vector 的�
 ## 2026-10-29 — 动态资源归档图标
 
 - Makepad 的 script_apply_eval! 动态作用域不能调用 crate_resource。项目归档图标改为在 script_mod! 中注册 ICON_PROJECT_ARCHIVE，运行时引用 mod.widgets 的已注册资源；新增 false→true→false 实际求值无错误回归。此前客户端日志中的变量缺失是实际缺陷，不能仅以编译通过替代运行时验证。
+
+## 2026-10-29 - Timeline live boundaries and service scope
+
+- SDK BaseRoom.latest_event is a displayable preview and may omit system events or be unset in a new state-only room. Before replacing a live timeline with an event-focused history window, retain the last observed live event identity. Use it only for main-room fallback when the SDK has no newer identity; unknown boundaries stay conservative and threads retain their own boundary rules. A latest message may occur before trailing state events in the displayed window.
+- A historical window can miss subsequent membership events. Opening Members must refresh the SDK roster and owner mapping with existing account/Room/epoch/request fences, without clearing an in-flight binding intent.
+- Agent service start/stop affects that Agent on its execution device across connected Rooms. A Room Overview shortcut obscures that scope; My Agents is the appropriate global management location, while Members adds an Agent to the current Room.
