@@ -15427,3 +15427,16 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   timeout stays Unknown while original fixture receipt completes uniquely;
   receive::6/6, normal feature-off lib check, own all-target strict and fmt pass.
   Hosted Windows and independent current-head review remain required.
+
+- R02 isolated dependency batch, 2026-10-30: based on361d4e34, a checksum-verified
+  original mdurl0.3.1 copy retains all sources/licenses and changes only its
+  active IDNA manifest to1.1.0. Root patch/exclude and explicit real package tests
+  keep the vendor outside workspace membership. Original133+new4+doc4 pass;
+  actual Matrix formatter6pass/7existing ignores and63-vector oracle pass,
+  own formatter strict passes. Old registry-source negative control reproduces
+  the masked ASCII ACE collapse; current regression rejects that rewrite.
+  Fresh same-DB main audit12→11 removes only idna0.3/RUSTSEC-2024-0421 and still
+  exits1, with warning counts unchanged. Independent Octos debt remains open.
+  Real metadata/inventory positive/negative2pass, original binding Node19pass,
+  actionlint pass; hosted CI and independent branch review remain pending.
+  Complete scope/limits and original logs are in the client-idna dependency report.

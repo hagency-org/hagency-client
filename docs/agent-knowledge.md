@@ -5859,3 +5859,16 @@ SDK 恢复 timeline 可包含同一事件多个句柄。保留原始 Vector 的�
   failure is still failure. Never replace it with a second domain owner, fake
   Started or recovered/replayed ReceiveWrite. Preserve actual child/retirement
   and unchanged-byte assertions separately from domain-only unit fixtures.
+
+### 2026-10-30 local mdurl dependency repair
+- mdurl0.3.1's complete original tests are133 (46unit+87parser), not just the108
+  percent/parser subset. Preserve all source and full MIT attribution; only its
+  normalized active manifest needs idna1.1.0. Original archive/provenance hashes
+  make the local same-version patch distinguishable from an upstream release.
+- An excluded path dependency is testable from root with `cargo test -p mdurl`,
+  but Cargo refuses workspace feature selection such as `--all-features` for it.
+  Inventory its actual default test build separately; metadata plus real test
+  names and a missing-selector negative control prove coverage without making it
+  a workspace member or adding selector exceptions.
+- App Matrix formatting uses mdurl percent primitives and separate raw punycode.
+  Removing old IDNA from the lock does not change or qualify IDN display policy.

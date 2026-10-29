@@ -1,5 +1,6 @@
 [workspace]
 members = ["crates/*"]
+exclude = ["vendor/mdurl"]
 default-members = ["crates/hagency-app"]
 resolver = "3"
 
@@ -123,6 +124,8 @@ lto = "off"
 strip = true
 debug-assertions = false
 [patch.crates-io]
+# Preserve mdurl percent primitives while replacing its obsolete IDNA dependency.
+mdurl = { path = "vendor/mdurl" }
 # Maintain the SDK changes in the fork branch; pin its reviewed revision.
 matrix-sdk = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "a70f68e6e3c3deae633b51390b7414770b49788b" }
 matrix-sdk-base = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "a70f68e6e3c3deae633b51390b7414770b49788b" }

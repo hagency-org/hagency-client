@@ -36,6 +36,10 @@ jobs:
       # step below still has its unchanged ten-minute deadline and assertions.
       - name: Compile all-feature test targets before spec inventory
         run: cargo test -p hagency -p hagency-agent-local -p hagency-core -p hagency-crypto-proof -p hagency-execution -p hagency-files -p hagency-matrix -p hagency-matrix-format -p hagency-media -p hagency-media-store -p hagency-metering -p hagency-palpo -p hagency-permissions -p hagency-platform -p hagency-progress -p hagency-progress-runtime -p hagency-runtime -p hagency-store --all-targets --all-features --locked --no-run
+      - name: Verify original vendored URL tests and IDNA repair regressions
+        run: cargo test --locked -p mdurl
+      - name: Verify excluded vendor inventory and missing-selector refusal
+        run: node --test tools/native/check-rust-spec-bindings-vendor.test.mjs
       - run: node tools/native/check-rust-spec-bindings.mjs
       - run: python3 -B tools/native/test-release-qualifications.py
       - run: node --test tools/native/check-production-callers.test.mjs tools/native/check-spec-bindings.test.mjs
