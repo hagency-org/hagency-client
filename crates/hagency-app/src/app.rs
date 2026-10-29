@@ -360,6 +360,7 @@ impl MatchEvent for App {
     }
 
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {
+        crate::shared::attachment_download::handle_share_actions(actions);
         for evicted in actions.iter().filter_map(|action|action.downcast_ref::<crate::sliding_sync::TimelineCacheEvicted>()) {
             crate::home::room_screen::release_cached_history(&evicted.0,evicted.1);
         }
@@ -1217,6 +1218,7 @@ fn workspace_navigation(action: &Action) -> bool {
 /// Clears all thread-local UI caches (user profiles, invited rooms, and timeline states).
 /// The `cx` parameter ensures that these thread-local caches are cleared on the main UI thread, 
 fn clear_all_app_state(cx: &mut Cx) {
+    crate::temp_storage::retire_account_shares();
     clear_user_profile_cache(cx);
     clear_all_invited_rooms(cx);
     clear_timeline_states(cx);
@@ -1847,6 +1849,7 @@ impl App {
                 crate::sliding_sync::set_sync_service_desired_running(true, "app foreground");
             }
             Event::Shutdown => {
+                crate::temp_storage::shutdown_temp_storage();
                 robius_speech::cancel_all();
                 self.handle_shutdown(cx);
             }

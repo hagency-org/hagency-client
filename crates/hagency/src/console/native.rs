@@ -2,6 +2,7 @@
 mod agent_crypto;
 mod configuration;
 mod ledger;
+pub(in crate::console) mod pending_approvals;
 mod remote_reviews;
 pub use agent_crypto::{
     AgentCryptoAction, AgentCryptoAuthority, AgentCryptoContext, AgentCryptoIdentity,
@@ -321,6 +322,9 @@ impl<'de> Deserialize<'de> for RoomCreationPolicy {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Command {
+    PendingApprovals {
+        cursor: Option<String>,
+    },
     AgentCrypto {
         action: AgentCryptoAction,
     },
@@ -482,9 +486,11 @@ impl Command {
     pub fn continues_running_task(&self) -> bool {
         matches!(
             self,
-            Self::AgentCrypto {
-                action: AgentCryptoAction::Status { .. } | AgentCryptoAction::Stop { .. }
-            } | Self::Projects
+            Self::PendingApprovals { .. }
+                | Self::AgentCrypto {
+                    action: AgentCryptoAction::Status { .. } | AgentCryptoAction::Stop { .. }
+                }
+                | Self::Projects
                 | Self::RemoteApprovals { .. }
                 | Self::ProjectRooms { .. }
                 | Self::Agents
@@ -565,7 +571,8 @@ fn request(command: Command) -> Result<(&'static str, String, Option<Value>), Na
     let root = "/console/api";
     let mut body = None;
     let (method, path) = match command {
-        Command::AgentConfigurationStatus { .. }
+        Command::PendingApprovals { .. }
+        | Command::AgentConfigurationStatus { .. }
         | Command::ExecutionEnvironment { .. }
         | Command::AgentConfiguration { .. }
         | Command::Ledger { .. }
@@ -940,6 +947,7 @@ pub(super) struct Inner {
     configuration_stopped: std::sync::atomic::AtomicBool,
     configuration_tasks: StdMutex<Vec<tokio::task::JoinHandle<()>>>,
     review_tasks: StdMutex<Vec<tokio::task::JoinHandle<()>>>,
+    pending_approvals: pending_approvals::Pager,
     crypto: agent_crypto::Registry,
     callback_task: StdMutex<Option<tokio::task::JoinHandle<()>>>,
     matrix_source: StdMutex<Option<Arc<dyn MatrixTokenSource>>>,
@@ -1041,6 +1049,7 @@ impl NativeOwner {
             configuration_stopped: std::sync::atomic::AtomicBool::new(false),
             configuration_tasks: StdMutex::new(Vec::new()),
             review_tasks: StdMutex::new(Vec::new()),
+            pending_approvals: Default::default(),
             crypto: Default::default(),
             callback_task: StdMutex::new(None),
             matrix_source: StdMutex::new(None),
@@ -1334,6 +1343,9 @@ impl NativeOwner {
             crate::update_guard::PROCESS.enter_task()
         }
         .ok_or_else(|| failure(409, "update_in_progress"))?;
+        if let Command::PendingApprovals { cursor } = command {
+            return pending_approvals::execute(self, cursor).await;
+        }
         if configuration::is_wrapper(&command) {
             return configuration::remote(self, command).await;
         }

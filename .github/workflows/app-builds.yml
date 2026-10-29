@@ -75,6 +75,11 @@ jobs:
         with:
           key: ${{ matrix.runner }}-build-${{ hashFiles('Cargo.lock') }}
 
+      - name: Test native Linux library and guarded sharing
+        run: |
+          cargo test --locked -p robius-share --lib
+          cargo test --locked -p hagency-app --lib
+
       - name: Build
         env:
           RUSTFLAGS: "-D warnings"
@@ -143,8 +148,10 @@ jobs:
       - name: Test Windows update verification and file locking
         run: cargo test --locked -p hagency-updater
 
-      - name: Test native Windows update controls
-        run: cargo test --locked -p hagency-app --lib updates_settings
+      - name: Test native Windows library and guarded sharing
+        run: |
+          cargo test --locked -p robius-share --lib
+          cargo test --locked -p hagency-app --lib
 
       - name: Build
         env:

@@ -1,6 +1,9 @@
 //! Download a Matrix media attachment and save it to storage.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use makepad_widgets::SignalToUI;
 use matrix_sdk::ruma::{OwnedMxcUri, events::room::MediaSource};
 use robius_share::ShareSheet;
@@ -8,7 +11,7 @@ use crate::{
     home::room_screen::TimelineUpdate,
     shared::popup_list::{PopupKind, enqueue_popup_notification},
     sliding_sync::{MatrixRequest, submit_async_request},
-    temp_storage::get_temp_dir_path,
+    temp_storage::{ShareScope, ShareTicket},
 };
 
 pub type TimelineUpdateSenderOption = Option<crate::timeline_updates::Sender>;
@@ -164,30 +167,54 @@ pub fn start_theme_preview(
 
 pub fn is_markdown_attachment(filename: &str, mimetype: Option<&str>) -> bool {
     let extension = filename.rsplit('.').next().unwrap_or_default();
-    (filename.contains('.') && (extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown")))
-        || mimetype.is_some_and(|mime| matches!(mime.split(';').next().unwrap_or_default().trim().to_ascii_lowercase().as_str(), "text/markdown" | "text/x-markdown"))
+    (filename.contains('.')
+        && (extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown")))
+        || mimetype.is_some_and(|mime| {
+            matches!(
+                mime.split(';')
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    .to_ascii_lowercase()
+                    .as_str(),
+                "text/markdown" | "text/x-markdown"
+            )
+        })
 }
 
 pub(crate) fn markdown_source(bytes: Vec<u8>) -> Result<Arc<str>, String> {
     if bytes.len() > article_core::document::MAX_BODY {
         return Err("Article exceeds its size limits.".into());
     }
-    let text = String::from_utf8(bytes).map_err(|_| "Markdown must contain UTF-8 text".to_owned())?;
+    let text =
+        String::from_utf8(bytes).map_err(|_| "Markdown must contain UTF-8 text".to_owned())?;
     Ok(text.trim_start_matches('\u{feff}').into())
 }
 
 /// Uses Matrix's authenticated media API, including encrypted attachments.
-pub fn start_markdown_preview(info: DownloadableAttachment, update_sender: TimelineUpdateSenderOption) {
+pub fn start_markdown_preview(
+    info: DownloadableAttachment,
+    update_sender: TimelineUpdateSenderOption,
+) {
     let account = crate::sliding_sync::current_user_id();
     let attachment = Some(info.clone());
     download_media(info, update_sender, move |title, mxc, bytes, sender| {
-        if account != crate::sliding_sync::current_user_id() || crate::logout::logout_state_machine::is_logout_in_progress() {
+        if account != crate::sliding_sync::current_user_id()
+            || crate::logout::logout_state_machine::is_logout_in_progress()
+        {
             finish_download_indicator(&sender, Some(&mxc), DownloadOutcome::Cancelled);
             return;
         }
         match markdown_source(bytes) {
             Ok(source) => {
-                makepad_widgets::Cx::post_action(crate::shared::web_browser::WebBrowserAction::OpenMarkdown { title, source, account, attachment });
+                makepad_widgets::Cx::post_action(
+                    crate::shared::web_browser::WebBrowserAction::OpenMarkdown {
+                        title,
+                        source,
+                        account,
+                        attachment,
+                    },
+                );
                 finish_download_indicator(&sender, Some(&mxc), DownloadOutcome::Succeeded);
             }
             Err(error) => {
@@ -202,7 +229,9 @@ pub fn start_markdown_preview(info: DownloadableAttachment, update_sender: Timel
 fn download_media(
     info: DownloadableAttachment,
     update_sender: TimelineUpdateSenderOption,
-    on_downloaded: impl FnOnce(String, OwnedMxcUri, Vec<u8>, TimelineUpdateSenderOption) + Send + 'static,
+    on_downloaded: impl FnOnce(String, OwnedMxcUri, Vec<u8>, TimelineUpdateSenderOption)
+    + Send
+    + 'static,
 ) {
     let mxc = media_source_mxc(&info.media_source).clone();
     let filename = info.filename.clone();
@@ -210,7 +239,9 @@ fn download_media(
         media_source: info.media_source,
         filename: info.filename,
         on_download_result: Box::new(move |result| match result {
-            MediaDownloadResult::Downloaded(bytes) => on_downloaded(filename, mxc, bytes, update_sender),
+            MediaDownloadResult::Downloaded(bytes) => {
+                on_downloaded(filename, mxc, bytes, update_sender)
+            }
             MediaDownloadResult::Failed(e) => {
                 enqueue_popup_notification(
                     format!("Failed to download \"{filename}\": {e}"),
@@ -241,70 +272,187 @@ pub fn save_loaded_attachment(filename: String, bytes: Arc<[u8]>) {
     show_save_dialog(filename, bytes, None, None);
 }
 
-/// Downloads the attachment and opens the native share sheet for it (via a temp file,
-/// since sharing needs a real path).
+/// Download and prepare off-thread; actual native presentation uses a fresh
+/// account fence on the UI thread. The API provides no share-completion verdict.
 pub fn start_attachment_share(
     info: DownloadableAttachment,
     update_sender: TimelineUpdateSenderOption,
 ) {
+    let Some(scope) = ShareScope::capture() else {
+        finish_download_indicator(
+            &update_sender,
+            Some(media_source_mxc(&info.media_source)),
+            DownloadOutcome::Cancelled,
+        );
+        return;
+    };
     let mime = info.kind.basic_mime_type();
-    let temp_dir = get_temp_dir_path();
     download_media(info, update_sender, move |filename, mxc, bytes, sender| {
-        // Success shows a "Shared" indicator; a share-step failure (already shown as
-        // a popup) just resets, since the download itself did succeed.
-        let outcome = if share_bytes(&temp_dir, &filename, &mxc, &bytes, mime) {
-            DownloadOutcome::Succeeded
-        } else {
-            DownloadOutcome::Cancelled
-        };
-        finish_download_indicator(&sender, Some(&mxc), outcome);
+        prepare_attachment_share(scope, filename, mxc, bytes.into(), mime, sender);
     });
 }
 
-/// Opens the native share sheet for an attachment already in memory.
 pub fn share_loaded_attachment(info: &DownloadableAttachment, bytes: Arc<[u8]>) {
-    let mxc = media_source_mxc(&info.media_source).clone();
-    let mime = info.kind.basic_mime_type();
-    let filename = info.filename.clone();
-    let temp_dir = get_temp_dir_path();
-    // Don't write a large attachment file to disk on the main UI thread.
-    std::thread::spawn(move || share_bytes(&temp_dir, &filename, &mxc, &bytes, mime));
+    let Some(scope) = ShareScope::capture() else {
+        return;
+    };
+    prepare_attachment_share(
+        scope,
+        info.filename.clone(),
+        media_source_mxc(&info.media_source).clone(),
+        bytes,
+        info.kind.basic_mime_type(),
+        None,
+    );
 }
 
-/// Writes the given `bytes` to a temp file (based on `filename`) and presents the native share sheet for it.
-///
-/// This is required because sharing a file requires a real path.
-///
-/// Returns true if the share sheet was shown. Enqueues a popup error upon any failure.
-fn share_bytes(temp_dir: &std::path::Path, filename: &str, mxc: &OwnedMxcUri, bytes: &[u8], mime: Option<&str>) -> bool {
-    let mut safe_name = sanitize_filename::sanitize(filename);
-    if safe_name.is_empty() {
-        safe_name = "shared_file".to_owned();
+type PreparedSharePayload = Result<(Arc<ShareTicket>, robius_share::PreparedShare), String>;
+
+struct PreparedAttachmentShare {
+    scope: ShareScope,
+    mxc: OwnedMxcUri,
+    sender: TimelineUpdateSenderOption,
+    payload: Mutex<Option<PreparedSharePayload>>,
+}
+impl std::fmt::Debug for PreparedAttachmentShare {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PreparedAttachmentShare { .. }")
     }
-    let dir = temp_dir.join(sanitize_filename::sanitize(mxc.as_str()));
-    let path = dir.join(safe_name);
-    if let Err(e) = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, bytes)) {
-        enqueue_popup_notification(
-            format!("Failed to prepare \"{filename}\" for sharing: {e}"),
-            PopupKind::Error,
-            None,
+}
+
+/// Remove under the lock, then return ownership so callback code may re-enter
+/// download/cancel/share without retaining the global transfer-map mutex.
+pub(crate) fn take_download<T>(
+    tasks: &Mutex<hashbrown::HashMap<OwnedMxcUri, T>>,
+    mxc: &OwnedMxcUri,
+) -> Option<T> {
+    tasks.lock().unwrap().remove(mxc)
+}
+
+fn prepare_attachment_share(
+    scope: ShareScope,
+    filename: String,
+    mxc: OwnedMxcUri,
+    bytes: Arc<[u8]>,
+    mime: Option<&'static str>,
+    sender: TimelineUpdateSenderOption,
+) {
+    let callback_scope = scope.clone();
+    let callback_mxc = mxc.clone();
+    let callback_sender = sender.clone();
+    let title = format!("Share {filename}");
+    let staged = crate::temp_storage::stage_share(
+        scope.clone(),
+        filename,
+        bytes,
+        Box::new(move |result| {
+            // Runs on the dedicated tracked disk worker. Windows StorageFile and
+            // macOS path preparation must finish here, never under SESSION_IO/UI.
+            let payload = result.and_then(|ticket| {
+                let sheet = ShareSheet::new().set_title(title);
+                let sheet = match mime {
+                    Some(mime) => sheet.add_file_with_mime_type(&ticket.path, mime),
+                    None => sheet.add_file(&ticket.path),
+                };
+                match sheet.prepare() {
+                    Ok(prepared) => Ok((ticket, prepared)),
+                    Err(error) => {
+                        ticket.discard();
+                        Err(format!("Could not prepare share sheet: {error}"))
+                    }
+                }
+            });
+            makepad_widgets::Cx::post_action(PreparedAttachmentShare {
+                scope: callback_scope,
+                mxc: callback_mxc,
+                sender: callback_sender,
+                payload: Mutex::new(Some(payload)),
+            });
+        }),
+    );
+    if let Err(error) = staged {
+        if scope.is_current() {
+            enqueue_popup_notification(error, PopupKind::Error, None);
+        }
+        finish_download_indicator(&sender, Some(&mxc), DownloadOutcome::Cancelled);
+    }
+}
+
+fn fenced_presentation_guard(
+    gate: &'static Mutex<()>,
+    authorize: impl Fn() -> bool + Send + Sync + 'static,
+) -> robius_share::PresentationGuard {
+    Arc::new(move |present| {
+        // Reentrant native payload callbacks fail closed instead of deadlocking
+        // the UI. Only actual presentation/payload commits hold this short fence.
+        let _session = gate.try_lock().map_err(|_| robius_share::Error::Retired)?;
+        if !authorize() {
+            return Err(robius_share::Error::Retired);
+        }
+        present()
+    })
+}
+
+/// Global UI action hook; preparing is insufficient authority to present.
+pub(crate) fn handle_share_actions(actions: &makepad_widgets::Actions) {
+    for action in actions
+        .iter()
+        .filter_map(|action| action.downcast_ref::<PreparedAttachmentShare>())
+    {
+        let Some(payload) = action.payload.lock().unwrap().take() else {
+            continue;
+        };
+        let result = match payload {
+            Ok((ticket, prepared)) => {
+                if !ticket.begin_presentation() {
+                    ticket.discard();
+                    if action.scope.is_current() {
+                        enqueue_popup_notification(
+                            "Private share staging is busy or exceeds its storage limit",
+                            PopupKind::Error,
+                            None,
+                        );
+                    }
+                    finish_download_indicator(
+                        &action.sender,
+                        Some(&action.mxc),
+                        DownloadOutcome::Cancelled,
+                    );
+                    continue;
+                }
+                let authority = ticket.clone();
+                let guard = fenced_presentation_guard(&crate::persistence::SESSION_IO, move || {
+                    authority.is_current()
+                });
+                match prepared.present_guarded(guard) {
+                    Ok(pending) => {
+                        ticket.observe(pending);
+                        Ok(())
+                    }
+                    Err(error) => {
+                        ticket.presentation_failed();
+                        if !matches!(error, robius_share::Error::OutcomeUnknown) {
+                            ticket.discard();
+                        }
+                        Err(format!("Could not open share sheet: {error}"))
+                    }
+                }
+            }
+            Err(error) => Err(error),
+        };
+        if action.scope.is_current() {
+            if let Err(error) = result {
+                enqueue_popup_notification(error, PopupKind::Error, None);
+            }
+        }
+        // Presentation is neither successful delivery nor known cancellation.
+        // Reset the spinner without displaying a misleading "Shared" verdict.
+        finish_download_indicator(
+            &action.sender,
+            Some(&action.mxc),
+            DownloadOutcome::Cancelled,
         );
-        return false;
     }
-    let sheet = ShareSheet::new().set_title(format!("Share {filename}"));
-    let sheet = match mime {
-        Some(mime) => sheet.add_file_with_mime_type(&path, mime),
-        None => sheet.add_file(&path),
-    };
-    if let Err(e) = sheet.share() {
-        enqueue_popup_notification(
-            format!("Couldn't open the share sheet for \"{filename}\": {e}"),
-            PopupKind::Error,
-            None,
-        );
-        return false;
-    }
-    true
 }
 
 enum DownloadOutcome {
@@ -373,7 +521,9 @@ fn finish_download_indicator(
     outcome: DownloadOutcome,
 ) {
     let Some(mxc) = mxc else { return };
-    let Some(sender) = update_sender.as_ref() else { return };
+    let Some(sender) = update_sender.as_ref() else {
+        return;
+    };
     match outcome {
         DownloadOutcome::Cancelled => {
             let _ = sender.send(TimelineUpdate::AttachmentDownloadReset(mxc.clone()));
@@ -384,7 +534,10 @@ fn finish_download_indicator(
                 DownloadOutcome::Succeeded => Ok(()),
                 _ => Err(String::new()),
             };
-            let _ = sender.send(TimelineUpdate::AttachmentDownloadFinished(mxc.clone(), result));
+            let _ = sender.send(TimelineUpdate::AttachmentDownloadFinished(
+                mxc.clone(),
+                result,
+            ));
             SignalToUI::set_ui_signal();
             // Clear the success/failure display after a short delay.
             let sender = sender.clone();
@@ -404,16 +557,85 @@ mod markdown_tests {
 
     #[test]
     fn recognizes_markdown_filenames_and_mime_without_matching_other_attachments() {
-        for name in ["notes.md", "NOTES.MD", "notes.Markdown"] { assert!(is_markdown_attachment(name, None)); }
-        assert!(is_markdown_attachment("notes", Some("text/markdown; charset=utf-8")));
+        for name in ["notes.md", "NOTES.MD", "notes.Markdown"] {
+            assert!(is_markdown_attachment(name, None));
+        }
+        assert!(is_markdown_attachment(
+            "notes",
+            Some("text/markdown; charset=utf-8")
+        ));
         assert!(is_markdown_attachment("notes.txt", Some("text/x-markdown")));
-        for name in ["md", "notes.md.exe", "image.png", "notes.txt"] { assert!(!is_markdown_attachment(name, None)); }
+        for name in ["md", "notes.md.exe", "image.png", "notes.txt"] {
+            assert!(!is_markdown_attachment(name, None));
+        }
     }
 
     #[test]
     fn accepts_utf8_bom_and_rejects_binary_or_oversize_documents() {
-        assert_eq!(&*markdown_source("\u{feff}# 文档".as_bytes().to_vec()).unwrap(), "# 文档");
+        assert_eq!(
+            &*markdown_source("\u{feff}# 文档".as_bytes().to_vec()).unwrap(),
+            "# 文档"
+        );
         assert!(markdown_source(vec![0xff, 0xfe]).is_err());
         assert!(markdown_source(vec![b'a'; article_core::document::MAX_BODY + 1]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod download_callback_tests {
+    use super::*;
+    #[test]
+    fn actual_presentation_and_delayed_payload_recheck_authority_without_reentrant_deadlock() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        static GATE: Mutex<()> = Mutex::new(());
+        let live = Arc::new(AtomicBool::new(true));
+        let checked = live.clone();
+        let guard = fenced_presentation_guard(&GATE, move || checked.load(Ordering::Acquire));
+        let committed = AtomicUsize::new(0);
+        guard(&mut || {
+            committed.fetch_add(1, Ordering::AcqRel);
+            // Windows can deliver callbacks while native presentation runs.
+            assert!(matches!(
+                guard(&mut || panic!("nested payload must not run")),
+                Err(robius_share::Error::Retired)
+            ));
+            Ok(())
+        })
+        .unwrap();
+        live.store(false, Ordering::Release);
+        assert!(matches!(
+            guard(&mut || {
+                committed.fetch_add(1, Ordering::AcqRel);
+                Ok(())
+            }),
+            Err(robius_share::Error::Retired)
+        ));
+        assert_eq!(committed.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn completion_and_cancellation_callbacks_can_reenter_the_download_map() {
+        for _cancelled in [false, true] {
+            type Callback = Box<dyn FnOnce() + Send>;
+            let map = Arc::new(Mutex::new(
+                hashbrown::HashMap::<OwnedMxcUri, Callback>::new(),
+            ));
+            let uri: OwnedMxcUri = "mxc://example.org/fixture".into();
+            let callback_map = map.clone();
+            map.lock().unwrap().insert(
+                uri.clone(),
+                Box::new(move || {
+                    assert!(
+                        callback_map.try_lock().is_ok(),
+                        "callback must not inherit the map mutex"
+                    );
+                }),
+            );
+            take_download(&map, &uri).unwrap()();
+            assert!(
+                take_download(&map, &uri).is_none(),
+                "callback remains single-use"
+            );
+        }
     }
 }

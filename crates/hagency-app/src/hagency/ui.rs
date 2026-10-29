@@ -15,6 +15,7 @@ mod recovery;
 mod crypto;
 mod project_navigation;
 mod model_resources;
+pub mod approval_discovery;
 
 #[derive(Clone, Debug)]
 pub enum HagencyAction {
@@ -31,6 +32,7 @@ pub enum HagencyAction {
     },
     OpenAgents,
     AgentRun {agent_id:String,binding_id:String},
+    ReviewApproval(approval_discovery::ApprovalTarget),
     NewAgent {
         project_id: Option<String>,
     },
@@ -627,6 +629,33 @@ script_mod! {
         Filler := View {width: Fill height: 64}
         Empty := View {width: Fill height: 64 padding: 16 margin: Inset{right: 20}
             empty_message := Text {text: #(crate::i18n::tr("No Projects yet. Create a Project to start a shared workspace.")) i18n_text: "No Projects yet. Create a Project to start a shared workspace."}
+        }
+    }
+    mod.widgets.ApprovalInboxRows = #(approval_discovery::ApprovalRows::register_widget(vm)) {
+        ..mod.widgets.PortalList
+    }
+    mod.widgets.GlobalApprovalInbox = #(approval_discovery::GlobalApprovalInbox::register_widget(vm)) {
+        width: Fill height: Fit flow: Down
+        open_approval_inbox := RinxGhostButton {width:Fill height:36 text:#(crate::i18n::tr("Approvals")) i18n_text:"Approvals"
+            draw_icon.svg:crate_resource("self://resources/icons/bell.svg") icon_walk:Walk{width:18 height:18} spacing:8}
+        inbox_popup := Modal {
+            content := SmallModal {width:580 height:560 flow:Down spacing:10
+                ModalTitle {text:#(crate::i18n::tr("Pending approvals")) i18n_text:"Pending approvals"}
+                inbox_status := RinxLabel {width:Fill height:Fit max_lines:3 flow:Flow.Right{wrap:true}}
+                inbox_rows := mod.widgets.ApprovalInboxRows {width:Fill height:Fill
+                    Approval := View {width:Fill height:102 flow:Down padding:8 spacing:6
+                        approval_summary := RinxLabel {width:Fill height:Fit max_lines:2 text_overflow:Ellipsis}
+                        review_approval := RinxGhostButton {width:Fill height:32 text:#(crate::i18n::tr("Review exact request")) i18n_text:"Review exact request"}
+                    }
+                    Empty := RinxLabel {width:Fill height:50 text:#(crate::i18n::tr("No pending approvals on this device.")) i18n_text:"No pending approvals on this device."}
+                }
+                View {width:Fill height:Fit flow:Flow.Right{wrap:true} spacing:6
+                    inbox_previous := RinxGhostButton {height:32 text:#(crate::i18n::tr("Previous page")) i18n_text:"Previous page"}
+                    inbox_next := RinxGhostButton {height:32 text:#(crate::i18n::tr("Next page")) i18n_text:"Next page"}
+                    inbox_refresh := RinxGhostButton {height:32 text:#(crate::i18n::tr("Refresh")) i18n_text:"Refresh"}
+                    inbox_close := RinxGhostButton {height:32 text:#(crate::i18n::tr("Close")) i18n_text:"Close"}
+                }
+            }
         }
     }
     mod.widgets.HagencyPanel = #(HagencyPanel::register_widget(vm)) {
@@ -1436,6 +1465,7 @@ pub struct HagencyPanel {
     #[rust] direct_state: Value,
     #[rust] wanted_agent: Option<String>,
     #[rust] wanted_run: Option<(String,String)>,
+    #[rust] wanted_approval: Option<approval_discovery::ApprovalTarget>,
     #[rust] wanted_model: Option<String>,
     #[rust] direct_timer: Timer,
     #[rust] direct_retry: Option<(String,String,u8)>,
@@ -1559,6 +1589,13 @@ impl HagencyPanel {
         self.view.drop_down(cx,ids!(approvals)).set_labels(cx,std::iter::once(crate::i18n::tr("Select a pending approval").to_owned()).chain(self.approvals.iter().map(|v|format!("{} · {}",string(&v["proposal"],"tool"),string(&v["proposal"]["scope"],"requester")))).collect());
         let index=selected.and_then(|id|self.approvals.iter().position(|v|string(v,"proposalId")==id)).map(|i|i+1).unwrap_or(0);
         self.view.drop_down(cx,ids!(approvals)).set_selected_item(cx,index);
+        if let Some(target)=self.wanted_approval.take() {
+            let exact=self.approvals.iter().position(|row|target.matches(&self.identity,row,super::approvals::now()));
+            self.view.drop_down(cx,ids!(approvals)).set_selected_item(cx,exact.map_or(0,|index|index+1));
+            if exact.is_none() {
+                self.view.label(cx,ids!(approval_feedback)).set_text(cx,crate::i18n::tr("This exact approval is no longer pending. No decision was submitted."));
+            }
+        }
         self.view.label(cx,ids!(approval_count)).set_text(cx,&crate::i18n::format("{count} pending approvals in this Room",&[("count",self.approvals.len().to_string())]));
         self.render_approval_details(cx);
         self.sync_navigation(cx);
@@ -3162,6 +3199,7 @@ impl HagencyPanel {
                         if open_model {self.wanted_model=Some(wanted);}
                         return;
                     }
+                    if self.wanted_approval.is_some() {self.reject_discovered_approval(cx);return;}
                 }
                 if let Some(wanted) = self.wanted_project.take() {
                     if let Some(index) =
@@ -3392,6 +3430,7 @@ impl HagencyPanel {
                 self.bindings = array(value, "bindings");
                 self.label_bindings(cx,ids!(bindings));
                 self.label_bindings(cx,ids!(policy_binding));
+                if self.open_discovered_binding(cx) {return;}
                 let initial = self.bindings.iter().position(|b| string(b,"scopeKind") == "owner_direct" && string(b,"state") == "active").or_else(||self.bindings.iter().position(|b| string(b,"state") == "active"));
                 self.select_policy_room(cx, initial.map_or(0,|i|i+1));
                 if let Some(index)=initial {let label=self.binding_label(cx,&self.bindings[index]);self.view.label(cx,ids!(binding_details)).set_text(cx,&format!("{} · {}",label,string(&self.bindings[index],"state")));}
@@ -4636,6 +4675,7 @@ impl Widget for HagencyPanel {
                 .selected(actions)
                 .is_some()
         {
+            self.wanted_approval=None;
             let index = self.view.drop_down(cx, if budget_room_changed { ids!(policy_binding) } else { ids!(bindings) }).selected_item();
             self.select_policy_room(cx, index);
             for id in [
@@ -5200,10 +5240,13 @@ impl HagencyPanelRef {
         let Some(mut panel) = self.borrow_mut() else {
             return;
         };
+        if let HagencyAction::ReviewApproval(target)=action
+            && !Service::existing_current().is_some_and(|service|service.identity()==target.identity) {return;}
         panel.cancel_direct_retry(cx);
         panel.cancel_read_wait(cx);
-        if matches!(action,HagencyAction::AgentRun {..}|HagencyAction::NewAgent {..}|HagencyAction::NewProject) {panel.reset_detail_scroll(cx);}
+        if matches!(action,HagencyAction::AgentRun {..}|HagencyAction::ReviewApproval(..)|HagencyAction::NewAgent {..}|HagencyAction::NewProject) {panel.reset_detail_scroll(cx);}
         panel.wanted_run=None;
+        panel.wanted_approval=None;
         panel.wanted_model=None;
         if matches!(action, HagencyAction::Close) {
             panel.active = false;
@@ -5364,9 +5407,13 @@ impl HagencyPanelRef {
                 }
                 panel.run(cx, Target::Journal, Command::Creations);
             }
-            HagencyAction::OpenAgents | HagencyAction::NewAgent { .. } | HagencyAction::AgentRun {..} => {
+            HagencyAction::OpenAgents | HagencyAction::NewAgent { .. } | HagencyAction::AgentRun {..} | HagencyAction::ReviewApproval(..) => {
                 panel.set_page(cx, Page::Agents);
                 if let HagencyAction::AgentRun {agent_id,binding_id}=action {panel.wanted_agent=Some(agent_id.clone()); panel.wanted_run=Some((agent_id.clone(),binding_id.clone()));}
+                if let HagencyAction::ReviewApproval(target)=action {
+                    panel.wanted_agent=Some(target.agent.clone());panel.wanted_run=Some((target.agent.clone(),target.binding.clone()));
+                    panel.wanted_approval=Some(target.clone());
+                }
                 if matches!(action, HagencyAction::NewAgent { .. }) {
                     panel.begin_agent_creation(cx);
                 }

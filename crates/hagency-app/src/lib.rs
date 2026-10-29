@@ -1,5 +1,9 @@
 #![recursion_limit = "256"]
 
+#[cfg(test)]
+#[path = "../build_support/git_paths.rs"]
+mod git_build_paths;
+
 use std::{path::Path, sync::OnceLock};
 
 use makepad_widgets::ScriptNew;

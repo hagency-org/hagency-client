@@ -15297,3 +15297,40 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 
 - Final frozen App library721passed/0failed/2originalignored in81.83s; final own App/engine all-targets strict Clippy passes. Independent profile due/account/overflow/capacity review and separate article network review found no remaining blockers. Hosted checks and merge remain pending; the full remediation goal is not complete.
 - Final complete agent-spec lifecycle5passed/0failed/0skipped/0uncertain after normalizing exact root lockfile boundary to./Cargo.lock; original4testpass/1boundaryfail retained. All final local checks now pass within their recorded scope.
+
+## 2026-10-30 — Quality remediation second batch verification
+
+- Implemented source-bound public release gates and fatal desktop engine matrix,
+  private bounded share staging and owned background/native presentation, unlocked
+  download callbacks, two-worker fair per-room history replay, bounded global
+  pending approval discovery over existing live owners, and actual linked Git
+  metadata input watches. Current branch codex/quality-followups is separate from
+  frozen PR18. Full details and open R02/R03/R05/R07/R13/R14 remain in the quality
+  remediation report; no complete release qualification is claimed.
+- First complete App run749pass/3fail/2originalignored exposed real blank virtual
+  list drawing and500px sidebar footer overflow, plus SDK background initialization
+  contaminating observer request counts. Fixed the production draw owner and
+  footer budget; isolated HTTP diagnostics proved exactly two SDK secret-storage
+  reads before the observer could be tested. Test now joins actual SDK init and
+  asserts zero additional observer HTTP, owner startup, lease/provider work.
+- Eight fair history regressions, two NativeOwner pending summary cases and eight
+  native share library cases pass; vendor Windows and Linux (including tests)
+  cross-check pass. Static styles310/0, i18n2729/0missing, theme/layout31 pass;
+  Python release preflight4tests and six-workflow actionlint pass. Task Contract
+  parse/lint98% pass. Strict Clippy exposed a complex share payload type, replaced
+  with a named alias without weakening lint. Final full tests and lifecycle are
+  running; all original failures remain in ignored .run/quality-followups.
+- PR18 desktop builds all succeed. Full matrix Windows tests remain active;
+  macOS engine job cancelled before acquiring a hosted runner due capacity and
+  will be selectively rerun only after that run ends. No premature merge or
+  fabricated pass. No task-writer is provisioned, and no paid model or real
+  account configuration was changed.
+
+- Frozen second-batch full App752passed/0failed/2originalignored in88.26s,
+  including actual sidebar500px and6approval cases. Final own App/engine/vendor
+  all-targets strict Clippy passes. Linux vendor lib+tests strict cross-Clippy
+  passes after equivalent question-mark simplification of one inherited branch;
+  no lint exemption. Complete agent-spec lifecycle is still running original
+  bound selectors; hosted CI remains required before merging.
+
+- Second-batch full lifecycle7pass/0fail/0skip/0uncertain, including boundaries and six bound selectors. Python/actionlint results remain separate from the Cargo-only lifecycle.

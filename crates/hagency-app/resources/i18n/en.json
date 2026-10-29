@@ -2716,5 +2716,16 @@
   "JSON draft is invalid. Validate it for details.": "JSON draft is invalid. Validate it for details.",
   "Verified owner private Rooms support encrypted tasks, replies and files. Shared requester trust and cross-host key recovery remain unavailable.": "Verified owner private Rooms support encrypted tasks, replies and files. Shared requester trust and cross-host key recovery remain unavailable.",
   "Your card draft was restored in another list because its original list is unavailable. Review the list before adding it.": "Your card draft was restored in another list because its original list is unavailable. Review the list before adding it.",
-  "Save or cancel an existing card draft before starting another. You can return to its Board without losing your draft.": "Save or cancel an existing card draft before starting another. You can return to its Board without losing your draft."
+  "Save or cancel an existing card draft before starting another. You can return to its Board without losing your draft.": "Save or cancel an existing card draft before starting another. You can return to its Board without losing your draft.",
+  "Approvals": "Approvals",
+  "Review exact request": "Review exact request",
+  "No pending approvals on this device.": "No pending approvals on this device.",
+  "Pending approvals are unavailable.": "Pending approvals are unavailable.",
+  "Approvals · {count}": "Approvals · {count}",
+  "Checking pending approvals on this device…": "Checking pending approvals on this device…",
+  "Approvals could not be refreshed. Review is disabled until a fresh check succeeds.": "Approvals could not be refreshed. Review is disabled until a fresh check succeeds.",
+  "{count} pending approvals across this device. Open a request to review its exact action.": "{count} pending approvals across this device. Open a request to review its exact action.",
+  "This exact approval is no longer pending. No decision was submitted.": "This exact approval is no longer pending. No decision was submitted.",
+  "Previous page": "Previous page",
+  "Next page": "Next page"
 }

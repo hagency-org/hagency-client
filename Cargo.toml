@@ -154,6 +154,11 @@ sqlx = { git = "https://github.com/project-robius/sqlx.git", branch = "update_li
 ## See <https://github.com/openwallet-foundation/askar/pull/386>
 askar-storage = { git = "https://github.com/openwallet-foundation/askar.git" }
 
+[patch."https://github.com/project-robius/robius"]
+# Retain the locked share implementation and check account authority at the
+# actual platform presentation/payload boundary, after background preparation.
+robius-share = { path = "crates/robius-share" }
+
 
 [patch."https://github.com/OctoSense-org/makepad.git"]
 makepad-script = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }

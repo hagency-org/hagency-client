@@ -5805,3 +5805,17 @@ SDK 恢复 timeline 可包含同一事件多个句柄。保留原始 Vector 的�
 - Provider button visibility/enabled state must have one state-driven renderer, including the execution-device online gate. A later generic render must not re-enable remote cached controls or expose connect/login actions during pending authentication. Pending login uses read-only status polling, not repeated UseLocal consent writes.
 - Model resources use runtime-specific labels; Octos owns profile reasoning, so hide the complete reasoning holder. Makepad DropDown's generic Widget visibility setter is insufficient; use a wrapping View.
 - MCP draft validation is exposed by NativeOwner using the same Programming contract as execution: max16named HTTP/stdio servers, canonical existing stdio paths and typed args; no ambient config import. Validation is not connectivity or process execution. Preserve invalid raw drafts, reject duplicate visual names, and clear their feedback when loading a saved policy.
+
+- **Quality follow-ups, 2026-10-30:** Makepad Modal draws its content with
+  draw_all, so a virtual PortalList nested inside it needs its own drawing
+  widget; the outer widget cannot populate swallowed DrawStep values. Script
+  use imports do not include widget exports declared later in the same script;
+  use the qualified mod.widgets path. SDK restore_session returns before E2EE
+  initialization finishes; observer tests must join its original initialization
+  tasks and distinguish those account-data reads from observer HTTP. Exact room
+  history mutex ownership must travel with actual blocking IO across observer
+  cancellation. A successful share presentation is not a completed delivery;
+  retain private file and pending portal/launcher custody until actual cleanup.
+  Release source gates must include compiled Markdown Agent templates, packaging
+  resources, configuration and toolchains. Existing qualification placeholders
+  must continue refusing public release.

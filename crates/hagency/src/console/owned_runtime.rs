@@ -2,6 +2,7 @@
 mod encrypted;
 #[cfg(unix)]
 mod encrypted_files;
+mod pending;
 #[cfg(unix)]
 mod received_files;
 mod remote_approvals;

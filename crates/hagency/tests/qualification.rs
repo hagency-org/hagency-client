@@ -9,7 +9,7 @@
 use serde_json::{Value, json};
 use std::path::Path;
 
-const PINNED_NATIVE: &str = "0.1.0";
+const PINNED_NATIVE: &str = env!("CARGO_PKG_VERSION");
 const EVIDENCE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/qualification/two-agent.json");
 /// The three claims an in-process fixture cannot honestly prove (ADR-144):
 /// foreign homeserver admission, E2EE to a second real device, and the

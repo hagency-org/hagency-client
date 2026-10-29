@@ -1,0 +1,92 @@
+[package]
+name = "robius-share"
+version = "0.3.1"
+edition = "2021"
+rust-version = "1.77.0"
+authors = [
+    "Kevin Boos <kevinaboos@gmail.com>",
+    "Project Robius Maintainers",
+]
+description = "Rust abstractions for showing native system share sheets on multiple platforms"
+documentation = "https://docs.rs/robius-share"
+homepage = "https://robius.rs/"
+keywords = ["robius", "share", "sheet", "intent", "native"]
+categories = ["os", "hardware-support", "api-bindings"]
+license = "MIT"
+repository = "https://github.com/project-robius/robius"
+readme = "README.md"
+
+
+## Note: ideally this would be only included when we're building for Android,
+## but Cargo doesn't support target-specific build scripts yet.
+## See: <https://github.com/rust-lang/cargo/issues/4932> and
+## <https://github.com/rust-lang/cargo/issues/14378#issuecomment-2278333431>.
+[build-dependencies]
+android-build = "0.1.2"
+
+
+[dependencies]
+cfg-if = "1.0.0"
+robius-common = { git = "https://github.com/project-robius/robius" }
+
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { version = "0.21.1", default-features = false }
+robius-android-env = "0.2.0"
+
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+dispatch2 = { version = "0.3.1", default-features = false, features = ["std", "objc2"] }
+objc2 = "0.6.4"
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std", "NSArray",
+    "NSEnumerator",
+    "NSObject",
+    "NSString",
+    "NSURL",
+] }
+
+
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
+    "std", "UIApplication",
+    "UIActivity",
+    "UIActivityViewController",
+    "UIPopoverPresentationController",
+    "UIPresentationController",
+    "UIResponder",
+    "UIView",
+    "UIViewController",
+    "UIWindow",
+    "block2",
+    "objc2-core-foundation",
+] }
+
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "std", "NSApplication",
+    "NSResponder",
+    "NSSharingService",
+    "NSView",
+    "NSWindow",
+    "objc2-core-foundation",
+] }
+
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.56.0", default-features = false, features = [
+    "ApplicationModel_DataTransfer",
+    "Foundation",
+    "Foundation_Collections",
+    "implement",
+    "Storage",
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }

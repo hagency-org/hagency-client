@@ -571,7 +571,7 @@ impl Widget for HomeScreen {
                 }
                 if let Some(action) = action.downcast_ref::<crate::hagency::ui::HagencyAction>() {
                     *cx.global::<DesktopWorkspace>() = match action {
-                        crate::hagency::ui::HagencyAction::OpenAgents | crate::hagency::ui::HagencyAction::NewAgent {..} | crate::hagency::ui::HagencyAction::AgentRun {..} => DesktopWorkspace::Other,
+                        crate::hagency::ui::HagencyAction::OpenAgents | crate::hagency::ui::HagencyAction::NewAgent {..} | crate::hagency::ui::HagencyAction::AgentRun {..} | crate::hagency::ui::HagencyAction::ReviewApproval(..) => DesktopWorkspace::Other,
                         crate::hagency::ui::HagencyAction::Close => DesktopWorkspace::GroupChats,
                         _ => DesktopWorkspace::Projects,
                     };

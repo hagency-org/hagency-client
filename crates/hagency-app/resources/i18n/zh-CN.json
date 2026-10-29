@@ -1720,7 +1720,7 @@
   "Advanced service options": "高级服务选项",
   "Start responding": "开始处理消息",
   "Stop responding": "停止处理消息",
-  "Pending approvals": "待确认请求",
+  "Pending approvals": "待处理审批",
   "Only requests or tools configured to ask you appear here.": "仅显示设置为需要你确认的请求或工具调用。",
   "Connect your account in Model & resources.": "请在“模型与资源”中连接账号。",
   "Save a model in Model & resources. A private workspace is created automatically.": "请在“模型与资源”中保存模型；私有工作目录将自动创建。",
@@ -2716,5 +2716,16 @@
   "JSON draft is invalid. Validate it for details.": "JSON 草稿无效，请点击验证查看详情。",
   "Verified owner private Rooms support encrypted tasks, replies and files. Shared requester trust and cross-host key recovery remain unavailable.": "已验证主人的私聊房间支持加密任务、回复和文件。共享房间请求者信任与跨主机密钥恢复仍未开放。",
   "Your card draft was restored in another list because its original list is unavailable. Review the list before adding it.": "原列表不可用，卡片草稿已恢复到另一个列表。添加前请确认目标列表。",
-  "Save or cancel an existing card draft before starting another. You can return to its Board without losing your draft.": "请先保存或取消已有卡片草稿，再创建新草稿。可以返回对应看板，草稿不会丢失。"
+  "Save or cancel an existing card draft before starting another. You can return to its Board without losing your draft.": "请先保存或取消已有卡片草稿，再创建新草稿。可以返回对应看板，草稿不会丢失。",
+  "Approvals": "审批",
+  "Review exact request": "审阅原请求",
+  "No pending approvals on this device.": "此设备没有待处理审批。",
+  "Pending approvals are unavailable.": "暂时无法读取待处理审批。",
+  "Approvals · {count}": "审批 · {count}",
+  "Checking pending approvals on this device…": "正在检查此设备上的待处理审批…",
+  "Approvals could not be refreshed. Review is disabled until a fresh check succeeds.": "无法刷新审批。重新检查成功后才能审阅。",
+  "{count} pending approvals across this device. Open a request to review its exact action.": "此设备共有 {count} 项待处理审批。打开请求以核对具体操作。",
+  "This exact approval is no longer pending. No decision was submitted.": "此审批请求已不再待处理，未提交任何决定。",
+  "Previous page": "上一页",
+  "Next page": "下一页"
 }

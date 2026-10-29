@@ -11,15 +11,15 @@
 | R01 图片请求内网边界 | 第一批实现并回归通过 | 每跳审核全部 DNS 地址并绑定连接，关闭代理和自动跳转；mapped/特殊地址拒绝，保留流量和时间预算 |
 | R02 双锁依赖与审计 | 部分修复，继续 | 主锁兼容更新后匹配21→12；独立 Octos 的47条仍需真实发行 feature 分流及更新；持续安全门禁待实现 |
 | R03 普通附件下载预算 | 待实现 | 私有文件流式传输、全局并发/排队/实际体积与磁盘额度、取消及加密校验 |
-| R04 发布资格闭环 | 待实现 | Windows 引擎阻断规则、同源码引擎结果、真实资格记录和安全分流 |
+| R04 发布资格闭环 | 第二批实现，验证中 | 所有桌面引擎必须成功，公开发布前检查同源码真实资格；当前占位记录仍正确拒绝发布 |
 | R05 系统凭证库 | 待实现 | token/密钥迁移、不可用及中断恢复、Windows DACL |
-| R06 分享明文生命周期 | 待实现 | 私有文件、分享结束/取消/失败、TTL、退出和崩溃清理 |
+| R06 分享明文生命周期 | 第二批实现，验证中 | 私有句柄、30分钟TTL、预算、退出及崩溃回收；原生分享无完成回调，已交付外部副本无法撤销 |
 | R07 流式上传 | 待实现 | 实际文件句柄和字节边界，避免先完整缓冲再拒绝 |
-| R08 下载完成锁与阻塞 | 待实现 | 回调前释放锁、有限后台写盘/分享、保留账号关闭后的任务归属 |
+| R08 下载完成锁与阻塞 | 第二批实现，验证中 | 回调前释放锁；有限后台准备、写盘、门户响应观察及账号失效围栏 |
 | R09 资料缓存 | 第一批实现，等待PR与CI | 用户/成员/完成队列有界，合并与有限UI批次，容量拒绝延期重试 |
-| R10 历史索引公平性 | 待实现 | 每轮预算、同房间有序cursor、跨房间有限调度及滞后状态 |
+| R10 历史索引公平性 | 第二批实现，验证中 | 两个有限page worker、FIFO轮转、精确房间锁、原有cursor事务；已进入SQLite事务不能撤销 |
 | R11 快速建卡草稿 | 第一批实现，等待PR与CI | 按Board保留原文与未知写幂等键、32个草稿显式容量、取消/确认保存/换账号清理 |
-| R12 全局审批发现 | 待实现 | 账号级待办/badge/可选系统通知；决定仍重验原请求 |
+| R12 全局审批发现 | 第二批实现，UI复核中 | 常驻入口、账号级有界分页与badge；只观察现有owner，精确路由后重新核对请求；未实现系统通知 |
 | R13 原生永久链接 | 待实现 | matrix.to/matrix:、alias/via、事件上下文定位和权限反馈 |
 | R14 音视频操作 | 待实现 | 明确下载/打开操作，准确文案，分阶段播放器及生命周期 |
 | R15 加密能力声明 | 第一批文档与UI已更新 | 中英README/quickstart/privacy/release notes区分owner与shared/恢复及资格边界 |
@@ -59,3 +59,30 @@
 
 - 规范路径后的完整agent-spec lifecycle最终5通过、0失败、0跳过、0不确定，包含精确边界和全部4个绑定测试scenario。
 - 另发现构建脚本在Git worktree中监视不存在的`.git/HEAD`，会反复触发重编译；已核实真实HEAD/ref路径由`git rev-parse --git-path`给出，列入下一批构建效率修复，不混入当前已冻结实现。
+
+
+## 第二批实现与验证中（2026-10-30）
+
+Task Contract 为 [task-client-quality-followups.spec.md](../crates/hagency-app/specs/task-client-quality-followups.spec.md)。此批在独立后续分支实现；第一批 [PR18](https://github.com/hagency-org/hagency-client/pull/18) 保持冻结，尚未合并。
+
+- 发布流程复用三平台引擎检查，移除 Windows continue-on-error；公开发行要求实际资格记录及其源码、版本和 Rust 判据同时通过。直接编入程序的 Agent Markdown 模板、安装资源、配置和工具链均属于资格输入。四项 Python 历史仓库自测试通过；真实记录仍为 placeholder，预检查按设计拒绝，不伪造通过。六份 workflow 的 actionlint 通过。
+- 分享明文使用原有私有存储权限和 nofollow 文件身份检查、独立进程租约、30分钟TTL、32文件/256MiB暂存预算、8个排队工作。原线程保留清理和外部观察归属；删除失败仍占预算，账号退休和退出阻止旧呈现。平台API没有成功分享完成回调，TTL及外部副本限制保留。Linux portal认证、准备和响应观察在后台，UI只执行单次非阻塞发送；可能已发送的失败不自动再次启动。Windows延迟数据请求也重新检查原账号围栏。vendored robius-share保留原MIT声明及原ShareSheet语义，说明见HAGENCY-PATCH.md。
+- 下载注册表在调用完成/取消回调前移除原回调并释放mutex，回归覆盖回调重新进入注册表。此项不关闭R03普通下载仍先完整缓冲的问题。
+- 历史索引新增8项真实SDK/本地HTTP/加密索引回归通过，包括旧hash碰撞房间的独立推进、1200行重放与重开、取消后的原IO持锁和账号退休。首次7通过/1失败保留：测试错误地认为健康索引reset_stale会清数据，修正为先标记stale，再验证原generation/coverage行为，没有改变生产语义。
+- 引擎待审批两项生产路径测试通过：80条跨两个Agent的分页、原NativeOwner请求与账本/HTTP计数、游标退休拒绝；没有启动provider或新lease。App首次全库749通过/3失败/2原有忽略。三项失败揭示虚拟列表未绘制、500px侧栏footer溢出，以及SDK restore_session后台初始化混入观察测试。实际绘制与预算修复正在重新验证，原失败保留；不把尚未通过的UI声明为完成。
+- R17构建效率：通过git rev-parse识别普通/linked worktree、packed refs及detached HEAD，监视实际存在的原Git路径与linked指针文件；源码archive不虚构路径。三项实际Git仓库测试通过，待全App一起最终核验。
+- 本机macOS vendor库8项测试通过；Windows及Linux vendor库（后者含测试目标）交叉类型检查通过。这些不是实际Windows分享UI或Linux桌面portal的资格证明。Android/iOS guarded share及Linux混合save bundle明确不支持。
+- 当前静态检查：310份源文件样式0违规、2729词条/0缺失、主题及31包工作区检查通过；Task Contract parse通过、lint98%。完整lifecycle、最终全库/Clippy及第二批PR仍待完成。
+
+本批原始输出保留在 `.run/quality-followups/`。第一批托管桌面构建均成功，完整引擎Windows还在运行；macOS引擎任务因托管运行器容量不足未取得runner而取消，不能算作通过，将在该workflow结束后选择性重跑。
+
+
+### 第二批冻结源码结果
+
+完整App库最终752通过、0失败、2原有忽略，88.26秒；包含原500px侧栏、6项审批widget、私有暂存及8项历史公平性回归。App/engine/vendor own all-targets严格Clippy通过。额外Linux vendor含测试目标的严格Clippy最初报告继承代码可用`?`简化分支，保持相同None语义改写后通过；没有加lint豁免。此交叉检查仍不能替代实际Linux门户测试，实际Linux/Windows库测试已加入对应托管构建lane。
+
+独立依赖梳理确认主锁剩余风险不能全部通过兼容cargo update消除：idna被mdurl旧约束锁定；quick-xml、zip/zstd和lopdf需要Octos源级迁移；crypto-bigint涉及上游加密API栈；rsa公告仍没有修复稳定版。独立Octos锁有一批同semver更新候选，但其减少数量只是公告集合计算，未求解/编译/重审计，不计作修复。后续必须更新真实源码及打包pin，不能修改工具缓存冒充提交。
+
+- 第二批完整agent-spec lifecycle：7通过、0失败、0跳过、0不确定，包含边界及六组原始绑定测试；lint0.981。Python及actionlint另行通过，不将Cargo-only lifecycle夸大为这些非Cargo检查。
+
+- R17在不改源码的原Cargo选择器重复执行时直接复用产物，2.36秒完成构建阶段，三项Git测试0.09秒；未再出现原worktree不存在路径导致的每次完整重编译。

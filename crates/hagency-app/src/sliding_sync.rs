@@ -2992,7 +2992,8 @@ async fn matrix_worker_task(
                                 Err(e.to_string())
                             }
                         };
-                    if let Some(active) = download_tasks2.lock().unwrap().remove(&mxc_uri2) {
+                    let active = crate::shared::attachment_download::take_download(&download_tasks2, &mxc_uri2);
+                    if let Some(active) = active {
                         (active.on_download_result)(match res {
                             Ok(bytes) => MediaDownloadResult::Downloaded(bytes),
                             Err(e) => MediaDownloadResult::Failed(e),
@@ -3008,7 +3009,8 @@ async fn matrix_worker_task(
                 );
                 crate::account_session::spawn(async move {
                     if Abortable::new(download_future, abort_registration).await.is_err() {
-                        if let Some(active) = download_tasks3.lock().unwrap().remove(&mxc_uri3) {
+                        let active = crate::shared::attachment_download::take_download(&download_tasks3, &mxc_uri3);
+                        if let Some(active) = active {
                             (active.on_download_result)(MediaDownloadResult::Cancelled);
                         }
                     }
@@ -3016,9 +3018,8 @@ async fn matrix_worker_task(
             }
 
             MatrixRequest::CancelDownload(mxc) => {
-                if let Some(active) = download_tasks.lock().unwrap().get(&mxc) {
-                    active.abort_handle.abort();
-                }
+                let abort = { download_tasks.lock().unwrap().get(&mxc).map(|active| active.abort_handle.clone()) };
+                if let Some(abort) = abort { abort.abort(); }
             }
 
         }
