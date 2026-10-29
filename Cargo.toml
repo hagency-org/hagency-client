@@ -37,6 +37,7 @@ idna = { version = "=1.1.0" }
 libc = { version = "0.2.186" }
 linkify = { version = "=0.10.0" }
 markdown = { version = "=1.0.0" }
+matrix-sdk = { version = "=0.19.1", default-features = false }
 matrix-sdk-base = { version = "=0.19.1" }
 matrix-sdk-common = { version = "=0.19.1" }
 matrix-sdk-crypto = { version = "=0.19.1" }

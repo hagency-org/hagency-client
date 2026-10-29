@@ -51,6 +51,8 @@ thiserror.workspace = true
 salvo = { workspace = true, features = ["server", "server-handle", "http1", "test"] }
 clap = { workspace = true, features = ["derive"] }
 getrandom.workspace = true
+# The executor's own Agent device for encrypted owner-direct Rooms.
+matrix-sdk = { workspace = true, features = ["e2e-encryption", "markdown", "sqlite", "bundled-sqlite", "rustls-aws-lc-rs"] }
 base64.workspace = true
 subtle.workspace = true
 tracing.workspace = true

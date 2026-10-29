@@ -57,10 +57,11 @@ impl Dispatch {
         for value in [&self.id, &self.event_id] {
             key(value)?;
         }
+        // An empty body marks an encrypted owner-direct request: the server
+        // routes only ciphertext and the executor's Agent device reads it.
         if !self.event_id.starts_with('$')
             || !(self.thread_root.starts_with('$') || self.thread_root == self.room_id)
             || self.binding_generation <= 0
-            || self.body.is_empty()
             || self.body.len() > 65536
         {
             return Err(Error::Invalid("dispatch identity/content"));

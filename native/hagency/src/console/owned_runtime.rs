@@ -1,5 +1,6 @@
 //! Explicit owner-started, chat-only Codex host. No legacy execution fallback.
 mod drain;
+mod e2ee;
 mod provider_custody;
 mod service;
 use super::lifecycle::{RetainedTask, TaskCustody};
@@ -1134,6 +1135,7 @@ impl Transport for PinnedConsole {
                 | Op::AuthorizeTool { .. }
                 | Op::Reply { .. }
                 | Op::ReconcileKnownReply { .. }
+                | Op::EncryptedReply { .. }
                 | Op::Finish { .. }
         );
         self.console
@@ -1169,6 +1171,7 @@ fn transport_error(status: u16, code: &str, acquiring: bool, request: bool) -> R
                 | "dispatch_epoch_expired"
                 | "room_delivery_denied"
                 | "dispatch_scope_revoked"
+                | "encrypted_reply_requires_encrypted_room"
         )
     {
         RuntimeError::Request
@@ -1571,6 +1574,7 @@ async fn run_host(
                     provider.stop().await.map_err(|_|RuntimeError::Provider)?;checked?;
                     let mut ledger=local(Ledger::open_scoped(&path,&owner,&profile_id))?;
                     let mut ready=RuntimeStatus::new(&work.config.agent_id,if models_allowed{"online_chat_only"}else{"ledger_recovery_required"},if models_allowed{None}else{Some("ledger_recovery_required")}).with_capabilities(&work.config);ready.binding_id=Some(work.config.binding_id.clone());work.status.send_replace(ready);
+                    if work.config.owner_direct && models_allowed {e2ee::prepare(&transport,&reference,&work.config,&mut work.receiver).await;}
                     execution_loop_with_gate(&transport,&owner,&mut ledger,&work.config,&reference,&mut work.receiver,&work.status,models_allowed).await
                 }.await;
                 let mut final_status=RuntimeStatus::new(&work.config.agent_id,"stopped",failure_code(&result)).with_capabilities(&work.config);
@@ -1709,7 +1713,7 @@ async fn execution_loop_with_gate<T: Transport>(
             {
                 continue;
             }
-            retry_reply(console, owner, ledger, lease, cancel, &record).await?;
+            retry_reply(console, owner, ledger, lease, cancel, config, &record).await?;
         }
         for (index, (state, outcome)) in [
             (State::Unknown, Outcome::Unknown),
@@ -2026,7 +2030,7 @@ async fn execution_loop_with_gate<T: Transport>(
                 }
             } else {
                 let record = local(ledger.inbox_record(owner, &prepared.dispatch.id))?;
-                retry_reply(console, owner, ledger, lease, cancel, &record).await?;
+                retry_reply(console, owner, ledger, lease, cancel, config, &record).await?;
             }
             let mut ready = RuntimeStatus::new(&config.agent_id, "online_chat_only", turn_error)
                 .with_capabilities(config);
@@ -2216,6 +2220,7 @@ async fn review_request<T: Transport>(
     ledger: &mut Ledger,
     owner: &str,
     prepared: &inbox::Prepared,
+    input: &str,
     cwd: &std::path::Path,
     queue: &codex::ApprovalQueue,
     cancel: &mut watch::Receiver<bool>,
@@ -2228,7 +2233,7 @@ async fn review_request<T: Transport>(
         scope: scope.clone(),
         dispatch: prepared.dispatch.id.clone(),
         tool: "model.request".into(),
-        arguments: serde_json::json!({"executionId":prepared.execution_id,"inputSha256":format!("{:x}",Sha256::digest(prepared.dispatch.body.as_bytes())),"inputPreview":prepared.dispatch.body.chars().take(2048).collect::<String>()}),
+        arguments: serde_json::json!({"executionId":prepared.execution_id,"inputSha256":format!("{:x}",Sha256::digest(input.as_bytes())),"inputPreview":input.chars().take(2048).collect::<String>()}),
         canonical_directory: cwd.to_string_lossy().into(),
         risk: "model_request".into(),
         policy_revision: revisions,
@@ -2270,6 +2275,23 @@ async fn run_turn<T: Transport>(
     status: &watch::Sender<RuntimeStatus>,
 ) -> Result<Option<Finish>, RuntimeError> {
     let scope = prepared.dispatch.scope();
+    // An empty body marks an encrypted owner-direct request. Only the Agent's
+    // own device reads it, before any provider work starts.
+    let device = if prepared.dispatch.body.is_empty() {
+        Some(e2ee::device(transport, lease, config, cancel).await?)
+    } else {
+        None
+    };
+    let input = match &device {
+        None => prepared.dispatch.body.clone(),
+        Some(device) => match device.read_request(&prepared.dispatch, cancel).await? {
+            Some(text) => text,
+            None => {
+                device.notice_unreadable(&prepared.dispatch).await;
+                return Ok(Some(Finish::Rejected));
+            }
+        },
+    };
     let profile = config.profile.clone();
     #[cfg(unix)]
     let mut profile = profile;
@@ -2341,6 +2363,7 @@ async fn run_turn<T: Transport>(
                 ledger,
                 owner,
                 &prepared,
+                &input,
                 &profile.cwd,
                 &queue,
                 cancel,
@@ -2384,9 +2407,15 @@ async fn run_turn<T: Transport>(
         provider.session.require_local_account().await.inspect_err(|error|{provider_failure("provider_account", error);})?;
         provider.session.open_context(ledger,&scope,&profile).await.inspect_err(|error|{provider_failure("provider_context", error);})?;
         if !fresh_running(transport,lease,&prepared.dispatch,&prepared.execution_id,&mut pre_model_cancel).await {return Err(codex::Error::Protocol("running dispatch authorization lost"));}
-        provider.session.run_with_started(ledger,owner,&scope,&prepared.execution_id,&prepared.dispatch.id,&prepared.dispatch.body,config.mode.clone(),&queue,Some(started_tx)).await.inspect_err(|error|{provider_failure("provider_turn", error);})
+        provider.session.run_with_started(ledger,owner,&scope,&prepared.execution_id,&prepared.dispatch.id,&input,config.mode.clone(),&queue,Some(started_tx)).await.inspect_err(|error|{provider_failure("provider_turn", error);})
         };
-        let (result, ()) = tokio::join!(model, processing_notice(transport,lease,&prepared,started_rx));
+        let notice = async {
+            match &device {
+                Some(device) => if started_rx.await.is_ok() {device.mark_processing(&prepared.dispatch).await},
+                None => processing_notice(transport,lease,&prepared,started_rx).await,
+            }
+        };
+        let (result, ()) = tokio::join!(model, notice);
         result
     }=>match r {
         Ok(completed)=>Ok(Ok(completed)),
@@ -2431,9 +2460,15 @@ async fn retry_reply<T: Transport>(
     ledger: &mut Ledger,
     lease: &LeaseRef,
     cancel: &mut watch::Receiver<bool>,
+    config: &StartConfig,
     record: &inbox::Record,
 ) -> Result<(), RuntimeError> {
-    match send_reply(console, owner, ledger, lease, cancel, record).await {
+    let sent = if record.dispatch.body.is_empty() {
+        send_encrypted_reply(console, owner, ledger, lease, cancel, config, record).await
+    } else {
+        send_reply(console, owner, ledger, lease, cancel, record).await
+    };
+    match sent {
         Err(RuntimeError::Stopped) => Err(RuntimeError::Stopped),
         Err(error) => {
             tracing::warn!(stage="agent_reply", dispatch_id=%record.dispatch.id, %error,
@@ -2442,6 +2477,48 @@ async fn retry_reply<T: Transport>(
         }
         Ok(()) => Ok(()),
     }
+}
+/// An empty dispatch body marks an encrypted owner-direct request. The Agent
+/// device sends the encrypted answer; the server records only its event ID.
+async fn send_encrypted_reply<T: Transport>(
+    console: &T,
+    owner: &str,
+    ledger: &mut Ledger,
+    lease: &LeaseRef,
+    cancel: &mut watch::Receiver<bool>,
+    config: &StartConfig,
+    record: &inbox::Record,
+) -> Result<(), RuntimeError> {
+    let execution = record.execution_id.clone().ok_or(RuntimeError::Profile)?;
+    let body = record.reply.as_deref().ok_or(RuntimeError::Profile)?;
+    let device = e2ee::device(console, lease, config, cancel).await?;
+    let matrix_event_id = device.send_reply(&record.dispatch, body).await?;
+    let recorded = operation(
+        console,
+        cancel,
+        Op::EncryptedReply {
+            lease: lease.clone(),
+            dispatch_id: record.dispatch.id.clone(),
+            execution_id: execution.clone(),
+            matrix_event_id,
+        },
+    )
+    .await;
+    match recorded {
+        Ok(Response::ReplyQueued(receipt))
+            if receipt.binding_id == record.dispatch.binding_id
+                && receipt.room_id == record.dispatch.room_id
+                && receipt.binding_generation == record.dispatch.binding_generation => {}
+        // The owner already has the answer. Never resend it because the server
+        // refused to record this one event (execution expired, lease changed).
+        Err(RuntimeError::Request) => {
+            tracing::warn!(stage="agent_reply", dispatch_id=%record.dispatch.id,
+                "Encrypted reply delivered; the server did not record its receipt");
+        }
+        Err(error) => return Err(error),
+        Ok(_) => return Err(RuntimeError::Transport),
+    }
+    local(ledger.confirm_matrix_delivery(owner, &record.dispatch.id, &execution))
 }
 async fn send_reply<T: Transport>(
     console: &T,
@@ -4360,6 +4437,7 @@ for raw in sys.stdin:
                 &mut ledger,
                 OWNER,
                 &prepared,
+                &prepared.dispatch.body,
                 temp.path(),
                 &queue,
                 &mut cancel,

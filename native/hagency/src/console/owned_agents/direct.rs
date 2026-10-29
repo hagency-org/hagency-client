@@ -94,7 +94,12 @@ fn validate(state: &Value, owner: &str, agent: &str, puppet: &str) -> Result<(),
         )
         || guests["content"]["guest_access"] != "forbidden"
         || joins["content"]["join_rule"] != "invite"
-        || events.iter().any(|e| e["type"] == "m.room.encryption")
+        // The owner may turn on Megolm: the Agent's own device on its
+        // execution host reads and answers; the server routes ciphertext.
+        || events.iter().any(|e| {
+            e["type"] == "m.room.encryption"
+                && (e["state_key"] != "" || e["content"]["algorithm"] != "m.megolm.v1.aes-sha2")
+        })
     {
         return Err(error(409, "owner_direct_room_identity_mismatch"));
     }
@@ -464,7 +469,7 @@ mod tests {
         ])
     }
     #[test]
-    fn direct_state_is_private_owner_bound_and_rejects_foreign_or_encrypted_room() {
+    fn direct_state_is_private_owner_bound_and_rejects_foreign_or_unknown_encryption() {
         assert!(validate(&state(), "@owner:test", "a", "@puppet:test").is_ok());
         let mut foreign = state();
         foreign[1]["sender"] = "@other:test".into();
@@ -472,12 +477,19 @@ mod tests {
         let mut extra = state();
         extra.as_array_mut().unwrap().push(json!({"type":"m.room.member","state_key":"@other:test","content":{"membership":"join"}}));
         assert!(validate(&extra, "@owner:test", "a", "@puppet:test").is_err());
-        let mut encrypted = state();
-        encrypted
+        let mut unknown = state();
+        unknown
             .as_array_mut()
             .unwrap()
-            .push(json!({"type":"m.room.encryption","content":{}}));
-        assert!(validate(&encrypted, "@owner:test", "a", "@puppet:test").is_err());
+            .push(json!({"type":"m.room.encryption","state_key":"","content":{}}));
+        assert!(validate(&unknown, "@owner:test", "a", "@puppet:test").is_err());
+        let mut megolm = state();
+        megolm
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"type":"m.room.encryption","state_key":"",
+            "content":{"algorithm":"m.megolm.v1.aes-sha2"}}));
+        assert!(validate(&megolm, "@owner:test", "a", "@puppet:test").is_ok());
         for visibility in ["world_readable", "unexpected"] {
             let mut public = state();
             public[2]["content"]["history_visibility"] = visibility.into();

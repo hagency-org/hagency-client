@@ -65,6 +65,17 @@ fn id(value: &str) -> Result<(), DeviceError> {
         Ok(())
     }
 }
+/// Room version 3+ event IDs are opaque `$` identifiers without a server part.
+fn event_id(value: &str) -> Result<(), DeviceError> {
+    if value.starts_with('$')
+        && (2..=512).contains(&value.len())
+        && !value.chars().any(|c| c.is_control() || c.is_whitespace())
+    {
+        Ok(())
+    } else {
+        Err(error(400, "invalid_execution_arguments"))
+    }
+}
 fn matrix(value: &str, prefix: char) -> Result<(), DeviceError> {
     if value.starts_with(prefix)
         && value.len() <= 255
@@ -162,6 +173,24 @@ pub struct ReplyReceipt {
     pub matrix_txn_id: String,
     pub state: String,
     pub matrix_event_id: Option<String>,
+}
+/// Token for the Agent's dedicated Matrix device, issued only to the lease holder
+/// so it can decrypt and encrypt locally in an encrypted owner-direct Room.
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct E2eeDeviceGrant {
+    pub user_id: String,
+    pub device_id: String,
+    pub access_token: String,
+    pub homeserver: String,
+}
+impl std::fmt::Debug for E2eeDeviceGrant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("E2eeDeviceGrant")
+            .field("user_id", &self.user_id)
+            .field("device_id", &self.device_id)
+            .finish_non_exhaustive()
+    }
 }
 /// Taking over another live device lease requires a deliberate owner action.
 #[derive(Clone, Copy)]
@@ -309,6 +338,16 @@ pub enum DeviceOperation {
         execution_id: String,
         body: String,
     },
+    E2eeDevice {
+        lease: LeaseRef,
+    },
+    /// Records an encrypted reply this device already sent with the Agent device.
+    EncryptedReply {
+        lease: LeaseRef,
+        dispatch_id: String,
+        execution_id: String,
+        matrix_event_id: String,
+    },
 }
 pub enum DeviceResponse {
     History(ExecutionHistory),
@@ -321,6 +360,7 @@ pub enum DeviceResponse {
     ToolAuthorized(Dispatch),
     Finished,
     ReplyQueued(ReplyReceipt),
+    E2eeDevice(E2eeDeviceGrant),
 }
 impl DeviceOperation {
     fn lease(&self) -> Option<&LeaseRef> {
@@ -335,6 +375,8 @@ impl DeviceOperation {
             | Self::AuthorizeTool { lease, .. }
             | Self::Finish { lease, .. }
             | Self::Reply { lease, .. }
+            | Self::E2eeDevice { lease }
+            | Self::EncryptedReply { lease, .. }
             | Self::ReconcileKnownReply { lease, .. } => Some(lease),
         }
     }
@@ -494,6 +536,21 @@ impl DeviceOperation {
                     json!({"lease":lease,"reply":{"dispatchId":dispatch_id,"executionId":execution_id,"body":body}}),
                 )
             }
+            Self::E2eeDevice { lease } => ("e2ee-device", json!({"lease":lease})),
+            Self::EncryptedReply {
+                lease,
+                dispatch_id,
+                execution_id,
+                matrix_event_id,
+            } => {
+                id(dispatch_id)?;
+                id(execution_id)?;
+                event_id(matrix_event_id)?;
+                (
+                    "replies/encrypted",
+                    json!({"lease":lease,"reply":{"dispatchId":dispatch_id,"executionId":execution_id,"matrixEventId":matrix_event_id}}),
+                )
+            }
         };
         let bytes =
             serde_json::to_vec(&body).map_err(|_| error(400, "invalid_execution_arguments"))?;
@@ -559,6 +616,50 @@ fn payload_digest(
     })
     .map_err(|_| error(400, "invalid_execution_arguments"))?;
     Ok(format!("{:x}", Sha256::digest(encoded)))
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EncryptedDigest<'a> {
+    dispatch_id: &'a str,
+    execution_id: &'a str,
+    matrix_event_id: &'a str,
+}
+/// This device already sent the encrypted reply: the server keeps no body and
+/// records exactly that Matrix event as sent under the current lease.
+fn check_encrypted_reply(
+    reply: &ReplyReceipt,
+    lease: &LeaseRef,
+    device: &AuthorizedDevice,
+    dispatch_id: &str,
+    execution_id: &str,
+    matrix_event_id: &str,
+) -> Result<(), DeviceError> {
+    let digest = serde_json::to_vec(&EncryptedDigest {
+        dispatch_id,
+        execution_id,
+        matrix_event_id,
+    })
+    .map_err(|_| error(400, "invalid_execution_arguments"))?;
+    if reply.owner_event_id != dispatch_id
+        || reply.agent_id != lease.agent_id
+        || reply.owner_user_id != device.user_id()
+        || reply.binding_generation < 1
+        || reply.dispatch_epoch != lease.epoch
+        || reply.delivery_epoch != lease.epoch
+        || !reply.body.is_empty()
+        || reply.payload_digest != format!("{:x}", Sha256::digest(digest))
+        || reply.matrix_txn_id != format!("hagency_{:x}", Sha256::digest(dispatch_id.as_bytes()))
+        || reply.state != "sent"
+        || reply.matrix_event_id.as_deref() != Some(matrix_event_id)
+        || !(reply.thread_root.starts_with('$') || reply.thread_root == reply.room_id)
+    {
+        return Err(error(502, "execution_scope_mismatch"));
+    }
+    matrix(&reply.room_id, '!')?;
+    matrix(&reply.puppet_mxid, '@')?;
+    matrix(&reply.requester_mxid, '@')?;
+    id(&reply.id).map_err(|_| error(502, "invalid_execution_response"))?;
+    id(&reply.binding_id).map_err(|_| error(502, "invalid_execution_response"))
 }
 fn check_reply(
     reply: &ReplyReceipt,
@@ -791,6 +892,37 @@ fn parse_response(
             Ok(DeviceResponse::Acknowledged)
         }
         DeviceOperation::Finish { .. } if value["finished"] == true => Ok(DeviceResponse::Finished),
+        DeviceOperation::EncryptedReply {
+            lease,
+            dispatch_id,
+            execution_id,
+            matrix_event_id,
+        } => {
+            let reply: ReplyReceipt = decode(&value, "reply")?;
+            check_encrypted_reply(
+                &reply,
+                lease,
+                device,
+                dispatch_id,
+                execution_id,
+                matrix_event_id,
+            )?;
+            Ok(DeviceResponse::ReplyQueued(reply))
+        }
+        DeviceOperation::E2eeDevice { .. } => {
+            let grant: E2eeDeviceGrant =
+                serde_json::from_value(value.clone()).map_err(|_| invalid())?;
+            matrix(&grant.user_id, '@')?;
+            if !(1..=255).contains(&grant.device_id.len())
+                || !grant.device_id.bytes().all(|b| b.is_ascii_alphanumeric())
+                || !(1..=1024).contains(&grant.access_token.len())
+                || !(grant.homeserver.starts_with("https://")
+                    || grant.homeserver.starts_with("http://127.0.0.1"))
+            {
+                return Err(invalid());
+            }
+            Ok(DeviceResponse::E2eeDevice(grant))
+        }
         _ => Err(invalid()),
     }
 }
