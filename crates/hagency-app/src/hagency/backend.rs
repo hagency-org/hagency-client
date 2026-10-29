@@ -574,36 +574,6 @@ impl Service {
         self.check()?;
         result
     }
-    /// Read this owner's existing Room services without adopting or starting any.
-    pub async fn room_agent_services(&self, room_id: &str) -> Result<Value, String> {
-        self.check()?;
-        let client = crate::sliding_sync::get_client().ok_or("matrix_sign_in_required")?;
-        let room = client.get_room(matrix_sdk::ruma::RoomId::parse(room_id).map_err(|_| "invalid_room_id")?.as_ref()).ok_or("room_join_required")?;
-        if room.state() != matrix_sdk::RoomState::Joined {return Err("room_join_required".into());}
-        let result = tokio::time::timeout(std::time::Duration::from_secs(30), async {
-            let roster = self.execute(Command::Agents).await?;
-            let devices = self.execute(Command::Devices).await?;
-            let agents = roster["agents"].as_array().ok_or("room_discovery_unavailable")?;
-            if agents.len() > 128 {return Err("room_discovery_incomplete".into());}
-            let mut services = Vec::new();
-            for agent in agents {
-                if agent["state"] != "active" {continue;}
-                let Some(id) = agent["id"].as_str() else {continue;};
-                let bindings = self.execute(Command::Bindings {agent_id:id.into()}).await?;
-                let Some(binding) = bindings["bindings"].as_array().and_then(|rows| rows.iter().find(|b|b["roomId"] == room_id && matches!(b["state"].as_str(),Some("active"|"pending"|"suspended")))) else {continue;};
-                if binding["scopeKind"] != "owner_direct" && !can_add_to_shared_room(agent) {continue;}
-                let Some(binding_id) = binding["id"].as_str() else {continue;};
-                let here = agent["executionDeviceId"].as_str().is_some_and(|device| devices["currentDeviceId"].as_str() == Some(device));
-                let runtime = if here {
-                    self.execute(Command::Local {agent_id:id.into(),action:LocalAction::AgentServiceStatus,input:None,binding_id:None,requester:None}).await
-                } else {Ok(Value::Null)};
-                services.push(serde_json::json!({"agentId":id,"bindingId":binding_id,"bindingState":binding["state"],"ownerServicePaused":binding["ownerServicePaused"],"service":runtime.as_ref().ok().and_then(|v|v.get("service")),"displayName":agent["displayName"],"thisDevice":here,"runtime":runtime.as_ref().ok().and_then(|v|v.get("runtime")),"statusAvailable":runtime.is_ok()}));
-            }
-            Ok(serde_json::json!({"roomId":room_id,"services":services}))
-        }).await.map_err(|_|"room_discovery_unavailable")?;
-        self.check()?;
-        result
-    }
     pub async fn execute(&self, command: Command) -> Result<Value, String> {
         let continuation = command.continues_running_task();
         let _update_task = if continuation { ::hagency::update_guard::PROCESS.continue_task() }

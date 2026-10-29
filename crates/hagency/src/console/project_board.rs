@@ -44,7 +44,7 @@ pub(super) fn request(
     let root = format!("/hagency/api/v1/projects/{project}");
     if let BoardAction::Within {board,command} = action {
         key(&board)?;
-        if matches!(*command, BoardAction::Within {..}|BoardAction::Overview|BoardAction::SetProjectArchived {..}|BoardAction::Boards|BoardAction::CreateBoard {..}) {return Err(invalid());}
+        if matches!(*command, BoardAction::Within {..}|BoardAction::Overview|BoardAction::SetProjectArchived {..}|BoardAction::SetNavigationDefault {..}|BoardAction::Boards|BoardAction::CreateBoard {..}) {return Err(invalid());}
         let (method,path,body) = request(project,*command)?;
         return Ok((method,path.replacen(&root,&format!("{root}/boards/{board}"),1),body));
     }
@@ -69,6 +69,11 @@ pub(super) fn request(
     let serialize = |input| serde_json::to_value(input).map_err(|_| invalid());
     Ok(match action {
         BoardAction::Overview => (Method::GET,format!("{root}/board/overview"),None),
+        BoardAction::SetNavigationDefault {kind,target_id,expected_revision} => {
+            if expected_revision<0 || !["board","room"].contains(&kind.as_str()) {return Err(invalid());}
+            if kind=="board" {key(&target_id)?;} else if !super::matrix_identifiers::room_id(&target_id) {return Err(invalid());}
+            (Method::PUT,format!("{root}/board/navigation-default"),Some(serde_json::json!({"kind":kind,"targetId":target_id,"expectedRevision":expected_revision})))
+        }
         BoardAction::SetProjectArchived {archived,expected_revision} => {
             if expected_revision<0 {return Err(invalid());}
             (Method::PUT,format!("{root}/board/project-archive"),Some(serde_json::json!({"archived":archived,"expectedRevision":expected_revision})))
@@ -259,4 +264,14 @@ mod multi_board_tests {
         assert!(scoped("board_2").is_read());
         assert!(!BoardAction::SetProjectArchived {archived:true,expected_revision:1}.is_read());
     }
+    #[test]
+    fn navigation_default_requests_are_closed_project_writes() {
+        let command=||BoardAction::SetNavigationDefault {kind:"room".into(),target_id:"!room:example.test".into(),expected_revision:4};
+        let (method,path,body)=request("project_1",command()).unwrap();assert_eq!(method,reqwest::Method::PUT);assert_eq!(path,"/hagency/api/v1/projects/project_1/board/navigation-default");assert_eq!(body.unwrap()["expectedRevision"],4);assert!(!command().is_read());
+        assert!(request("project_1",BoardAction::Within {board:"board_1".into(),command:Box::new(command())}).is_err());
+        for (kind,target,revision) in [("room","invalid",0),("board","../other",0),("agent","x",0),("board","b",-1)] {
+            assert!(request("project_1",BoardAction::SetNavigationDefault {kind:kind.into(),target_id:target.into(),expected_revision:revision}).is_err());
+        }
+    }
+
 }

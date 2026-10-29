@@ -291,6 +291,7 @@ impl ConfigureColumns {
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BoardAction {
     Overview,
+    SetNavigationDefault {kind:String,target_id:String,expected_revision:i64},
     SetProjectArchived {archived: bool, expected_revision: i64},
     Boards,
     CreateBoard {idempotency_key: String, name: String},

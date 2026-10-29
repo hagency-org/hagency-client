@@ -19,6 +19,7 @@ mod project_navigation;
 pub enum HagencyAction {
     OpenProjects,
     NewProject,
+    NewRoom {project_id:String},
     ProjectBoard {project_id: String, board_id: String},
     ProjectDetails {
         project_id: String,
@@ -62,6 +63,7 @@ enum Target {
     ProjectHome,
     BoardCreated,
     ProjectArchived,
+    NavigationDefaultChanged,
     Rooms,
     Spaces,
     Agents,
@@ -307,28 +309,6 @@ fn agent_command_details(command:&Value)->String {
         _ => crate::i18n::tr("We could not confirm the result. Check status first, or retry this same request safely. You can create other Agents meanwhile.").into(),
     }
 }
-pub(crate) fn runtime_summary(runtime:&Value,agent:&str,binding:Option<&str>)->String {
-    if runtime.is_null() {return crate::i18n::tr("Not running on this device.").into();}
-    if string(runtime,"agentId") != agent {return crate::i18n::tr("Refresh this Agent's runtime status.").into();}
-    let selected=binding.and_then(|id|array(runtime,"bindings").into_iter().find(|b|string(b,"bindingId")==id));
-    let value=selected.as_ref().unwrap_or(runtime);
-    if binding.is_some() && selected.is_none() && runtime["bindingId"].as_str() != binding && string(runtime,"lastError") != "ledger_recovery_required" && string(runtime,"phase") != "waiting_for_lease" {
-        return crate::i18n::tr("This Room is not running. Other selected Rooms may still be active.").into();
-    }
-    let text=match string(value,"phase") {
-        "online"|"online_chat_only"=>"Responding in this Room. Configured limits and request permissions still apply.",
-        "waiting_for_lease"=>"Waiting for the previous runtime lease to be released…",
-        "checking_provider"=>"Checking this device's local runtime connection…",
-        "executing"|"executing_chat_only"|"executing_host_files"=>"Processing a request in this Room…",
-        "awaiting_approval"|"waiting_owner"=>"Waiting for your approval before continuing.",
-        "ledger_recovery_required"|"reconciliation_only"=>"Restore this owner's complete ledger before new requests. Only known original replies may be recovered.",
-        "stopped"=>"Stopped on this device.",
-        _=>"The runtime has not confirmed it is ready. Refresh its status.",
-    };
-    let failure=string(value,"lastError");
-    let text = crate::i18n::tr(text);
-    if failure.is_empty() {text.into()} else if failure=="ledger_recovery_required" {crate::i18n::tr("Restore this owner's complete ledger before new requests. Stop, restore, then start again.").into()} else {format!("{text} {}",user_error(failure))}
-}
 // Only these static native error codes are safe to expose as diagnostics.
 // Never render a provider's raw JSON, stderr, filesystem paths, or credentials.
 fn provider_error_message(error: &str) -> Option<&'static str> {
@@ -424,6 +404,7 @@ impl ProjectRoomNavigation {
 fn navigate_agent_chat(cx: &mut Cx, room: matrix_sdk::ruma::OwnedRoomId, owner_direct: bool, project: Option<(&str, &str)>) {
     if !owner_direct && let Some((identity, project_id)) = project {
         cx.action(ProjectRoomNavigation {identity: identity.into(), project_id: project_id.into()});
+        cx.action(crate::home::project_tree::ProjectSelectionChanged {identity:identity.into(),project_id:project_id.into(),target:crate::home::project_tree::ProjectSelection::Room(room.clone())});
     }
     let name = crate::sliding_sync::get_client().and_then(|client| client.get_room(&room))
         .and_then(|sdk_room| sdk_room.cached_display_name().or_else(|| sdk_room.name().map(matrix_sdk::RoomDisplayName::Named)))
@@ -444,6 +425,9 @@ fn audience_label(agent: &Value) -> &'static str {
         Some("private") => "Private · owner chat only",
         _ => "Service audience unavailable. Update the server and refresh.",
     }
+}
+fn project_empty_message(loaded:bool,loading:bool)->&'static str {
+    crate::i18n::tr(if loading {"Loading projects…"}else if !loaded {"Projects could not be loaded. Refresh to retry."}else{"No Projects yet. Create a Project to start a shared workspace."})
 }
 fn agent_empty_message(loaded: bool, loading: bool) -> &'static str {
     if loading { crate::i18n::tr("Loading your Agents…") }
@@ -619,7 +603,7 @@ script_mod! {
     let Cards = PortalList {width: Fill height: Fill
         Card := RoundedView {width: Fill height: Fit flow: Right padding: 16 spacing: 16 margin: Inset{right: 20 bottom: 12} align: Align{y: 0.5}
             draw_bg +: {color: mod.widgets.RINX_SURFACE border_color: mod.widgets.RINX_BORDER border_size: 1 border_radius: 8}
-            View {width: Fill height: Fit flow: Down spacing: 6
+            content := View {width: Fill height: Fit flow: Down spacing: 6
                 title := Text {draw_text.text_style: theme.font_bold{font_size: mod.widgets.RINX_TITLE_SIZE}}
                 badge_row := View {width: Fill height: Fit flow: Flow.Right{wrap: true} spacing: 6
                     audience_badge := DeviceBadge {visible: false}
@@ -648,7 +632,7 @@ script_mod! {
         ..mod.widgets.SolidView
         width: Fill height: Fill flow: Down padding: Inset{top: 8 left: 12 right: 0 bottom: 0} spacing: 6 draw_bg.color: mod.widgets.RINX_CONTENT_BG
         panel_header := View {width:Fill height:Fit margin:Inset{right:20} spacing:6 align:Align{y:0.5}
-            title_row := View {width:Fill height:32 spacing:8 align:Align{y:0.5}
+            title_row := View {width:Fill height:Fit spacing:8 align:Align{y:0.5}
             back := RinxIconButton {visible:false width:32 height:32 draw_icon.svg:ICON_ARROW_BACK}
             title_group := View {width:Fill height:32 spacing:8 align:Align{y:0.5}
             heading := Text {width:Fit{max:FitBound.Rel{base:Base.Line factor:0.9}} max_lines:1 text_overflow:Ellipsis text: #(crate::i18n::tr("Projects")) i18n_text: "Projects" draw_text.text_style: theme.font_bold{font_size: mod.widgets.RINX_TITLE_SIZE}}
@@ -662,7 +646,7 @@ script_mod! {
             project_tabs := View {visible:false width: Fit height: Fit flow: Flow.Right{wrap: true} spacing: 4
                         overview_tab := Action {height:32 padding:Inset{left:10 right:10}text: #(crate::i18n::tr("Overview")) i18n_text: "Overview"}
                         board_tab := Action {height:32 padding:Inset{left:10 right:10}text: #(crate::i18n::tr("Boards")) i18n_text: "Boards"}
-                        rooms_tab := Action {height:32 padding:Inset{left:10 right:10}visible: false text: #(crate::i18n::tr("Rooms")) i18n_text: "Rooms"}
+                        rooms_tab := Action {height:32 padding:Inset{left:10 right:10}text: #(crate::i18n::tr("Rooms")) i18n_text: "Rooms"}
                         members_tab := Action {height:32 padding:Inset{left:10 right:10}text: #(crate::i18n::tr("Members")) i18n_text: "Members"}
                         permissions_tab := Action {height:32 padding:Inset{left:10 right:10}text: #(crate::i18n::tr("Access")) i18n_text: "Access"}
                         archive_project := RinxIconButton {visible:false width:32 height:32 draw_icon.svg:crate_resource("self://resources/icons/archive_box.svg")}
@@ -703,7 +687,11 @@ script_mod! {
                         }
                     }
                 }
-            project_list_holder := View {width: Fill height: Fill project_list := Cards {}}
+            project_list_holder := View {width: Fill height: Fill project_list := Cards {Card +: {
+                padding: Inset{left:16 right:16 top:10 bottom:10} spacing:12 margin:Inset{right:20 bottom:8}
+                draw_bg.border_radius:mod.widgets.RINX_CONTROL_RADIUS
+                content +: {title +: {max_lines:1 text_overflow:Ellipsis draw_text.text_style:theme.font_bold{font_size:mod.widgets.RINX_BODY_SIZE}}}
+            }}}
             agent_list_holder := View {visible: false width: Fill height: Fill flow: Down spacing: 8
                 View {visible: #(cfg!(feature = "agent_chat")) width: Fill height: Fit flow: Flow.Right{wrap: true} padding: Inset{right: 20}
                     agent_approval_chats := Action {text: #(crate::i18n::tr("Agent approval chats")) i18n_text: "Agent approval chats"}
@@ -735,7 +723,7 @@ script_mod! {
                             Text {text:#(crate::i18n::tr("Boards")) i18n_text:"Boards" draw_text.text_style:theme.font_bold{font_size:mod.widgets.RINX_BODY_SIZE}}
                             overview_boards := FlatList {width:Fill height:Fit flow:Flow.Right{wrap:true} spacing:8
                                 scroll_bars +: {show_scroll_x:false show_scroll_y:false}
-                                Board := View {width:Fit height:32 open_board := RinxGhostButton {height:32 draw_icon.svg:ICON_SQUARES}}
+                                Board := View {width:Fit height:32 spacing:6 align:Align{y:0.5} open_board := RinxGhostButton {height:32 draw_icon.svg:ICON_SQUARES} default_badge := mod.widgets.RinxDefaultBadge {visible:false label +: {i18n_text:"default"}}}
                             }
                         }
                         RinxCard {width:Fill height:Fit flow:Down spacing:14 padding:16
@@ -756,17 +744,22 @@ script_mod! {
                             }
                         }
                     }
-                    rooms_section := Section {visible: false width: Fill height: Fit flow: Down spacing: 10
-                    Text {text: #(crate::i18n::tr("Choose a discussion Room to open it or manage its members.")) i18n_text: "Choose a discussion Room to open it or manage its members." draw_text.color: mod.widgets.RINX_MUTED}
-                    new_room := Action {text: #(crate::i18n::tr("Add discussion Room")) i18n_text: "Add discussion Room"}
-                    rooms := Select {labels: [#(crate::i18n::tr("Select a Room"))]}
-                    room_details := Text {}
-                    View {width: Fill height: 40 spacing: 8
-                        room_members := Action {text: #(crate::i18n::tr("Room members")) i18n_text: "Room members"}
-                        open_room := Action {text: #(crate::i18n::tr("Open Room")) i18n_text: "Open Room"}
+                    rooms_section := View {visible:false width:Fill height:Fit flow:Down spacing:12
+                        rooms_empty_status := Text {text:#(crate::i18n::tr("Loading…"))}
+                        room_management := View {visible:false width:Fill height:Fit flow:Down
+                        View {width:Fill height:32 spacing:6 align:Align{y:0.5}
+                            rooms := Select {width:220 height:32 labels:[#(crate::i18n::tr("Select a Room"))]}
+                            new_room := RinxIconButton {width:32 height:32 draw_icon.svg:ICON_ADD}
+                        }
+                        rooms_hint := Text {width:Fill height:Fit flow:Flow.Right{wrap:true} text:#(crate::i18n::tr("No Rooms yet. Add a Room to start a conversation.")) i18n_text:"No Rooms yet. Add a Room to start a conversation." draw_text.color:mod.widgets.RINX_MUTED}
+                        room_details := Text {}
+                        View {width:Fill height:Fit flow:Flow.Right{wrap:true} spacing:8
+                            room_members := Action {text:#(crate::i18n::tr("Room members")) i18n_text:"Room members"}
+                            open_room := Action {text:#(crate::i18n::tr("Open Room")) i18n_text:"Open Room"}
+                            room_permissions := Action {text:#(crate::i18n::tr("Room Agent permissions")) i18n_text:"Room Agent permissions"}
+                            room_agents := Action {text:#(crate::i18n::tr("Manage my Agents")) i18n_text:"Manage my Agents"}
+                        }
                     }
-                    room_permissions := Action {text: #(crate::i18n::tr("Room Agent permissions")) i18n_text: "Room Agent permissions"}
-                    room_agents := Action {text: #(crate::i18n::tr("Manage my Agents")) i18n_text: "Manage my Agents"}
                     }
                     permissions_section := Section {visible: false width: Fill height: Fit flow: Down spacing: 8
                         permission_heading := Text {text: #(crate::i18n::tr("Access")) i18n_text: "Access"}
@@ -1287,6 +1280,7 @@ pub struct HagencyPanel {
     #[rust] detail_scroll_key:String,
     #[rust]
     agents_loaded: bool,
+    #[rust] projects_loaded:bool,
     #[rust]
     agents_loading: bool,
     #[rust]
@@ -1307,6 +1301,10 @@ pub struct HagencyPanel {
     wanted_project: Option<String>,
     #[rust]
     wanted_project_section: Option<(String, ProjectDetailSection)>,
+    #[rust] wanted_new_room: bool,
+    #[rust] wanted_open_rooms: bool,
+    #[rust] has_registered_rooms:Option<bool>,
+    #[rust] auto_default_project:Option<String>,
     #[rust] board_catalog: Vec<Value>,
     #[rust] selected_board: Option<String>,
     #[rust] wanted_board: Option<String>,
@@ -1983,7 +1981,7 @@ impl HagencyPanel {
         let topic=string(&p,"topic");
         self.view.label(cx,ids!(project_details)).set_text(cx,topic);
         self.view.label(cx,ids!(project_details)).set_visible(cx,!topic.is_empty());
-        self.rooms.clear();
+        self.rooms.clear();self.has_registered_rooms=None;
         self.labels(cx, ids!(rooms), "Select a Room", &self.rooms, "roomId");
         self.view.label(cx, ids!(room_details)).set_text(cx, "");
         self.run(
@@ -2111,6 +2109,11 @@ impl HagencyPanel {
     }
     fn project_section(&self, cx: &mut Cx, selected: &[LiveId]) {
         let project=self.project(cx);
+        if self.active && !self.identity.is_empty() && let Some(project_id)=&project {
+            use crate::home::project_tree::{ProjectSelection,ProjectSelectionChanged};
+            let target=if selected==[id!(board_section)] {self.selected_board.clone().map(ProjectSelection::Board).unwrap_or(ProjectSelection::Project)}else{ProjectSelection::Project};
+            cx.action(ProjectSelectionChanged {identity:self.identity.clone(),project_id:project_id.clone(),target});
+        }
         self.view.project_board(cx,ids!(board)).bind_scope(cx,&self.identity,project.as_deref(),self.selected_board.as_deref(),self.active && self.selected_board.is_some() && selected==[id!(board_section)]);
         for id in [
             ids!(board_section),
@@ -2574,6 +2577,21 @@ impl HagencyPanel {
             }
         }
     }
+
+    fn open_room_creation(&mut self,cx:&mut Cx) {
+        if self.project_home["canCreateRoom"]!=true || self.project_home["archived"]==true {return;}
+        if !self.begin_creation_form(cx,true) {return;}
+        self.reset_detail_scroll(cx);
+        self.view.view(cx,ids!(project_detail)).set_visible(cx,false);
+        self.create_room=true;
+        self.view.view(cx,ids!(project_form)).set_visible(cx,true);
+        self.view.drop_down(cx,ids!(creation_source)).set_labels(cx,vec![
+            crate::i18n::tr("Create a private Room").into(),
+            crate::i18n::tr("Connect an existing Room").into(),
+        ]);
+        self.view.drop_down(cx,ids!(creation_source)).set_selected_item(cx,0);
+        self.creation_source(cx);
+    }
     fn begin_creation_form(&mut self,cx:&mut Cx,room:bool)->bool {
         let unresolved=self.creation.as_ref().is_some_and(|v|v["phase"] != "complete") || (self.creation.is_none() && self.pending_input.is_some());
         if unresolved {
@@ -2948,6 +2966,7 @@ impl HagencyPanel {
                 self.run(cx, Target::Projects, Command::Projects);
             }
             Target::Projects => {
+                self.projects_loaded=true;
                 self.all_projects = array(value, "projects");
                 self.projects = self.all_projects.iter().filter(|p| self.show_archived_projects || p["archived"]!=true || self.wanted_project.as_deref()==p["id"].as_str()).cloned().collect();
                 self.labels(cx, ids!(projects), "Select a Project", &self.projects, "id");
@@ -2973,6 +2992,10 @@ impl HagencyPanel {
                 }
             }
             Target::ProjectHome | Target::BoardCreated => self.apply_project_home(cx,target,value),
+            Target::NavigationDefaultChanged => {
+                cx.action(crate::home::project_tree::ProjectTreeChanged {identity:self.identity.clone()});
+                self.load_project_home(cx);
+            }
             Target::ProjectArchived => {
                 if let Some(project)=self.project(cx) {self.wanted_project=Some(project);}
                 cx.action(crate::home::project_tree::ProjectTreeChanged {identity:self.identity.clone()});
@@ -2993,6 +3016,8 @@ impl HagencyPanel {
                     );
                 } else {
                     self.rooms = array(value, "rooms");
+                    self.rooms.sort_by_key(|r|(r["isDefault"]!=true,string(r,"name").to_lowercase(),string(r,"roomId").to_owned()));
+                    self.has_registered_rooms=value["hasRegisteredRooms"].as_bool();
                     self.labels(cx, ids!(rooms), "Select a Room", &self.rooms, "roomId");
                     if let Some((project_id, section)) = self.wanted_project_section.take()
                         && let Some(project) = self.selected(cx, ids!(projects), &self.projects)
@@ -3005,7 +3030,7 @@ impl HagencyPanel {
                                 self.project_section(cx, ids!(overview_section))
                             }
                             ProjectDetailSection::Rooms => {
-                                self.project_section(cx, ids!(rooms_section))
+                                self.open_project_rooms(cx);
                             }
                             ProjectDetailSection::Members => {
                                 self.show_members(cx, string(&project, "spaceId").into(), true)
@@ -3389,6 +3414,10 @@ impl HagencyPanel {
                         identity: self.identity.clone(),
                     });
                     self.pending_input = None;
+                    if let Some(project)=self.auto_default_project.take() && self.project(cx).as_ref()==Some(&project) && next["projectId"]==project && next["kind"]=="room" {
+                        self.wanted_project_section=Some((project.clone(),ProjectDetailSection::Rooms));
+                        self.run(cx,Target::Rooms,Command::ProjectRooms {project_id:project});return;
+                    }
                     self.list_page(cx);
                     self.status(cx, "Creation completed. Refresh Projects to see its Rooms.");
                     self.run(cx, Target::Projects, Command::Projects);
@@ -3943,7 +3972,7 @@ impl Widget for HagencyPanel {
                             if matches!(done.target,Target::ListService | Target::Runtime) {runtime_diagnostic(error)} else {visible_error(error)}
                         };
                         if !matches!(done.target,Target::ConfigurationStatus | Target::ModelSaved) {self.show_failure(cx,done.target,error,&message);}
-                        if matches!(done.target,Target::ProjectArchived) {self.load_project_home(cx);}
+                        if matches!(done.target,Target::ProjectArchived|Target::NavigationDefaultChanged) {self.load_project_home(cx);}
                         if matches!(done.target,Target::Runtime) {
                             let current=Ok(self.agent_service_state.clone());
                             let mut summary=runtime_service_description(Some(&current),self.agent(cx).as_deref().unwrap_or(""));
@@ -3962,6 +3991,7 @@ impl Widget for HagencyPanel {
                             } else { "Could not load members. Check your connection and retry." });
                         }
                         if matches!(done.target, Target::Creation) && self.pending_input.is_some() {
+                            if self.auto_default_project.is_some() {self.view.view(cx,ids!(project_detail)).set_visible(cx,false);self.view.view(cx,ids!(project_form)).set_visible(cx,true);self.create_room=true;self.creation_source(cx);}
                             self.view.view(cx, ids!(recovery)).set_visible(cx, true);
                             self.view.label(cx, ids!(creation_result)).set_text(cx, crate::i18n::tr("Result unconfirmed. Resume this original creation; do not start a replacement."));
                         }
@@ -4147,14 +4177,18 @@ impl Widget for HagencyPanel {
             return;
         }
         if self.handle_project_navigation(cx,actions) {return;}
-        if self.view.button(cx, ids!(board_tab)).clicked(actions) {self.project_section(cx,ids!(board_section));return;}
+        if self.view.button(cx, ids!(board_tab)).clicked(actions) {
+            if !self.view.project_board(cx,ids!(board)).can_switch(cx) {return;}
+            self.selected_board=self.board_catalog.first().and_then(|b|b["id"].as_str()).map(str::to_owned);
+            self.project_section(cx,ids!(board_section));return;
+        }
         if self.view.button(cx, ids!(overview_tab)).clicked(actions) {
             self.project_section(cx, ids!(overview_section));
             self.load_project_home(cx);
             return;
         }
         if self.view.button(cx, ids!(rooms_tab)).clicked(actions) {
-            self.project_section(cx, ids!(rooms_section));
+            self.refresh_project_rooms(cx);
             return;
         }
         if self.view.button(cx, ids!(members_tab)).clicked(actions) {
@@ -4341,34 +4375,7 @@ impl Widget for HagencyPanel {
             }
             return;
         }
-        if self.view.button(cx, ids!(new_room)).clicked(actions) {
-            if !self.begin_creation_form(cx,true) {return;}
-            self.reset_detail_scroll(cx);
-            self.view
-                .view(cx, ids!(project_detail))
-                .set_visible(cx, false);
-            self.create_room = self.view.button(cx, ids!(new_room)).clicked(actions);
-            self.view.view(cx, ids!(project_form)).set_visible(cx, true);
-            self.view.drop_down(cx, ids!(creation_source)).set_labels(
-                cx,
-                if self.create_room {
-                    vec![
-                        crate::i18n::tr("Create a private Room").into(),
-                        crate::i18n::tr("Connect an existing child Room").into(),
-                    ]
-                } else {
-                    vec![
-                        crate::i18n::tr("Create a new Space").into(),
-                    ]
-                },
-            );
-            self.view
-                .drop_down(cx, ids!(creation_source))
-                .set_selected_item(cx, 0);
-            self.creation_source(cx);
-
-            return;
-        }
+        if self.view.button(cx, ids!(new_room)).clicked(actions) {self.open_room_creation(cx);return;}
         if self.view.button(cx, ids!(room_agents)).clicked(actions) {
             cx.action(HagencyAction::OpenAgents);
             return;
@@ -4906,10 +4913,10 @@ impl Widget for HagencyPanel {
         let stacked=cx.turtle().rect().size.x<760.0;
         if self.header_stacked!=Some(stacked) {
             self.header_stacked=Some(stacked);
-            let mut header=self.view.view(cx,ids!(panel_header));
-            let mut tabs=self.view.view(cx,ids!(project_tabs));
-            if stacked {script_apply_eval!(cx,header,{flow:Down align:Align{x:0.0 y:0.5}});script_apply_eval!(cx,tabs,{width:Fill});}
-            else {script_apply_eval!(cx,header,{flow:Right align:Align{x:0.0 y:0.5}});script_apply_eval!(cx,tabs,{width:Fit});}
+            let header=self.view.view(cx,ids!(panel_header));
+            let tabs=self.view.view(cx,ids!(project_tabs));
+            if let Some(mut header)=header.borrow_mut() {header.layout.flow=if stacked {Flow::Down}else{Flow::right()};header.layout.align=Align{x:0.0,y:0.5};}
+            if let Some(mut tabs)=tabs.borrow_mut() {tabs.walk.width=if stacked {Size::fill()}else{Size::fit()};}
         }
         if self.page==Page::Projects && self.view.view(cx,ids!(board_section)).visible() {
             let loading=self.busy || self.view.project_board(cx,ids!(board)).is_loading();
@@ -4927,6 +4934,7 @@ impl Widget for HagencyPanel {
                 let Some(mut list)=step.borrow_mut::<FlatList>() else {continue;};
                 for board in &self.board_catalog {
                     let Some(row)=list.item(cx,LiveId::from_str(string(board,"id")),id!(Board)) else {continue;};
+                    row.view(cx,ids!(default_badge)).set_visible(cx,board["isDefault"]==true);
                     let name=string(board,"name");row.button(cx,ids!(open_board)).set_text(cx,if name=="Main Board" {crate::i18n::tr(name)}else{name});
                     row.draw_all(cx,scope);
                 }
@@ -5043,7 +5051,7 @@ impl Widget for HagencyPanel {
                         row.label(cx, ids!(empty_message)).set_text(
                             cx,
                             if self.page == Page::Projects {
-                                crate::i18n::tr("No Projects yet. Create a Project to start a shared workspace.")
+                                project_empty_message(self.projects_loaded,self.busy)
                             } else {
                                 agent_empty_message(self.agents_loaded, self.agents_loading)
                             },
@@ -5061,12 +5069,7 @@ impl Widget for HagencyPanel {
                 row.label(cx, ids!(title))
                     .set_text(cx, if title.is_empty() { "Untitled" } else { title });
                 let mut summary = if self.page == Page::Projects {
-                    let mut description = crate::i18n::tr(if value["archived"]==true {"Archived"} else {"Project"}).to_owned();
-                    let topic = string(value, "topic");
-                    if !topic.is_empty() {
-                        description.push_str(&format!("\n{topic}"));
-                    }
-                    description
+                    string(value,"topic").trim().to_owned()
                 } else {
                     let identity_state=crate::i18n::tr(if string(value,"state")=="active" {"Server identity active"} else {"Server identity pending"});
                     let local=match agent_device_state(value,&self.current_device_id,&self.execution_devices,self.devices_loaded) {
@@ -5077,6 +5080,7 @@ impl Widget for HagencyPanel {
                     };
                     format!("{identity_state} · {}\n{local}", string(value,"puppetMxid"))
                 };
+                row.view(cx,ids!(badge_row)).set_visible(cx,self.page==Page::Agents || value["archived"]==true);
                 let audience = row.view(cx, ids!(audience_badge));
                 audience.set_visible(cx, self.page == Page::Agents || value["archived"]==true);
                 audience.label(cx, ids!(device_label)).set_text(cx, crate::i18n::tr(if self.page==Page::Agents {audience_label(value)} else {"Archived"}));
@@ -5148,7 +5152,7 @@ impl HagencyPanelRef {
             panel.view.view(cx,ids!(service_logs_panel)).set_visible(cx,false);
             panel.view.label(cx,ids!(service_log_text)).set_text(cx,"");
             panel.clear_members(cx);
-            panel.projects.clear();panel.all_projects.clear();panel.board_catalog.clear();panel.selected_board=None;panel.wanted_board=None;panel.wanted_access=false;panel.project_home=Value::Null;panel.room_can_manage=false;panel.board_creation=None;panel.show_archived_projects=false;
+            panel.projects.clear();panel.all_projects.clear();panel.projects_loaded=false;panel.board_catalog.clear();panel.selected_board=None;panel.wanted_board=None;panel.wanted_access=false;panel.project_home=Value::Null;panel.room_can_manage=false;panel.board_creation=None;panel.show_archived_projects=false;
             panel.view.check_box(cx,ids!(show_archived_projects)).set_active(cx,false,Animate::No);
             panel.rooms.clear();
             panel.agent_rooms.clear();
@@ -5204,10 +5208,15 @@ impl HagencyPanelRef {
             }
         }
         panel.wanted_project = None;
+        panel.wanted_new_room = false;panel.wanted_open_rooms=false;panel.has_registered_rooms=None;panel.auto_default_project=None;
+        panel.wanted_board=None;panel.wanted_access=false;
         panel.wanted_project_section = None;
         panel.list_page(cx);
         panel.identity = identity;
         panel.active = true;
+        if matches!(action,HagencyAction::OpenProjects|HagencyAction::NewProject) {
+            cx.action(crate::home::project_tree::ProjectSelectionChanged {identity:panel.identity.clone(),project_id:String::new(),target:crate::home::project_tree::ProjectSelection::Project});
+        }
         panel.agent_journal_loaded = false;
         panel.agent_pending_commands.clear();
         panel.busy = false;
@@ -5223,6 +5232,7 @@ impl HagencyPanelRef {
         match action {
             HagencyAction::OpenProjects
             | HagencyAction::NewProject
+            | HagencyAction::NewRoom {..}
             | HagencyAction::ProjectBoard { .. }
             | HagencyAction::ProjectDetails { .. }
             | HagencyAction::ProjectSection { .. } => {
@@ -5259,6 +5269,9 @@ impl HagencyPanelRef {
                 }
                 if let HagencyAction::ProjectDetails { project_id } = action {
                     panel.wanted_project = Some(project_id.clone());
+                }
+                if let HagencyAction::NewRoom {project_id}=action {
+                    panel.wanted_project=Some(project_id.clone());panel.wanted_new_room=true;
                 }
                 if let HagencyAction::ProjectSection {
                     project_id,
@@ -5619,6 +5632,18 @@ mod tests {
             assert!(rect.size.y>height-120.0,"list should fill the body: {rect:?}, height {height}");
             assert!(rect.pos.y+rect.size.y<=height-15.0,"list stays within panel padding: {rect:?}");
             let second=list.item(&mut cx,1,id!(Card)).area().rect(&cx);assert!(second.size.y>0.0 && second.pos.y+second.size.y<height,"second card is fully visible: {second:?}");
+            let header=panel.view.view(&cx,ids!(title_row)).area().rect(&cx);
+            for id in [ids!(new_item),ids!(refresh)] {
+                let button=panel.view.button(&cx,id).area().rect(&cx);
+                assert!(button.pos.y>=header.pos.y && button.pos.y+button.size.y<=header.pos.y+header.size.y+0.1,"header must contain the complete button: {button:?}, {header:?}");
+            }
+            if page==Page::Projects {
+                let row=list.item(&mut cx,0,id!(Card));let card=row.area().rect(&cx);
+                assert!(card.size.y<=64.0,"Project rows without a topic must remain compact: {card:?}");
+                assert!(!row.label(&cx,ids!(summary)).visible());assert!(!row.view(&cx,ids!(badge_row)).visible());
+                let open=row.button(&cx,ids!(open)).area().rect(&cx);
+                assert!(open.pos.y>=card.pos.y && open.pos.y+open.size.y<=card.pos.y+card.size.y,"project action stays inside its row");
+            }
             if page==Page::Agents {
                 let row=list.item(&mut cx,0,id!(Card));let device=row.view(&cx,ids!(device_badge)).area().rect(&cx);let runtime=row.button(&cx,ids!(runtime_badge)).area().rect(&cx);
                 if width==980.0 {assert!((device.pos.y-runtime.pos.y).abs()<1.0);assert!(runtime.pos.x>=device.pos.x+device.size.x);}
@@ -5696,10 +5721,9 @@ mod tests {
         }
     }
     #[test]
-    fn lease_wait_is_explicit_in_list_room_and_dm_shared_summary() {
+    fn lease_wait_is_explicit_in_agent_list() {
         let value=json!({"runtime":{"agentId":"a","phase":"waiting_for_lease"}});
         assert_eq!(runtime_list_label(Some(&Ok(value.clone())),"a"),"Waiting for the previous runtime lease to be released…");
-        assert_eq!(runtime_summary(&value["runtime"],"a",Some("binding")),"Waiting for the previous runtime lease to be released…");
     }
     #[test]
     fn detail_scroll_resets_on_identity_target_change_but_preserves_same_detail() {
@@ -6671,9 +6695,6 @@ mod tests {
         panel.apply(&mut cx,Target::Provider,&json!({"authenticated":false,"state":"signed_out"}));
         assert!(panel.view.button(&cx,ids!(provider_login)).visible());
         assert!(!panel.view.button(&cx,ids!(provider_logout)).visible());
-        assert!(runtime_summary(&json!({"agentId":"a","phase":"unknown"}),"a",None).contains("not confirmed"));
-        assert!(runtime_summary(&json!({"agentId":"a","phase":"ledger_recovery_required","lastError":"ledger_recovery_required"}),"a",None).contains("complete ledger"));
-        assert_eq!(runtime_summary(&Value::Null,"a",None),"Not running on this device.");
         panel.apply(&mut cx,Target::ProviderModels,&json!({"authenticated":false,"models":[]}));
         assert!(panel.provider_models.is_empty());assert!(panel.runtime_efforts.is_empty());
     }
@@ -6804,6 +6825,12 @@ mod tests {
         panel.apply(&mut cx, Target::AgentCreated, &Value::Null);
         assert!(!panel.view.view(&cx, ids!(agent_create)).visible());
         assert!(panel.agent_command.is_none());
+    }
+    #[test]
+    fn project_empty_state_requires_a_successful_directory_read() {
+        assert_eq!(project_empty_message(false,true),crate::i18n::tr("Loading projects…"));
+        assert_eq!(project_empty_message(false,false),crate::i18n::tr("Projects could not be loaded. Refresh to retry."));
+        assert!(project_empty_message(true,false).starts_with("No Projects yet"));
     }
     #[test]
     fn portal_empty_state_appears_once_and_real_rows_never_become_placeholders() {

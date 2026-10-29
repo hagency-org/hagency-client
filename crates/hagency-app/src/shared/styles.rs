@@ -5,6 +5,12 @@ script_mod! {
     use mod.prelude.widgets.*
     use mod.widgets.*
 
+        mod.widgets.RinxDefaultBadge = RoundedView {
+            width:Fit height:24 padding:Inset{left:6 right:6} align:Center
+            draw_bg +: {color:RINX_SELECTED border_radius:RINX_CONTROL_RADIUS}
+            label := mod.widgets.RinxHint {text:#(crate::i18n::tr("default")) draw_text.color:RINX_ACCENT}
+        }
+
     mod.widgets.RinxBrandLogo = Image {
         width: 24 height: 24
         fit: ImageFit.Smallest
