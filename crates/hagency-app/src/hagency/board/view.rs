@@ -132,6 +132,8 @@ makepad_widgets::script_mod! {
                     toggle_board_creation := RinxIconButton {width:32 height:32 draw_icon.svg:ICON_ADD}
                 }
             toolbar_actions := View {width: Fill{min:270} height: Fit flow: Flow.Right{wrap: true} spacing: 6 align: Align{x:1.0 y: 0.5}
+                default_badge := mod.widgets.RinxDefaultBadge {visible:false label +: {i18n_text:"default"}}
+                set_default := RinxGhostButton {visible:false height:32 text:#(crate::i18n::tr("Set as default")) i18n_text:"Set as default"}
                 filters_toggle := RinxIconButton {width:32 height:32 draw_icon.svg:crate_resource("self://resources/icons/filter.svg")}
                 clear_filters := RinxGhostButton {height:32 visible:false text:#(crate::i18n::tr("Clear filters")) i18n_text:"Clear filters"}
                 my_tasks := RinxGhostButton {height:32 text:#(crate::i18n::tr("My tasks")) i18n_text:"My tasks"}

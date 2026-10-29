@@ -21,6 +21,44 @@ pub(super) fn ordered_members(members: Vec<Value>) -> Vec<Value> {
     result
 }
 impl HagencyPanel {
+    pub(super) fn open_first_project_room(&self,cx:&mut Cx)->bool {
+        let record=self.rooms.iter().find(|r|r["active"]==true && matches!(r["membership"].as_str(),Some("join"|"invite"))
+            || r["active"]==true && r["roomId"].as_str().and_then(|id|matrix_sdk::ruma::OwnedRoomId::try_from(id).ok()).is_some_and(|id|crate::sliding_sync::get_client().and_then(|c|c.get_room(&id)).is_some_and(|r|matches!(r.state(),matrix_sdk::RoomState::Joined|matrix_sdk::RoomState::Invited))));
+        let (Some(record),Some(project))=(record,self.project(cx)) else {return false;};
+        let Ok(room)=matrix_sdk::ruma::OwnedRoomId::try_from(string(record,"roomId")) else {return false;};
+        cx.action(crate::home::project_tree::ProjectSelectionChanged {identity:self.identity.clone(),project_id:project.clone(),target:crate::home::project_tree::ProjectSelection::Room(room.clone())});
+        cx.action(super::ProjectRoomNavigation {identity:self.identity.clone(),project_id:project});
+        let invited=record["membership"]=="invite" || (!record["membership"].is_string() && crate::sliding_sync::get_client().and_then(|c|c.get_room(&room)).is_some_and(|r|r.state()==matrix_sdk::RoomState::Invited));
+        let room_name_id=crate::utils::RoomNameId::new(matrix_sdk::RoomDisplayName::Named(string(record,"name").into()),room);
+        // The authenticated directory already established membership. Generic
+        // RoomId navigation can misclassify a newly-created Room before SDK sync.
+        let selected=if invited {crate::app::SelectedRoom::InvitedRoom {room_name_id}} else {crate::app::SelectedRoom::JoinedRoom {room_name_id}};
+        cx.widget_action(self.widget_uid(),crate::home::rooms_list::RoomsListAction::Selected(selected));
+        true
+    }
+    pub(super) fn refresh_project_rooms(&mut self,cx:&mut Cx) {
+        let Some(project_id)=self.project(cx) else {return;};
+        self.wanted_project_section=Some((project_id.clone(),ProjectDetailSection::Rooms));
+        self.run(cx,Target::Rooms,Command::ProjectRooms {project_id});
+    }
+    pub(super) fn open_project_rooms(&mut self,cx:&mut Cx) {
+        if self.open_first_project_room(cx) {self.wanted_open_rooms=false;return;}
+        self.wanted_open_rooms=true;self.project_section(cx,ids!(rooms_section));
+        self.view.label(cx,ids!(rooms_empty_status)).set_text(cx,crate::i18n::tr("Loading…"));
+        if self.busy {return;}
+        if self.project_home.is_null() {self.load_project_home(cx);return;}
+        self.wanted_open_rooms=false;
+        if self.has_registered_rooms!=Some(false) || self.project_home["canCreateRoom"]!=true || self.project_home["archived"]==true {
+            self.view.label(cx,ids!(rooms_empty_status)).set_text(cx,crate::i18n::tr("No accessible Rooms. Ask a Project administrator to create or invite you to one."));return;
+        }
+        let Some(project)=self.project(cx) else {return;};
+        if !self.begin_creation_form(cx,true) {return;}
+        self.auto_default_project=Some(project);
+        self.view.drop_down(cx,ids!(creation_source)).set_selected_item(cx,0);
+        self.view.text_input(cx,ids!(creation_name)).set_text(cx,"General");
+        self.view.label(cx,ids!(rooms_empty_status)).set_text(cx,crate::i18n::tr("Creating the default Room…"));
+        self.create_matrix(cx);
+    }
     fn board_controls(&self,cx:&Cx)->WidgetRef {self.view.project_board(cx,ids!(board)).controls(cx)}
     fn board_creation_action(&mut self,name:&str)->BoardAction {
         let (idempotency_key,name)=self.board_creation.get_or_insert_with(||(uuid::Uuid::new_v4().to_string(),name.into())).clone();
@@ -47,11 +85,12 @@ impl HagencyPanel {
     pub(super) fn apply_project_home(&mut self,cx:&mut Cx,target:Target,value:&Value) {
         if value["projectId"].as_str()!=self.project(cx).as_deref() {return;}
         self.board_catalog=array(value,"boards");
+        self.board_catalog.sort_by_key(|b|(b["isDefault"]!=true,string(b,"name").to_lowercase(),string(b,"id").to_owned()));
         let wanted=value["createdBoardId"].as_str().map(str::to_owned).or_else(||self.wanted_board.take()).or_else(||self.selected_board.clone());
         let index=wanted.as_deref().and_then(|id|self.board_catalog.iter().position(|b|b["id"]==id)).unwrap_or(0);
         self.selected_board=self.board_catalog.get(index).and_then(|b|b["id"].as_str()).map(str::to_owned);
         self.board_controls(cx).drop_down(cx,ids!(boards)).set_labels(cx,self.board_catalog.iter().map(|b|{
-            let name=string(b,"name");if name=="Main Board" {crate::i18n::tr(name).into()}else{name.into()}
+            let name=string(b,"name");let name=if name=="Main Board" {crate::i18n::tr(name)}else{name};if b["isDefault"]==true {format!("{name} · {}",crate::i18n::tr("default"))}else{name.into()}
         }).collect());
         self.board_controls(cx).drop_down(cx,ids!(boards)).set_selected_item(cx,index);
         if matches!(target,Target::BoardCreated) {
@@ -68,6 +107,12 @@ impl HagencyPanel {
 
         }
         self.render_project_controls(cx);
+        if self.view.view(cx,ids!(board_section)).visible() {self.project_section(cx,ids!(board_section));}
+        if self.wanted_new_room && matches!(target,Target::ProjectHome) {
+            self.wanted_new_room=false;
+            self.open_room_creation(cx);
+        }
+        if self.wanted_open_rooms && matches!(target,Target::ProjectHome) {self.open_project_rooms(cx);}
         if self.wanted_access && matches!(target,Target::ProjectHome) {
             self.wanted_access=false;
             if self.project_home["canManagePolicy"]==true {self.load_permissions(cx,false);}
@@ -106,13 +151,18 @@ impl HagencyPanel {
         self.board_controls(cx).button(cx,ids!(create_board)).set_visible(cx,detail && !archived);
 
         self.view.button(cx,ids!(new_room)).set_visible(cx,detail && self.project_home["canCreateRoom"]==true && !archived);
+        self.view.label(cx,ids!(rooms_hint)).set_text(cx,crate::i18n::tr(if self.rooms.is_empty() {"No Rooms yet. Add a Room to start a conversation."}else{"Choose a discussion Room to open it or manage its members."}));
+        let is_default=self.board_catalog.iter().any(|b|b["id"].as_str()==self.selected_board.as_deref() && b["isDefault"]==true);
+        self.board_controls(cx).view(cx,ids!(default_badge)).set_visible(cx,detail && is_default);
+        self.board_controls(cx).button(cx,ids!(set_default)).set_visible(cx,admin && !archived && self.project_home["navigationRevision"].is_i64() && self.selected_board.is_some() && !is_default);
+        self.board_controls(cx).button(cx,ids!(set_default)).set_enabled(cx,!self.busy);
         let room_selected=self.selected(cx,ids!(rooms),&self.rooms).is_some();
         self.view.button(cx,ids!(room_permissions)).set_visible(cx,self.room_can_manage && room_selected);
     }
     pub(super) fn handle_project_navigation(&mut self,cx:&mut Cx,actions:&Actions)->bool {
         for (key,row) in self.view.flat_list(cx,ids!(overview_boards)).items_with_actions(actions) {
             if row.button(cx,ids!(open_board)).clicked(actions) && let Some(board)=self.board_catalog.iter().find(|b|LiveId::from_str(string(b,"id"))==key) {
-                self.selected_board=Some(string(board,"id").into());self.project_section(cx,ids!(board_section));return true;
+                self.selected_board=Some(string(board,"id").into());self.project_section(cx,ids!(board_section));self.render_project_controls(cx);return true;
             }
         }
 
@@ -133,7 +183,14 @@ impl HagencyPanel {
                 self.status(cx,"Save or close the current task before switching boards.");
                 let old=self.board_catalog.iter().position(|b|b["id"].as_str()==self.selected_board.as_deref()).unwrap_or(0);
                 self.board_controls(cx).drop_down(cx,ids!(boards)).set_selected_item(cx,old);
-            } else {self.selected_board=self.board_catalog.get(index).and_then(|b|b["id"].as_str()).map(str::to_owned);}
+            } else {self.selected_board=self.board_catalog.get(index).and_then(|b|b["id"].as_str()).map(str::to_owned);self.project_section(cx,ids!(board_section));self.render_project_controls(cx);}
+            return true;
+        }
+        if self.board_controls(cx).button(cx,ids!(set_default)).clicked(actions) {
+            if !self.busy && self.project_home["canManagePolicy"]==true && self.project_home["archived"]!=true
+                && let (Some(project_id),Some(target_id),Some(expected_revision))=(self.project(cx),self.selected_board.clone(),self.project_home["navigationRevision"].as_i64()) {
+                self.run(cx,Target::NavigationDefaultChanged,Command::ProjectBoard {project_id,action:BoardAction::SetNavigationDefault {kind:"board".into(),target_id,expected_revision}});
+            }
             return true;
         }
         if self.board_controls(cx).button(cx,ids!(create_board)).clicked(actions) {
@@ -162,6 +219,32 @@ mod tests {
         cx.with_vm(|vm| {makepad_widgets::script_mod(vm);crate::app::register_widgets(vm);vm.bx.captured_errors=Some(Vec::new());
             let value=script_eval!(vm,{mod.widgets.HagencyPanel {}});
             let panel=HagencyPanel::script_from_value(vm,value);assert!(vm.take_errors().is_empty());panel})
+    }
+    #[test]
+    fn rooms_open_the_visible_default_without_waiting_for_sdk_cache_and_never_show_management() {
+        let mut cx=Cx::new(Box::new(|_,_|{}));let mut p=panel(&mut cx);
+        p.identity="owner".into();p.projects=vec![json!({"id":"project","name":"Project","spaceId":"!space:test","active":true})];p.labels(&mut cx,ids!(projects),"Select a Project",&p.projects,"id");p.view.drop_down(&cx,ids!(projects)).set_selected_item(&mut cx,1);
+        p.rooms=vec![json!({"roomId":"!default:test","active":true,"membership":"join","isDefault":true}),json!({"roomId":"!other:test","active":true,"membership":"join"})];
+        let actions=cx.capture_actions(|cx|p.open_project_rooms(cx));
+        assert!(actions.iter().any(|a|a.downcast_ref::<crate::home::project_tree::ProjectSelectionChanged>().is_some_and(|s|s.target==crate::home::project_tree::ProjectSelection::Room(matrix_sdk::ruma::room_id!("!default:test").into()))));
+        assert!(actions.iter().filter_map(|a|a.as_widget_action()).any(|a|matches!(a.cast::<crate::home::rooms_list::RoomsListAction>(),crate::home::rooms_list::RoomsListAction::Selected(crate::app::SelectedRoom::JoinedRoom {room_name_id}) if room_name_id.room_id().as_str()=="!default:test")),"a joined directory result must open directly without an SDK-dependent join prompt");
+        assert!(!actions.iter().any(|a|a.downcast_ref::<crate::app::AppStateAction>().is_some()),"do not reclassify trusted directory membership through generic RoomId navigation");
+        assert!(!p.wanted_open_rooms);assert!(p.auto_default_project.is_none());
+        p.rooms.clear();p.has_registered_rooms=Some(true);p.project_home=json!({"canCreateRoom":true,"archived":false});p.open_project_rooms(&mut cx);
+        assert!(p.auto_default_project.is_none(),"private/inaccessible existing Rooms must not trigger another Room or bypass membership");
+        assert!(!p.view.view(&cx,ids!(room_management)).visible());
+        assert_eq!(p.view.label(&cx,ids!(rooms_empty_status)).text(),crate::i18n::tr("No accessible Rooms. Ask a Project administrator to create or invite you to one."));
+    }
+    #[test]
+    fn explicit_rooms_navigation_waits_for_a_fresh_directory_instead_of_cached_membership() {
+        let mut cx=Cx::new(Box::new(|_,_|{}));let mut p=panel(&mut cx);
+        p.projects=vec![json!({"id":"p","spaceId":"!space:test","active":true})];p.labels(&mut cx,ids!(projects),"Select a Project",&p.projects,"id");p.view.drop_down(&cx,ids!(projects)).set_selected_item(&mut cx,1);
+        p.rooms=vec![json!({"roomId":"!old:test","name":"Old","active":true,"membership":"join","isDefault":true})];
+        let actions=cx.capture_actions(|cx|p.refresh_project_rooms(cx));
+        assert_eq!(p.wanted_project_section,Some(("p".into(),ProjectDetailSection::Rooms)));
+        assert!(!actions.iter().any(|a|a.downcast_ref::<crate::home::project_tree::ProjectSelectionChanged>().is_some()),"cached default must not navigate before the directory read");
+        let actions=cx.capture_actions(|cx|p.apply(cx,Target::Rooms,&json!({"rooms":[{"roomId":"!new:test","name":"Invited Room","active":true,"membership":"invite","isDefault":true}],"hasRegisteredRooms":true,"navigationRevision":2})));
+        assert!(actions.iter().filter_map(|a|a.as_widget_action()).any(|a|matches!(a.cast::<crate::home::rooms_list::RoomsListAction>(),crate::home::rooms_list::RoomsListAction::Selected(crate::app::SelectedRoom::InvitedRoom {room_name_id}) if room_name_id.room_id().as_str()=="!new:test")));
     }
     #[test]
     fn archive_icon_switching_uses_registered_resources_without_script_errors() {

@@ -926,13 +926,14 @@ script_mod! {
         // single-pane template enables it, where no tab bar shows the room name.
         desktop_chat_header := SolidView {
             visible: false
-            width: Fill, height: 52
+            width: Fill, height: Fit
             flow: Down
             show_bg: true
             draw_bg.color: mod.widgets.RINX_CONTENT_BG
 
-            View {
-                width: Fill, height: Fill
+            room_navigation_holder := View {visible:false width:Fill height:Fit room_navigation := mod.widgets.RoomNavigation {}}
+            direct_header := View {
+                width: Fill, height: 52
                 flow: Right
                 padding: Inset{left: 20, right: 8}
                 align: Align{y: 0.5}
@@ -1378,7 +1379,11 @@ impl Widget for RoomScreen {
             return;
         }
         if let Event::Actions(actions) = event
-            && self.view.navigation_bar_button(cx, ids!(desktop_chat_info_button)).clicked(actions) {
+            && (self.view.navigation_bar_button(cx, ids!(desktop_chat_info_button)).clicked(actions) || {
+                use super::room_navigation::{RoomNavigationAction as Nav,RoomNavigationWidgetExt};
+                let nav=self.view.room_navigation(cx,ids!(room_navigation));
+                nav.requested(actions,Nav::Info) || nav.requested(actions,Nav::Members)
+            }) {
             board.show_history(cx);
         }
         self.view.view(cx, ids!(room_screen_wrapper)).set_visible(cx, !board.active());
@@ -1693,6 +1698,12 @@ impl Widget for RoomScreen {
             // Once scrolling stops, the read receipt timer determines which events are
             // actually visible and sends read receipts for them.
             if portal_list.scrolled(actions) {
+                if let Some(tl) = self.tl_state.as_mut() {
+                    tl.update_live_scroll_intent(
+                        portal_list.user_scroll_travel() > self.read_receipt_state.last_user_scroll_travel,
+                        portal_list.is_at_end(),
+                    );
+                }
                 self.read_receipt_state.handle_scroll(cx, &portal_list);
             }
 
@@ -1703,8 +1714,12 @@ impl Widget for RoomScreen {
                 actions,
             );
             if let Some(tl) = self.tl_state.as_mut() {
+                if clicked_bottom {
+                    tl.follow_live = true;
+                }
                 if !tl.is_live {
                     if clicked_bottom {
+                        tl.live_focus_pending = true;
                         submit_async_request(MatrixRequest::FocusTimeline { timeline_kind: tl.kind.clone(), target: None });
                     } else if portal_list.reached_end(actions) && !tl.is_paginating && !tl.forwards_paginated {
                         tl.is_paginating = true;
@@ -1758,6 +1773,7 @@ impl Widget for RoomScreen {
 
         if self.tl_state.is_some() && !matches!(event, Event::Draw(_)) {
             if let Some(event_id) = self.pending_history_jump.clone() {
+                if let Some(tl) = self.tl_state.as_mut() {tl.follow_live = false;}
                 let index = self.tl_state.as_ref().and_then(|tl| tl.items.iter().position(|item| item.as_event().is_some_and(|ev| ev.event_id() == Some(&event_id))));
                 if let Some(index) = index {
                     // A restored stack view may not have drawn any PortalList items yet.
@@ -1804,6 +1820,14 @@ impl Widget for RoomScreen {
                 self.view.view(cx, ids!(room_screen_wrapper)).handle_event(cx, event, &mut Scope::empty());
             }
         });
+        // PortalList reports Scroll actions from its next draw. Observe direct
+        // user movement now, before a queued snapshot or that draw can re-arm
+        // tailing and erase the chosen history position.
+        if portal_list.user_scroll_travel() > self.read_receipt_state.last_user_scroll_travel
+            && let Some(tl) = self.tl_state.as_mut()
+        {
+            tl.follow_live = false;
+        }
         // Here, we handle and remove any general actions that are relevant to only this RoomScreen.
         // Removing the handled actions ensures they are not mistakenly handled by other RoomScreen widget instances.
         actions_generated_within_this_room_screen.retain(|action| {
@@ -2165,6 +2189,7 @@ impl Widget for RoomScreen {
             if !tl_state.fully_paginated
                 && !tl_state.is_paginating
                 && !tl_state.is_backwards_pagination_stalled()
+                && !(tl_state.follow_live && tl_state.is_live)
                 && !list.is_filling_viewport()
             {
                 log!("Automatically paginating timeline to fill viewport for room {:?}", self.room_name_id);
@@ -2211,6 +2236,16 @@ impl Widget for RoomScreen {
         // PortalList resolves its final at_end state during drawing. Synchronize
         // afterwards too, so reaching the bottom needs no further mouse event.
         let list = self.view.portal_list(cx, ids!(timeline.list));
+        if let Some(tl) = self.tl_state.as_mut()
+            && tl.follow_live && !tl.is_live && !tl.live_focus_pending
+            && !tl.items.is_empty()
+        {
+            // Initial history hydration can temporarily replace the SDK's live
+            // window. Reading its complete tail must resume the live subscriber;
+            // otherwise new incoming messages only update the room preview.
+            tl.live_focus_pending = true;
+            submit_async_request(MatrixRequest::FocusTimeline {timeline_kind: tl.kind.clone(), target: None});
+        }
         self.sync_jump_to_latest_visibility(cx, &list);
         DrawStep::done()
     }
@@ -2224,23 +2259,23 @@ fn window_contains_latest<'a>(
     latest.map_or(forwards_paginated, |latest| event_ids.any(|id| id == latest))
 }
 
+fn timeline_contains_latest(tl: &TimelineUiState) -> bool {
+    let latest = crate::sliding_sync::get_client()
+        .and_then(|client| client.get_room(tl.kind.room_id()))
+        .filter(|_| tl.kind.thread_root_event_id().is_none())
+        .and_then(|room| (*room).latest_event().event_id());
+    // SDK previews can omit state events in a short room. Retain the actual
+    // observed live edge when history hydration replaces that window.
+    let live_edge = tl.kind.thread_root_event_id().is_none()
+        .then_some(tl.last_live_event.as_deref()).flatten();
+    window_contains_latest(tl.items.iter().rev().filter_map(|item| item.as_event()?.event_id()),
+        latest.as_deref().or(live_edge), tl.forwards_paginated)
+}
+
 impl RoomScreen {
     fn sync_jump_to_latest_visibility(&self, cx: &mut Cx, list: &PortalListRef) {
         let at_latest = self.tl_state.as_ref().is_none_or(|tl| {
-            // Back pagination can rebase even a short, complete room into an
-            // Event-focused window. Its focus mode alone cannot mean "older".
-            let latest = crate::sliding_sync::get_client()
-                .and_then(|client| client.get_room(tl.kind.room_id()))
-                .filter(|_| tl.kind.thread_root_event_id().is_none())
-                .and_then(|room| (*room).latest_event().event_id());
-            // The SDK preview can omit state events, or be empty in a new
-            // state-only room. Retain the actual live edge before rebasing.
-            let live_edge = tl.kind.thread_root_event_id().is_none().then_some(tl.last_live_event.as_deref()).flatten();
-            let contains_latest = window_contains_latest(
-                tl.items.iter().rev().filter_map(|item| item.as_event()?.event_id()),
-                latest.as_deref().or(live_edge), tl.forwards_paginated,
-            );
-            tl.items.is_empty() || (list.is_at_end() && (tl.is_live || contains_latest))
+            tl.items.is_empty() || (list.is_at_end() && (tl.is_live || timeline_contains_latest(tl)))
         });
         if self.jump_to_bottom_button(cx, ids!(jump_to_bottom_button)).update_visibility(cx, at_latest) {
             // A hidden overlay may have no old area; redraw its parent to both
@@ -2345,7 +2380,7 @@ impl RoomScreen {
             };
             match update {
                 TimelineUpdate::WindowAnchor {target,index} => {
-                    if tl.items.get(index).and_then(|item|item.as_event()).is_some_and(|event|event.event_id()==Some(&target)) {
+                    if !tl.follow_live && tl.items.get(index).and_then(|item|item.as_event()).is_some_and(|event|event.event_id()==Some(&target)) {
                         portal_list.set_tail_range(false);
                         portal_list.set_first_id_and_scroll(index,0.0);
                     }
@@ -2357,6 +2392,7 @@ impl RoomScreen {
                         tl.last_live_event = None;
                     }
                     tl.is_live = is_live;
+                    tl.live_focus_pending = false;
                     tl.fully_paginated = false;
                     tl.forwards_paginated = false;
                     tl.is_paginating = false;
@@ -2891,10 +2927,12 @@ impl RoomScreen {
                     // A historical window cannot display the new local echo. Return
                     // to live only after the SDK has accepted the outgoing message.
                     if !tl.is_live {
+                        tl.live_focus_pending = true;
                         submit_async_request(MatrixRequest::FocusTimeline {
                             timeline_kind: tl.kind.clone(), target: None,
                         });
                     }
+                    tl.follow_live = true;
                     portal_list.set_first_id_and_scroll(tl.items.len().saturating_sub(1), 0.0);
                     portal_list.set_tail_range(true);
                     jump_to_bottom_button.update_visibility(cx, true);
@@ -2923,6 +2961,13 @@ impl RoomScreen {
             (tl.index_of_last_own_sent, tl.index_of_first_own_failed) =
                 own_send_indices(&tl.items, tl.kind.thread_root_event_id().is_none());
         }
+        if items_changed && tl.follow_live {
+            // A catch-up snapshot, read marker, or composer resize can arrive
+            // after MessageQueued. Preserve the sending user's live-edge intent
+            // through all those updates instead of restoring an old first item.
+            portal_list.set_first_id_and_scroll(tl.items.len().saturating_sub(1), 0.0);
+            portal_list.set_tail_range(true);
+        }
 
         let blocked_send = tl.index_of_first_own_failed
             .and_then(|i| tl.items.get(i))
@@ -2936,7 +2981,7 @@ impl RoomScreen {
                 _ => None,
             });
 
-        if should_continue_backwards_pagination {
+        if should_continue_backwards_pagination && !(tl.follow_live && tl.is_live) {
             tl.is_paginating = true;
             submit_async_request(MatrixRequest::PaginateTimeline {
                     anchor: None,
@@ -3774,6 +3819,7 @@ impl RoomScreen {
         // Jumping to an event isn't really a user scroll action, so don't send read receipts based on jumps.
         self.read_receipt_state.cancel_timer(cx);
         let Some(tl) = self.tl_state.as_mut() else { return };
+        tl.follow_live = false;
         let max_tl_idx = max_tl_idx.unwrap_or_else(|| tl.items.len());
 
         // Attempt to find the index of replied-to message in the timeline.
@@ -3901,6 +3947,8 @@ impl RoomScreen {
                     // We assume timelines being viewed for the first time haven't been fully paginated.
                     fully_paginated: false,
                     is_live: true,
+                    follow_live: true,
+                    live_focus_pending: false,
                     last_live_event: None,
                     forwards_paginated: false,
                     is_paginating: false,
@@ -4192,6 +4240,7 @@ impl RoomScreen {
     /// Note: this accepts a direct reference to the timeline's UI state,
     /// so this function must not try to re-obtain it by accessing `self.tl_state`.
     fn restore_state(&mut self, cx: &mut Cx, tl_state: &mut TimelineUiState) {
+        tl_state.follow_live = tl_state.saved_state.was_at_end || tl_state.saved_state.first_index_and_scroll.is_none();
         let SavedState {
             first_index_and_scroll,
             was_at_end,
@@ -4239,8 +4288,10 @@ impl RoomScreen {
     fn handle_desktop_chat_info(&mut self, cx: &mut Cx, event: &Event) {
         if !self.view.view(cx, ids!(desktop_chat_header)).visible() { return; }
         if let Event::Actions(actions) = event {
-            let search = self.view.navigation_bar_button(cx, ids!(desktop_history_search)).clicked(actions);
-            let media = self.view.navigation_bar_button(cx, ids!(desktop_history_media)).clicked(actions);
+            use super::room_navigation::{RoomNavigationAction as Nav,RoomNavigationWidgetExt};
+            let nav=self.view.room_navigation(cx,ids!(room_navigation));
+            let search = self.view.navigation_bar_button(cx, ids!(desktop_history_search)).clicked(actions) || nav.requested(actions,Nav::Search);
+            let media = self.view.navigation_bar_button(cx, ids!(desktop_history_media)).clicked(actions) || nav.requested(actions,Nav::Media);
             if search || media {
                 if let Some(room) = self.room_name_id.clone() {
                     cx.action(super::room_history::RoomHistoryAction::Open {
@@ -4251,10 +4302,18 @@ impl RoomScreen {
                 return;
             }
         }
-        if let Event::Actions(actions) = event
-            && self.view.navigation_bar_button(cx, ids!(desktop_chat_info_button)).clicked(actions) {
-            self.set_desktop_chat_info_visible(cx, !self.chat_info_requested);
-            return;
+        if let Event::Actions(actions) = event {
+            use super::room_navigation::{RoomNavigationAction as Nav,RoomNavigationWidgetExt};
+            let nav=self.view.room_navigation(cx,ids!(room_navigation));
+            let members=nav.requested(actions,Nav::Members);
+            if self.view.navigation_bar_button(cx, ids!(desktop_chat_info_button)).clicked(actions) || nav.requested(actions,Nav::Info) || members {
+                self.set_desktop_chat_info_visible(cx, members || !self.chat_info_requested);
+                if members {
+                    let info=if self.chat_info_inline {ids!(desktop_chat_info)}else{ids!(compact_chat_info)};
+                    self.view.mobile_chat_info(cx,info).show_members(cx);
+                }
+                return;
+            }
         }
         if self.chat_info_inline || !self.chat_info_requested { return; }
         let dismiss = match event {
@@ -4262,7 +4321,9 @@ impl RoomScreen {
             Event::MouseDown(e) if !self.view.user_profile_sliding_pane(cx, ids!(user_profile_sliding_pane)).is_currently_shown(cx) => {
                 let card = self.view.view(cx, ids!(compact_chat_info_card)).area().rect(cx);
                 let button = self.view.navigation_bar_button(cx, ids!(desktop_chat_info_button)).area().rect(cx);
-                self.view.area().rect(cx).contains(e.abs) && !card.contains(e.abs) && !button.contains(e.abs)
+                use super::room_navigation::RoomNavigationWidgetExt;
+                let shared_button=self.view.room_navigation(cx,ids!(room_navigation)).info_rect(cx);
+                self.view.area().rect(cx).contains(e.abs) && !card.contains(e.abs) && !button.contains(e.abs) && !shared_button.contains(e.abs)
             }
             _ => false,
         };
@@ -4293,6 +4354,8 @@ impl RoomScreen {
         let show = desktop && self.chat_info_requested;
         let toggle = self.view.navigation_bar_button(cx, ids!(desktop_chat_info_button));
         toggle.set_selected(cx, show);
+        use super::room_navigation::RoomNavigationWidgetExt;
+        self.view.room_navigation(cx,ids!(room_navigation)).set_info_visible(cx,show);
         if let Some(mut button) = toggle.borrow_mut() {
             button.set_tooltip_text(crate::i18n::tr(if show {"Hide room information"} else {"Show room information"}));
         }
@@ -4329,6 +4392,13 @@ impl RoomScreen {
     fn update_desktop_chat_header(&mut self, cx: &mut Cx) {
         let header = self.view.view(cx, ids!(desktop_chat_header));
         if !header.visible() { return }
+        use super::room_navigation::RoomNavigationWidgetExt;
+        let shared=self.room_name_id.as_ref().filter(|r|!matches!(self.timeline_kind,Some(TimelineKind::Thread {..}))
+            && crate::sliding_sync::get_client().and_then(|c|c.get_room(r.room_id())).is_some_and(|r|r.direct_targets().is_empty() && !r.is_space()));
+        let nav=self.view.room_navigation(cx,ids!(room_navigation));
+        let shared=nav.set_room(cx,shared);
+        header.view(cx,ids!(room_navigation_holder)).set_visible(cx,shared);
+        header.view(cx,ids!(direct_header)).set_visible(cx,!shared);
         self.view.navigation_bar_button(cx, ids!(desktop_thread_back)).set_visible(cx, self.room_name_id.is_some() && matches!(self.timeline_kind, Some(TimelineKind::Thread {..})));
         let Some(room_name_id) = self.room_name_id.as_ref() else { return };
         let title = match self.timeline_kind {
@@ -4558,6 +4628,7 @@ impl RoomScreen {
     ) {
         let Some(tl) = self.tl_state.as_mut() else { return };
         if !portal_list.reached_start(actions) { return };
+        if tl.follow_live && tl.is_live { return; }
         if tl.fully_paginated { return };
         if tl.is_paginating {
             tl.pending_reached_start = true;
@@ -5156,6 +5227,10 @@ struct TimelineUiState {
     /// This must be reset to `false` whenever the timeline is fully cleared.
     fully_paginated: bool,
     is_live: bool,
+    /// Live-edge intent survives catch-up snapshots and temporary history windows.
+    /// Only scrolling towards older messages or opening a history target cancels it.
+    follow_live: bool,
+    live_focus_pending: bool,
     /// Last observed live edge, retained when back pagination rebases the window.
     last_live_event: Option<OwnedEventId>,
     forwards_paginated: bool,
@@ -5267,6 +5342,12 @@ struct TimelineUiState {
 }
 
 impl TimelineUiState {
+    fn update_live_scroll_intent(&mut self, scrolled_up: bool, at_end: bool) {
+        // at_end is resolved on the next draw, so it can still be true during
+        // the first upward scroll. Explicit user intent takes precedence.
+        if scrolled_up {self.follow_live = false;}
+        else if at_end && (self.is_live || timeline_contains_latest(self)) {self.follow_live = true;}
+    }
     fn clear_history_metadata(&mut self) {
         self.fetched_thread_summaries.clear();
         self.pending_thread_summary_fetches.clear();
@@ -8794,6 +8875,7 @@ mod skeleton_tests {
             state.update_receiver = receiver;
             screen.tl_state = Some(state);
             screen.tl_state.as_mut().unwrap().is_live = is_live;
+            screen.tl_state.as_mut().unwrap().follow_live = false;
             let list = screen.view.portal_list(&cx, ids!(timeline.list));
             list.borrow_mut().unwrap().set_item_range(&mut cx, 0, 100);
             list.set_tail_range(false);
@@ -8801,6 +8883,7 @@ mod skeleton_tests {
             screen.jump_to_bottom_button(&cx, ids!(jump_to_bottom_button)).update_visibility(&mut cx, false);
             sender.send(TimelineUpdate::MessageQueued).unwrap();
             screen.process_timeline_updates(&mut cx, &list);
+            assert!(screen.tl_state.as_ref().unwrap().follow_live);
             assert!(!screen.view.view(&cx, ids!(jump_to_bottom_button)).visible());
             // Local echo may arrive after the queued outcome. Its next range
             // must still follow the latest item, even while a focus build runs.
@@ -8812,6 +8895,55 @@ mod skeleton_tests {
                 screen.process_timeline_updates(&mut cx, &list);
                 assert!(screen.tl_state.as_ref().unwrap().is_live);
             }
+        }
+    }
+
+    #[test]
+    fn upward_scroll_cancels_following_before_the_next_draw_updates_at_end() {
+        let mut state = empty_tl_state(matrix_sdk::ruma::room_id!("!scroll-intent:server").to_owned());
+        state.update_live_scroll_intent(true, true);
+        assert!(!state.follow_live, "the old draw's at_end must not override the upward scroll");
+        state.update_live_scroll_intent(false, false);
+        assert!(!state.follow_live);
+        state.update_live_scroll_intent(false, true);
+        assert!(state.follow_live, "scrolling back to the live edge resumes following");
+    }
+
+    #[test]
+    fn returning_to_live_does_not_auto_rebase_back_into_history_on_layout() {
+        let (mut cx, mut screen) = screen();
+        screen.is_loaded = true;
+        let room = matrix_sdk::ruma::room_id!("!live-layout:server").to_owned();
+        screen.room_name_id = Some(RoomNameId::empty(room.clone()));
+        screen.tl_state = Some(empty_tl_state(room));
+        let (sender, receiver) = crate::timeline_updates::channel();
+        screen.tl_state.as_mut().unwrap().update_receiver = receiver;
+        screen.tl_state.as_mut().unwrap().is_live = false;
+        screen.tl_state.as_mut().unwrap().follow_live = false;
+        let portal = screen.view.portal_list(&cx, ids!(timeline.list));
+        sender.send(TimelineUpdate::MessageQueued).unwrap();
+        sender.send(TimelineUpdate::FocusChanged {is_live: true}).unwrap();
+        sender.send(TimelineUpdate::FirstUpdate {initial_items: Vector::new()}).unwrap();
+        screen.process_timeline_updates(&mut cx, &portal);
+
+        for follow_live in [true, false] {
+            screen.tl_state.as_mut().unwrap().follow_live = follow_live;
+            cx.redraw_all();
+            let pass = DrawPass::new(&mut cx);
+            pass.set_size(&mut cx, dvec2(560.0, 700.0));
+            let mut draw_list = DrawList2d::new(&mut cx);
+            let event = DrawEvent::default();
+            let mut draw = makepad_widgets::makepad_draw::cx_draw::CxDraw::new(&mut cx, &event);
+            let mut cx2d = Cx2d::new(&mut draw);
+            cx2d.begin_pass(&pass, None);
+            draw_list.begin_always(&mut cx2d);
+            cx2d.begin_root_turtle(dvec2(560.0, 700.0), Layout::flow_overlay());
+            screen.draw_walk_all(&mut cx2d, &mut Scope::empty(), Walk::fill());
+            cx2d.end_pass_sized_turtle();
+            draw_list.end(&mut cx2d);
+            cx2d.end_pass(&pass);
+            assert_eq!(screen.tl_state.as_ref().unwrap().is_paginating, !follow_live,
+                "live-edge layout must keep its subscriber; explicitly reading history can hydrate it");
         }
     }
 
@@ -8830,6 +8962,8 @@ mod skeleton_tests {
             room_members: None,
             fully_paginated: false,
             is_live: true,
+            follow_live: true,
+            live_focus_pending: false,
             last_live_event: None,
             forwards_paginated: false,
             is_paginating: false,

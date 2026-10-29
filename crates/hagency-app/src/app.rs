@@ -1206,7 +1206,7 @@ fn workspace_navigation(action: &Action) -> bool {
         || matches!(action.downcast_ref::<ThemeStudioAction>(), Some(ThemeStudioAction::Open))
         || matches!(action.downcast_ref::<MiniAppsAction>(), Some(MiniAppsAction::Open | MiniAppsAction::OpenReviewed))
         || matches!(action.downcast_ref::<AgentAccessAction>(), Some(AgentAccessAction::Open))
-        || matches!(action.downcast_ref::<SpaceManagementAction>(), Some(SpaceManagementAction::Open {..}));
+        || matches!(action.downcast_ref::<SpaceManagementAction>(), Some(SpaceManagementAction::Open {..} | SpaceManagementAction::CreateRoom {..}));
     #[cfg(feature = "agent_chat")]
     let navigation = navigation
         || matches!(action.downcast_ref::<ApprovalInboxAction>(), Some(ApprovalInboxAction::Open {..}))

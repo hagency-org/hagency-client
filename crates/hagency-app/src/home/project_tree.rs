@@ -61,6 +61,7 @@ script_mod! {
                         width: Fill max_lines: 1 text_overflow: Ellipsis
                         draw_text +: {color: mod.widgets.RINX_INK text_style: theme.font_regular {font_size: mod.widgets.RINX_UI_SIZE}}
                     }
+                    default_badge := mod.widgets.RinxDefaultBadge {visible:false label +: {i18n_text:"default"}}
                     unread := UnreadBadge {}
                 }
                 View {width:32 height:32 more := RinxMoreButton {visible:false}}
@@ -98,6 +99,8 @@ pub struct TreeProject {
     pub rooms: Vec<OwnedRoomId>,
     pub boards: Vec<(String,String)>,
     pub archived: bool,
+    pub default_board:Option<String>,
+    pub default_room:Option<OwnedRoomId>,
 }
 #[derive(Clone, Debug)]
 pub struct ProjectTreeSnapshot {
@@ -195,8 +198,9 @@ fn tree_rows(
         result.push(Row::Project(project.id.clone()));
         if expanded.contains(&project.id) || !query.is_empty() {
             let mut visible = visible;
-            visible.sort_by_key(|id| (joined[*id].name.display().to_lowercase(), (*id).clone()));
-            result.extend(project.boards.iter().map(|(board,_)|Row::Board {project:project.id.clone(),board:board.clone()}));
+            visible.sort_by_key(|id| (project.default_room.as_ref()!=Some(*id),joined[*id].name.display().to_lowercase(), (*id).clone()));
+            let mut boards:Vec<_>=project.boards.iter().collect();boards.sort_by_key(|(id,name)|(project.default_board.as_ref()!=Some(id),name.to_lowercase(),id.clone()));
+            result.extend(boards.into_iter().map(|(board,_)|Row::Board {project:project.id.clone(),board:board.clone()}));
             result.extend(visible.into_iter().map(|id| if joined[id].invited {Row::Invite(id.clone())}else{Row::Room(id.clone())}));
         }
     }
@@ -254,6 +258,20 @@ fn workspace_rows(
             || matches!(row,Row::Invite(id) if rooms.iter().any(|r|r.name.room_id()==id && !r.is_direct && (r.is_space || assigned.contains(id))))
             || matches!(row,Row::Room(id) if assigned.contains(id) && rooms.iter().any(|r|r.name.room_id()==id && !r.is_direct)))
         .collect()
+}
+
+#[derive(Clone,Debug,PartialEq,Eq)]
+pub(crate) enum ProjectSelection {Project,Board(String),Room(OwnedRoomId)}
+#[derive(Clone,Debug,PartialEq,Eq)]
+pub(crate) struct ProjectSelectionChanged {pub identity:String,pub project_id:String,pub target:ProjectSelection}
+impl ProjectSelectionChanged {
+    fn current(&self)->bool {crate::hagency::backend::Service::for_current().is_ok_and(|s|s.identity()==self.identity)}
+    fn matches(&self,row:&Row)->bool {match (&self.target,row) {
+        (ProjectSelection::Project,Row::Project(p))=>p==&self.project_id,
+        (ProjectSelection::Board(id),Row::Board {project,board})=>project==&self.project_id && id==board,
+        (ProjectSelection::Room(id),Row::Room(room)|Row::Invite(room))=>id==room,
+        _=>false,
+    }}
 }
 
 /// The Group Chats graph contains only non-project, non-direct accessible rooms.
@@ -329,6 +347,7 @@ pub struct ProjectTree {
     row_styles: RowStyles,
     #[rust] pointer:Option<Vec2d>,
     #[rust] hovered_row:Option<Row>,
+    #[rust] selection:Option<ProjectSelectionChanged>,
     #[rust]
     snapshot: Option<ProjectTreeSnapshot>,
     #[rust]
@@ -485,6 +504,7 @@ impl ProjectTree {
     }
     fn clear(&mut self, cx: &mut Cx) {
         self.snapshot = None;
+        self.selection=None;
         self.legacy_selection_checked=false;
         self.pending = false;
         self.refresh_again = false;
@@ -498,6 +518,13 @@ impl ProjectTree {
         self.show_archived=false;
         self.view.check_box(cx,ids!(archived_projects)).set_active(cx,false,Animate::No);
         self.redraw(cx);
+    }
+    fn follow_selection(&mut self,cx:&mut Cx,selection:&ProjectSelectionChanged) {
+        if self.identity.as_ref()!=Some(&selection.identity) {self.clear(cx);self.identity=Some(selection.identity.clone());}
+        let expand=selection.target!=ProjectSelection::Project;
+        if self.selection.as_ref()==Some(selection) && (!expand || self.expanded.contains(&selection.project_id)) {return;}
+        if expand {self.expanded.insert(selection.project_id.clone());self.query.clear();}
+        self.selection=Some(selection.clone());self.rebuild(cx);
     }
     // Called only after the navigation's full current-account identity is verified.
     // Initialize before the first Projects activation, so refresh won't clear
@@ -587,6 +614,7 @@ impl ProjectTree {
                             project_id: id.clone(),
                         })
                         .await?;
+                    let default_room=active_records(&rooms,"rooms")?.into_iter().find(|r|r["isDefault"]==true).and_then(|r|r["roomId"].as_str()).and_then(|s|s.parse().ok());
                     let rooms = active_records(&rooms, "rooms")?
                         .into_iter()
                         .map(|room| {
@@ -598,6 +626,7 @@ impl ProjectTree {
                         })
                         .collect::<Result<Vec<OwnedRoomId>, _>>()?;
                     let boards=service.execute(Command::ProjectBoard {project_id:id.clone(),action: ::hagency::project_board::BoardAction::Boards}).await?;
+                    let default_board=boards["boards"].as_array().and_then(|b|b.iter().find(|b|b["isDefault"]==true)).and_then(|b|b["id"].as_str()).map(str::to_owned);
                     let boards=boards["boards"].as_array().ok_or("invalid_board_response")?.iter().map(|b|Ok((b["id"].as_str().ok_or("invalid_board_response")?.to_owned(),b["name"].as_str().ok_or("invalid_board_response")?.to_owned()))).collect::<Result<Vec<_>,String>>()?;
                     projects.push(TreeProject {
                         id,
@@ -606,6 +635,7 @@ impl ProjectTree {
                         rooms,
                         boards,
                         archived: value["archived"]==true,
+                        default_board,default_room,
                     });
                 }
                 let mut spaces=HashMap::new();
@@ -713,6 +743,17 @@ impl Widget for ProjectTree {
                 if matches!(action.downcast_ref::<crate::login::login_screen::LoginAction>(), Some(crate::login::login_screen::LoginAction::LoginSuccess)) {
                     self.refresh(cx);
                 }
+                if let Some(selection)=action.downcast_ref::<ProjectSelectionChanged>() && selection.current() {
+                    self.follow_selection(cx,selection);
+                }
+                if let RoomsListAction::Selected(selected)=action.as_widget_action().cast() {
+                    let id=selected.room_id();
+                    if let Some(snapshot)=self.snapshot.as_ref().filter(|s|snapshot_current(s))
+                        && let Some(project)=snapshot.projects.iter().find(|p|p.rooms.contains(id)) {
+                        let selection=ProjectSelectionChanged {identity:snapshot.service_identity.clone(),project_id:project.id.clone(),target:ProjectSelection::Room(id.clone())};
+                        self.follow_selection(cx,&selection);
+                    }
+                }
                 if let Some(navigation) = action.downcast_ref::<crate::hagency::ui::ProjectRoomNavigation>()
                     && navigation.current() {
                     self.expand_navigation(cx, &navigation.identity, &navigation.project_id);
@@ -740,6 +781,12 @@ impl Widget for ProjectTree {
                             }
                             if !self.refresh_again {self.unclassified_rooms.clear();}
                             self.snapshot = Some(snapshot.clone());
+                            if self.selection.is_none() && self.mode==ProjectTreeMode::Projects
+                                && let Some(room)=scope.data.get::<crate::app::AppState>().and_then(|s|s.selected_room.as_ref())
+                                && let Some(project)=snapshot.projects.iter().find(|p|p.rooms.contains(room.room_id())) {
+                                self.expanded.insert(project.id.clone());
+                                self.selection=Some(ProjectSelectionChanged {identity:snapshot.service_identity.clone(),project_id:project.id.clone(),target:ProjectSelection::Room(room.room_id().clone())});
+                            }
                             self.error = None;
                         }
                         Err(code) => {
@@ -820,7 +867,14 @@ impl Widget for ProjectTree {
                     continue;
                 };
                 let item = list.item(cx, index, id!(Row));
-                let row_selected = matches!(row,Row::Room(id)|Row::Invite(id) if selected.as_ref()==Some(id));
+                if let Some(mut view)=item.borrow_mut::<View>() {
+                    let project_row=self.mode==ProjectTreeMode::Projects && matches!(row,Row::Project(_));
+                    view.walk.height=Size::Fixed(if project_row {43.0}else{37.0});
+                    view.layout.padding.top=if project_row {6.0}else{0.0};
+                }
+                let row_selected=if self.mode==ProjectTreeMode::Projects && let Some(selection)=self.selection.as_ref().filter(|s|self.identity.as_ref()==Some(&s.identity)) {
+                    selection.matches(row)
+                }else {matches!(row,Row::Room(id)|Row::Invite(id)|Row::Space(id) if selected.as_ref()==Some(id))};
                 item.navigation_bar_button(cx, ids!(row)).set_selected(cx, row_selected);
                 let background = if row_selected {selection_color} else {Vec4f::default()};
                 let project = if let Row::Project(id) = row {
@@ -836,6 +890,12 @@ impl Widget for ProjectTree {
                     None
                 };
                 let board=if let Row::Board {project,board}=row {self.snapshot.as_ref().and_then(|s|s.projects.iter().find(|p|p.id==*project)).and_then(|p|p.boards.iter().find(|(id,_)|id==board))} else {None};
+                let is_default=match row {
+                    Row::Board {project,board}=>self.snapshot.as_ref().and_then(|s|s.projects.iter().find(|p|p.id==*project)).is_some_and(|p|p.default_board.as_ref()==Some(board)),
+                    Row::Room(id)|Row::Invite(id)=>self.snapshot.as_ref().is_some_and(|s|s.projects.iter().any(|p|p.default_room.as_ref()==Some(id))),
+                    _=>false,
+                };
+                item.view(cx,ids!(default_badge)).set_visible(cx,is_default);
                 item.view(cx,ids!(board_icon)).set_visible(cx,board.is_some());
                 item.view(cx,ids!(room_icon)).set_visible(cx,room.is_some_and(|r|!r.is_space));
                 let text = project
@@ -960,12 +1020,30 @@ mod tests {
     }
     fn project(value: &str, rooms: &[&str]) -> TreeProject {
         TreeProject {
-            boards: Vec::new(), archived: false,
+            boards: Vec::new(), archived: false, default_board:None,default_room:None,
             id: value.into(),
             space: id(&format!("space-{value}")),
             name: value.into(),
             rooms: rooms.iter().map(|r| id(r)).collect(),
         }
+    }
+    #[test]
+    fn default_children_are_first_and_navigation_selects_exactly_one_matching_row() {
+        let mut p=project("Work",&["Aroom","Zroom"]);p.boards=vec![("a".into(),"A board".into()),("z".into(),"Z board".into())];p.default_board=Some("z".into());p.default_room=Some(id("Zroom"));
+        let rows=tree_rows(&[p],&[room("Aroom"),room("Zroom")],&HashSet::from(["Work".into()]),"");
+        assert_eq!(rows[1],Row::Board {project:"Work".into(),board:"z".into()});assert_eq!(rows[3],Row::Room(id("Zroom")));
+        for target in [ProjectSelection::Project,ProjectSelection::Board("z".into()),ProjectSelection::Room(id("Zroom"))] {
+            let selection=ProjectSelectionChanged {identity:"account".into(),project_id:"Work".into(),target};assert_eq!(rows.iter().filter(|r|selection.matches(r)).count(),1);
+            assert!(!selection.matches(&Row::Board {project:"Other".into(),board:"z".into()}));
+        }
+    }
+    #[test]
+    fn following_actual_navigation_expands_its_project_and_clears_other_account_selection() {
+        let mut cx=Cx::new(Box::new(|_,_|{}));let mut tree=cx.with_vm(|vm|{makepad_widgets::script_mod(vm);crate::app::register_widgets(vm);let value=script_eval!(vm,{mod.widgets.ProjectTree {}});ProjectTree::script_from_value(vm,value)});
+        tree.query="old filter".into();let mut selection=ProjectSelectionChanged {identity:"owner-a".into(),project_id:"Work".into(),target:ProjectSelection::Board("default".into())};
+        tree.follow_selection(&mut cx,&selection);assert!(tree.expanded.contains("Work"));assert!(tree.query.is_empty());assert!(tree.selection.as_ref().unwrap().matches(&Row::Board {project:"Work".into(),board:"default".into()}));
+        selection.target=ProjectSelection::Project;selection.project_id="Another".into();tree.follow_selection(&mut cx,&selection);assert!(tree.selection.as_ref().unwrap().matches(&Row::Project("Another".into())));
+        selection.identity="owner-b".into();selection.project_id="New".into();selection.target=ProjectSelection::Room(id("Newroom"));tree.follow_selection(&mut cx,&selection);assert!(!tree.expanded.contains("Work"));assert_eq!(tree.identity.as_deref(),Some("owner-b"));
     }
     #[test]
     fn refresh_error_stays_visible_beside_nonempty_cached_projects() {

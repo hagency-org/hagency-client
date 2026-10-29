@@ -441,9 +441,8 @@ impl Widget for ProjectBoard {
         );
         if self.layout_key != layout_key {
             self.layout_key = layout_key;
-            let mut toolbar_row=self.view.view(cx,ids!(toolbar_row));
-            if width<600.0 {script_apply_eval!(cx,toolbar_row,{flow:Down});}
-            else {script_apply_eval!(cx,toolbar_row,{flow:Right});}
+            let toolbar_row=self.view.view(cx,ids!(toolbar_row));
+            if let Some(mut toolbar)=toolbar_row.borrow_mut() {toolbar.layout.flow=if width<600.0 {Flow::Down}else{Flow::right()};}
             self.view.view(cx, ids!(board_scroll)).set_visible(cx, true);
             self.prepare_extension_draw(cx);
             for index in 0..12 {

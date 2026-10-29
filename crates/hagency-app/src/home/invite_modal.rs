@@ -222,7 +222,7 @@ impl WidgetMatchEvent for InviteModal {
             // Validate the user ID
             if user_id_str.is_empty() {
                 script_apply_eval!(cx, status_label, {
-                    text: crate::i18n::tr("Please enter a user ID."),
+                    text: #(crate::i18n::tr("Please enter a user ID.")),
                     draw_text +: {
                         color: mod.widgets.COLOR_FG_DANGER_RED,
                     },
@@ -251,7 +251,7 @@ impl WidgetMatchEvent for InviteModal {
                         });
                         self.state = InviteModalState::WaitingForInvite(user_id);
                         script_apply_eval!(cx, status_label, {
-                            text: crate::i18n::tr("Sending invite..."),
+                            text: #(crate::i18n::tr("Sending invite...")),
                             draw_text +: {
                                 color: mod.widgets.COLOR_ACTIVE_PRIMARY_DARKER,
                             },
@@ -263,7 +263,7 @@ impl WidgetMatchEvent for InviteModal {
                 }
                 Err(_) => {
                     script_apply_eval!(cx, status_label, {
-                        text: crate::i18n::tr("Invalid User ID. Expected format: @user:server.xyz"),
+                        text: #(crate::i18n::tr("Invalid User ID. Expected format: @user:server.xyz")),
                         draw_text +: {
                             color: mod.widgets.COLOR_FG_DANGER_RED,
                         },

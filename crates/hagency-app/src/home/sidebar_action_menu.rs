@@ -87,7 +87,6 @@ fn project_navigation(
     let section = match button {
         id!(project_overview) => ProjectDetailSection::Overview,
         id!(project_access) => ProjectDetailSection::Access,
-        id!(project_rooms) => ProjectDetailSection::Rooms,
         id!(project_members) => ProjectDetailSection::Members,
         _ => return None,
     };
@@ -112,7 +111,6 @@ script_mod! {
             show_bg: true
             draw_bg +: {color: mod.widgets.RINX_SURFACE border_size: 1 border_color: mod.widgets.RINX_BORDER}
             project_overview := mod.widgets.ContextMenuButton {visible: false icon_walk: Walk{width: 0 height: 0} spacing: 0 text: #(crate::i18n::tr("Overview")) i18n_text: "Overview"}
-            project_rooms := mod.widgets.ContextMenuButton {visible: false icon_walk: Walk{width: 0 height: 0} spacing: 0 text: #(crate::i18n::tr("Discussion Rooms")) i18n_text: "Discussion Rooms"}
             project_members := mod.widgets.ContextMenuButton {visible: false icon_walk: Walk{width: 0 height: 0} spacing: 0 text: #(crate::i18n::tr("Project members")) i18n_text: "Project members"}
             project_invite := mod.widgets.ContextMenuButton {visible: false enabled: false icon_walk: Walk{width: 0 height: 0} spacing: 0 text: #(crate::i18n::tr("Invite members")) i18n_text: "Invite members"}
             project_access := mod.widgets.ContextMenuButton {visible: false icon_walk: Walk{width: 0 height: 0} spacing: 0 text: #(crate::i18n::tr("Access")) i18n_text: "Access"}
@@ -181,7 +179,6 @@ impl SidebarActionMenu {
     fn project_buttons(&self, cx: &mut Cx, visible: bool) {
         for id in [
             id!(project_overview),
-            id!(project_rooms),
             id!(project_members),
             id!(project_invite),
         ] {
@@ -238,7 +235,7 @@ impl SidebarActionMenu {
             .button(cx, ids!(new_project))
             .set_visible(cx, false);
         self.project_buttons(cx, true);
-        let menu_size = expected_menu_size(5, 0);
+        let menu_size = expected_menu_size(4, 0);
         let margin = menu_position_margin(container, pos, menu_size);
         let mut content = self.view.view(cx, ids!(main_content));
         script_apply_eval!(cx, content, {width: #(menu_size.x) margin: #(margin)});
@@ -354,7 +351,6 @@ impl Widget for SidebarActionMenu {
                 let selected = [
                     id!(project_access),
                     id!(project_overview),
-                    id!(project_rooms),
                     id!(project_members),
                     id!(project_invite),
                 ]
@@ -514,7 +510,6 @@ mod render_tests {
         use crate::hagency::ui::{HagencyAction, ProjectDetailSection};
         for (button, section) in [
             (id!(project_overview), ProjectDetailSection::Overview),
-            (id!(project_rooms), ProjectDetailSection::Rooms),
             (id!(project_members), ProjectDetailSection::Members),
         ] {
             assert!(
@@ -522,6 +517,7 @@ mod render_tests {
             );
         }
         assert!(project_navigation(&target, id!(project_invite)).is_none());
+        assert!(project_navigation(&target, id!(project_rooms)).is_none(), "removed Discussion Rooms cannot route even a stale click");
         assert!(project_navigation(&target, id!(project_space)).is_none());
     }
     #[test]
@@ -543,9 +539,9 @@ mod render_tests {
             pos: dvec2(0.0, 0.0),
             size: dvec2(1280.0, 760.0),
         };
+        assert!(menu.view.widget(&cx,ids!(project_rooms)).is_empty());
         for id in [
             id!(project_overview),
-            id!(project_rooms),
             id!(project_members),
             id!(project_invite),
         ] {
@@ -602,7 +598,6 @@ mod render_tests {
         );
         for id in [
             id!(project_overview),
-            id!(project_rooms),
             id!(project_members),
             id!(project_invite),
         ] {

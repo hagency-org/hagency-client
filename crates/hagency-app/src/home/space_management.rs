@@ -192,6 +192,10 @@ async fn editable_space(client: &Client, id: &RoomId, event: StateEventType) -> 
     Ok(room)
 }
 
+pub(crate) async fn can_add_room(client: &Client, id: &RoomId) -> bool {
+    editable_space(client, id, StateEventType::SpaceChild).await.is_ok()
+}
+
 async fn route(room: &Room) -> Result<Vec<OwnedServerName>> {
     let mut route = room.route().await.unwrap_or_default();
     if route.is_empty() {
@@ -322,6 +326,7 @@ async fn snapshot(client: &Client, parent: Option<&OwnedRoomId>) -> Result<Snaps
 #[derive(Clone, Debug)]
 pub enum SpaceManagementAction {
     Open { parent: Option<RoomNameId> },
+    CreateRoom { parent: Option<RoomNameId> },
     Close,
 }
 #[derive(Clone, Debug)]
@@ -856,10 +861,10 @@ impl SpaceManagementPanelRef {
         };
         inner.request = next_request();
         match action {
-            SpaceManagementAction::Open { parent } => {
+            SpaceManagementAction::Open { parent } | SpaceManagementAction::CreateRoom { parent } => {
                 inner.active = true;
                 inner.parent = parent.as_ref().map(|p| p.room_id().clone());
-                inner.manage = parent.is_some();
+                inner.manage = parent.is_some() && !matches!(action, SpaceManagementAction::CreateRoom {..});
                 inner.created = None;
                 inner.data = Snapshot::default();
                 inner.query.clear();
