@@ -122,9 +122,10 @@ impl VerifiedSharedActivity {
         self.check()?;
         w.validate()?;
         let c = self.sink.original();
+        // Any member of the assignment's Room may send work; the server
+        // verified that sender's fresh membership and mention before issuing it.
         if w.assignment_id != c.assignment_id
             || w.runtime_command_digest != self.sink.command_digest()
-            || w.requester_mxid != c.reserve_command.manager_mxid
             || w.room_id != c.reserve_command.room_id
         {
             return Err(Error::LocalAuthority);
