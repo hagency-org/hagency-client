@@ -587,7 +587,7 @@ async fn fixture_with_processing_failure(unknown: bool, budget: u64, processing_
             .unwrap()
             .to_owned();
         assert!(reply.starts_with("isolated fixture answer"));
-        assert!(reply.contains("本次用量 5 Token"));
+        assert!(!reply.contains("Token"));
         assert!(!reply.contains("历史请求的费用尚待确认"));
         assert_eq!(
             ledger.inbox_record(OWNER, "dispatch-a").unwrap().state,
@@ -600,8 +600,9 @@ async fn fixture_with_processing_failure(unknown: bool, budget: u64, processing_
             .unwrap()
             .to_owned();
         if budget > 0 {
-            assert!(reply.starts_with("isolated fixture answer\n\n✅"));
-            assert!(reply.contains("本次用量 5 Token（输入 3 / 输出 2"));
+            // The reply carries only the answer, like shared Agents.
+            assert!(reply.starts_with("isolated fixture answer"));
+            assert!(!reply.contains("本次用量"));
         } else {
             assert!(reply.contains("可用额度不足"));
             assert!(reply.contains("本次未调用模型"));

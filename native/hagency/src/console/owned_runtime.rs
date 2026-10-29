@@ -2400,18 +2400,11 @@ async fn run_turn<T: Transport>(
     let completed = match result? {
         Ok(completed) => completed,
         Err(reason) => {
-            let body = with_owner_budget(
-                reason.to_owned(),
-                ledger,
-                owner,
-                &scope,
-                config.owner_direct,
-            )?;
             local(ledger.persist_no_provider_reply(
                 owner,
                 &prepared.dispatch.id,
                 &prepared.execution_id,
-                &body,
+                reason,
             ))?;
             return Ok(None);
         }
@@ -2419,83 +2412,17 @@ async fn run_turn<T: Transport>(
     if completed.text.is_empty() || completed.text.len() > 65_536 {
         return Err(RuntimeError::Profile);
     }
-    let body = completion_body(&completed);
-    let body = with_owner_budget(body, ledger, owner, &scope, config.owner_direct)?;
+    // Like shared Agents, a chat reply is only the answer. Turn usage and the
+    // Agent budget stay in the ledger and the owner's Agent limits page.
     local(ledger.persist_execution_reply(
         owner,
         &prepared.dispatch.id,
         &prepared.execution_id,
-        &body,
+        &completed.text,
     ))?;
     Ok(None)
 }
 
-fn completion_body(completed: &codex::Completed) -> String {
-    // Cached input/reasoning output are subsets, not additional charge.
-    let summary = format!(
-        "✅ 本轮处理已结束 · 已运行 {} 秒\n本次用量 {} Token（输入 {} / 输出 {}；缓存输入 {}，推理输出 {}）· 工具请求 {} 次，已返回 {} 次",
-        completed.elapsed_seconds,
-        completed.usage.input + completed.usage.output,
-        completed.usage.input,
-        completed.usage.output,
-        completed.usage.cached_input,
-        completed.usage.reasoning_output,
-        completed.tool_requests,
-        completed.tool_returns,
-    );
-    // Leave room for the private owner-budget line without losing this summary.
-    append_summary_limit(&completed.text, &summary, 64_512)
-}
-fn append_summary(text: &str, summary: &str) -> String {
-    append_summary_limit(text, summary, 65_536)
-}
-fn append_summary_limit(text: &str, summary: &str, limit: usize) -> String {
-    // Keep the complete accounting summary even for a maximum-size answer.
-    // Truncation is explicit and respects UTF-8 boundaries and wire byte limits.
-    let marker = "\n…（回复过长，已截断）";
-    let suffix = format!("\n\n{summary}");
-    let maximum = limit - suffix.len();
-    if text.len() <= maximum {
-        return format!("{text}{suffix}");
-    }
-    let mut end = maximum - marker.len();
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}{marker}{suffix}", &text[..end])
-}
-fn with_owner_budget(
-    body: String,
-    ledger: &Ledger,
-    owner: &str,
-    scope: &Scope,
-    owner_direct: bool,
-) -> Result<String, RuntimeError> {
-    // Only server-verified owner-direct bindings may expose the global budget.
-    if !owner_direct {
-        return Ok(body);
-    }
-    let policy = local(ledger.agent_policy(owner, &scope.agent))?.policy;
-    let (spent, held) =
-        local(ledger.agent_account(owner, &scope.agent, policy.budget.period, now()))?;
-    let limit = match policy.budget.limit {
-        hagency_agent_local::Limit::Tokens(n) => n.to_string(),
-        hagency_agent_local::Limit::Unlimited | hagency_agent_local::Limit::Unset => {
-            "不限额".into()
-        }
-    };
-    let period = match policy.budget.period {
-        hagency_agent_local::Period::Lifetime => "累计",
-        hagency_agent_local::Period::UtcDay => "UTC 当日",
-        hagency_agent_local::Period::UtcMonth => "UTC 当月",
-    };
-    Ok(append_summary(
-        &body,
-        &format!(
-            "Agent 配额（{period}）：已使用 {spent} / {limit} Token；待确认或运行中的预留 {held} Token。"
-        ),
-    ))
-}
 // A historical delivery failure is scoped to its immutable reply. Retry on a
 // later pass, leaving polling and later requests free to make progress.
 async fn retry_reply<T: Transport>(
@@ -2603,55 +2530,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_summary_reports_this_turn_without_double_counting_subsets() {
-        let completed = super::codex::Completed {
-            text: "answer".into(),
-            usage: hagency_agent_local::Usage {
-                input: 30,
-                output: 20,
-                cached_input: 10,
-                reasoning_output: 5,
-                accounting_version: "fixture".into(),
-            },
-            status: super::codex::TurnStatus::Completed,
-            elapsed_seconds: 13,
-            tool_requests: 2,
-            tool_returns: 1,
-        };
-        let body = super::completion_body(&completed);
-        assert!(body.starts_with("answer\n\n✅"));
-        assert!(body.contains("本次用量 50 Token"));
-        assert!(body.contains("已运行 13 秒"));
-        assert!(body.contains("工具请求 2 次，已返回 1 次"));
-        assert!(!body.contains("配额"));
-        assert!(!body.contains("65 Token"));
-    }
-    #[test]
-    fn large_unicode_answer_keeps_summary_with_explicit_truncation() {
-        let body = super::append_summary(&"中文答案".repeat(6000), "本次用量 50 Token");
-        assert!(body.len() <= 65_536);
-        assert!(body.contains("回复过长，已截断"));
-        assert!(body.ends_with("本次用量 50 Token"));
-    }
-    #[test]
-    fn shared_room_summary_never_reads_or_discloses_owner_budget() {
-        let tmp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
-        let ledger = Ledger::open(tmp.path().join("ledger.db"), "@alice:test").unwrap();
-        let scope = Scope {
-            agent: "not-registered".into(),
-            binding: "b".into(),
-            room: "!r:test".into(),
-            requester: "@bob:test".into(),
-            thread: "t".into(),
-        };
-        assert_eq!(
-            super::with_owner_budget("answer".into(), &ledger, "@alice:test", &scope, false)
-                .unwrap(),
-            "answer"
-        );
-    }
-    #[test]
-    fn private_owner_summary_preserves_turn_usage_and_shows_spent_separately_from_holds() {
+    fn owner_agent_account_shows_spent_separately_from_holds() {
         use hagency_agent_local::{
             Budget, Layer, Limit, Period, Policy, RequestPolicy, ToolPolicy, Usage,
         };
@@ -2697,20 +2576,6 @@ mod tests {
         ledger
             .reserve(&scope, "call-b", "dispatch-b", 10, now())
             .unwrap();
-        let completed = codex::Completed {
-            text: "长答案".repeat(7000),
-            usage,
-            status: codex::TurnStatus::Completed,
-            elapsed_seconds: 8,
-            tool_requests: 0,
-            tool_returns: 0,
-        };
-        let body =
-            with_owner_budget(completion_body(&completed), &ledger, OWNER, &scope, true).unwrap();
-        assert!(body.len() <= 65_536);
-        assert!(body.contains("本次用量 20 Token"));
-        assert!(body.contains("已使用 20 / 100 Token"));
-        assert!(body.contains("预留 10 Token"));
         assert_eq!(
             ledger
                 .agent_account(OWNER, "agent-a", Period::Lifetime, now())

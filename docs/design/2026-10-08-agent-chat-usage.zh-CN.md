@@ -1,5 +1,7 @@
 # Agent 聊天用量与配额反馈
 
+> 2026-10-28 更新：按用户决定与资源池 Agent 统一，个人 Agent 的回复只包含答案，不再追加“本轮处理已结束 / 本次用量”摘要和主人私聊的“Agent 配额”行。本次用量和额度在账本与 Agent 限额页查看。未调用模型的处理说明（未授权、额度不足、历史费用待确认）保留。Desktop 的 `agent_usage` 展示逻辑只处理历史消息中的旧摘要。下文为 10-08 的原始设计记录。
+
 ## 差异核对
 
 旧 Rinx 展示的处理状态不是聊天界面自行计算的。旧客户端 `hagency-store/domain/activity.rs` 投影执行生命周期、时间与工具事件，再由 `hagency-matrix/outgoing.rs` 发送并编辑 Matrix notice。旧配额暂停提示由 `domain/quota_holds.rs` 生成。
