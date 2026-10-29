@@ -5848,3 +5848,14 @@ SDK 恢复 timeline 可包含同一事件多个句柄。保留原始 Vector 的�
 - Makepad77c8039 exposes NativeDeepLink, but only Android emission was found;
   macOS plist registration alone does not establish desktop OS URL delivery.
   App-contained Matrix links and OS launch qualification are separate evidence.
+
+### 2026-10-30 original receive fixture receipts
+- DomainStore production reply expiry and received.begin replay protection both
+  return OutcomeUnknown. Error text alone cannot identify original physical IO
+  delay; retain event/row/timing evidence rather than label it successful or retry.
+- A durable fixture setup that needs its unique grant cannot assume a two-second
+  production RPC always returns it. The explicit default-off specialized fixture
+  receipt retains the actual writer/transaction/Started cap; external watchdog
+  failure is still failure. Never replace it with a second domain owner, fake
+  Started or recovered/replayed ReceiveWrite. Preserve actual child/retirement
+  and unchanged-byte assertions separately from domain-only unit fixtures.

@@ -5359,6 +5359,7 @@ dependencies = [
  "hagency-core",
  "hagency-metering",
  "hagency-platform",
+ "hagency-store",
  "hmac 0.12.1",
  "rusqlite",
  "rustix",

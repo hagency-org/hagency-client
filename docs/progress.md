@@ -15416,3 +15416,14 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   rerun on unchanged head after workflow completion. EngineMac/Win and IntelApp
   still running; no merge before all individual final-head jobs pass. SDK2
   a70f three native suites+strict passed, last benchmark jobs still required.
+
+- Windows receive fixture follow-up in isolated secondary: original PR19b3
+  50pass/1fail remains preserved; setup begin returned OutcomeUnknown before
+  retirement assertions. Original event/timing/rowstate was not captured, so
+  no physical Windows IO attribution is claimed. Explicit default-off fixture
+  feature retains one original writer reserve+begin receipt after actual child
+  Started, preserving production2s/unknown and all original retirement/file
+  assertions. Two controlled actual-SQLite trace gate tests prove production
+  timeout stays Unknown while original fixture receipt completes uniquely;
+  receive::6/6, normal feature-off lib check, own all-target strict and fmt pass.
+  Hosted Windows and independent current-head review remain required.
