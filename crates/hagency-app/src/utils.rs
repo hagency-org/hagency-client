@@ -20,7 +20,9 @@ pub const GEO_URI_SCHEME: &str = "geo:";
 /// Unencrypted rooms and Spaces have no E2EE history to share. The pinned SDK
 /// attempts history sharing before every invite when that feature is enabled.
 /// Keep that behavior for encrypted rooms, without making plaintext invitations
-/// depend on the existence of a room-key backup.
+/// depend on the existence of a room-key backup. An encrypted room with a valid
+/// backup and no sessions must receive `{"sessions": {}}` from the server; do
+/// not bypass SDK history sharing or swallow backup errors to make invites work.
 pub(crate) async fn invite_room_member(
     room: &matrix_sdk::Room,
     user: &matrix_sdk::ruma::UserId,
@@ -1728,3 +1730,7 @@ mod tests_ends_with_href {
         assert!(!ends_with_href(" hrf= "));
     }
 }
+
+#[cfg(test)]
+#[path = "utils/invite_tests.rs"]
+mod invite_tests;
