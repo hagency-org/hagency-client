@@ -291,11 +291,24 @@ impl ConfigureColumns {
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BoardAction {
     Overview,
-    SetNavigationDefault {kind:String,target_id:String,expected_revision:i64},
-    SetProjectArchived {archived: bool, expected_revision: i64},
+    SetNavigationDefault {
+        kind: String,
+        target_id: String,
+        expected_revision: i64,
+    },
+    SetProjectArchived {
+        archived: bool,
+        expected_revision: i64,
+    },
     Boards,
-    CreateBoard {idempotency_key: String, name: String},
-    Within {board: String, command: Box<BoardAction>},
+    CreateBoard {
+        idempotency_key: String,
+        name: String,
+    },
+    Within {
+        board: String,
+        command: Box<BoardAction>,
+    },
     Snapshot {
         query: Query,
     },
@@ -362,13 +375,23 @@ pub enum BoardAction {
     },
 }
 impl BoardAction {
-    pub fn is_upload(&self)->bool {match self {Self::UploadAttachment {..}=>true,Self::Within {command,..}=>command.is_upload(),_=>false}}
+    pub fn is_upload(&self) -> bool {
+        match self {
+            Self::UploadAttachment { .. } => true,
+            Self::Within { command, .. } => command.is_upload(),
+            _ => false,
+        }
+    }
 
     pub fn is_read(&self) -> bool {
-        if let Self::Within {command,..} = self {return command.is_read();}
+        if let Self::Within { command, .. } = self {
+            return command.is_read();
+        }
         matches!(
             self,
-            Self::Overview | Self::Boards | Self::Snapshot { .. }
+            Self::Overview
+                | Self::Boards
+                | Self::Snapshot { .. }
                 | Self::Notifications { .. }
                 | Self::Attachment { .. }
                 | Self::Page { .. }

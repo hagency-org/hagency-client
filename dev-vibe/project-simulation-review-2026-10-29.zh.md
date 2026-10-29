@@ -38,3 +38,5 @@
 主要命令：`cargo +1.99.0 test -p hagency-app --lib`、`cargo +1.99.0 test -p hagency --lib console::project_board`、`cargo +1.99.0 clippy -p hagency-app --all-targets --no-deps -- -D warnings`；Server 使用 `scripts/test-agent-service-postgres.py` 创建隔离数据库运行完整 suite。日志分别为 `client-full-accepted.log`、`console-contract-final-all.log`、`client-clippy-accepted.log`、`server-full.log`、`server-clippy-final.log`。
 
 验证范围为本机 macOS 原生界面和真实本地 API/数据库，不声称完成手机设备测试或模型执行。Room 失效默认项自动修复由 Server 隔离测试覆盖，未假称通过原生界面执行不存在的 Room 归档操作。截图、账号数据库及凭证只留本机忽略目录；仓库提交代码、回归测试和本报告。
+
+提交后 CI 复核：Server quality 首次因遗漏全仓库 rustfmt 检查而失败。已按现有格式规则整理6个相关 Server Rust 文件（含既有 Project 归档代码），`cargo +1.99.0 fmt --all -- --check` 通过；Client 同时执行 CI 的完整包选择器，发现并格式化2个 Core/console Board 文件，最终该选择器检查通过。此跟进只涉及 Rust 格式，不修改界面或协议行为；原始 CI 日志一并保留，远端后续构建与本地功能验收分别记录。

@@ -42,11 +42,25 @@ pub(super) fn request(
     use reqwest::Method;
     key(project)?;
     let root = format!("/hagency/api/v1/projects/{project}");
-    if let BoardAction::Within {board,command} = action {
+    if let BoardAction::Within { board, command } = action {
         key(&board)?;
-        if matches!(*command, BoardAction::Within {..}|BoardAction::Overview|BoardAction::SetProjectArchived {..}|BoardAction::SetNavigationDefault {..}|BoardAction::Boards|BoardAction::CreateBoard {..}) {return Err(invalid());}
-        let (method,path,body) = request(project,*command)?;
-        return Ok((method,path.replacen(&root,&format!("{root}/boards/{board}"),1),body));
+        if matches!(
+            *command,
+            BoardAction::Within { .. }
+                | BoardAction::Overview
+                | BoardAction::SetProjectArchived { .. }
+                | BoardAction::SetNavigationDefault { .. }
+                | BoardAction::Boards
+                | BoardAction::CreateBoard { .. }
+        ) {
+            return Err(invalid());
+        }
+        let (method, path, body) = request(project, *command)?;
+        return Ok((
+            method,
+            path.replacen(&root, &format!("{root}/boards/{board}"), 1),
+            body,
+        ));
     }
     let task = match &action {
         BoardAction::Attachment { task, .. }
@@ -68,23 +82,57 @@ pub(super) fn request(
     let task_root = format!("{root}/tasks/{}", task.unwrap_or_default());
     let serialize = |input| serde_json::to_value(input).map_err(|_| invalid());
     Ok(match action {
-        BoardAction::Overview => (Method::GET,format!("{root}/board/overview"),None),
-        BoardAction::SetNavigationDefault {kind,target_id,expected_revision} => {
-            if expected_revision<0 || !["board","room"].contains(&kind.as_str()) {return Err(invalid());}
-            if kind=="board" {key(&target_id)?;} else if !super::matrix_identifiers::room_id(&target_id) {return Err(invalid());}
-            (Method::PUT,format!("{root}/board/navigation-default"),Some(serde_json::json!({"kind":kind,"targetId":target_id,"expectedRevision":expected_revision})))
+        BoardAction::Overview => (Method::GET, format!("{root}/board/overview"), None),
+        BoardAction::SetNavigationDefault {
+            kind,
+            target_id,
+            expected_revision,
+        } => {
+            if expected_revision < 0 || !["board", "room"].contains(&kind.as_str()) {
+                return Err(invalid());
+            }
+            if kind == "board" {
+                key(&target_id)?;
+            } else if !super::matrix_identifiers::room_id(&target_id) {
+                return Err(invalid());
+            }
+            (
+                Method::PUT,
+                format!("{root}/board/navigation-default"),
+                Some(
+                    serde_json::json!({"kind":kind,"targetId":target_id,"expectedRevision":expected_revision}),
+                ),
+            )
         }
-        BoardAction::SetProjectArchived {archived,expected_revision} => {
-            if expected_revision<0 {return Err(invalid());}
-            (Method::PUT,format!("{root}/board/project-archive"),Some(serde_json::json!({"archived":archived,"expectedRevision":expected_revision})))
+        BoardAction::SetProjectArchived {
+            archived,
+            expected_revision,
+        } => {
+            if expected_revision < 0 {
+                return Err(invalid());
+            }
+            (
+                Method::PUT,
+                format!("{root}/board/project-archive"),
+                Some(serde_json::json!({"archived":archived,"expectedRevision":expected_revision})),
+            )
         }
-        BoardAction::Within {..} => return Err(invalid()),
-        BoardAction::Boards => (Method::GET,format!("{root}/boards"),None),
-        BoardAction::CreateBoard {idempotency_key,name} => {
+        BoardAction::Within { .. } => return Err(invalid()),
+        BoardAction::Boards => (Method::GET, format!("{root}/boards"), None),
+        BoardAction::CreateBoard {
+            idempotency_key,
+            name,
+        } => {
             key(&idempotency_key)?;
-            let name=name.trim();
-            if name.is_empty() || name.chars().count()>80 || name.chars().any(char::is_control) {return Err(invalid());}
-            (Method::POST,format!("{root}/boards"),Some(serde_json::json!({"idempotencyKey":idempotency_key,"name":name})))
+            let name = name.trim();
+            if name.is_empty() || name.chars().count() > 80 || name.chars().any(char::is_control) {
+                return Err(invalid());
+            }
+            (
+                Method::POST,
+                format!("{root}/boards"),
+                Some(serde_json::json!({"idempotencyKey":idempotency_key,"name":name})),
+            )
         }
         BoardAction::Notifications { before } => {
             if before < 0 {
@@ -256,22 +304,82 @@ mod multi_board_tests {
     use super::*;
     #[test]
     fn scoped_board_commands_keep_the_real_project_and_reject_nested_or_arbitrary_scopes() {
-        let scoped=|board:&str|BoardAction::Within {board:board.into(),command:Box::new(BoardAction::Detail {task:"task_1".into()})};
-        let (method,path,_)=request("prj_1",scoped("board_2")).unwrap();
-        assert_eq!(method,reqwest::Method::GET);assert_eq!(path,"/hagency/api/v1/projects/prj_1/boards/board_2/tasks/task_1");
-        for board in ["../other","a/b","a?b","https://remote"] {assert!(request("prj_1",scoped(board)).is_err());}
-        assert!(request("prj_1",BoardAction::Within {board:"board_2".into(),command:Box::new(scoped("board_3"))}).is_err());
+        let scoped = |board: &str| BoardAction::Within {
+            board: board.into(),
+            command: Box::new(BoardAction::Detail {
+                task: "task_1".into(),
+            }),
+        };
+        let (method, path, _) = request("prj_1", scoped("board_2")).unwrap();
+        assert_eq!(method, reqwest::Method::GET);
+        assert_eq!(
+            path,
+            "/hagency/api/v1/projects/prj_1/boards/board_2/tasks/task_1"
+        );
+        for board in ["../other", "a/b", "a?b", "https://remote"] {
+            assert!(request("prj_1", scoped(board)).is_err());
+        }
+        assert!(
+            request(
+                "prj_1",
+                BoardAction::Within {
+                    board: "board_2".into(),
+                    command: Box::new(scoped("board_3"))
+                }
+            )
+            .is_err()
+        );
         assert!(scoped("board_2").is_read());
-        assert!(!BoardAction::SetProjectArchived {archived:true,expected_revision:1}.is_read());
+        assert!(
+            !BoardAction::SetProjectArchived {
+                archived: true,
+                expected_revision: 1
+            }
+            .is_read()
+        );
     }
     #[test]
     fn navigation_default_requests_are_closed_project_writes() {
-        let command=||BoardAction::SetNavigationDefault {kind:"room".into(),target_id:"!room:example.test".into(),expected_revision:4};
-        let (method,path,body)=request("project_1",command()).unwrap();assert_eq!(method,reqwest::Method::PUT);assert_eq!(path,"/hagency/api/v1/projects/project_1/board/navigation-default");assert_eq!(body.unwrap()["expectedRevision"],4);assert!(!command().is_read());
-        assert!(request("project_1",BoardAction::Within {board:"board_1".into(),command:Box::new(command())}).is_err());
-        for (kind,target,revision) in [("room","invalid",0),("board","../other",0),("agent","x",0),("board","b",-1)] {
-            assert!(request("project_1",BoardAction::SetNavigationDefault {kind:kind.into(),target_id:target.into(),expected_revision:revision}).is_err());
+        let command = || BoardAction::SetNavigationDefault {
+            kind: "room".into(),
+            target_id: "!room:example.test".into(),
+            expected_revision: 4,
+        };
+        let (method, path, body) = request("project_1", command()).unwrap();
+        assert_eq!(method, reqwest::Method::PUT);
+        assert_eq!(
+            path,
+            "/hagency/api/v1/projects/project_1/board/navigation-default"
+        );
+        assert_eq!(body.unwrap()["expectedRevision"], 4);
+        assert!(!command().is_read());
+        assert!(
+            request(
+                "project_1",
+                BoardAction::Within {
+                    board: "board_1".into(),
+                    command: Box::new(command())
+                }
+            )
+            .is_err()
+        );
+        for (kind, target, revision) in [
+            ("room", "invalid", 0),
+            ("board", "../other", 0),
+            ("agent", "x", 0),
+            ("board", "b", -1),
+        ] {
+            assert!(
+                request(
+                    "project_1",
+                    BoardAction::SetNavigationDefault {
+                        kind: kind.into(),
+                        target_id: target.into(),
+                        expected_revision: revision
+                    }
+                )
+                .is_err()
+            );
         }
     }
-
 }
