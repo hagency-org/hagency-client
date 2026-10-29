@@ -70,6 +70,36 @@ mod git_path_tests {
     };
 
     struct Fixture(PathBuf);
+
+    // canonicalize uses Windows' extended-length API spelling, but Git's
+    // worktree/config arguments need the ordinary drive or UNC spelling.
+    // Keep canonicalization (including macOS /private resolution), then change
+    // only the Windows verbatim prefix; no file-system target is changed.
+    fn git_cli_path(path: &Path) -> PathBuf {
+        #[cfg(windows)]
+        {
+            use std::{ffi::OsString, path::{Component, Prefix}};
+            let mut components = path.components();
+            if let Some(Component::Prefix(prefix)) = components.next() {
+                let ordinary = match prefix.kind() {
+                    Prefix::VerbatimDisk(drive) => Some(OsString::from(format!("{}:", char::from(drive)))),
+                    Prefix::VerbatimUNC(server, share) => {
+                        let mut ordinary = OsString::from(r"\\");
+                        ordinary.push(server);
+                        ordinary.push(r"\");
+                        ordinary.push(share);
+                        Some(ordinary)
+                    }
+                    _ => None,
+                };
+                if let Some(ordinary) = ordinary {
+                    return PathBuf::from(ordinary).join(components.as_path());
+                }
+            }
+        }
+        path.to_owned()
+    }
+
     impl Fixture {
         fn new() -> Self {
             static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -83,7 +113,7 @@ mod git_path_tests {
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));
             fs::create_dir(&path).unwrap();
-            Self(path.canonicalize().unwrap())
+            Self(git_cli_path(&path.canonicalize().unwrap()))
         }
         fn repo(&self) -> PathBuf {
             let root = self.0.join("repo");
@@ -113,8 +143,23 @@ mod git_path_tests {
         }
     }
     fn git(root: &Path, args: &[&str]) -> String {
-        git_output(root, args)
-            .unwrap_or_else(|| panic!("git {args:?} failed in {}", root.display()))
+        let output = Command::new("git").current_dir(root).args(args).output()
+            .unwrap_or_else(|error| panic!("git {args:?} could not start in {}: {error}", root.display()));
+        assert!(output.status.success(), "git {args:?} failed in {} with {}\nstdout: {}\nstderr: {}",
+            root.display(), output.status, String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn git_arguments_keep_original_windows_drive_and_unc_paths() {
+        for (api, cli) in [
+            (r"\\?\D:\hagency git input\linked with spaces", r"D:\hagency git input\linked with spaces"),
+            (r"\\?\UNC\server\share\hagency git input", r"\\server\share\hagency git input"),
+            (r"D:\already ordinary\path", r"D:\already ordinary\path"),
+        ] {
+            assert_eq!(git_cli_path(Path::new(api)), PathBuf::from(cli));
+        }
     }
     fn assert_existing(paths: &[PathBuf]) {
         assert!(!paths.is_empty());

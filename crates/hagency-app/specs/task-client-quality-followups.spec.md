@@ -51,6 +51,7 @@ findings remain open; unavailable real-host evidence must still refuse release.
 - crates/hagency-app/src/home/rooms_sidebar.rs
 - crates/hagency-app/src/home/home_screen.rs
 - crates/hagency-app/src/hagency/backend.rs
+- crates/hagency-app/src/hagency/agent_crypto.rs
 - crates/hagency-app/src/hagency/ui.rs
 - crates/hagency-app/src/hagency/ui/approval_discovery.rs
 - crates/hagency-app/resources/i18n/en.json

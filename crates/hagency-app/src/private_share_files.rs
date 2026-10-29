@@ -139,7 +139,9 @@ impl RunDirectory {
             hagency_store::private::check_handle(&file).map_err(storage_error)?;
             Ok(StagedFile {
                 path: file_path,
-                directory: directory.try_clone()?,
+                directory: Some(directory.try_clone()?),
+                parent: Some(self.directory.try_clone()?),
+                directory_name: name.clone().into(),
                 filename,
                 identity: Some(same_file::Handle::from_file(file)?),
                 expires: Instant::now() + ttl,
@@ -179,7 +181,9 @@ impl RunDirectory {
 
 pub(crate) struct StagedFile {
     pub path: PathBuf,
-    directory: Dir,
+    directory: Option<Dir>,
+    parent: Option<Dir>,
+    directory_name: OsString,
     filename: OsString,
     identity: Option<same_file::Handle>,
     pub expires: Instant,
@@ -187,8 +191,11 @@ pub(crate) struct StagedFile {
 }
 impl StagedFile {
     pub fn verify(&self) -> io::Result<()> {
+        let directory = self.directory.as_ref().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "share file was already removed")
+        })?;
         let current =
-            same_file::Handle::from_file(open_file(&self.directory, Path::new(&self.filename))?)?;
+            same_file::Handle::from_file(open_file(directory, Path::new(&self.filename))?)?;
         if self.identity.as_ref() != Some(&current) {
             return Err(io::Error::other("share file identity changed"));
         }
@@ -208,23 +215,46 @@ impl StagedFile {
         &mut self,
         unlink: impl FnOnce(&Dir, &std::ffi::OsStr) -> io::Result<()>,
     ) -> io::Result<()> {
-        let current = match open_file(&self.directory, Path::new(&self.filename)) {
-            Ok(file) => same_file::Handle::from_file(file)?,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                self.identity.take();
-                return self.directory.try_clone()?.remove_open_dir();
-            }
-            Err(error) => return Err(error),
+        self.remove_operations(unlink, |parent, name| parent.remove_dir(name))
+    }
+    pub(super) fn remove_operations(
+        &mut self,
+        unlink: impl FnOnce(&Dir, &std::ffi::OsStr) -> io::Result<()>,
+        remove_directory: impl FnOnce(&Dir, &std::ffi::OsStr) -> io::Result<()>,
+    ) -> io::Result<()> {
+        let Some(parent) = self.parent.as_ref() else {
+            return Ok(());
         };
-        if self.identity.as_ref() != Some(&current) {
-            return Err(io::Error::other("refused replaced share file cleanup"));
+        if let Some(directory) = self.directory.as_ref() {
+            let current = match open_file(directory, Path::new(&self.filename)) {
+                Ok(file) => Some(same_file::Handle::from_file(file)?),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error),
+            };
+            if let Some(current) = current {
+                if self.identity.as_ref() != Some(&current) {
+                    return Err(io::Error::other("refused replaced share file cleanup"));
+                }
+                drop(current);
+                // Keep the original file ID if unlink fails so it remains retryable.
+                unlink(directory, &self.filename)?;
+            }
+            self.identity.take();
         }
-        drop(current);
-        // Retained read handles permit delete sharing on Windows. Keep the ID
-        // through unlink: a transient sharing/IO failure must remain retryable.
-        unlink(&self.directory, &self.filename)?;
-        self.identity.take();
-        self.directory.try_clone()?.remove_open_dir()
+        // cap-std intentionally opens directories without FILE_SHARE_DELETE on
+        // Windows. A clone cannot be removed while this original handle lives.
+        // Close the original child only after its file was confirmed absent;
+        // then remove only the empty child through the retained original parent.
+        self.directory.take();
+        match remove_directory(parent, &self.directory_name) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        // A failed empty-directory removal keeps this parent for retry. Never
+        // reopen or recursively delete replacement contents during that retry.
+        self.parent.take();
+        Ok(())
     }
 }
 

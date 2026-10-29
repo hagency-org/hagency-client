@@ -279,3 +279,26 @@ fn observed_native_reap_releases_admission_and_inflight_presentation_keeps_its_s
     state.presenting -= 1;
     assert!(state.admits(1));
 }
+
+
+#[test]
+fn empty_directory_cleanup_retries_without_touching_replacement_contents() {
+    let cache = tempfile::tempdir().unwrap();
+    let root = files::RunDirectory::open(cache.path(), SHARE_TTL).unwrap();
+    let mut file = root.stage("message.txt", b"original", SHARE_TTL).unwrap();
+    let path = file.path.clone();
+    let failed = file.remove_operations(
+        |directory, name| directory.remove_file(name),
+        |_, _| Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "injected empty-directory removal failure")),
+    );
+    assert!(failed.is_err());
+    assert!(!path.exists(), "original plaintext was removed before closing its directory");
+    std::fs::write(&path, b"replacement must survive").unwrap();
+    assert!(file.remove().is_err(), "retry may only remove an empty directory");
+    assert_eq!(std::fs::read(&path).unwrap(), b"replacement must survive");
+    assert!(file.verify().is_err(), "a removed original is never reconstructed from a replacement");
+    std::fs::remove_file(&path).unwrap();
+    file.remove().unwrap();
+    file.remove().unwrap();
+    root.remove().unwrap();
+}

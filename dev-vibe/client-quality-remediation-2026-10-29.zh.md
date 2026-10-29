@@ -86,3 +86,12 @@ Task Contract 为 [task-client-quality-followups.spec.md](../crates/hagency-app/
 - 第二批完整agent-spec lifecycle：7通过、0失败、0跳过、0不确定，包含边界及六组原始绑定测试；lint0.981。Python及actionlint另行通过，不将Cargo-only lifecycle夸大为这些非Cargo检查。
 
 - R17在不改源码的原Cargo选择器重复执行时直接复用产物，2.36秒完成构建阶段，三项Git测试0.09秒；未再出现原worktree不存在路径导致的每次完整重编译。
+
+
+### 第二批平台CI发现与修复（2026-10-30）
+
+原current-head托管Windows App全库739通过/7失败/2原忽略，Linux751通过/1失败/2原忽略，原失败保留。Windows六项分享失败定位到真实目录句柄：cap-std有意不允许directory的FILE_SHARE_DELETE；clone.remove_open_dir关闭的是clone，原目录仍被StagedFile持有。现仅在确认原文件unlink后关闭真实child句柄，通过保留的原parent删除空目录，失败保留parent重试；不会递归遍历replacement。新增真实文件/目录删除故障及replacement保留回归，本机temp_storage13项通过，实际Windows仍待新head CI。
+
+Windows另有Git测试把canonicalize产生的verbatim盘符路径传Git导致拒绝，测试fixture现保留OsString转换回普通盘符/UNC，且Git失败完整记录status/stdout/stderr；保留真实linked worktree。Linux锁失败与并行fork继承open file description相符：本机Unix受控fork证明，即使FD有CLOEXEC，父drop后子exec/close前锁仍在，子关闭后立即可取；未捕获原Linux具体继承者，不夸大为已在Linux复现。两个真实store lease测试使用同exe单test子进程隔离无关fork，所有held拒绝、原drop、scope与symlink断言原封不动，没有重试、sleep或修改生产锁。新Linux CI仍是最终平台证据。
+
+- 平台小补冻结源码本地完整App753通过/0失败/2原忽略，69.70秒；own App all-targets严格Clippy及agent-spec lifecycle7通过/0失败/0跳过/0不确定，样式310/0通过。Windows专属Git测试已通过Windows target rustc metadata类型检查，真实运行仍待托管Windows。第一批macOS第二次选择性重跑仍未取得runner并取消；不算通过。PR19已包含第一批全部提交，现作为统一整改候选，要求其最终head所有平台job真实成功后再合并，保留中间版本原始失败/取消记录。

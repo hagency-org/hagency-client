@@ -15334,3 +15334,22 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   bound selectors; hosted CI remains required before merging.
 
 - Second-batch full lifecycle7pass/0fail/0skip/0uncertain, including boundaries and six bound selectors. Python/actionlint results remain separate from the Cargo-only lifecycle.
+
+- PR19 platform follow-up in isolated quality-platform-ci worktree: original
+  Windows739pass/7fail/2ignore and Linux751/1/2 remain recorded. Windows private
+  share cleanup retained the original cap-std directory after removing a clone;
+  close only that confirmed empty original, retain parent through failure and
+  remove no replacement contents. New real-file fault/retry test plus existing
+  temp_storage suite13/13 pass locally. Windows Git fixture normalizes API
+  verbatim paths without losing OsString and keeps real linked worktree tests.
+  Original strict crypto-store lease tests run in isolated actual subprocesses:
+  controlled Unix fork proves inherited CLOEXEC open descriptions can retain
+  parent-dropped locks until child closes; no specific Linux holder was captured.
+  Production lock and all original assertions remain. Final full tests/CI pending.
+
+- Frozen platform repair full App753/0/2 in69.70s, own all-targets strict
+  Clippy and full lifecycle7/0/0/0 pass. Windows Git test module cross-metadata
+  typechecks; no claim of Windows runtime yet. PR18 macOS second selective retry
+  again cancelled before runner acquisition. Preserve those original outcomes;
+  PR19 contains both reviewed batches and is now the consolidated merge candidate,
+  requiring every final-head individual platform job to succeed before merge.
