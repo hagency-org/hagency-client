@@ -63,13 +63,14 @@ extend-exclude = [
 ]
 
 # Exact original mdurl strings retained under its checksum provenance record.
-# Keep the rest of these vendored files and the repository spellchecked.
+# Type globs match basenames only. These four exact strings stay checked
+# everywhere except files with the corresponding original source basenames.
 [type.mdurl-upstream]
 extend-glob = [
-    "vendor/mdurl/src/url.rs",
-    "vendor/mdurl/tests/parse.rs",
-    "vendor/mdurl/src/format.rs",
-    "vendor/mdurl/src/urlencode/encode.rs",
+    "url.rs",
+    "parse.rs",
+    "format.rs",
+    "encode.rs",
 ]
 extend-ignore-re = [
     '[Ff][Ee][Dd][Cc]:[Bb][Aa]98:7654:3210:[Ff][Ee][Dd][Cc]:[Bb][Aa]98:7654:3210',

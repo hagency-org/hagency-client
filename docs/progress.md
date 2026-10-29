@@ -15465,7 +15465,7 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   810passed/0failed/2originalignored; same-profile own all-target strict passes.
 - Combined IDNA plus original receive-receipt fixes independently reviewed and
   integrated. Actual SQLite receipt2/2 and real vendor binding2/2 pass. Matching
-  typos1.51.1 first flags exact upstream fixture/comment strings; four file-local
+  typos1.51.1 first flags exact upstream fixture/comment strings; four exact source-basename
   original-string patterns preserve checksum provenance without excluding
   vendor files. Full repository spelling then passes. Eight freshly built
   release remote-memory processes pass unchanged gates: maximum Rust heap
@@ -15476,3 +15476,11 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   limits apply: SDK initialization outside Rust window, no whole-App/TLS/SQLite
   memory qualification. New combined head still requires hosted checks.
 - Combined attachment lifecycle completed7/7, zero fail/skip/uncertain, strict review mode; all six bound actual Cargo groups passed, with the explicit changed-file boundary verified.
+
+- Correction: the first parent spelling command sequence hid typos exit2 behind
+  a later successful diff check; its log actually failed. Hosted83c caught the
+  same original upstream strings. Actual typos1.51.1 source matches type globs
+  against basename only, so path globs were ineffective. Use the four original
+  source basenames plus only complete original strings; run typos as its own
+  checked process. The earlier local-pass statement is withdrawn, and83c
+  spelling remains failed evidence. No content assertion or source bytes change.
