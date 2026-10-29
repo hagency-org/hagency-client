@@ -2216,6 +2216,14 @@ impl Widget for RoomScreen {
     }
 }
 
+fn window_contains_latest<'a>(
+    mut event_ids: impl Iterator<Item = &'a matrix_sdk::ruma::EventId>,
+    latest: Option<&matrix_sdk::ruma::EventId>,
+    forwards_paginated: bool,
+) -> bool {
+    latest.map_or(forwards_paginated, |latest| event_ids.any(|id| id == latest))
+}
+
 impl RoomScreen {
     fn sync_jump_to_latest_visibility(&self, cx: &mut Cx, list: &PortalListRef) {
         let at_latest = self.tl_state.as_ref().is_none_or(|tl| {
@@ -2225,10 +2233,13 @@ impl RoomScreen {
                 .and_then(|client| client.get_room(tl.kind.room_id()))
                 .filter(|_| tl.kind.thread_root_event_id().is_none())
                 .and_then(|room| (*room).latest_event().event_id());
-            let contains_latest = match latest {
-                Some(latest) => tl.items.iter().rev().find_map(|item| item.as_event()?.event_id()) == Some(&latest),
-                None => tl.forwards_paginated,
-            };
+            // The SDK preview can omit state events, or be empty in a new
+            // state-only room. Retain the actual live edge before rebasing.
+            let live_edge = tl.kind.thread_root_event_id().is_none().then_some(tl.last_live_event.as_deref()).flatten();
+            let contains_latest = window_contains_latest(
+                tl.items.iter().rev().filter_map(|item| item.as_event()?.event_id()),
+                latest.as_deref().or(live_edge), tl.forwards_paginated,
+            );
             tl.items.is_empty() || (list.is_at_end() && (tl.is_live || contains_latest))
         });
         if self.jump_to_bottom_button(cx, ids!(jump_to_bottom_button)).update_visibility(cx, at_latest) {
@@ -2340,6 +2351,11 @@ impl RoomScreen {
                     }
                 }
                 TimelineUpdate::FocusChanged { is_live } => {
+                    if tl.is_live && !is_live {
+                        tl.last_live_event = tl.items.iter().rev().find_map(|item| item.as_event()?.event_id()).map(ToOwned::to_owned);
+                    } else if is_live {
+                        tl.last_live_event = None;
+                    }
                     tl.is_live = is_live;
                     tl.fully_paginated = false;
                     tl.forwards_paginated = false;
@@ -3885,6 +3901,7 @@ impl RoomScreen {
                     // We assume timelines being viewed for the first time haven't been fully paginated.
                     fully_paginated: false,
                     is_live: true,
+                    last_live_event: None,
                     forwards_paginated: false,
                     is_paginating: false,
                     items: Vector::new(),
@@ -5139,6 +5156,8 @@ struct TimelineUiState {
     /// This must be reset to `false` whenever the timeline is fully cleared.
     fully_paginated: bool,
     is_live: bool,
+    /// Last observed live edge, retained when back pagination rebases the window.
+    last_live_event: Option<OwnedEventId>,
     forwards_paginated: bool,
 
     /// Whether a pagination request is currently in flight.
@@ -8738,6 +8757,18 @@ mod hover_action_bar_tests {
 
 #[cfg(test)]
 mod skeleton_tests {
+    #[test]
+    fn latest_identity_can_precede_state_events_but_never_match_an_older_window() {
+        use matrix_sdk::ruma::event_id;
+        let message = event_id!("$latest_message");
+        let topic = event_id!("$latest_topic");
+        let older = event_id!("$older");
+        assert!(super::window_contains_latest([topic, message, older].into_iter(), Some(message), false));
+        assert!(super::window_contains_latest([topic, older].into_iter(), Some(topic), false), "a retained live state-event boundary identifies a complete short room");
+        assert!(!super::window_contains_latest([older].into_iter(), Some(message), true), "a known newer event overrides an old pagination boundary");
+        assert!(!super::window_contains_latest([older].into_iter(), None, false), "unknown boundaries remain conservative");
+        assert!(super::window_contains_latest([older].into_iter(), None, true));
+    }
     use super::*;
 
     fn screen() -> (Cx, RoomScreen) {
@@ -8799,6 +8830,7 @@ mod skeleton_tests {
             room_members: None,
             fully_paginated: false,
             is_live: true,
+            last_live_event: None,
             forwards_paginated: false,
             is_paginating: false,
             items: Vector::new(),
