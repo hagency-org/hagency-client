@@ -55,3 +55,22 @@ SDK 夹具复用项目已有 loopback sync/context 服务，开启真实 SDK thr
 - 本地 SDK/控件夹具不代表生产 federation、TLS、真实账号 E2EE key recovery 或真实桌面 OS URL 投递已通过。
 - 已发送的 join 可能在取消观察后完成；保留原服务器结果未知的说明，不伪称撤销。用户仍需服务器授予的真实权限。
 - 本机只验证 macOS arm64；其他平台及 GitHub CI 必须在后续最终 PR head 上独立通过。当前分支未 push、未开 PR，等待父任务独立审查。
+
+
+## 父复核后的组合源码验证
+
+父工作树在`a30a42cd`基线上依次整合两项已审查提交，当前实现提交为`76024fe2`，
+分支为`codex/quality-matrix-navigation`。25个实现/契约/报告文件的Git blob与
+agent最终源码逐一相同；两份协调文档通过共同前缀验证合并，保留两边完整追加记录。
+父复核确认普通导航取消原意图、内部根切换携原Ticket、首次desktop draw后再投递，
+以及退休初始化不会因Ticket失效而获得启动管理runtime的权限。
+
+- 精确CI特性`agent_chat,octosense-module,macos-sparkle`完整App：824通过、
+  0失败、2原有忽略，78.17秒；这是当前组合源码结果，替代此前821项的局部基线。
+- own App与miniapp core all-target严格Clippy通过（29.43秒）。
+- 完整agent-spec生命周期8/8通过、0失败/跳过/不确定、质量得分1.0；
+  显式核对全部27个改动路径并执行七组真实Cargo绑定，未把空worktree当边界证明。
+- 全仓typos1.51.1、主题literal guard通过；2755词条、2025翻译调用点、0缺失。
+
+本节记录本地冻结时证据；当前提交的hosted CI仍待PR采集后独立复核，不能用本地
+结果或旧提交平台结果替代。系统URL投递和真实账号E2EE恢复仍未取得平台资格。

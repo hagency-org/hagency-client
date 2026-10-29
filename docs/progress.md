@@ -15529,3 +15529,10 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   Earlier a699 full821/0/2 and lifecycle8/8 are retained prior-source evidence.
   Parent owns final composed-branch wholeApp/exactCI/lifecycle verification;
   no duplicate full-suite claim for this follow-up. No push/PR from this branch.
+
+- Parent R13 integration on a30: preserved25 reviewed file blobs plus both
+  complete appended coordination sections. Source76024fe2 passes exact CI-feature
+  full App824/0/2 in78.17s, own all-target strict29.43s, complete lifecycle8/8
+  with all27 explicit paths and seven actual Cargo groups. Typos1.51.1/theme
+  guard/i18n2755entries2025sites0missing pass. Current-head hosted checks still
+  required; system URL delivery and real-account E2EE remain unqualified.

@@ -141,5 +141,5 @@ Scenario: Native link fixtures never start providers or use real account state
 
 Local loopback fixtures do not qualify production federation, E2EE key recovery
 on a real account, or system URL delivery. Preserve HTTP failures and original
-unknown joining outcomes. CI and independent review remain required before PR
-publication or merging this branch.
+unknown joining outcomes. Independent review and current-head CI remain required before merging this
+branch. A draft pull request may collect that CI evidence.
