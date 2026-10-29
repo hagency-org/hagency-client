@@ -15484,3 +15484,14 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   source basenames plus only complete original strings; run typos as its own
   checked process. The earlier local-pass statement is withdrawn, and83c
   spelling remains failed evidence. No content assertion or source bytes change.
+
+- PR20 a30 MacARM actualApp810/0/2 and strict succeeded, then root workspace
+  checker failed on excluded vendor/mdurl. Preserve failure, no unchanged-head
+  retry. Layout now accepts only exact declared registry path patches explicitly
+  excluded from members, insidevendor with canonical nonsymlink directories,
+  exact nonsymlink manifest/name; other foreign/nested crates remain refused.
+  Independent review caught resolve-before-exclude directoryalias acceptance;
+  real Git/Cargo fixture reproduces it and final raw-path/canonical checks reject
+  both unexcluded alias and explicitlyexcluded junction/symlink alias. Actual
+  metadata/inventory/layout/alias Node4/4, root layout31members/onevendor,
+  full R02 lifecycle3/3 pass. Runtime and lockfile unchanged; newhead CI required.
