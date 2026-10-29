@@ -95,3 +95,6 @@ Task Contract 为 [task-client-quality-followups.spec.md](../crates/hagency-app/
 Windows另有Git测试把canonicalize产生的verbatim盘符路径传Git导致拒绝，测试fixture现保留OsString转换回普通盘符/UNC，且Git失败完整记录status/stdout/stderr；保留真实linked worktree。Linux锁失败与并行fork继承open file description相符：本机Unix受控fork证明，即使FD有CLOEXEC，父drop后子exec/close前锁仍在，子关闭后立即可取；未捕获原Linux具体继承者，不夸大为已在Linux复现。两个真实store lease测试使用同exe单test子进程隔离无关fork，所有held拒绝、原drop、scope与symlink断言原封不动，没有重试、sleep或修改生产锁。新Linux CI仍是最终平台证据。
 
 - 平台小补冻结源码本地完整App753通过/0失败/2原忽略，69.70秒；own App all-targets严格Clippy及agent-spec lifecycle7通过/0失败/0跳过/0不确定，样式310/0通过。Windows专属Git测试已通过Windows target rustc metadata类型检查，真实运行仍待托管Windows。第一批macOS第二次选择性重跑仍未取得runner并取消；不算通过。PR19已包含第一批全部提交，现作为统一整改候选，要求其最终head所有平台job真实成功后再合并，保留中间版本原始失败/取消记录。
+
+
+- 后续Linux两架构暴露审批observer测试setup只收到1条而非2条GET。原SDK初始化屏障仅等待主setup；Recovery还有读取初值Unknown的长期观察任务，第二次初始化读取可稍后才发生，并不是UI启动owner。测试现以真实server完整回复两条白名单GET的Notify条件作初始化屏障，再保留观察阶段零新增HTTP、startup0、CURRENT为空和无owner目录的严格断言；不以sleep静止或allow任意请求迎合结果。本次6项审批测试和own App全targets严格Clippy通过，lint/boundary两层lifecycle通过；此前完整753/0/2与7项完整lifecycle仍保留，未把本次选择性复核改写为新的完整运行。当前head各平台CI仍需通过。

@@ -15353,3 +15353,11 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   again cancelled before runner acquisition. Preserve those original outcomes;
   PR19 contains both reviewed batches and is now the consolidated merge candidate,
   requiring every final-head individual platform job to succeed before merge.
+
+- PR19 Linux ARM/AMD then exposed an initialization barrier gap: joining the
+  SDK main E2EE setup does not join Recovery's long-lived observer of the initial
+  backup state. Wait for the real server's two complete whitelisted responses,
+  then keep zero observer HTTP/owner startup assertions; no guessed quiet sleep
+  or unrestricted request allowance. Focused approvals6/6 and own all-target
+  strict Clippy pass; lifecycle lint/boundary-only pass is reported separately
+  from the previous complete7-scenario run. New hosted head remains required.

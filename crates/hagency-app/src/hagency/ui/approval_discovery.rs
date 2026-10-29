@@ -417,10 +417,12 @@ mod tests {
         // parallel tests. There is no mock Service lookup or Pending command.
         crate::sliding_sync::backend_runtime().block_on(async {
             use tokio::io::{AsyncReadExt,AsyncWriteExt};
-            use std::sync::{Arc,Mutex};
+            use std::sync::{Arc,Mutex,atomic::{AtomicUsize,Ordering}};
             let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let origin=format!("http://{}",listener.local_addr().unwrap());
             let requests=Arc::new(Mutex::new(Vec::new()));let observed=requests.clone();
+            let completed=Arc::new(AtomicUsize::new(0));let replied=completed.clone();
+            let replies=Arc::new(tokio::sync::Notify::new());let response_ready=replies.clone();
             let server=tokio::spawn(async move {
                 loop {
                     let Ok((mut socket,_))=listener.accept().await else {break;};
@@ -430,7 +432,10 @@ mod tests {
                         request.extend_from_slice(&bytes[..count]);
                     }
                     observed.lock().unwrap().push(String::from_utf8_lossy(&request).lines().next().unwrap_or("").to_owned());
-                    let _=socket.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await;
+                    if socket.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await.is_ok() {
+                        replied.fetch_add(1,Ordering::Release);
+                        response_ready.notify_one();
+                    }
                 }
             });
             let client=matrix_sdk::Client::builder().homeserver_url(&origin)
@@ -441,10 +446,24 @@ mod tests {
             // its asynchronous account-data reads to an owner startup.
             tokio::time::timeout(std::time::Duration::from_secs(5),client.encryption().wait_for_e2ee_initialization_tasks())
                 .await.expect("the SDK's original encryption setup must finish before observation");
-            let setup_requests=requests.lock().unwrap().clone();
             let secret_storage_read="GET /_matrix/client/r0/user/@observer:test/account_data/m.secret_storage.default_key HTTP/1.1";
+            // SDK 919a38b Recovery::setup both reads the state directly and
+            // starts update_state_after_backup_state_change. The latter consumes
+            // ChannelObservable's initial Unknown value in a separate task;
+            // wait_for_e2ee_initialization_tasks joins only setup_e2ee. This
+            // fixture has no backup keys, and its 404 ends both initial reads.
+            // Wait for the real server to finish both responses, not a guessed
+            // quiet interval, before observing any widget HTTP side effects.
+            tokio::time::timeout(std::time::Duration::from_secs(5),async {
+                loop {
+                    let response=replies.notified();
+                    if completed.load(Ordering::Acquire)>=2 {break;}
+                    response.await;
+                }
+            }).await.expect("the SDK's direct and background setup reads must both receive their complete responses");
+            let setup_requests=requests.lock().unwrap().clone();
             assert_eq!(setup_requests,vec![secret_storage_read.to_owned(),secret_storage_read.to_owned()],
-                "SDK setup permits only its two backup/recovery secret-storage reads; no management/login/lease/provider request is permitted");
+                "SDK setup permits only its two original secret-storage reads; no management/login/lease/provider or other HTTP request is permitted");
             assert!(crate::sliding_sync::replace_client(Some(client)).is_none());
             assert!(crate::sliding_sync::get_client().unwrap().user_id().is_some());
             assert_eq!(Service::startup_bootstrap_count(),0);
