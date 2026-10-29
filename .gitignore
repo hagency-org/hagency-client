@@ -56,3 +56,8 @@ mockup/tmp/
 # Isolated local build previews and dependency links
 /.run/
 /mockup/node_modules
+
+# Agent working logs stay on the operator's machine: they record local
+# paths, hosts and conversations.
+/docs/progress.md
+/docs/agent-knowledge.md

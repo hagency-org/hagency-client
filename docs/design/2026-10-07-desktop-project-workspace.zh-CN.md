@@ -175,7 +175,7 @@ OAuth 的 Matrix API scope、唯一 device scope 与 token 刷新行为依据 [M
 
 原生开发应用：`chrislearn/hagency-desktop/target/debug/.rinx-dev/Hagency Desktop.app`。运行：`cargo run --offline --bin rinx`。测试 profile 通过绝对路径 `HAGENCY_DESKTOP_DATA_DIR` 隔离于用户默认目录，本次放在 Desktop 的 `.run/desktop-project-workspace-20261007/profile`。
 
-原重构启动日志为该目录的 `desktop-final.log`；本次统一登录初次启动日志为 `desktop-unified-login.log`；解锁后修正 OAuth 入口并重新构建的实际窗口启动日志为 `desktop-window-login.log`。新 HTTPS 测试窗口日志为 `.run/hagency-local-https-20261007/desktop-https-login.log`，截图为该目录的 `hagency-only-sign-in.png`；隔离测试数据位于 `/Users/chris/Library/Application Support/Hagency/Development/https-local-20261007`。本轮源码指纹清单共 130 个文件，另存于 `2026-10-07-desktop-code-review.sha256`，只覆盖本轮源代码与构建适配，不含账号数据、token、日志或构建产物。
+原重构启动日志为该目录的 `desktop-final.log`；本次统一登录初次启动日志为 `desktop-unified-login.log`；解锁后修正 OAuth 入口并重新构建的实际窗口启动日志为 `desktop-window-login.log`。新 HTTPS 测试窗口日志为 `.run/hagency-local-https-20261007/desktop-https-login.log`，截图为该目录的 `hagency-only-sign-in.png`；隔离测试数据位于 `~/Library/Application Support/Hagency/Development/https-local-20261007`。本轮源码指纹清单共 130 个文件，另存于 `2026-10-07-desktop-code-review.sha256`，只覆盖本轮源代码与构建适配，不含账号数据、token、日志或构建产物。
 
 ## 功能入口补全：2026-10-07
 
