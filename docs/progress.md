@@ -15429,8 +15429,11 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   Hosted Windows and independent current-head review remain required.
 
 - R02 isolated dependency batch, 2026-10-30: based on361d4e34, a checksum-verified
-  original mdurl0.3.1 copy retains all sources/licenses and changes only its
-  active IDNA manifest to1.1.0. Root patch/exclude and explicit real package tests
+  original mdurl0.3.1 copy retains source behavior/tests/licenses and changes its
+  active IDNA manifest to1.1.0. Parent native warning-policy check then exposed
+  two original Cow return lifetime warnings; explicit anonymous lifetimes fix
+  them without lint exemptions. Original failure preserved. Root patch/exclude
+  and explicit real package tests
   keep the vendor outside workspace membership. Original133+new4+doc4 pass;
   actual Matrix formatter6pass/7existing ignores and63-vector oracle pass,
   own formatter strict passes. Old registry-source negative control reproduces
@@ -15440,3 +15443,10 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   Real metadata/inventory positive/negative2pass, original binding Node19pass,
   actionlint pass; hosted CI and independent branch review remain pending.
   Complete scope/limits and original logs are in the client-idna dependency report.
+
+- Parent IDNA review reproduced native RUSTFLAGS=-Dwarnings failure in the
+  two upstream elided Cow return types. Explicit anonymous lifetimes preserve
+  behavior without lint exemptions; original failure retained. Actual warning
+  policy check, original137+doc4, Matrix6/7originalignored and lifecycle3/0/0/0
+  pass again. Independent archive SHA/file comparison proves only manifest and
+  those two type annotations differ from the19 original files.

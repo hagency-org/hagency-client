@@ -11,8 +11,11 @@
 `5736ba45bbac8f7ccc99a897f88ce85e508a18baec973a040f2514e6cdbff0d2`，
 对应上游 commit `0a7536e3ffc7f5688d3b06ab647ebcfbc511d1cb`。
 完整 MIT 许可和四组原始归属、README、源文件及原始测试全部保留。
-原始归档文件的摘要记在 `UPSTREAM-SHA256.json`；验证只有有效的
-`Cargo.toml` 改变，将内部 IDNA 要求精确改为 `=1.1.0`。
+原始归档文件的摘要记在 `UPSTREAM-SHA256.json`；有效的 `Cargo.toml`
+将内部 IDNA 要求精确改为 `=1.1.0`。父复核另发现原生构建的
+`RUSTFLAGS=-D warnings` 会拒绝两处原有 lifetime syntax warning，因此
+仅在 encode/decode 两个返回类型补 `Cow<'_, str>`，
+保持原推导生命周期和行为，没有加 lint 豁免。
 版本仍是 0.3.1，这不是新的上游发布；新增测试和补丁说明单独可见。
 root patch 指向该副本，workspace 显式排除它；registry/Git 源缓存未被手工修改。
 
@@ -35,8 +38,8 @@ mdurl 内部两个域名格式化 API 的签名保持兼容；旧依赖的 ASCII
   63 个 JS 派生向量逐字节相等。7 个既有 terminal-display parity 测试仍 ignored，
   不计通过；零 doctest 不计通过。本 Client 副本没有旧 JS 生成器/运行源码，
   本批没有声称重新执行 JS；固定语料、其来源摘要和 Rust 实现均未改变。
-- 自身 formatter 的 all-targets、no-deps 严格 Clippy 通过。上游 mdurl 的
-  两处既有 lifetime syntax warning 原样保留，未称该第三方库自身 strict 通过。
+- 自身 formatter 的 all-targets、no-deps 严格 Clippy 通过。父复核实际 native warning policy 的首次失败保留；两处纯语法
+  lifetime 注释后须重新通过相同 policy，不将之前 own Clippy 代替整依赖构建。
 - root `cargo test --locked -p mdurl` 实际选择了这个 excluded path dependency。
   真实 metadata 证明唯一 mdurl 指向 vendor 且不在 workspace members；
   实际 inventory 含 137 项测试名。新增 Node integration 正/负 2 项通过：
@@ -78,3 +81,5 @@ unmaintained 13、unsound 18、yanked 4。
 原始日志位于本工作树 `.run/quality-dependencies/`，包括 fresh 前后 JSON、
 旧依赖负对照、完整原测试、新回归、App corpus、strict、实际 graph/inventory
 正负证明及 agent-spec 生命周期。发布/合并仍需独立复核和当前提交 CI。
+
+父复核补充：保留原生 `RUSTFLAGS=-D warnings` 的实际首次失败，两处显式 lifetime 注释后同一 formatter 依赖构建通过；重新运行完整 mdurl137+doc4、formatter6/7原忽略及 lifecycle3/0/0/0 通过。父评审独立核对原始 archive SHA，并逐个比对19原文件，变化严格限于 manifest 依赖与两行等价 lifetime；未加 lint 豁免或改变percent行为。

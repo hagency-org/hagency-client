@@ -27,7 +27,7 @@ pub const ENCODE_COMPONENT_CHARS : AsciiSet = AsciiSet::from("-_.!~*'()");
 /// const SAFE_SET : AsciiSet = AsciiSet::from(";/?:@&=+$,-_.!~*'()#");
 /// assert_eq!(encode("[hello]", SAFE_SET, true), "%5Bhello%5D");
 /// ```
-pub fn encode(string: &str, exclude: AsciiSet, keep_escaped: bool) -> Cow<str> {
+pub fn encode(string: &str, exclude: AsciiSet, keep_escaped: bool) -> Cow<'_, str> {
     let exclude = exclude.add_alphanumeric();
     let mut result = Vec::new();
     let bytes = string.as_bytes();

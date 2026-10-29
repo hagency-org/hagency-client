@@ -30,7 +30,7 @@ pub const DECODE_COMPONENT_CHARS : AsciiSet = AsciiSet::from("");
 /// const SAFE_SET : AsciiSet = AsciiSet::from(";/?:@&=+$,#");
 /// assert_eq!(decode("%5Bhello%5D", SAFE_SET), "[hello]");
 /// ```
-pub fn decode(string: &str, exclude: AsciiSet) -> Cow<str> {
+pub fn decode(string: &str, exclude: AsciiSet) -> Cow<'_, str> {
     URLENCODED_SEQUENCE.replace_all(string, |caps: &regex::Captures| -> String {
         let mut result = Vec::new();
         let mut bytes = caps.get(0).unwrap().as_str().as_bytes().iter();

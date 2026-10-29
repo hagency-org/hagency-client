@@ -5862,8 +5862,9 @@ SDK 恢复 timeline 可包含同一事件多个句柄。保留原始 Vector 的�
 
 ### 2026-10-30 local mdurl dependency repair
 - mdurl0.3.1's complete original tests are133 (46unit+87parser), not just the108
-  percent/parser subset. Preserve all source and full MIT attribution; only its
-  normalized active manifest needs idna1.1.0. Original archive/provenance hashes
+  percent/parser subset. Preserve source behavior, all tests and full MIT
+  attribution. The normalized manifest needs idna1.1.0 and two explicit return
+  lifetimes are required by native RUSTFLAGS=-Dwarnings. Original archive hashes
   make the local same-version patch distinguishable from an upstream release.
 - An excluded path dependency is testable from root with `cargo test -p mdurl`,
   but Cargo refuses workspace feature selection such as `--all-features` for it.

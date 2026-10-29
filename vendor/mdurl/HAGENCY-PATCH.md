@@ -13,10 +13,14 @@ Origin:
 - `UPSTREAM-SHA256.json` records every original archive file before patching.
   `.cargo_vcs_info.json` and `Cargo.toml.orig` remain original provenance.
 
-The sole change to an upstream file is the normalized `Cargo.toml` IDNA
-requirement: `>= 0.1.0, < 0.4` becomes `=1.1.0`. The original source, parser,
-percent primitives, README and all 133 existing tests are unchanged. Added
-integration tests exercise the two formatting APIs with the newer dependency.
+The normalized `Cargo.toml` IDNA requirement changes from `>= 0.1.0, < 0.4`
+to `=1.1.0`. Two percent-function return types add the explicit anonymous
+lifetime `Cow<'_, str>` in encode.rs and decode.rs; this
+is the same inferred lifetime and changes no behavior. The local path dependency
+must compile under the native build's existing `RUSTFLAGS=-D warnings`, which
+otherwise rejects those original lifetime-syntax warnings. No lint is suppressed.
+All other original source, parser, README and all 133 existing tests are unchanged.
+Added integration tests exercise the formatting APIs with the newer dependency.
 
 Both `idna::domain_to_ascii` and `idna::domain_to_unicode` retain their signatures
 in 1.1.0. Invalid ASCII-only or empty ACE labels intentionally follow the fixed

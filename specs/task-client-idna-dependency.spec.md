@@ -7,15 +7,16 @@ tags: [active, rust, desktop, security, dependencies]
 ## Intent
 
 Repair the remaining main-lock idna 0.3.0 path through mdurl 0.3.1 with a
-provenance-preserving local copy and idna 1.1.0. Keep the actual Matrix formatter's
+provenance-preserving local copy and idna 1.1.0, plus two explicit anonymous
+lifetime annotations required by the existing native strict-warning build. Keep the actual Matrix formatter's
 percent encoding and raw punycode behavior unchanged. This is one dependency
 repair, not a qualification of every independent lockfile or IDN display policy.
 
 ## Constraints
 
 ### Must
-- Preserve all original mdurl sources tests documentation and complete MIT attribution with exact registry package and upstream commit identity.
-- Keep the package version 0.3.1 and disclose the local manifest-only dependency change rather than claim a new upstream release.
+- Preserve all original mdurl source behavior tests documentation and complete MIT attribution with exact registry package and upstream commit identity; only two explicit anonymous return lifetime annotations may accompany the dependency change.
+- Keep the package version 0.3.1 and disclose the local dependency and lifetime-syntax changes rather than claim a new upstream release.
 - Require idna 1.1.0 through the local mdurl manifest and preserve both formatting API signatures.
 - Preserve actual Matrix percent encoding decoding raw punycode relative Matrix URI and JavaScript oracle behavior.
 - Run all133 original upstream unit and parser tests plus doctests and direct valid and invalid IDNA formatting regressions.

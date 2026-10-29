@@ -68,7 +68,9 @@ parser renders that fixture correctly. No panic swallowing, source-specific
 placeholder or alternate JavaScript renderer is used. The sole vendored
 exception is now mdurl 0.3.1: the exact original MIT-licensed registry sources,
 tests and attribution are retained under `vendor/mdurl`, with provenance and
-only its active manifest's obsolete IDNA dependency changed to idna 1.1.0.
+its active manifest's obsolete IDNA dependency changed to idna 1.1.0, plus
+two explicit anonymous return lifetime annotations needed by native builds
+that deny warnings; neither annotation changes percent behavior.
 This repairs RUSTSEC-2024-0421 without changing the percent primitives, the
 separate raw punycode policy or the retained JavaScript content oracle.
 Unsafe reference definitions are prevented from becoming definitions in one
