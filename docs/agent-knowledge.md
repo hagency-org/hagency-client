@@ -5910,3 +5910,10 @@ SDK 恢复 timeline 可包含同一事件多个句柄。保留原始 Vector 的�
   LoadDock consumes it, even when its Ticket is stale; retirement cannot grant
   permission to enter the management factory. Explicit Home/Projects remain
   separate authorized factory paths.
+
+
+## 2026-10-30：SQLite身份观察与当前质量验收
+
+普通SqliteCryptoStore::open/open_with_config会初始化、迁移及checkpoint，不能用于证明旧数据库原样身份。SDK PR4的专用同步reader使用READONLY/NO_CREATE和同一read transaction尊重有效WAL，仅返回user/device；SQLite必要SHM协调不保证sidecar字节不变。immutable会忽略有效WAL，不可替代。原StoreCipher PBKDF2 rounds来自认证前封装数据，输入文件小不等于计算成本有限；新reader在原默认200k兼容基础上固定拒绝超过1m轮，旧import默认语义保留。reader必须在真实owned worker完整执行，observer取消不代表SQLite/密钥归属结束。当前SDK PR4仍须其head95de平台CI后才可合并。
+
+主整改验收/合并是PR21精确head48b33772、main merge cf7fbb63，而非旧PR18–20 head各自失败/未结束的CI。15实际current checks成功，四mobile+夜间维护skip非资格。真实remote8case/12sourcehash父复核与原失败均保留；主锁audit仍11匹配/失败，独立Octos47条为旧结果，不可泛称依赖全修。

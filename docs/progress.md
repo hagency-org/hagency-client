@@ -15547,3 +15547,12 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   with all27 explicit paths and seven actual Cargo groups. Typos1.51.1/theme
   guard/i18n2755entries2025sites0missing pass. Current-head hosted checks still
   required; system URL delivery and real-account E2EE remain unqualified.
+
+
+## 2026-10-30：统一整改与原生链接合并
+
+PR21 当前 head48b33772 完整包含 PR20 的25beaf6e。父独立复核源码、精确本地824/0/2、严格Clippy、链接lifecycle8/8，并重新核对当前 head15项实际CI全部SUCCESS、5项声明条件skip。该完整候选于2026-10-29T23:03:32Z合并为cf7fbb63b45c751d7f7efc0369963de3839435b5；PR18–20因祖先关系自动标记merged，不把旧head失败/取消/未完成当通过。PR17用户tutorial分支未合并或修改。
+
+当前48b Linux workflow40958705871/job123745783208的8组真实传输raw证据已独立重算，12source hashes全部对应精确提交，production validator无错误；最大Rust堆3506028B、采样RSS33034240B。证据在quality-matrix-links工作树.run/quality-matrix-navigation/parent-pr21-48b-raw-heap-validation.json。依旧仅remote transport窗，不是整个App/TLS/SQLite资格。执行报告顶部清单已按此实际交付更新，历史各轮保留。
+
+SDK PR3已审查并合并a34339e，13项当前CI和六份新鲜artifact的50profile独立复核通过。SDK PR4 head95de9a4e新增SQLite真正只读的一致WAL身份检查及固定有限PBKDF2导入策略，父独立8reader+15encryption通过，当前CI仍运行；agent-spec1.4不支持Cargo features，reader真实Skip保留，外部exact-feature测试单独执行，不把Skip计通过。R05客户端和R07 SDK资源控制仍实施/复核中。
