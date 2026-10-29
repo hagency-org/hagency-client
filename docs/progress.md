@@ -15338,7 +15338,7 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 ## 2026-10-30 — Third quality batch in progress
 
 - Opened PR19 at873afe74 after full App752/0/2 and lifecycle7/0/0/0.
-  Hosted spelling found one inherited Robius Windows comment aceept; fixed only
+  Hosted spelling found one inherited Robius Windows comment spelling; fixed only
   that comment in de4a704e and advanced PR19. The new-head spelling passes;
   engine/App platform CI is running. PR18 Windows engine including real media
   restoration and release build passed. Selective retry of its unacquired macOS
