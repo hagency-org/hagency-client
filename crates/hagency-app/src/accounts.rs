@@ -218,6 +218,16 @@ mod tests {
     }
     #[tokio::test]
     async fn logout_removes_only_selected_tokens_and_preserves_other_accounts() {
+        // This real credential worker uses the process-wide account epoch.
+        // Other tests intentionally close their own App session; those are
+        // different application lifetimes, not a logout of this fixture.
+        const NAME: &str = "accounts::tests::logout_removes_only_selected_tokens_and_preserves_other_accounts";
+        if crate::persistence::credential_state::tests::isolated_case(
+            NAME,
+            "HAGENCY_ACCOUNT_REMOVAL_CHILD",
+        ) {
+            return;
+        }
         let f = Fixture::new();
         let a = f.session("@alice:fixture.test", false);
         let b = f.session("@bob:fixture.test", false);
