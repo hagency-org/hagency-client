@@ -15547,3 +15547,5 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   with all27 explicit paths and seven actual Cargo groups. Typos1.51.1/theme
   guard/i18n2755entries2025sites0missing pass. Current-head hosted checks still
   required; system URL delivery and real-account E2EE remain unqualified.
+
+2026-10-30 — Tutorial UI / Room encryption review: #26 carries glyph-ink centering; #27 adds project Room creation encryption and explicit irreversible enable from Room settings. Local Room branch: app 822 passed / 2 existing ignored, engine 290 passed / 9 existing qualification ignores, strict app+engine Clippy passed, SDK joined-room 45 passed. Exact-head dispatched App CI and Rust CI passed; full App Build dispatch additionally exposed pre-existing mobile packager/process-custody gaps (tracked separately). Retargeted #27 to main so normal PR-scoped checks run; no mobile success is claimed. Independent-client native acceptance and tutorial retake are continuing on the dependent security branch.
