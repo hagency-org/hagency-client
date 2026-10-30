@@ -920,7 +920,8 @@ async fn native_server_login_background_refresh_logout_and_issuer_pin() {
     assert_eq!(fake.state.lock().unwrap().revocations, 2);
     let pending = f
         .credentials
-        .revocations(&f.root.path().join("state/server-login-revocations.json"));
+        .revocations(&f.root.path().join("state/server-login-revocations.json"))
+        .await;
     assert_eq!(pending, json!([]));
     assert_eq!(
         get("/console/api/project-sides", &cookie)
@@ -1034,7 +1035,7 @@ async fn native_server_login_offline_logout_retries_after_restart_without_restor
     assert!(device.bearer().is_err());
     assert!(f.console.authorized_device().await.is_err());
     let path = f.root.path().join("state/server-login-revocations.json");
-    let pending = f.credentials.revocations(&path);
+    let pending = f.credentials.revocations(&path).await;
     assert_eq!(pending.as_array().unwrap().len(), 1);
     assert_eq!(pending[0]["hint"], "refresh_token");
     let mut observation = get("/console/server-login", &cookie).send(&service).await;
@@ -1054,7 +1055,7 @@ async fn native_server_login_offline_logout_retries_after_restart_without_restor
     );
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
-            let pending = f.credentials.revocations(&path);
+            let pending = f.credentials.revocations(&path).await;
             if pending == json!([]) {
                 break;
             }

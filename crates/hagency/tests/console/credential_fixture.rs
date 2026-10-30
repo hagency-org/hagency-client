@@ -6,9 +6,9 @@ use hagency_store::credential_vault::{
 use serde_json::Value;
 use std::{
     collections::BTreeMap,
-    io::Read,
     path::Path,
     sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
 use zeroize::Zeroizing;
 
@@ -54,18 +54,25 @@ impl CredentialFixture {
 
     /// Read the actual persisted queue, verify its production scope and AEAD,
     /// then return the original rows for the existing HTTP/progress assertions.
-    pub fn revocations(&self, path: &Path) -> Value {
-        // read_secret is for <=512-byte secrets, not authenticated documents.
-        // Observe an actual private file descriptor without contending with the
-        // writer's Document lock; these bytes never authorize a publication.
+    pub async fn revocations(&self, path: &Path) -> Value {
+        // read_secret has a 512-byte cap; unlocked private::open can also reject
+        // the legitimate writer's atomic rename between open and inode checks.
+        // Observe under its actual Document lock. Only lock Conflict is retried,
+        // with async yields and a finite bound; permission/IO errors stay fatal.
         const OBSERVATION_LIMIT: usize = 1_048_576;
-        let file = hagency_store::private::open(path, false).unwrap();
-        let mut bytes = Zeroizing::new(Vec::new());
-        file.take((OBSERVATION_LIMIT + 1) as u64)
-            .read_to_end(&mut bytes)
-            .unwrap();
-        assert!(bytes.len() <= OBSERVATION_LIMIT);
-        let encoded = std::str::from_utf8(&bytes).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let document = loop {
+            match document::Document::open(path, OBSERVATION_LIMIT) {
+                Ok(document) => break document,
+                Err(cv::Error::Conflict) if Instant::now() < deadline => {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+                Err(error) => panic!("cannot observe revocation document: {error:?}"),
+            }
+        };
+        let source = document.read().unwrap().unwrap();
+        let bytes = source.bytes();
+        let encoded = std::str::from_utf8(bytes).unwrap();
         for secret in [
             "oauth-user-secret-0123456789",
             "oauth-refresh-secret",
@@ -77,7 +84,7 @@ impl CredentialFixture {
                 "revocation bytes must not contain fixture tokens"
             );
         }
-        let stored: Value = serde_json::from_slice(&bytes).unwrap();
+        let stored: Value = serde_json::from_slice(bytes).unwrap();
         assert_eq!(stored["version"], 2);
         let envelope: Envelope = serde_json::from_value(stored["envelope"].clone()).unwrap();
         let root = path.parent().unwrap();

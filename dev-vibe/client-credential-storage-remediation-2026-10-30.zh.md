@@ -142,3 +142,18 @@ no-follow 和句柄检查，再以 `Read::take(1MiB+1)` 实际累计读并断言
 8MiB，这里的 1MiB 是更小的测试观察界限；没有放宽生产 cap、权限或链接校验。
 完整 v2/scope/AEAD/no-token 断言保留。此修正仍待 fresh 验证，不将前轮
 2 项失败或继续运行的旧二进制结果回填为通过。
+
+
+第三轮 console 实际 129 通过/1 失败/6 原有忽略；同一原二进制单独运行
+原 offline case 为 1 通过（0.47 秒），不是全并行通过。剩余失败在无锁
+`private::open` 的 inode 检查：writer 原子 rename 后原 FD 的 inode/nlink
+可能不再等于当前路径，按设计返回 `Private`。先前认为原 FD 已足以使该接口
+无锁观察稳定的判断遗漏了它还会检查当前路径，现明确纠正；不将该错误解释为
+权限损坏，也不重试 `Private`。
+
+最终仅将 fixture 观察改为 async `Document::open`：只对 `Conflict` 以 1ms
+异步等待重试，内部最多 5 秒，成功后持有原 Document guard 完成实际 read、
+v2/schema、完整 Scope、Vault/AEAD 和 no-token 检查，之后释放再观察新一轮。
+其他错误立即失败，原 offline 外层 5 秒 timeout 完整保留；没有重试写入或
+任何非幂等操作，没有改生产权限/锁/上限。此新版本仍待 fresh 默认并行验证，
+不把单独运行通过或被终止的生命周期记为最终通过。
