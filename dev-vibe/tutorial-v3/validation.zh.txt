@@ -31,6 +31,7 @@ Hagency v3 最终原生验收（2026-10-30）
 
 
 CI复跑记录
+- 最终CI：Client PR38的dfc6b5c0为15项通过、5项现有条件skip、0失败；所有5个工作流均成功。Server PR24的4ec3f51为3项通过、2项发布条件skip。文档PR39以PR38分支为基线，不触发仅限main的CI；运行时代码的CI证据来自PR38。
 - 10a2ca16的Intel Mac CI为837通过、1失败、2原有忽略；失败是已有会话关闭回归用250ms调度心跳判断让出线程，受高负载调度影响。Issue #40记录现场。
 - PR38的dfc6b5c0仅修改cfg(test)：显式首次poll必须在原IO锁仍被持有时返回Pending，随后握手释放锁并完成关闭；阻塞锁反例仍稳定失败。修正后本地831通过、2原有忽略，严格Clippy通过。
 - 已验证account_session生产代码与录制源10a2ca16完全一致，成片无需重录。最终各PR提交和CI结论见交付包ci-status.json；移动平台受控skip仍明确保留。
