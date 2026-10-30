@@ -141,37 +141,29 @@ mod tests {
         let _serial = TRANSITION_TESTS.lock().await;
         open();
         let (entered, holding) = std::sync::mpsc::sync_channel(1);
-        let (progress, heartbeat) = std::sync::mpsc::sync_channel(1);
+        let (release, released) = std::sync::mpsc::sync_channel(1);
         let original_io = std::thread::spawn(move || {
             let _original = crate::persistence::SESSION_IO.lock().unwrap();
             entered.send(()).unwrap();
-            // A broken blocking close cannot deadlock this test: the original
-            // holder releases after 250ms and reports that no heartbeat ran.
-            heartbeat
-                .recv_timeout(std::time::Duration::from_millis(250))
+            // This is only a deadlock watchdog for a regressed blocking close.
+            // Correctness depends on the explicit release after the first poll,
+            // never on scheduling a heartbeat within a short wall-clock window.
+            released
+                .recv_timeout(std::time::Duration::from_secs(10))
                 .is_ok()
         });
-        holding
-            .recv_timeout(std::time::Duration::from_secs(1))
-            .unwrap();
-        let (started, closing) = tokio::sync::oneshot::channel();
-        let close_task = tokio::spawn(async move {
-            let _ = started.send(());
-            close().await;
-        });
-        let heartbeat_task = tokio::spawn(async move {
-            closing.await.unwrap();
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-            let _ = progress.send(());
-        });
-        heartbeat_task.await.unwrap();
+        holding.recv().unwrap();
+        let mut closing = std::pin::pin!(close());
+        let first_poll = closing
+            .as_mut()
+            .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()));
+        let _ = release.send(());
         assert!(
-            original_io.join().unwrap(),
+            original_io.join().unwrap() && first_poll.is_pending(),
             "close blocked the single Tokio thread instead of yielding while original IO retained its commit fence"
         );
-        tokio::time::timeout(std::time::Duration::from_millis(250), close_task)
+        tokio::time::timeout(std::time::Duration::from_secs(10), closing)
             .await
-            .unwrap()
             .unwrap();
         open();
     }
