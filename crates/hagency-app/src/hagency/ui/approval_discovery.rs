@@ -2,8 +2,9 @@
 //! original scoped page; neither discovery nor cached rows can authorize tools.
 use super::*;
 use serde::Deserialize;
-use std::collections::HashMap;
-const INTERVAL: f64 = 5.0;
+use std::collections::{HashMap, HashSet};
+const INTERVAL: f64 = 10.0;
+const IDLE_INTERVAL: f64 = 60.0;
 const MAX_PAGE: usize = 32;
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -12,7 +13,7 @@ struct Summary {
     agent_id: String, binding_id: String, room_id: String, requester: String,
     proposal_id: String, args_digest: String, tool: String, expires: i64,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ApprovalTarget {
     pub identity: String,
     pub agent: String,
@@ -85,13 +86,47 @@ pub struct ApprovalRows {
     #[rust] failed: bool,
     #[rust] pending: bool,
     #[rust] painted: HashMap<WidgetUid,ApprovalTarget>,
+    #[rust] keys: HashMap<ApprovalTarget,usize>,
+    #[rust] next_key: usize,
 }
 impl ApprovalRows {
+    fn replace_rows(&mut self,cx:&mut Cx,identity:&str,rows:&[Summary]) {
+        let position=(self.list.first_id(),self.list.first_scroll());
+        let anchor=if self.identity==identity {self.rows.get(position.0)
+            .map(|row|ApprovalTarget::from_summary(&self.identity,row))} else {None};
+        if self.identity!=identity {self.painted.clear();self.keys.clear();}
+        let targets:Vec<_>=rows.iter().map(|row|ApprovalTarget::from_summary(identity,row)).collect();
+        self.keys.retain(|target,_|targets.contains(target));
+        for target in &targets {
+            if !self.keys.contains_key(target) {
+                // The cache holds at most one bounded page plus visible retired
+                // widgets. Do not reuse a still-painted key for a new request.
+                while self.keys.values().any(|key|*key==self.next_key) || self.list.items().contains_key(&self.next_key) {
+                    self.next_key=(self.next_key+1)%(MAX_PAGE*3);
+                }
+                self.keys.insert(target.clone(),self.next_key);self.next_key=(self.next_key+1)%(MAX_PAGE*3);
+            }
+        }
+        self.rows.clear();self.rows.extend_from_slice(rows);self.identity=identity.into();
+        self.list.set_item_range(cx,0,rows.len().max(1));
+        let first=anchor.as_ref().and_then(|anchor|targets.iter().position(|target|target==anchor))
+            .unwrap_or_else(||position.0.min(rows.len().saturating_sub(1)));
+        self.list.set_first_id_and_scroll(first,if rows.is_empty() {0.0} else {position.1});
+    }
+    fn actionable(&self)->bool {
+        !self.failed && self.fresh.is_some_and(|at|at.elapsed().as_secs()<15)
+    }
+    fn empty_message(&self)->&'static str {
+        if self.failed {"Pending approvals are unavailable."}
+        else if self.pending {"Checking pending approvals on this device…"}
+        else {"No pending approvals on this device."}
+    }
     fn clicked_target(&self,cx:&Cx,actions:&Actions)->Option<ApprovalTarget> {
-        for index in 0..self.rows.len() {
-            let Some((_,row))=self.list.get_item(index) else {continue;};
-            if row.button(cx,ids!(review_approval)).clicked(actions) {
-                return self.painted.get(&row.widget_uid()).cloned();
+        for row in self.list.items().values() {
+            if row.widget.button(cx,ids!(review_approval)).clicked(actions)
+                && let Some(target)=self.painted.get(&row.widget.widget_uid())
+                && self.rows.iter().any(|row|ApprovalTarget::from_summary(&self.identity,row)==*target) {
+                return Some(target.clone());
             }
         }
         None
@@ -102,23 +137,43 @@ impl Widget for ApprovalRows {
         self.list.handle_event(cx,event,scope);
     }
     fn draw_walk(&mut self,cx:&mut Cx2d,scope:&mut Scope,walk:Walk)->DrawStep {
-        let actionable=!self.failed && self.fresh.is_some_and(|at|at.elapsed().as_secs()<15);
+        let actionable=self.actionable();
+        let mut visible=HashSet::new();let mut drawn=false;
         self.list.set_item_range(cx,0,self.rows.len().max(1));
         while self.list.draw_walk(cx,scope,walk).step().is_some() {
+            drawn=true;
             while let Some(index)=self.list.next_visible_item(cx) {
                 let Some(row)=self.rows.get(index) else {
-                    let empty=self.list.item(cx,index,id!(Empty));
-                    empty.set_text(cx,crate::i18n::tr(if self.failed {"Pending approvals are unavailable."} else if self.pending {"Checking pending approvals on this device…"} else {"No pending approvals on this device."}));
-                    empty.draw_all(cx,scope);continue;
+                    // PortalList probes past the logical end to fill its viewport.
+                    // Only index zero represents the single empty-state row.
+                    if index==0 && self.rows.is_empty() {
+                        let empty=self.list.item(cx,index,id!(Empty));
+                        let message=crate::i18n::tr(self.empty_message());
+                        if empty.text()!=message {empty.set_text(cx,message);}
+                        empty.draw_all(cx,scope);
+                    }
+                    continue;
                 };
-                let widget=self.list.item(cx,index,id!(Approval));
-                widget.label(cx,ids!(approval_summary)).set_text(cx,&format!("{} · {}\n{} · {}",row.agent_id,row.tool,row.room_id,row.requester));
-                widget.button(cx,ids!(review_approval)).set_enabled(cx,actionable && row.expires>super::super::approvals::now());
-                self.painted.insert(widget.widget_uid(),ApprovalTarget::from_summary(&self.identity,row));
+                let target=ApprovalTarget::from_summary(&self.identity,row);
+                let key=self.keys[&target];
+                let widget=self.list.item(cx,key,id!(Approval));
+                let summary=format!("{} · {}\n{} · {}",row.agent_id,row.tool,row.room_id,row.requester);
+                let label=widget.label(cx,ids!(approval_summary));
+                if label.text()!=summary {label.set_text(cx,&summary);}
+                set_button_enabled_if_changed(widget.button(cx,ids!(review_approval)),cx,actionable && row.expires>super::super::approvals::now());
+                visible.insert(widget.widget_uid());
+                self.painted.insert(widget.widget_uid(),target);
                 widget.draw_all(cx,scope);
             }
         }
+        if drawn {self.painted.retain(|uid,_|visible.contains(uid));}
         DrawStep::done()
+    }
+}
+
+fn set_button_enabled_if_changed(button:ButtonRef,cx:&mut Cx,enabled:bool) {
+    if button.borrow().is_some_and(|button|button.enabled()!=enabled) {
+        button.set_enabled(cx,enabled);
     }
 }
 
@@ -156,7 +211,9 @@ impl GlobalApprovalInbox {
         if self.pending || self.identity.is_empty() {return;}
         let Some(service)=Service::existing_current() else {return;};
         if service.identity()!=self.identity {return;}
-        self.request=nonce();self.pending=true;self.render(cx);
+        self.request=nonce();self.pending=true;
+        // Keep an already-painted snapshot in place during background checks.
+        if self.fresh.is_none() {self.render(cx);}
         let request=self.request;let identity=self.identity.clone();let widget=self.widget_uid();let cursor=self.cursor.clone();
         let handle=crate::account_session::spawn(async move {
             let result=tokio::time::timeout(std::time::Duration::from_secs(10),service.execute(Command::PendingApprovals {cursor:cursor.clone()}))
@@ -180,29 +237,41 @@ impl GlobalApprovalInbox {
                 }
             }
         }
-        cx.stop_timer(self.timer);self.timer=cx.start_timeout(INTERVAL);self.render(cx);
+        cx.stop_timer(self.timer);self.timer=cx.start_timeout(self.interval(cx));self.render(cx);
     }
     fn actionable(&self)->bool { !self.failed && self.fresh.is_some_and(|at|at.elapsed().as_secs()<15) }
+    fn interval(&self,cx:&Cx)->f64 {
+        if self.view.modal(cx,ids!(inbox_popup)).is_open() {INTERVAL} else {IDLE_INTERVAL}
+    }
     fn render(&mut self,cx:&mut Cx) {
-        let compact=self.view.area().rect(cx).size.x<120.0;
+        let compact=self.compact;
         let count=if self.identity.is_empty() {"0".into()} else if self.failed {"?".into()} else {self.total.to_string()};
-        self.view.button(cx,ids!(open_approval_inbox)).set_text(cx,&if compact {count.clone()} else {
+        let caption=if compact {count.clone()} else {
             crate::i18n::format("Approvals · {count}",&[("count",count)])
-        });
-        self.view.button(cx,ids!(open_approval_inbox)).set_enabled(cx,!self.identity.is_empty());
+        };
+        let button=self.view.button(cx,ids!(open_approval_inbox));
+        if button.text()!=caption {button.set_text(cx,&caption);}
+        set_button_enabled_if_changed(self.view.button(cx,ids!(open_approval_inbox)),cx,!self.identity.is_empty());
         let status=if self.failed {crate::i18n::tr("Approvals could not be refreshed. Review is disabled until a fresh check succeeds.").to_owned()}
             else if self.pending && self.fresh.is_none() {crate::i18n::tr("Checking pending approvals on this device…").into()}
             else {crate::i18n::format("{count} pending approvals across this device. Open a request to review its exact action.",&[("count",self.total.to_string())])};
-        self.view.label(cx,ids!(inbox_status)).set_text(cx,&status);
-        self.view.button(cx,ids!(inbox_next)).set_enabled(cx,!self.pending && self.next.is_some() && self.actionable());
-        self.view.button(cx,ids!(inbox_previous)).set_enabled(cx,!self.pending && !self.back.is_empty());
-        self.view.button(cx,ids!(inbox_refresh)).set_enabled(cx,!self.pending);
+        let label=self.view.label(cx,ids!(inbox_status));
+        if label.text()!=status {label.set_text(cx,&status);}
+        let show_status=!self.rows.is_empty();
+        if label.visible()!=show_status {label.set_visible(cx,show_status);}
+        set_button_enabled_if_changed(self.view.button(cx,ids!(inbox_next)),cx,self.next.is_some() && self.actionable());
+        set_button_enabled_if_changed(self.view.button(cx,ids!(inbox_previous)),cx,!self.back.is_empty());
+        set_button_enabled_if_changed(self.view.button(cx,ids!(inbox_refresh)),cx,!self.pending || self.fresh.is_some());
+        let pagination=self.view.view(cx,ids!(inbox_pagination));
+        let has_pages=self.next.is_some() || !self.back.is_empty();
+        if pagination.visible()!=has_pages {pagination.set_visible(cx,has_pages);}
         if let Some(mut rows)=self.view.approval_rows(cx,ids!(inbox_rows)).borrow_mut() {
-            rows.rows=self.rows.clone();rows.identity=self.identity.clone();rows.fresh=self.fresh;
-            rows.failed=self.failed;rows.pending=self.pending;rows.painted.clear();
-            rows.list.redraw(cx);
+            let changed=rows.rows!=self.rows || rows.identity!=self.identity || rows.failed!=self.failed;
+            let empty=rows.empty_message();let actionable=rows.actionable();
+            if rows.rows!=self.rows || rows.identity!=self.identity {rows.replace_rows(cx,&self.identity,&self.rows);}
+            rows.fresh=self.fresh;rows.failed=self.failed;rows.pending=self.pending && self.fresh.is_none();
+            if changed || empty!=rows.empty_message() || actionable!=rows.actionable() {rows.list.redraw(cx);}
         }
-        self.view.redraw(cx);
     }
     fn review(&mut self,cx:&mut Cx,target:&ApprovalTarget) {
         let current=Service::existing_current().map(|service|service.identity());
@@ -225,16 +294,18 @@ impl Widget for GlobalApprovalInbox {
         if identity!=self.identity {self.reset(cx,identity);}
         let due=self.timer.is_event(event).is_some();
         if !self.identity.is_empty() && (due || self.timer.is_empty() && !self.pending) {
-            self.timer=cx.start_timeout(INTERVAL);self.poll(cx);
+            self.timer=cx.start_timeout(self.interval(cx));self.poll(cx);
         }
         self.view.handle_event(cx,event,scope);
         if let Event::Actions(actions)=event {
             for action in actions {if let Some(done)=action.downcast_ref::<Discovered>() {self.accept(cx,done);}}
             if self.view.button(cx,ids!(open_approval_inbox)).clicked(actions) {
-                self.view.modal(cx,ids!(inbox_popup)).open(cx);self.poll(cx);self.render(cx);
+                self.view.modal(cx,ids!(inbox_popup)).open(cx);
+                cx.stop_timer(self.timer);self.timer=cx.start_timeout(INTERVAL);self.poll(cx);self.render(cx);
             }
             if self.view.button(cx,ids!(inbox_close)).clicked(actions) || self.view.modal(cx,ids!(inbox_popup)).dismissed(actions) {
                 self.view.modal(cx,ids!(inbox_popup)).close(cx);
+                cx.stop_timer(self.timer);self.timer=cx.start_timeout(IDLE_INTERVAL);
             }
             if self.view.button(cx,ids!(inbox_refresh)).clicked(actions) && !self.pending {
                 self.cursor=None;self.back.clear();self.poll(cx);
@@ -254,14 +325,22 @@ impl Widget for GlobalApprovalInbox {
     fn draw_walk(&mut self,cx:&mut Cx2d,scope:&mut Scope,walk:Walk)->DrawStep {
         // The modal uses the current window bounds, including narrow/short views.
         let size=cx.current_pass_size();
-        let width=(size.x-32.0).clamp(200.0,580.0);let height=(size.y-48.0).clamp(200.0,560.0);
+        let width=(size.x-32.0).clamp(200.0,580.0);
+        let preferred_height=if self.rows.is_empty() {240.0} else {560.0};
+        let height=(size.y-48.0).clamp(200.0,preferred_height);
         if self.dialog_size!=Some(dvec2(width,height)) {
             let mut content=self.view.view(cx,ids!(inbox_popup.content));
             script_apply_eval!(cx,content,{width:#(width) height:#(height)});
             self.dialog_size=Some(dvec2(width,height));
         }
-        let compact=self.view.area().rect(cx).size.x<120.0;
-        if compact!=self.compact {self.compact=compact;self.render(cx);}
+        let compact=cx.peek_walk_turtle(walk).size.x<120.0;
+        if compact!=self.compact {
+            self.compact=compact;
+            let mut button=self.view.button(cx,ids!(open_approval_inbox));
+            if compact {script_apply_eval!(cx,button,{align:Align{x:0.5 y:0.5} padding:0 spacing:4});}
+            else {script_apply_eval!(cx,button,{align:Align{x:0 y:0.5} padding:Inset{left:12 right:8} spacing:10});}
+            self.render(cx);
+        }
         self.view.draw_walk(cx,scope,walk)
     }
 
@@ -356,6 +435,114 @@ mod tests {
         finish(&mut cx,&mut inbox,json!({"approvals":[],"total":0,"nextCursor":null}));
         assert!(inbox.clicked_target(&cx,&clicks).is_none());
         assert!(inbox.rows.is_empty() && inbox.total==0);
+    }
+    #[test]
+    fn empty_inbox_draws_one_message_and_keeps_icon_actions_in_the_header() {
+        let (mut cx,mut inbox)=widget();inbox.identity="account".into();
+        finish(&mut cx,&mut inbox,json!({"approvals":[],"total":0,"nextCursor":null}));
+        assert_eq!(inbox.interval(&cx),IDLE_INTERVAL);
+        inbox.view.modal(&cx,ids!(inbox_popup)).open(&mut cx);
+        assert_eq!(inbox.interval(&cx),INTERVAL);
+        for (width,height) in [(375.0,640.0),(1100.0,760.0)] {
+            draw(&mut cx,&mut inbox,width,height);
+            let list=inbox.view.approval_rows(&cx,ids!(inbox_rows));
+            let rows=list.borrow().unwrap();
+            let (template,empty)=rows.list.get_item(0).expect("one visible empty state");
+            assert_eq!(template,id!(Empty));
+            assert_eq!(empty.text(),crate::i18n::tr("No pending approvals on this device."));
+            assert!(rows.list.get_item(1).is_none(),"the viewport must not manufacture more empty rows");
+            assert!(rows.painted.is_empty(),"an empty state is never an approval target");
+            drop(rows);
+            assert!(!inbox.view.view(&cx,ids!(inbox_pagination)).visible());
+            assert!(!inbox.view.label(&cx,ids!(inbox_status)).visible(),"do not repeat the empty-state message in a second summary");
+            assert!(inbox.view.view(&cx,ids!(inbox_popup.content)).area().rect(&cx).size.y<=240.0,"empty inbox uses a compact dialog");
+            let entry=inbox.view.button(&cx,ids!(open_approval_inbox));
+            let entry_bounds=entry.area().rect(&cx);
+            let icon=entry.borrow().unwrap().draw_icon.rect_pos;
+            assert!((f64::from(icon.x)-entry_bounds.pos.x-12.0).abs()<1.0,"expanded approval icon is left aligned: {entry_bounds:?} {icon:?}");
+            let header=inbox.view.view(&cx,ids!(inbox_header)).area().rect(&cx);
+            let refresh=inbox.view.button(&cx,ids!(inbox_refresh));let close=inbox.view.button(&cx,ids!(inbox_close));
+            let a=refresh.area().rect(&cx);let b=close.area().rect(&cx);
+            assert!(refresh.text().is_empty() && close.text().is_empty(),"header actions use the shared icon buttons");
+            assert!(a.pos.x>header.pos.x+header.size.x/2.0 && b.pos.x>=a.pos.x+a.size.x);
+            assert!((b.pos.x+b.size.x-header.pos.x-header.size.x).abs()<1.0,"close stays at the header right edge: {header:?} {b:?}");
+            assert!((a.pos.y+a.size.y/2.0-header.pos.y-header.size.y/2.0).abs()<1.0);
+            assert!((b.pos.y+b.size.y/2.0-header.pos.y-header.size.y/2.0).abs()<1.0);
+        }
+    }
+    #[test]
+    fn unchanged_poll_preserves_the_painted_rows_scroll_and_draw_cache() {
+        let (mut cx,mut inbox)=widget();inbox.identity="account".into();
+        let value=json!({"approvals":(0..12).map(|i|summary("a","one",&format!("p{i}"))).collect::<Vec<_>>(),"total":12,"nextCursor":null});
+        finish(&mut cx,&mut inbox,value.clone());
+        inbox.view.modal(&cx,ids!(inbox_popup)).open(&mut cx);
+        draw(&mut cx,&mut inbox,1100.0,760.0);
+        let list=inbox.view.approval_rows(&cx,ids!(inbox_rows));
+        list.borrow_mut().unwrap().list.set_first_id_and_scroll(3,-12.0);
+        draw(&mut cx,&mut inbox,1100.0,760.0);
+        let rows=list.borrow().unwrap();
+        let position=(rows.list.first_id(),rows.list.first_scroll());
+        let (template,row)=rows.list.get_item(3).unwrap();assert_eq!(template,id!(Approval));
+        let uid=row.widget_uid();let target=rows.painted.get(&uid).unwrap().clone();
+        let storage=rows.rows.as_ptr();drop(rows);
+        cx.new_draw_event=DrawEvent::default();
+        finish(&mut cx,&mut inbox,value);
+        assert!(!cx.new_draw_event.will_redraw(),"an identical response must not invalidate the modal or list");
+        let rows=list.borrow().unwrap();
+        assert_eq!((rows.list.first_id(),rows.list.first_scroll()),position);
+        assert_eq!(rows.rows.as_ptr(),storage,"keep the existing row snapshot allocation");
+        assert_eq!(rows.list.get_item(3).unwrap().1.widget_uid(),uid);
+        assert_eq!(rows.painted.get(&uid),Some(&target),"unchanged refresh keeps the exact painted click target");
+    }
+    #[test]
+    fn changed_and_inserted_approvals_reuse_existing_widgets_without_losing_scroll() {
+        let (mut cx,mut inbox)=widget();inbox.identity="account".into();
+        let mut value=json!({"approvals":(0..12).map(|i|summary("a","one",&format!("p{i}"))).collect::<Vec<_>>(),"total":12,"nextCursor":null});
+        finish(&mut cx,&mut inbox,value.clone());
+        inbox.view.modal(&cx,ids!(inbox_popup)).open(&mut cx);
+        draw(&mut cx,&mut inbox,1100.0,760.0);
+        let list=inbox.view.approval_rows(&cx,ids!(inbox_rows));
+        list.borrow_mut().unwrap().list.set_first_id_and_scroll(3,-12.0);
+        draw(&mut cx,&mut inbox,1100.0,760.0);
+        let rows=list.borrow().unwrap();let position=(rows.list.first_id(),rows.list.first_scroll());
+        let original=rows.list.get_item(3).unwrap().1;let changed=rows.list.get_item(4).unwrap().1;
+        let original_text=original.label(&cx,ids!(approval_summary)).text();drop(rows);
+        value["approvals"][4]["tool"]=json!("files.read");
+        value["approvals"].as_array_mut().unwrap().push(summary("b","two","new"));value["total"]=json!(13);
+        cx.new_draw_event=DrawEvent::default();finish(&mut cx,&mut inbox,value);
+        assert!(cx.new_draw_event.will_redraw(),"changed data must repaint in place");
+        draw(&mut cx,&mut inbox,1100.0,760.0);
+        let rows=list.borrow().unwrap();
+        assert_eq!((rows.list.first_id(),rows.list.first_scroll()),position);
+        assert_eq!(rows.list.get_item(3).unwrap().1.widget_uid(),original.widget_uid());
+        assert_eq!(rows.list.get_item(4).unwrap().1.widget_uid(),changed.widget_uid());
+        assert_eq!(original.label(&cx,ids!(approval_summary)).text(),original_text);
+        assert!(changed.label(&cx,ids!(approval_summary)).text().contains("files.read"));
+        assert_eq!(rows.rows.len(),13);assert_eq!(rows.rows[12].proposal_id,"new");
+        assert!(rows.painted.values().all(|target|target.identity=="account"));
+    }
+    #[test]
+    fn prepended_requests_keep_the_visible_anchor_and_exact_review_target() {
+        let (mut cx,mut inbox)=widget();inbox.identity="account".into();
+        let mut value=json!({"approvals":(0..12).map(|i|summary("a","one",&format!("p{i}"))).collect::<Vec<_>>(),"total":12,"nextCursor":null});
+        finish(&mut cx,&mut inbox,value.clone());inbox.view.modal(&cx,ids!(inbox_popup)).open(&mut cx);
+        draw(&mut cx,&mut inbox,1100.0,760.0);
+        let list=inbox.view.approval_rows(&cx,ids!(inbox_rows));
+        list.borrow_mut().unwrap().list.set_first_id_and_scroll(3,-12.0);
+        draw(&mut cx,&mut inbox,1100.0,760.0);
+        let rows=list.borrow().unwrap();let scroll=rows.list.first_scroll();
+        let target=ApprovalTarget::from_summary("account",&rows.rows[3]);let key=rows.keys[&target];
+        let original=rows.list.get_item(key).unwrap().1;drop(rows);
+        value["approvals"].as_array_mut().unwrap().insert(0,summary("a","one","new-first"));value["total"]=json!(13);
+        finish(&mut cx,&mut inbox,value);draw(&mut cx,&mut inbox,1100.0,760.0);
+        let rows=list.borrow().unwrap();
+        assert_eq!((rows.list.first_id(),rows.list.first_scroll()),(4,scroll));
+        assert_eq!(rows.keys[&target],key);
+        assert_eq!(rows.list.get_item(key).unwrap().1.widget_uid(),original.widget_uid());
+        drop(rows);
+        let button=original.button(&cx,ids!(review_approval));
+        let clicks=cx.capture_actions(|cx|cx.widget_action(button.widget_uid(),ButtonAction::Clicked(KeyModifiers::default())));
+        assert_eq!(inbox.clicked_target(&cx,&clicks),Some(target),"insertion cannot change which exact request the painted button reviews");
     }
     #[test]
     fn discovered_target_is_selected_only_after_matching_fresh_scope_id_and_digest() {

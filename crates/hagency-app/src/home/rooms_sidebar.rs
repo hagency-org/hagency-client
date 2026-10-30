@@ -94,8 +94,8 @@ script_mod! {
                 width: Fill height: 0 visible: true
                 CachedWidget {rooms_list := RoomsList {}}
             }
-            global_approvals := GlobalApprovalInbox {margin:Inset{left:10 right:10}}
             View {width: Fill height: Fill}
+            global_approvals := GlobalApprovalInbox {margin:Inset{left:10 right:10}}
             open_settings := DesktopNavButton {margin: Inset{left: 10 right: 10} nav_icon.draw_icon.svg: ICON_SETTINGS tooltip_text: #(crate::i18n::tr("Settings")) label.text: #(crate::i18n::tr("Settings")) label.i18n_text: "Settings"}
             HagencyAccountBar {margin: Inset{left: 10 right: 10}}
         },
@@ -389,9 +389,9 @@ impl Widget for RoomsSideBar {
         for slot in [ids!(projects_action_slot).as_slice(),ids!(agents_action_slot).as_slice(),ids!(group_chats_action_slot).as_slice()] {self.view.view(cx,slot).set_visible(cx,!collapsed);}
         // Show every primary entry on a normal desktop window, reserving
         // space for the tree and footer before scrolling on short windows.
-        // The persistent approval entry adds 36px plus the parent 5px spacing
+        // The persistent approval entry adds 40px plus the parent 5px spacing
         // to the footer. Keep that space before assigning the scrolling menu.
-        let navigation_height = (height - 301.0).clamp(100.0, 224.0);
+        let navigation_height = (height - 305.0).clamp(100.0, 224.0);
         let navigation = self.view.view(cx, ids!(primary_navigation));
         if let Some(mut view) = navigation.borrow_mut() {view.walk.height = Size::Fixed(navigation_height); }
         if let Some(state) = scope.data.get::<crate::app::AppState>() {
@@ -632,6 +632,12 @@ mod layout_tests {
             let rect=sidebar.view.widget(&cx,id).area().rect(&cx);
             assert!(rect.size.y>0.0 && rect.pos.y>=0.0 && rect.pos.y+rect.size.y<=500.0,"Footer action stays within sidebar: {id:?} {rect:?}");
         }
+        let approvals=sidebar.view.widget(&cx,ids!(global_approvals)).area().rect(&cx);
+        let settings=sidebar.view.widget(&cx,ids!(open_settings)).area().rect(&cx);
+        assert!(approvals.pos.y+approvals.size.y<=settings.pos.y && settings.pos.y-approvals.pos.y-approvals.size.y<=6.0,
+            "approvals belong directly above Settings in the footer: {approvals:?} {settings:?}");
+        assert!((approvals.pos.x-settings.pos.x).abs()<1.0 && (approvals.size.x-settings.size.x).abs()<1.0,
+            "footer entries share the same left edge and width");
     }
 
     #[test]
