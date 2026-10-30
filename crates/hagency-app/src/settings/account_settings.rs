@@ -421,7 +421,16 @@ impl MatchEvent for AccountSettings {
 
         for action in actions {
             if let Some(update) = action.downcast_ref::<VerificationStateAction>() {
-                if update.pin.is_current() {self.verification_state = update.state;self.update_verification_banner(cx);self.view.crypto_settings(cx,ids!(encryption_recovery)).refresh(cx);}
+                if update.pin.is_current() {
+                    let changed = self.verification_state != update.state;
+                    self.verification_state = update.state;
+                    self.update_verification_banner(cx);
+                    // A fresh key query can emit the same verification value.
+                    // Refreshing on that echo would start another key query.
+                    if changed {
+                        self.view.crypto_settings(cx, ids!(encryption_recovery)).refresh(cx);
+                    }
+                }
                 continue;
             }
 

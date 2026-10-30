@@ -23,6 +23,7 @@ pub(super) struct Snapshot {
     pub backup: bool,
     pub backup_connected: bool,
     pub pending: bool,
+    pub applying: bool,
     pub key_loaded: bool,
     pub key_saved: bool,
 }
@@ -44,6 +45,7 @@ pub(super) struct Update {
 pub(super) enum Operation {
     Refresh,
     Prepare,
+    Discard,
     Save,
     LoadPending,
     Enable,
@@ -123,7 +125,8 @@ async fn snapshot(client: &Client, pin: &SessionPin) -> Result<Snapshot> {
     let verified = own.as_ref().is_some_and(|i| i.is_verified())
         && device.is_some_and(|d| d.is_cross_signed_by_owner() && !d.is_deleted());
     let plan = Plan::load(&root(), client)?;
-    let pending = plan.is_some_and(|p| !p.complete);
+    let pending = plan.as_ref().is_some_and(|p| !p.complete);
+    let applying = plan.is_some_and(|p| p.applying && !p.complete);
     current(pin)?;
     let keys = KEY.lock().unwrap();
     let key = keys.as_ref().filter(|k| k.pin == *pin);
@@ -135,6 +138,7 @@ async fn snapshot(client: &Client, pin: &SessionPin) -> Result<Snapshot> {
         backup,
         backup_connected,
         pending,
+        applying,
         key_loaded: key.is_some(),
         key_saved: key.is_some_and(|k| k.saved),
     })
@@ -152,29 +156,114 @@ fn saved_key(pin: &SessionPin, require_saved: bool) -> Result<Zeroizing<String>>
     Ok(Zeroizing::new(key.key.to_string()))
 }
 pub(super) fn file_picker_supported() -> bool {
-    cfg!(any(target_os="macos", target_os="windows", all(target_os="linux", not(target_env="ohos"))))
+    cfg!(any(
+        target_os = "macos",
+        target_os = "windows",
+        all(target_os = "linux", not(target_env = "ohos"))
+    ))
 }
-#[cfg(any(target_os="macos", target_os="windows", all(target_os="linux", not(target_env="ohos"))))]
+#[cfg(target_os = "macos")]
 async fn pick_path(save: bool) -> Result<Option<std::path::PathBuf>> {
-    let picker=rfd::AsyncFileDialog::new().set_title(if save {"Save your recovery key privately"} else {"Choose your recovery key file"});
-    let picked=if save {picker.set_file_name("hagency-recovery-key.txt").save_file().await} else {picker.pick_file().await};
-    Ok(picked.map(|f|f.path().to_owned()))
+    use makepad_widgets::makepad_platform::{makepad_objc_sys::objc_block, os::apple::apple_sys::*};
+    static DIALOG: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+    let permit = DIALOG
+        .try_acquire()
+        .context("Close the previous key dialog first")?;
+    let client = get_client().context("Sign in first")?;
+    let pin = SessionPin::capture(&client).context("No Matrix session")?;
+    let (send, receive) = tokio::sync::oneshot::channel();
+    let callback = std::sync::Mutex::new(Some(move || {
+        let _original_dialog = permit;
+        let chosen = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if !pin.is_current() {
+                return None;
+            }
+            let picker = rfd::FileDialog::new().set_title(if save {
+                "Save your recovery key privately"
+            } else {
+                "Choose your recovery key file"
+            });
+            if save {
+                picker.set_file_name("hagency-recovery-key.txt").save_file()
+            } else {
+                picker.pick_file()
+            }
+        }))
+        .map_err(|_| anyhow::anyhow!("The system key dialog could not be opened"));
+        let _ = send.send(chosen);
+    }));
+    // Makepad drives AppKit's event loop itself. Async rfd checks isRunning(),
+    // which is false here. Run a synchronous panel on the main operation queue,
+    // outside a dispatch callback, and return only the chosen path to the worker.
+    unsafe {
+        let block = objc_block!(move || {
+            if let Some(choose) = callback.lock().unwrap().take() {
+                choose();
+            }
+        });
+        let queue: ObjcId = msg_send![class!(NSOperationQueue), mainQueue];
+        let operation: ObjcId = msg_send![class!(NSBlockOperation),blockOperationWithBlock:&block];
+        let (): () = msg_send![queue,addOperation:operation];
+    }
+    receive.await.context("The key dialog was interrupted")?
 }
-#[cfg(not(any(target_os="macos", target_os="windows", all(target_os="linux", not(target_env="ohos")))))]
+#[cfg(any(
+    target_os = "windows",
+    all(target_os = "linux", not(target_env = "ohos"))
+))]
+async fn pick_path(save: bool) -> Result<Option<std::path::PathBuf>> {
+    let picker = rfd::AsyncFileDialog::new().set_title(if save {
+        "Save your recovery key privately"
+    } else {
+        "Choose your recovery key file"
+    });
+    let picked = if save {
+        picker
+            .set_file_name("hagency-recovery-key.txt")
+            .save_file()
+            .await
+    } else {
+        picker.pick_file().await
+    };
+    Ok(picked.map(|f| f.path().to_owned()))
+}
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "windows",
+    all(target_os = "linux", not(target_env = "ohos"))
+)))]
 async fn pick_path(_save: bool) -> Result<Option<std::path::PathBuf>> {
-    anyhow::bail!("File-based recovery setup is available in the desktop app. Paste an existing recovery key to restore this device.")
+    anyhow::bail!(
+        "File-based recovery setup is available in the desktop app. Paste an existing recovery key to restore this device."
+    )
 }
 async fn pick_key() -> Result<Option<Zeroizing<String>>> {
-    let Some(path)=pick_path(false).await? else {return Ok(None)};
+    let Some(path) = pick_path(false).await? else {
+        return Ok(None);
+    };
     Ok(Some(pending::load_key(&path)?))
 }
 
+async fn recover(client: &Client, key: &str) -> Result<()> {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(45),
+        client.encryption().recovery().recover(key),
+    )
+    .await
+    .context(
+        "Recovery is unconfirmed. Keep your saved key, refresh, and resume the original setup.",
+    )??;
+    Ok(())
+}
 async fn perform(client: &Client, pin: &SessionPin, op: Operation) -> Result<Option<&'static str>> {
     current(pin)?;
     match op {
         Operation::Refresh => {}
         Operation::Prepare => {
-            ensure!(file_picker_supported(), "Set up recovery in the desktop app first");
+            ensure!(
+                file_picker_supported(),
+                "Set up recovery in the desktop app first"
+            );
             let state = snapshot(client, pin).await?;
             ensure!(
                 state.can_prepare(),
@@ -192,9 +281,28 @@ async fn perform(client: &Client, pin: &SessionPin, op: Operation) -> Result<Opt
             });
             return Ok(Some("Save your recovery key, then enable recovery."));
         }
+        Operation::Discard => {
+            let plan = Plan::load(&root(), client)?.context("No pending setup")?;
+            ensure!(
+                !plan.applying && !plan.complete,
+                "Resume the original saved key; this setup may already be published"
+            );
+            ensure!(
+                default_key(client).await?.is_none(),
+                "Recovery is already configured; restore its key instead"
+            );
+            current(pin)?;
+            plan.discard(&root())?;
+            clear();
+            return Ok(Some(
+                "Unstarted recovery setup discarded. No server keys were changed.",
+            ));
+        }
         Operation::Save => {
             let key = saved_key(pin, false)?;
-            let Some(path)=pick_path(true).await? else {return Ok(None)};
+            let Some(path) = pick_path(true).await? else {
+                return Ok(None);
+            };
             current(pin)?;
             pending::save_key(&path, &key)?;
             let mut keys = KEY.lock().unwrap();
@@ -273,7 +381,7 @@ async fn perform(client: &Client, pin: &SessionPin, op: Operation) -> Result<Opt
                 ensure!(*returned == *saved, "Recovery key confirmation failed");
             }
             current(pin)?;
-            client.encryption().recovery().recover(&saved).await?;
+            recover(client, &saved).await?;
             let state = snapshot(client, pin).await?;
             ensure!(
                 state.default_key.as_deref() == Some(&plan.key_id)
@@ -294,14 +402,14 @@ async fn perform(client: &Client, pin: &SessionPin, op: Operation) -> Result<Opt
                 return Ok(None);
             };
             current(pin)?;
-            client.encryption().recovery().recover(&key).await?;
+            recover(client, &key).await?;
             return Ok(Some(
                 "Recovery key accepted. Available room keys will be downloaded as needed.",
             ));
         }
         Operation::Restore(key) => {
             ensure!(!key.trim().is_empty(), "Enter your recovery key");
-            client.encryption().recovery().recover(key.trim()).await?;
+            recover(client, key.trim()).await?;
             return Ok(Some(
                 "Recovery key accepted. Available room keys will be downloaded as needed.",
             ));

@@ -2786,5 +2786,11 @@
   "This device is not verified. Verify it or restore your recovery key.": "此设备尚未验证。请验证设备或使用恢复密钥恢复。",
   "This device is verified. Encrypted history also requires its room keys.": "此设备已验证。读取加密历史还需要相应的房间密钥。",
   "Verification checks device identity. Recovery protects the keys needed to read encrypted history on another device.": "设备验证用于核对身份；恢复功能保护在其他设备上读取加密历史所需的密钥。",
-  "Verification completed. The compared keys matched. Encrypted history still requires its room keys.": "验证完成，双方核对的密钥一致。读取加密历史仍需要相应的房间密钥。"
+  "Verification completed. The compared keys matched. Encrypted history still requires its room keys.": "验证完成，双方核对的密钥一致。读取加密历史仍需要相应的房间密钥。",
+  "Key recovery": "密钥恢复",
+  "Discard unfinished setup": "放弃未完成的设置",
+  "Unstarted recovery setup discarded. No server keys were changed.": "已放弃尚未启用的恢复设置，服务器密钥未改变。",
+  "Finish signing in with Pasion in your browser, then return to Hagency.": "请在浏览器中完成 Pasion 登录，然后返回 Hagency。",
+  "Continue in your browser": "在浏览器中继续",
+  "Setup not confirmed": "设置尚未确认"
 }
