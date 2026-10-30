@@ -22,6 +22,13 @@ use windows_sys::{
     },
 };
 
+fn diagnostic(stage: &str, detail: impl std::fmt::Display) {
+    if std::env::var_os("HAGENCY_WINDOWS_SYNC_TRACE").as_deref() == Some(std::ffi::OsStr::new("1"))
+    {
+        eprintln!("directory-sync {stage}: {detail}");
+    }
+}
+
 // Compile-time checks tie the fixed outputs to the pinned C layouts. No layout
 // assertion, formatting or allocation is evaluated after a native call starts.
 const _: () = {
@@ -65,7 +72,8 @@ impl WindowsDirectorySync {
         owner.check()?;
         // A supported profile does not replace an actual directory flush. This
         // initial ACK precedes journal IO; every later journal needs its own ACK.
-        if owner.flush().is_err() {
+        if let Err(error) = owner.flush() {
+            diagnostic("initial_flush", error);
             return Ok(None);
         }
         owner.check()?;
@@ -132,7 +140,10 @@ fn candidate(directory: &Dir) -> Result<Option<(File, Identity)>, Error> {
     // overlapped flag, ReOpenFile, handle duplication or ambient path fallback.
     let file = match directory.open_with(".", &options) {
         Ok(file) => file.into_std(),
-        Err(_) => return Ok(None),
+        Err(error) => {
+            diagnostic("relative_open", error);
+            return Ok(None);
+        }
     };
     if identity(&file)? != before {
         return Err(Error::Private);
@@ -162,7 +173,7 @@ fn query(file: File, #[cfg(test)] gate: Option<tests::Gate>) -> Option<File> {
     let mut flags = 0;
     // SAFETY: Live borrowed File, initialized fixed output storage and optional
     // null outputs meet the synchronous Win32 signature. No buffer escapes.
-    if unsafe {
+    let filesystem_result = unsafe {
         GetVolumeInformationByHandleW(
             file.as_raw_handle(),
             ptr::null_mut(),
@@ -173,7 +184,12 @@ fn query(file: File, #[cfg(test)] gate: Option<tests::Gate>) -> Option<File> {
             filesystem.as_mut_ptr(),
             filesystem.len() as u32,
         )
-    } == 0
+    };
+    diagnostic(
+        "filesystem",
+        format_args!("result={filesystem_result} name={filesystem:?} flags={flags}"),
+    );
+    if filesystem_result == 0
         || filesystem[..5] != [78, 84, 70, 83, 0]
         || flags & FILE_READ_ONLY_VOLUME != 0
     {
@@ -222,6 +238,17 @@ fn query(file: File, #[cfg(test)] gate: Option<tests::Gate>) -> Option<File> {
     if completion == STATUS_PENDING {
         park_original(original);
     }
+    // Only terminal completion can reach this diagnostic; pending native
+    // output storage continues to follow the unchanged ownership path above.
+    diagnostic(
+        "device",
+        format_args!(
+            "completion={completion} information={} device={} characteristics={}",
+            original.status.Information,
+            original.device.DeviceType,
+            original.device.Characteristics
+        ),
+    );
     if completion != STATUS_SUCCESS
         || original.status.Information != size_of::<FILE_FS_DEVICE_INFORMATION>()
         || !supported_profile(original.device.DeviceType, original.device.Characteristics)
