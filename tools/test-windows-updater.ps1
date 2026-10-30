@@ -13,13 +13,17 @@ $previousData = $env:HAGENCY_APP_DATA_DIR
 $previousMarker = $env:HAGENCY_UPDATE_TEST_MARKER
 $previousToolchain = $env:RUSTUP_TOOLCHAIN
 $previousBusy = $env:HAGENCY_UPDATE_TEST_BUSY
+$previousTemp = $env:TEMP
+$previousTmp = $env:TMP
 $env:RUSTUP_TOOLCHAIN = $Toolchain
 $testRoot = Join-Path $OutputRoot ([guid]::NewGuid().ToString())
 New-Item -ItemType Directory -Force -Path $testRoot | Out-Null
 $env:CARGO_HOME = 'D:/BuildCache/hagency-client/cargo'
 $env:CARGO_TARGET_DIR = 'D:/BuildCache/hagency-client/target'
-$env:TEMP = 'D:/BuildCache/hagency-client/tmp'
-$env:TMP = $env:TEMP
+$temporary = Join-Path $testRoot 'tmp'
+New-Item -ItemType Directory -Force -Path $temporary | Out-Null
+$env:TEMP = $temporary
+$env:TMP = $temporary
 Push-Location $repo
 try {
     $metadata = (& cargo metadata --no-deps --locked --format-version 1 | ConvertFrom-Json)
@@ -157,5 +161,7 @@ SectionEnd
     $env:HAGENCY_UPDATE_TEST_MARKER = $previousMarker
     $env:RUSTUP_TOOLCHAIN = $previousToolchain
     $env:HAGENCY_UPDATE_TEST_BUSY = $previousBusy
+    $env:TEMP = $previousTemp
+    $env:TMP = $previousTmp
     Pop-Location
 }
