@@ -68,6 +68,17 @@ fn history_key(secret: &str, context: &str) -> [u8; 32] {
 
 #[tokio::test]
 async fn credential_migration_retained_original_ref_sqlite_and_encrypted_history_survive_handoff() {
+    const NAME: &str = "persistence::credential_state::retained::retained_tests::credential_migration_retained_original_ref_sqlite_and_encrypted_history_survive_handoff";
+    // This migration exercises the application's global pending-owner flush.
+    // Give it one complete App lifetime rather than sharing intentionally dirty
+    // OAuth fault fixtures from other independent App lifetimes in this harness.
+    if std::env::var_os("HAGENCY_RETAINED_CLEANUP_CHILD").is_none() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("private-profile");
+        hagency_store::private::create_directory_new(&root).unwrap();
+        run_cleanup_child(NAME, &root, false);
+        return;
+    }
     let _serial = SERIAL.lock().await;
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("data");

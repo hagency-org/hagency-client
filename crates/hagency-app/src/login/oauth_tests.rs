@@ -307,6 +307,13 @@ async fn sdk_oauth_registration_disabled_after_discovery_refuses_before_dcr_or_b
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 #[tokio::test]
 async fn sdk_oauth_dcr_pkce_callback_whoami_refresh_and_session_roundtrip() {
+    const NAME: &str = "login::homeserver::oauth_tests::sdk_oauth_dcr_pkce_callback_whoami_refresh_and_session_roundtrip";
+    if crate::persistence::credential_state::tests::isolated_case(
+        NAME,
+        "HAGENCY_OAUTH_ROUNDTRIP_CHILD",
+    ) {
+        return;
+    }
     let fixture = Fixture::new();
     let client = Client::builder()
         .homeserver_url(&fixture.origin)

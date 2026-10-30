@@ -74,3 +74,28 @@ Matrix 访问令牌已失效而刷新令牌仍未确认撤销时，当前策略�
 原生 Agent/独立 server-login 的库路径在 Linux 也需要可用 Secret Service 与用户
 D-Bus；缺服务的 headless/container 环境明确失败，不会隐式选择文件或 Mock。
 真实 Linux 服务/容器凭据行为未获资格验证，旧产品 CLI/无界面安装器仍未恢复。
+
+
+## 整合后完整并行测试的隔离修正
+
+整合 main 后的精确 CI profile 首轮实际为 851 通过、5 失败、2 个原有忽略，
+不能计作全库通过（主树原记录 `app-ci-profile-full.log`）。5 项失败均进入了
+凭据加载前的全局 pending 保存；最初的 epoch 并发猜测不是已证根因。
+
+已用未修改的 `60058011` 二进制做真实因果对照：一个进程串行运行原 OAuth
+roundtrip 后再运行 `session_preserves`，实际 1 通过/1 失败，后者精确重现
+`credential_storage_failed`（`.run/quality-credentials/shared-pending-two-case-negative.log`）；
+新进程单独运行同一完整名称 case 实际 1 通过
+（`.run/quality-credentials/shared-pending-same-case-alone.log`）。第一次简称加
+`--exact` 的诊断只选中 0 项，原记录保留，不计入通过证据。
+
+原 OAuth 测试故意删除会话文件后再真实刷新，以断言已移除会话不会被重建；
+保存回调按设计保留脏快照，测试随后删除其资料目录。该进程全局 pending owner
+在回调家族释放后，仍会被其他测试的加载入口尝试保存到已删除目录。
+这证明了测试 App 生命周期互相污染，而不是应当弱化生产围栏的理由。
+
+仅将这个 producer 及 5 个 consumer 放进现有独立子进程 helper：每个使用全新
+私有资料目录、显式 Fake/Native deny、精确单项 selector 与 60 秒 watchdog。
+故意删会话→真实刷新、原数据库/历史/令牌断言全部保留；未清空生产 pending，
+未改生产 epoch/flush/授权逻辑，未降低完整 suite 的默认并行度。该 test-only
+补丁的 fresh 因果两项与完整默认并行重验由主任务执行，不能用旧二进制代替。

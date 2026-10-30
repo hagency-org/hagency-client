@@ -11,13 +11,15 @@ pub(crate) fn isolated_case(name: &str, marker: &str) -> bool {
     }
     use std::io::{Read, Seek};
     let root = tempfile::tempdir().unwrap();
+    let profile = root.path().join("private-profile");
+    hagency_store::private::create_directory_new(&profile).unwrap();
     let mut stdout = tempfile::tempfile().unwrap();
     let mut stderr = tempfile::tempfile().unwrap();
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", name, "--nocapture", "--test-threads=1"])
         .env(marker, "1")
         .env("HAGENCY_NATIVE_CREDENTIAL_IO", "deny")
-        .env("HAGENCY_APP_DATA_DIR", root.path())
+        .env("HAGENCY_APP_DATA_DIR", &profile)
         .stdout(stdout.try_clone().unwrap())
         .stderr(stderr.try_clone().unwrap())
         .spawn()
@@ -107,6 +109,10 @@ fn session_path(root: &Path, session: &FullSessionPersisted) -> PathBuf {
 }
 #[test]
 fn credential_migration_session_preserves_exact_database_key_and_tokens() {
+    const NAME: &str = "persistence::credential_state::tests::credential_migration_session_preserves_exact_database_key_and_tokens";
+    if isolated_case(NAME, "HAGENCY_SESSION_KEY_CHILD") {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let fake = Arc::new(FakeStore::default());
     let service = Service::new(root.path().into(), Vault::new(fake.clone())).unwrap();
@@ -148,6 +154,10 @@ fn credential_migration_session_preserves_exact_database_key_and_tokens() {
 }
 #[test]
 fn credential_migration_locked_store_keeps_original_plaintext_only_until_verified_commit() {
+    const NAME: &str = "persistence::credential_state::tests::credential_migration_locked_store_keeps_original_plaintext_only_until_verified_commit";
+    if isolated_case(NAME, "HAGENCY_LOCKED_STORE_CHILD") {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let fake = Arc::new(FakeStore::default());
     let service = Service::new(root.path().into(), Vault::new(fake.clone())).unwrap();
@@ -233,6 +243,10 @@ fn credential_migration_logout_legacy_retained_without_session_is_database_only(
 
 #[test]
 fn credential_migration_older_keep_cannot_roll_back_newer_canonical_pair() {
+    const NAME: &str = "persistence::credential_state::tests::credential_migration_older_keep_cannot_roll_back_newer_canonical_pair";
+    if isolated_case(NAME, "HAGENCY_OLDER_KEEP_CHILD") {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let service = fake_service(root.path());
     let original = session_fixture();
@@ -540,6 +554,10 @@ async fn credential_migration_cancelled_native_preparation_keeps_original_io_and
 
 #[test]
 fn credential_migration_activation_reload_uses_fresh_keep_without_publishing_authority() {
+    const NAME: &str = "persistence::credential_state::tests::credential_migration_activation_reload_uses_fresh_keep_without_publishing_authority";
+    if isolated_case(NAME, "HAGENCY_ACTIVATION_RELOAD_CHILD") {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let service = fake_service(root.path());
     let original = session_fixture();
