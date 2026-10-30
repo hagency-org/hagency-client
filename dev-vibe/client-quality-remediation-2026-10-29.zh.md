@@ -197,3 +197,8 @@ R02本次主锁匹配12→11，audit仍exit1；其他依赖与独立Octos风险�
 类型glob与basename匹配，完整路径规则未生效；已改原四种文件名和完整原字符串，
 重新独立检查退出码。此规则也会适用于同名文件中的相同完整字符串，
 不声称它具有该工具不支持的目录级匹配能力。
+
+
+### R05整合候选本地资格（4383b920，尚未合并）
+
+桌面Native scoped vault、原key/ref迁移、真实最新token custody及revoke-only队列已整合已合并main/SDK95。父本地精确features App857/0/2、完整console130/0/6、两端严格Clippy与R05 lifecycle5/5通过；原whole-engine失败记录完整保留，当前提交三平台CI仍为合并前条件。启动数据库自动回收已安全暂停，跨进程创建/删除协议尚未交付。真实OS服务、移动端、生产OAuth和旧key自动GC仍开放。详见凭据整改报告；不以此候选关闭R02/R07/R18或所有生产资格。

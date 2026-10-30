@@ -157,3 +157,15 @@ v2/schema、完整 Scope、Vault/AEAD 和 no-token 检查，之后释放再观�
 其他错误立即失败，原 offline 外层 5 秒 timeout 完整保留；没有重试写入或
 任何非幂等操作，没有改生产权限/锁/上限。此新版本仍待 fresh 默认并行验证，
 不把单独运行通过或被终止的生命周期记为最终通过。
+
+
+## 父任务最终本地复验（4383b920）
+
+- 精确 CI features 的 App 完整默认并行库：857 通过、0 失败、2 个原有忽略，85.52 秒。因果两项2/2、真实 SDK 审批与严格 mock 两项2/2均通过，无原 SDK 后台广播 panic；唯一 full stderr panic 是原更新器刻意故障注入。App 及 miniapp-core own 全 targets 严格 Clippy 通过（1m58s）。
+- 最终 console 完整默认并行：130 通过、0 失败、6 个原有忽略（66.31 秒）。最终 Engine CI 所列全部包全 targets严格Clippy通过3.94秒，格式检查通过。较早 whole all-targets 的37个其他目标通过，但原 whole 命令曾含4/2项 console失败，保持失败状态；本轮仅重跑受改动影响的完整console，不将组合证据冒充一次全目标绿色命令。合并前仍要求当前提交的完整 hosted engine CI。
+- 未修改的 agent-spec1.4 原生命周期严格复验5/5：81个精确变更路径 boundary及4个真实Cargo组，分别17、32、13、3项实际通过，0 fail/skip/uncertain/pending_review；3项非阻断lint保留。生命周期App用其默认feature，CI完整App另用上面的精确features，未伪造Cargo feature支持。先前为修正源而中止的生命周期不计通过。
+- 当前核心17/17、i18n2760 entries/2034 callsites/0missing、331文件样式0violations、主题和typos、布局、当前Native caller、50个契约检查及发行资格脚本通过。主锁新鲜audit仍11匹配/exit1；7个既有package缺Cargo许可元数据并未被当作无许可判决。真实三平台OS凭据、生产OAuth、移动端与旧key自动GC仍未验证/未交付，R19自动数据库删除仍暂停。
+
+所有本地凭据执行均显式 `HAGENCY_NATIVE_CREDENTIAL_IO=deny`，使用明确Fake及临时私有profile。App源码/生产依赖在53d13f37至4383b920保持相同，之后只有引擎集成fixture、契约与本文变化；原始失败/负对照和最终证据都保存在主任务 `.run/quality-credentials-integration/`。当前PR/三平台CI仍待，以上不等于已合并。
+
+本批改动的6个workflow均通过actionlint（含shellcheck）。额外全仓actionlint仍在未改动的app-aur-publish.yml:99报既有SC2129样式项；该全仓命令保留exit1，不计全仓通过。最终typos与布局检查通过。
