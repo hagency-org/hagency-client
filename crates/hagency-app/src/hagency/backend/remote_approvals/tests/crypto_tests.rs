@@ -76,8 +76,7 @@ fn is_own_secret_request(body: &[u8], owner: &UserId) -> bool {
             user == owner
                 && !devices.is_empty()
                 && devices.values().all(|content| {
-                    content
-                        .deserialize_as::<ToDeviceSecretRequestEventContent>()
+                    serde_json::from_str::<ToDeviceSecretRequestEventContent>(content.json().get())
                         .is_ok_and(|request| {
                             matches!(request.action.action(), "request" | "request_cancellation")
                         })
