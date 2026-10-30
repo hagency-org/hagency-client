@@ -1378,6 +1378,17 @@ impl Widget for RoomScreen {
         let board = self.view.action_room_board(cx, ids!(actions_board));
         if let Event::Actions(actions) = event {
             for action in actions {
+                if let Some(changed) = action.downcast_ref::<super::room_settings::RoomSettingsChanged>()
+                    && let Some(timeline) = self.tl_state.as_mut()
+                    && timeline.kind.room_id() == changed.0.room_id()
+                    && crate::sliding_sync::get_client().and_then(|client| client.get_room(changed.0.room_id()))
+                        .is_some_and(|room| room.encryption_state().is_encrypted())
+                {
+                    // A settings refresh can update SDK state before the room-list
+                    // diff observes a transition. Read the current session's Room.
+                    timeline.is_encrypted = true;
+                    self.view.room_input_bar(cx, ids!(room_input_bar)).update_encryption_state(cx, true);
+                }
                 if let Some(crate::miniapps::MiniAppsAction::OpenActionsRoom(target)) = action.downcast_ref()
                     && crate::sliding_sync::current_user_id().as_ref() == Some(&target.account)
                     && matches!(&self.timeline_kind, Some(TimelineKind::MainRoom { room_id }) if room_id == &target.room_id) {
