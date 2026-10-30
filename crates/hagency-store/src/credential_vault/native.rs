@@ -48,10 +48,10 @@ fn classify(error: keyring::Error) -> Error {
                 }
             }
             #[cfg(windows)]
-            if let Some(status) = source.downcast_ref::<keyring::windows::Error>() {
-                if matches!(status.0, 5 | 1223) {
-                    return Error::Denied;
-                }
+            if let Some(status) = source.downcast_ref::<keyring::windows::Error>()
+                && matches!(status.0, 5 | 1223)
+            {
+                return Error::Denied;
             }
         }
         _ => {}
@@ -120,5 +120,34 @@ impl SecretStore for NativeStore {
             let _ = reference;
             Err(Error::Unsupported)
         }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_windows_denial_classification_preserves_other_failures() {
+        for code in [5, 1223] {
+            assert!(matches!(
+                classify(keyring::Error::PlatformFailure(Box::new(
+                    keyring::windows::Error(code)
+                ))),
+                Error::Denied
+            ));
+            assert!(matches!(
+                classify(keyring::Error::NoStorageAccess(Box::new(
+                    keyring::windows::Error(code)
+                ))),
+                Error::Denied
+            ));
+        }
+        assert!(matches!(
+            classify(keyring::Error::PlatformFailure(Box::new(
+                keyring::windows::Error(1312)
+            ))),
+            Error::Unavailable
+        ));
     }
 }

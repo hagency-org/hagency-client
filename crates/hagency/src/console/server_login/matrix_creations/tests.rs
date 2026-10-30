@@ -4,6 +4,7 @@ fn input(kind: Kind) -> Input {
         command_id: "command-1".into(),
         kind: kind.clone(),
         name: "Discussion".into(),
+        encrypted: false,
         project_id: (kind == Kind::Room).then(|| "prj_1".into()),
         space_id: (kind == Kind::Room).then(|| "!space:example.test".into()),
     }
@@ -404,4 +405,59 @@ fn space_candidates_filter_real_membership_metadata_and_bound_pagination() {
             .is_none()
     );
     assert!(candidate_space("!s:test", &json!({}), owner, &projects).is_err());
+}
+
+#[test]
+fn project_room_encryption_is_frozen_in_the_request_and_recovery_proof() {
+    let mut c = command();
+    c.input.encrypted = true;
+    let (_, _, body) = MatrixOperation::Create(
+        c.input.clone(),
+        c.owner.clone(),
+        "@_hagency_service:example.test".into(),
+    )
+    .request()
+    .unwrap();
+    let state_events = body.unwrap()["initial_state"].as_array().unwrap().clone();
+    assert!(
+        state_events.iter().any(|e| e["type"] == "m.room.encryption"
+            && e["content"]["algorithm"] == "m.megolm.v1.aes-sha2")
+    );
+    assert!(
+        state_events
+            .iter()
+            .any(|e| e["type"] == MARKER && e["content"]["encrypted"] == true)
+    );
+    let mut actual = state(&c);
+    assert!(
+        !created_by(&actual, &c),
+        "a plaintext room cannot recover an encrypted intent"
+    );
+    actual[1]["content"]["encrypted"] = json!(true);
+    actual.as_array_mut().unwrap().push(
+        json!({"type":"m.room.encryption","state_key":"","content":{"algorithm":"unsupported"}}),
+    );
+    assert!(!created_by(&actual, &c));
+    actual[3]["content"]["algorithm"] = json!("m.megolm.v1.aes-sha2");
+    assert!(created_by(&actual, &c));
+    let mut duplicate = actual.clone();
+    duplicate.as_array_mut().unwrap().push(actual[3].clone());
+    assert!(
+        !created_by(&duplicate, &c),
+        "ambiguous state cannot confirm an encrypted creation"
+    );
+    let mut space = input(Kind::Space);
+    space.encrypted = true;
+    assert!(validate_input(&space).is_err());
+    assert!(
+        MatrixOperation::Create(space, c.owner, "@_hagency_service:example.test".into())
+            .request()
+            .is_err()
+    );
+    let legacy = serde_json::to_value(input(Kind::Room)).unwrap();
+    assert!(legacy.get("encrypted").is_none());
+    assert!(
+        !serde_json::from_value::<Input>(legacy).unwrap().encrypted,
+        "old journals retain their original plaintext intent"
+    );
 }

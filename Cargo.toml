@@ -127,14 +127,14 @@ debug-assertions = false
 # Preserve mdurl percent primitives while replacing its obsolete IDNA dependency.
 mdurl = { path = "vendor/mdurl" }
 # Maintain the SDK changes in the fork branch; pin its reviewed revision.
-matrix-sdk = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "95de9a4e393921c446b2b79e5d72ad09411ef586" }
-matrix-sdk-base = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "95de9a4e393921c446b2b79e5d72ad09411ef586" }
-matrix-sdk-common = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "95de9a4e393921c446b2b79e5d72ad09411ef586" }
-matrix-sdk-crypto = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "95de9a4e393921c446b2b79e5d72ad09411ef586" }
-matrix-sdk-indexeddb = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "95de9a4e393921c446b2b79e5d72ad09411ef586" }
-matrix-sdk-sqlite = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "95de9a4e393921c446b2b79e5d72ad09411ef586" }
-matrix-sdk-store-encryption = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "95de9a4e393921c446b2b79e5d72ad09411ef586" }
-matrix-sdk-ui = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "95de9a4e393921c446b2b79e5d72ad09411ef586" }
+matrix-sdk = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "a3181338524893fe7b4191fbb8fbf182415d3c32" }
+matrix-sdk-base = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "a3181338524893fe7b4191fbb8fbf182415d3c32" }
+matrix-sdk-common = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "a3181338524893fe7b4191fbb8fbf182415d3c32" }
+matrix-sdk-crypto = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "a3181338524893fe7b4191fbb8fbf182415d3c32" }
+matrix-sdk-indexeddb = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "a3181338524893fe7b4191fbb8fbf182415d3c32" }
+matrix-sdk-sqlite = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "a3181338524893fe7b4191fbb8fbf182415d3c32" }
+matrix-sdk-store-encryption = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "a3181338524893fe7b4191fbb8fbf182415d3c32" }
+matrix-sdk-ui = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "a3181338524893fe7b4191fbb8fbf182415d3c32" }
 # Octos' existing OpenHarmony ioctl ABI correction for rustyline's nix 0.29.
 nix = { git = "https://github.com/octos-org/octos.git", rev = "deb433e9a452c03d8fe7f4f6a26b42785c47ced7" }
 # Pending additive App Hub contract release; see crates/octosense-app-contract/RINX-PATCH.md.
@@ -164,47 +164,47 @@ robius-share = { path = "crates/robius-share" }
 
 
 [patch."https://github.com/OctoSense-org/makepad.git"]
-makepad-script = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-widgets = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-code-editor = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-app-module = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-ai = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-studio-protocol = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-network = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-wm-api = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-ai-services = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-strict-json = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-wm-theme = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-sheets = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-photos = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-aichat = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-markdown = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-markdown-widgets = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
+makepad-script = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-widgets = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-code-editor = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-app-module = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-ai = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-studio-protocol = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-network = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-wm-api = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-ai-services = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-strict-json = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-wm-theme = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-sheets = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-photos = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-aichat = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-markdown = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-markdown-widgets = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
 
 [patch."https://github.com/OctoSense-org/makepad"]
-makepad-script = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-widgets = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-code-editor = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-app-module = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-ai = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-studio-protocol = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-network = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-wm-api = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-ai-services = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-strict-json = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-wm-theme = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-sheets = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-photos = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-aichat = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-markdown = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-markdown-widgets = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
+makepad-script = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-widgets = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-code-editor = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-app-module = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-ai = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-studio-protocol = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-network = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-wm-api = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-ai-services = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-strict-json = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-wm-theme = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-sheets = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-photos = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-aichat = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-markdown = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-markdown-widgets = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
 
 [patch."https://github.com/kevinaboos/makepad"]
-makepad-widgets = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-code-editor = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
+makepad-widgets = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-code-editor = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
 
 [patch."https://github.com/ZhangHanDong/makepad.git"]
-makepad-widgets = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
+makepad-widgets = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
 
 [patch."https://github.com/OctoSense-org/Octoscript.git"]
 octoscript-ui-l0 = { git = "https://www.github.com/OctoSense-org/Octoscript.git", rev = "dbd48cfb799551c11e30970c393777d29644a605" }
@@ -224,50 +224,50 @@ octoscript-node = { git = "https://www.github.com/OctoSense-org/Octoscript-Makep
 # Reviewed renderer fixes live on the fork branch chris/bounded-chat-memory.
 # Pin every source spelling to the same immutable fork revision.
 [patch."https://www.github.com/OctoSense-org/makepad.git"]
-makepad-apple-sys = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-byteorder-lite = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-code-editor = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-derive-wasm-bridge = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-derive-widget = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-draw = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-error-log = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-fast-inflate = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-filesystem-watcher = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-futures = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-futures-legacy = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-gif = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-git = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-half = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-html = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-latex-math = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-live-id = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-live-id-macros = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-live-reload-core = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-markdown = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-markdown-widgets = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-math = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-micro-proc-macro = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-micro-serde = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-micro-serde-derive = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-network = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-objc-sys = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-platform = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-platform-video = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-regex = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-script = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-script-derive = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-script-std = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-shared-bytes = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-stitch = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-studio-protocol = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-svg = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-tsdf = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-wasm-bridge = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-webp = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-widgets = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-zune-bmp = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-zune-core = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-zune-inflate = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-zune-jpeg = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-zune-png = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
-makepad-zune-qoi = { git = "https://github.com/chrislearn/makepad.git", rev = "77c8039bc0910f7099bfe4c6f6106a74ae783528" }
+makepad-apple-sys = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-byteorder-lite = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-code-editor = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-derive-wasm-bridge = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-derive-widget = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-draw = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-error-log = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-fast-inflate = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-filesystem-watcher = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-futures = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-futures-legacy = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-gif = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-git = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-half = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-html = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-latex-math = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-live-id = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-live-id-macros = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-live-reload-core = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-markdown = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-markdown-widgets = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-math = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-micro-proc-macro = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-micro-serde = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-micro-serde-derive = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-network = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-objc-sys = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-platform = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-platform-video = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-regex = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-script = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-script-derive = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-script-std = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-shared-bytes = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-stitch = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-studio-protocol = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-svg = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-tsdf = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-wasm-bridge = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-webp = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-widgets = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-zune-bmp = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-zune-core = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-zune-inflate = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-zune-jpeg = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-zune-png = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }
+makepad-zune-qoi = { git = "https://github.com/chrislearn/makepad.git", rev = "dab801081f3c2f2ea705ae4ea938b04bf0e58dc7" }

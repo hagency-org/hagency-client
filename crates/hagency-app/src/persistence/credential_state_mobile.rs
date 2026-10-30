@@ -139,6 +139,10 @@ fn replace_v1(path: &Path, encoded: &[u8], validate: impl Fn(&[u8]) -> Result<()
     let result = (|| -> Result<()> {
         file.write_all(encoded)?;
         file.sync_all()?;
+        // Windows create-only private handles deny delete sharing. Release the
+        // completed writer before renaming; keep the original target identity
+        // and bytes checked immediately before publication.
+        drop(file);
         // A desktop envelope imported while selection/IO was pending cannot be
         // silently replaced by this compile-time compatibility writer.
         reject_native_artifacts(path)?;
@@ -357,6 +361,27 @@ mod tests {
             read_session(&path).unwrap().client_session.passphrase,
             "DB_SECRET_MARKER"
         );
+        // Both first publication and rotation must close their temporary
+        // writer before rename, including Windows handles without delete sharing.
+        let mut refreshed = session.clone();
+        if let super::super::PersistedUserSession::Matrix(user) = &mut refreshed.user_session {
+            user.tokens.access_token = "REFRESHED_ACCESS_MARKER".into();
+        } else {
+            panic!("fixture must use a Matrix session");
+        }
+        let refreshed_bytes = Zeroizing::new(serde_json::to_vec(&refreshed).unwrap());
+        replace_v1(&path, &refreshed_bytes, validate_session).unwrap();
+        assert_eq!(
+            serde_json::to_vec(&read_session(&path).unwrap()).unwrap(),
+            *refreshed_bytes
+        );
+        assert!(std::fs::read_dir(&state).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".mobile-v1-")
+        }));
         let native = br#"{"version":2,"authentication":{"ciphertext":"opaque"}}"#;
         hagency_store::private::replace(&path, native).unwrap();
         assert!(read_session(&path).is_err());

@@ -79,6 +79,7 @@ jobs:
       - name: Test native Linux library and guarded sharing
         run: |
           cargo test --locked -p robius-share --lib
+          cargo test --locked -p hagency-history
           cargo test --locked -p hagency-app --lib
 
       - name: Build
@@ -171,6 +172,7 @@ jobs:
       - name: Test native Windows library and guarded sharing
         run: |
           cargo test --locked -p robius-share --lib
+          cargo test --locked -p hagency-history
           cargo test --locked -p hagency-app --lib
 
       - name: Build

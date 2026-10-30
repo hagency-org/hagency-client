@@ -114,6 +114,16 @@ impl Index {
     /// `wrapping_key` must come from the authenticated account's protected secret,
     /// and be domain separated by homeserver, user and device. It is never saved.
     pub fn open(path: &Path, wrapping_key: &[u8; 32], identity: &str) -> Result<Self> {
+        // Account/device/room hashes can exceed the default Windows VFS path
+        // budget. SQLite's long-path VFS keeps the same locking and journal
+        // implementation while accepting the full original database path.
+        #[cfg(windows)]
+        let conn = Connection::open_with_flags_and_vfs(
+            path,
+            rusqlite::OpenFlags::default(),
+            "win32-longpath",
+        )?;
+        #[cfg(not(windows))]
         let conn = Connection::open(path)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch(

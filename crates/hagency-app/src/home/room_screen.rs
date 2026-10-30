@@ -1378,6 +1378,17 @@ impl Widget for RoomScreen {
         let board = self.view.action_room_board(cx, ids!(actions_board));
         if let Event::Actions(actions) = event {
             for action in actions {
+                if let Some(changed) = action.downcast_ref::<super::room_settings::RoomSettingsChanged>()
+                    && let Some(timeline) = self.tl_state.as_mut()
+                    && timeline.kind.room_id() == changed.0.room_id()
+                    && crate::sliding_sync::get_client().and_then(|client| client.get_room(changed.0.room_id()))
+                        .is_some_and(|room| room.encryption_state().is_encrypted())
+                {
+                    // A settings refresh can update SDK state before the room-list
+                    // diff observes a transition. Read the current session's Room.
+                    timeline.is_encrypted = true;
+                    self.view.room_input_bar(cx, ids!(room_input_bar)).update_encryption_state(cx, true);
+                }
                 if let Some(crate::miniapps::MiniAppsAction::OpenActionsRoom(target)) = action.downcast_ref()
                     && crate::sliding_sync::current_user_id().as_ref() == Some(&target.account)
                     && matches!(&self.timeline_kind, Some(TimelineKind::MainRoom { room_id }) if room_id == &target.room_id) {
@@ -1961,6 +1972,12 @@ impl Widget for RoomScreen {
             self.update_timeline_skeleton_visibility(cx);
             return DrawStep::done();
         }
+
+        // Settings and other covering pages can suppress Signal delivery to
+        // this widget. Catch up before drawing it again, including late
+        // decryption updates, rather than painting the stale cached rows.
+        let list = self.view.portal_list(cx, ids!(timeline.list));
+        self.process_timeline_updates(cx, &list);
 
         // While the timeline's first pagination is in flight and nothing has
         // arrived yet, show skeleton message rows instead of a blank area.
@@ -8867,7 +8884,7 @@ mod hover_action_bar_tests {
 }
 
 #[cfg(test)]
-mod skeleton_tests {
+pub(crate) mod skeleton_tests {
     #[test]
     fn latest_identity_can_precede_state_events_but_never_match_an_older_window() {
         use matrix_sdk::ruma::event_id;
@@ -8894,6 +8911,23 @@ mod skeleton_tests {
             screen
         });
         (cx, screen)
+    }
+
+    pub(crate) fn prepare_resume_probe(cx: &mut Cx, room: &RoomScreenRef) -> crate::timeline_updates::Sender {
+        let mut room = room.borrow_mut().expect("actual RoomScreen probe");
+        let id = matrix_sdk::ruma::room_id!("!covered-resume:server").to_owned();
+        room.is_loaded = true;
+        room.room_name_id = Some(RoomNameId::empty(id.clone()));
+        let mut state = empty_tl_state(id);
+        let (sender, receiver) = crate::timeline_updates::channel();
+        state.update_receiver = receiver;
+        room.tl_state = Some(state);
+        room.redraw(cx);
+        sender
+    }
+    pub(crate) fn assert_resume_probe_updated(room: &RoomScreenRef) {
+        assert!(room.borrow().unwrap().tl_state.as_ref().unwrap().is_encrypted,
+            "closing Settings must process updates hidden behind the cached page");
     }
 
     #[test]
@@ -8926,6 +8960,48 @@ mod skeleton_tests {
                 assert!(screen.tl_state.as_ref().unwrap().is_live);
             }
         }
+    }
+
+    #[test]
+    fn resumed_draw_applies_updates_without_a_signal_event() {
+        let (mut cx, mut screen) = screen();
+        let room = matrix_sdk::ruma::room_id!("!recovered-while-hidden:server").to_owned();
+        screen.room_name_id = Some(RoomNameId::empty(room.clone()));
+        screen.is_loaded = true;
+        let mut state = empty_tl_state(room);
+        let (sender, receiver) = crate::timeline_updates::channel();
+        state.update_receiver = receiver;
+        // A previously painted timeline has cached rows. While another page
+        // covers it, the subscriber queues a replacement and encryption state.
+        state.content_drawn_since_last_update.insert(0..3);
+        state.profile_drawn_since_last_update.insert(0..3);
+        screen.tl_state = Some(state);
+        sender.send(TimelineUpdate::RoomEncrypted).unwrap();
+        sender.send(TimelineUpdate::NewItems {
+            new_items: Vector::new(), changed_indices: 0..3,
+            clear_cache: true, is_append: false,
+        }).unwrap();
+
+        // No Event::Signal is delivered: exposing the Room only asks it to draw.
+        let pass = DrawPass::new(&mut cx);
+        pass.set_size(&mut cx, dvec2(560.0, 700.0));
+        let mut draw_list = DrawList2d::new(&mut cx);
+        let event = DrawEvent::default();
+        {
+            let mut draw = makepad_widgets::makepad_draw::cx_draw::CxDraw::new(&mut cx, &event);
+            let mut cx2d = Cx2d::new(&mut draw);
+            cx2d.begin_pass(&pass, None);
+            draw_list.begin_always(&mut cx2d);
+            cx2d.begin_root_turtle(dvec2(560.0, 700.0), Layout::flow_overlay());
+            screen.draw_walk_all(&mut cx2d, &mut Scope::empty(), Walk::fill());
+            cx2d.end_pass_sized_turtle();
+            draw_list.end(&mut cx2d);
+            cx2d.end_pass(&pass);
+        }
+        let state = screen.tl_state.as_ref().unwrap();
+        assert!(state.is_encrypted, "a resumed draw must consume the queued update");
+        assert!(!state.content_drawn_since_last_update.contains(&0), "the stale message cache must be invalidated before repainting");
+        assert!(!state.profile_drawn_since_last_update.contains(&0));
     }
 
     #[test]

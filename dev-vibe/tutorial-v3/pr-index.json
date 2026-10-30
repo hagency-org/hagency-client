@@ -1,0 +1,38 @@
+{
+  "client": {
+    "26": "按钮实际字形居中",
+    "27": "创建与设置中的Room加密",
+    "28": "设备认证隔离和基础恢复（ready；刷新跟进38）",
+    "31": "邀请同意弹窗、加密输入提示和任务附件布局",
+    "34": "历史下载失败可重试",
+    "36": "Makepad无界滚动溢出修复pin",
+    "38": "Settings返回缓存房间时处理已恢复timeline更新；会话关闭回归去除调度竞态"
+  },
+  "server": {
+    "20": "Pasion传输peer绑定",
+    "22": "匿名登录探测401循环刷新",
+    "24": "退出任务组件卸载取消"
+  },
+  "sdk": {
+    "6": "SDK加密状态刷新",
+    "7": "提前保存恢复密钥",
+    "8": "秘密导入不跨网络持OlmMachine guard",
+    "9": "历史下载错误上报及原备份重试"
+  },
+  "makepad": {
+    "1": "实际字形居中",
+    "2": "无界滚动边界计算"
+  },
+  "palpo": {
+    "606": "签名/变更标记并发幂等",
+    "610": "备份sessions包裹、保留同Room多会话、用户隔离"
+  },
+  "open_gaps": [
+    "hagency-org/hagency-client#25: Element功能对照",
+    "hagency-org/hagency-client#29: 原移动平台构建缺口"
+  ],
+  "pending_merge_fixes": [
+    "hagency-org/hagency-client#37: 修复PR38真机验证通过，待合并",
+    "hagency-org/hagency-client#40: 会话关闭测试调度竞态已在PR38修正，待合并"
+  ]
+}
