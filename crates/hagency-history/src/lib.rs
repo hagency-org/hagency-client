@@ -123,7 +123,10 @@ impl Index {
             .filter(|parent| !parent.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."))
             .canonicalize()?
-            .join(path.file_name().context("History database filename missing")?);
+            .join(
+                path.file_name()
+                    .context("History database filename missing")?,
+            );
         // Keep SQLite's ordinary locking and journal implementation.
         #[cfg(windows)]
         let conn = Connection::open_with_flags_and_vfs(
