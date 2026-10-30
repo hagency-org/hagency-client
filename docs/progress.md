@@ -15292,3 +15292,265 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 ## 2026-10-29 — Tutorial issue regressions
 
 - User requested fixing Server issues9/10 with separate Client/Server PRs and passing CI. Encrypted empty-room failure comes from embedded Palpo's room-backup response, not permission to bypass SDK history sharing. Client adds actual SDK crypto/cross-signing HTTP regressions for a valid empty backup and negative version/permission/server/malformed responses; focused4/4 pass. Protocol implementation and pagination filters are in the paired Server/dependency work. No task-writer is provisioned in this source checkout; tutorial screenplay files remain separate and uncommitted.
+## 2026-10-29 — Quality remediation first batch
+
+- Operator authorized implementing the multidimensional review, opening reviewable PRs and merging only after direct review and all current-head CI/platform jobs pass. Created isolated managed worktree quality-improvements on codex/quality-hardening from origin/main932dcdea; original tutorial branch and untracked material remain untouched. No task-writer is provisioned.
+- Implemented article image DNS/address pinning and redirect/private-address isolation; bounded profile/member/completion state with idle-page retry; retained Board quick-create drafts and original unknown-write keys; corrected discovery protocol3 and updated encrypted owner capability UI/docs in both languages. Main-lock compatible security updates reduce advisory matches21to12; independent Octos47remain unresolved. Full16-item status is retained in dev-vibe/client-quality-remediation-2026-10-29.zh.md.
+- Installed agent-spec1.4.0 in ignored per-run tooling cache; bounded Task Contract parse/lint pass (0.963, one manual-review coverage warning). First fullApp719pass/1newLRUtestfailure/2originalignored retained; deterministic timestamp test correction and independent retry-redraw review follow-up are being validated in final source tests. Seven image network tests pass and admission4pass/1realHTTPSignore; initial strict App/engine all-targets Clippy, styles306/0, translations2718/0missing, theme,30-package layout and46gate self-tests pass. Final lifecycle, final full tests, PR and hosted CI outcomes will be recorded separately. No paid models, credentials or running services changed.
+
+- Final frozen App library721passed/0failed/2originalignored in81.83s; final own App/engine all-targets strict Clippy passes. Independent profile due/account/overflow/capacity review and separate article network review found no remaining blockers. Hosted checks and merge remain pending; the full remediation goal is not complete.
+- Final complete agent-spec lifecycle5passed/0failed/0skipped/0uncertain after normalizing exact root lockfile boundary to./Cargo.lock; original4testpass/1boundaryfail retained. All final local checks now pass within their recorded scope.
+
+## 2026-10-30 — Quality remediation second batch verification
+
+- Implemented source-bound public release gates and fatal desktop engine matrix,
+  private bounded share staging and owned background/native presentation, unlocked
+  download callbacks, two-worker fair per-room history replay, bounded global
+  pending approval discovery over existing live owners, and actual linked Git
+  metadata input watches. Current branch codex/quality-followups is separate from
+  frozen PR18. Full details and open R02/R03/R05/R07/R13/R14 remain in the quality
+  remediation report; no complete release qualification is claimed.
+- First complete App run749pass/3fail/2originalignored exposed real blank virtual
+  list drawing and500px sidebar footer overflow, plus SDK background initialization
+  contaminating observer request counts. Fixed the production draw owner and
+  footer budget; isolated HTTP diagnostics proved exactly two SDK secret-storage
+  reads before the observer could be tested. Test now joins actual SDK init and
+  asserts zero additional observer HTTP, owner startup, lease/provider work.
+- Eight fair history regressions, two NativeOwner pending summary cases and eight
+  native share library cases pass; vendor Windows and Linux (including tests)
+  cross-check pass. Static styles310/0, i18n2729/0missing, theme/layout31 pass;
+  Python release preflight4tests and six-workflow actionlint pass. Task Contract
+  parse/lint98% pass. Strict Clippy exposed a complex share payload type, replaced
+  with a named alias without weakening lint. Final full tests and lifecycle are
+  running; all original failures remain in ignored .run/quality-followups.
+- PR18 desktop builds all succeed. Full matrix Windows tests remain active;
+  macOS engine job cancelled before acquiring a hosted runner due capacity and
+  will be selectively rerun only after that run ends. No premature merge or
+  fabricated pass. No task-writer is provisioned, and no paid model or real
+  account configuration was changed.
+
+- Frozen second-batch full App752passed/0failed/2originalignored in88.26s,
+  including actual sidebar500px and6approval cases. Final own App/engine/vendor
+  all-targets strict Clippy passes. Linux vendor lib+tests strict cross-Clippy
+  passes after equivalent question-mark simplification of one inherited branch;
+  no lint exemption. Complete agent-spec lifecycle is still running original
+  bound selectors; hosted CI remains required before merging.
+
+- Second-batch full lifecycle7pass/0fail/0skip/0uncertain, including boundaries and six bound selectors. Python/actionlint results remain separate from the Cargo-only lifecycle.
+
+## 2026-10-30 — Third quality batch in progress
+
+- Opened PR19 at873afe74 after full App752/0/2 and lifecycle7/0/0/0.
+  Hosted spelling found one inherited Robius Windows comment spelling; fixed only
+  that comment in de4a704e and advanced PR19. The new-head spelling passes;
+  engine/App platform CI is running. PR18 Windows engine including real media
+  restoration and release build passed. Selective retry of its unacquired macOS
+  job accepted after the original workflow ended; still pending, no merge yet.
+- Third branch codex/quality-attachments starts from de4a704e. Active contract
+  covers actual streamed ordinary downloads, App-side64MiB upload-source checks,
+  existing media action wording and a real dhat/RSS workload. SDK local media
+  cache lacked any bounded read; a separate exact919a38b fork branch is adding
+  compatible bounded Memory/SQLite API, without altering Cargo checkout caches.
+- R14 initial new tests failed to compile (Actions is a slice and temporary
+  WidgetAction borrowing); corrected fixture ownership. Next run1pass/2fail
+  revealed the PortalList fixture's single-frame measurement/visibility and row
+  retention assumptions; fixture now retains its one row and measures then
+  redraws. Not yet rerun; original output remains .run/quality-attachments.
+- Independent review is repairing original IO custody on cancellation, SQLite
+  interact continuation, TTL/file-count bounds, joined worker shutdown, common
+  per-process4GiB disk reservations including Save As/share copies, and private
+  crash journal identity. Native Save As uses original owned synchronous
+  consumers and actual macOS main-thread construction; Linux external portal
+  unknown outcomes remain an explicit limitation, not a closed-popup claim.
+- SDK isolated source tests reported SQLite31/31, encryption12/12 and base2/2,
+  plus strict Clippy with actual crypto-store features and actionlint. Parent
+  and independent agent reviewed source, including bounded borrowed decoding.
+  SDK PR/current-head three-platform CI and Clientpin remain pending. Memory
+  probe driver negative checks pass but actual8-case measurement has not run.
+  No paid inference, real credentials or production accounts were modified.
+
+- PR19 platform follow-up in isolated quality-platform-ci worktree: original
+  Windows739pass/7fail/2ignore and Linux751/1/2 remain recorded. Windows private
+  share cleanup retained the original cap-std directory after removing a clone;
+  close only that confirmed empty original, retain parent through failure and
+  remove no replacement contents. New real-file fault/retry test plus existing
+  temp_storage suite13/13 pass locally. Windows Git fixture normalizes API
+  verbatim paths without losing OsString and keeps real linked worktree tests.
+  Original strict crypto-store lease tests run in isolated actual subprocesses:
+  controlled Unix fork proves inherited CLOEXEC open descriptions can retain
+  parent-dropped locks until child closes; no specific Linux holder was captured.
+  Production lock and all original assertions remain. Final full tests/CI pending.
+
+- Frozen platform repair full App753/0/2 in69.70s, own all-targets strict
+  Clippy and full lifecycle7/0/0/0 pass. Windows Git test module cross-metadata
+  typechecks; no claim of Windows runtime yet. PR18 macOS second selective retry
+  again cancelled before runner acquisition. Preserve those original outcomes;
+  PR19 contains both reviewed batches and is now the consolidated merge candidate,
+  requiring every final-head individual platform job to succeed before merge.
+
+- PR19 Linux ARM/AMD then exposed an initialization barrier gap: joining the
+  SDK main E2EE setup does not join Recovery's long-lived observer of the initial
+  backup state. Wait for the real server's two complete whitelisted responses,
+  then keep zero observer HTTP/owner startup assertions; no guessed quiet sleep
+  or unrestricted request allowance. Focused approvals6/6 and own all-target
+  strict Clippy pass; lifecycle lint/boundary-only pass is reported separately
+  from the previous complete7-scenario run. New hosted head remains required.
+
+- Third attachment batch frozen on SDK a70f68e: complete App802/0/2 in77.15s,
+  own all-target strict Clippy including examples, full lifecycle7/0/0/0,
+  styles320/0, i18n2729/0missing, theme/layout31 and actionlint pass.
+  Four private-create fault cases preserve original ID/parent and pending
+  cleanup including concurrent retries; scoped popup queue and visible native
+  entries cannot survive the original account epoch/logout. Shared original
+  SDK cache worker1+queue16 and32MiB owned write-clone budget cover preview
+  and local file cache; retain ordinary129MiB Rust admission through Vec write.
+  Three original MediaStoreLock fixtures failed because SDK lease is reentrant;
+  controlled actual MediaStore futures now prove original async custody, while
+  SQLite real read/format/type/native tests are separate. All originals retained.
+- Eight production remote-memory subprocesses pass fixed32MiB peak/8MiB growth,
+  real1/4 concurrency x32/256MiB plain/encrypted, verified contents and zero
+  original custody/actual private files. Maximum Rust heap3482524B, sampled
+  process RSS31522816B. SDK init outside Rust window; HTTP fixture does not
+  qualify whole App/TLS/native SQLite. Final binary and all relevant source
+  fingerprints retained. Whole dependency strict Clippy still hits27 original
+  article-makepad lints; own App check is explicitly narrower.
+- PR19 b3 Linux both architectures and Windows build/library/installer passed;
+  Mac ARM build original runner-capacity cancellation preserved, only that job
+  rerun on unchanged head after workflow completion. EngineMac/Win and IntelApp
+  still running; no merge before all individual final-head jobs pass. SDK2
+  a70f three native suites+strict passed, last benchmark jobs still required.
+
+- Windows receive fixture follow-up in isolated secondary: original PR19b3
+  50pass/1fail remains preserved; setup begin returned OutcomeUnknown before
+  retirement assertions. Original event/timing/rowstate was not captured, so
+  no physical Windows IO attribution is claimed. Explicit default-off fixture
+  feature retains one original writer reserve+begin receipt after actual child
+  Started, preserving production2s/unknown and all original retirement/file
+  assertions. Two controlled actual-SQLite trace gate tests prove production
+  timeout stays Unknown while original fixture receipt completes uniquely;
+  receive::6/6, normal feature-off lib check, own all-target strict and fmt pass.
+  Hosted Windows and independent current-head review remain required.
+
+- R02 isolated dependency batch, 2026-10-30: based on361d4e34, a checksum-verified
+  original mdurl0.3.1 copy retains source behavior/tests/licenses and changes its
+  active IDNA manifest to1.1.0. Parent native warning-policy check then exposed
+  two original Cow return lifetime warnings; explicit anonymous lifetimes fix
+  them without lint exemptions. Original failure preserved. Root patch/exclude
+  and explicit real package tests
+  keep the vendor outside workspace membership. Original133+new4+doc4 pass;
+  actual Matrix formatter6pass/7existing ignores and63-vector oracle pass,
+  own formatter strict passes. Old registry-source negative control reproduces
+  the masked ASCII ACE collapse; current regression rejects that rewrite.
+  Fresh same-DB main audit12→11 removes only idna0.3/RUSTSEC-2024-0421 and still
+  exits1, with warning counts unchanged. Independent Octos debt remains open.
+  Real metadata/inventory positive/negative2pass, original binding Node19pass,
+  actionlint pass; hosted CI and independent branch review remain pending.
+  Complete scope/limits and original logs are in the client-idna dependency report.
+
+- Parent IDNA review reproduced native RUSTFLAGS=-Dwarnings failure in the
+  two upstream elided Cow return types. Explicit anonymous lifetimes preserve
+  behavior without lint exemptions; original failure retained. Actual warning
+  policy check, original137+doc4, Matrix6/7originalignored and lifecycle3/0/0/0
+  pass again. Independent archive SHA/file comparison proves only manifest and
+  those two type annotations differ from the19 original files.
+
+- Parent combined review: SDK PR2 a70f passed all13 current-head checks and
+  was merged as709ad8ec. Client PR20 remains draft; previous361 head passed
+  all five desktop builds, both Linux and Mac/Windows engine suites, ARM App
+  and spelling, but Intel App failed808/1/2 in the media HTTP fixture with404.
+  Original packet/path details were absent, so no exact failure phase is claimed.
+  Accepted sockets now explicitly clear nonblocking mode; only complete bounded
+  headers route, with Interrupted handled, incomplete/failed reads rejected and
+  exact sync endpoints accepted with or without query. Keep last32 complete
+  method/path observations for future failures. Actual visible/recycled widget
+  assertions remain unchanged; new fragmented/Interrupted/WouldBlock/EOF case
+  passes alongside all three original cases. Full exact CI-feature App now
+  810passed/0failed/2originalignored; same-profile own all-target strict passes.
+- Combined IDNA plus original receive-receipt fixes independently reviewed and
+  integrated. Actual SQLite receipt2/2 and real vendor binding2/2 pass. Matching
+  typos1.51.1 first flags exact upstream fixture/comment strings; four exact source-basename
+  original-string patterns preserve checksum provenance without excluding
+  vendor files. Full repository spelling then passes. Eight freshly built
+  release remote-memory processes pass unchanged gates: maximum Rust heap
+  3749524B and sampled RSS31490048B; all eight raw heap sums independently
+  equal reported peaks, outputs verified and actual private data cleaned.
+  Raw profiles, samples, source/binary hashes retained under combined-memory-final;
+  only1.2GB regenerable input fixtures removed after validation. Same measurement
+  limits apply: SDK initialization outside Rust window, no whole-App/TLS/SQLite
+  memory qualification. New combined head still requires hosted checks.
+- Combined attachment lifecycle completed7/7, zero fail/skip/uncertain, strict review mode; all six bound actual Cargo groups passed, with the explicit changed-file boundary verified.
+
+- Correction: the first parent spelling command sequence hid typos exit2 behind
+  a later successful diff check; its log actually failed. Hosted83c caught the
+  same original upstream strings. Actual typos1.51.1 source matches type globs
+  against basename only, so path globs were ineffective. Use the four original
+  source basenames plus only complete original strings; run typos as its own
+  checked process. The earlier local-pass statement is withdrawn, and83c
+  spelling remains failed evidence. No content assertion or source bytes change.
+
+- PR20 a30 MacARM actualApp810/0/2 and strict succeeded, then root workspace
+  checker failed on excluded vendor/mdurl. Preserve failure, no unchanged-head
+  retry. Layout now accepts only exact declared registry path patches explicitly
+  excluded from members, insidevendor with canonical nonsymlink directories,
+  exact nonsymlink manifest/name; other foreign/nested crates remain refused.
+  Independent review caught resolve-before-exclude directoryalias acceptance;
+  real Git/Cargo fixture reproduces it and final raw-path/canonical checks reject
+  both unexcluded alias and explicitlyexcluded junction/symlink alias. Actual
+  metadata/inventory/layout/alias Node4/4, root layout31members/onevendor,
+  full R02 lifecycle3/3 pass. Runtime and lockfile unchanged; newhead CI required.
+
+
+### 2026-10-30 — R13 native Matrix room/event link navigation
+- Implemented in a separate managed `quality-matrix-links` worktree on
+  `codex/quality-matrix-links`, exact base361d4e34. Original primary and PR19
+  platform-fix worktrees remain unchanged by this batch. Contract:
+  `crates/hagency-app/specs/task-client-quality-matrix-links.spec.md`.
+- Original SDK room/alias/event/via resolution, explicit native join consent,
+  authenticated Megolm thread relation, main/thread/direct composer identity,
+  nonce/WeakClient/epoch scopes, deferred UI cancellation and scoped errors are
+  connected through existing native navigation/focus paths. Legacy join/leave
+  modal takeover retires original Confirm/Dismiss/Finished callbacks.
+- Initial lifecycle6pass/2fail exposed real passive owner bootstrap. Preserved
+  original logs and traced actual widget draw / completed contact observations;
+  fixed only passive read/validation entry points, with original Service capture
+  before async work. Explicit LoginSuccess recovery and mutations retain factory.
+- Final agent-spec1.4 lifecycle8/8pass, quality1.0, no fail/skip/uncertain/pending.
+  Exact App CI features(agent_chat,octosense-module,macos-sparkle), App+miniapp
+  core all-target strict Clippy29.36s pass; full App821pass/0fail/2originalignore
+  in77.39s. Earlier820/0/2 and all original failure evidence retained locally.
+  i18n2755entries/2025calls/missing0 and theme literal guard pass.
+  Existing CI no-default+agent_chat check, with Sparkle env removed, passes51.67s.
+- Report: `dev-vibe/client-quality-matrix-links-2026-10-30.zh.md`. Application
+  NativeDeepLink consumption does not qualify macOS/Windows OS delivery. SDK
+  event512KiB inspection occurs after HTTP buffering; no early network cap claim.
+  No real account/provider inference/deployment. Independent review and final
+  multi-platform PR CI remain required; this branch has not been pushed.
+
+
+### 2026-10-30 — R13 root-navigation review follow-up
+- Fixed real Delivering-phase root-selection replacement race with original
+  Ticket-bound EnterHome/EnterContacts packets; unscoped navigation always
+  retires the old intent, including queued delivery, context and Contacts draw.
+- Actual1280 Settings→Home→Room/Space proved lazy LoadDock could overwrite the
+  selected target. Preserve at most one original navigation until child draw
+  finishes; initialize dock before target delivery. Original12pass/1fail retained.
+- Preserve permalink initialization provenance through delayed stale LoadDock;
+  never interpret an expired Ticket as authority for implicit OpenProjects.
+  Actual same-original-widget stale queue regression keeps CURRENTNone,
+  startup0/no owner dir. Explicit Home/Projects factory code remains available.
+- Current follow-up:13/13 focusedMatrix,5/5 originalHome,5/5 originalDesktop;
+  exactCI features App+miniapp-core all-targets strictClippy15.06s pass.
+  Earlier a699 full821/0/2 and lifecycle8/8 are retained prior-source evidence.
+  Parent owns final composed-branch wholeApp/exactCI/lifecycle verification;
+  no duplicate full-suite claim for this follow-up. No push/PR from this branch.
+
+- Parent R13 integration on a30: preserved25 reviewed file blobs plus both
+  complete appended coordination sections. Source76024fe2 passes exact CI-feature
+  full App824/0/2 in78.17s, own all-target strict29.43s, complete lifecycle8/8
+  with all27 explicit paths and seven actual Cargo groups. Typos1.51.1/theme
+  guard/i18n2755entries2025sites0missing pass. Current-head hosted checks still
+  required; system URL delivery and real-account E2EE remain unqualified.
+
+2026-10-30 — Tutorial UI / Room encryption review: #26 carries glyph-ink centering; #27 adds project Room creation encryption and explicit irreversible enable from Room settings. Local Room branch: app 822 passed / 2 existing ignored, engine 290 passed / 9 existing qualification ignores, strict app+engine Clippy passed, SDK joined-room 45 passed. Exact-head dispatched App CI and Rust CI passed; full App Build dispatch additionally exposed pre-existing mobile packager/process-custody gaps (tracked separately). Retargeted #27 to main so normal PR-scoped checks run; no mobile success is claimed. Independent-client native acceptance and tutorial retake are continuing on the dependent security branch.
+
+2026-10-30 — Tutorial v3 native follow-up: Client PR31 adds an actual overlay-order regression for hidden invitation consent and actual dialog-button geometry regressions (old36px face/23px icon center fails; corrected padding passes). Composed App829 passed/2 existing ignored, strict Clippy/native build passed before the final translated history hint; that text-only follow-up also passes strict Clippy/build, i18n2804/2069/missing0 and both style guards. Independent native project/Room normal invite cancel/accept pass. Actual Room creation and settings upgrade produce Megolm state; wire events remain plaintext before enabling and encrypted afterwards. Two-user encrypted attachment download matches the original278-byte SHA256. First recovery and interrupted original-key continuation pass on a Palpo signature-fix candidate. New-device identity restore passes, but historical restore revealed Palpo all-key backup envelope/session loss (issue607/PR610), so history recovery remains unqualified pending its actual retest. Native findings, failures and limits are recorded in dev-vibe/tutorial-v3/validation.zh.txt. Final multi-device/security capture and hosted CI remain in progress; no mobile/full Matrix compliance claim.

@@ -1,3 +1,12 @@
+- **Quality hardening, 2026-10-29:** Article image isolation must audit all DNS
+  answers and pin them to each connection; redirects need a new audited hop and
+  proxy bypass must be explicit. A Signal alone cannot retry a draw-time cache
+  lookup: budget timers need account-bound retry-due state that causes an actual
+  redraw even before the completion queue has an account epoch. Cache LRU tests
+  need ordered timestamps instead of relying on equal-time BTreeMap key order.
+  Board quick-create drafts retain original unknown-save keys across navigation;
+  capacity must refuse new drafts explicitly instead of evicting unsaved input.
+
 - **Encrypted owner chain, 2026-10-27:** Deliver through the current runtime,
   not a second execution engine. Distinct encrypted run permits require original
   local input and fresh newly-started Server receipts; compare ciphertext history
@@ -5798,3 +5807,109 @@ SDK 恢复 timeline 可包含同一事件多个句柄。保留原始 Vector 的�
 - MCP draft validation is exposed by NativeOwner using the same Programming contract as execution: max16named HTTP/stdio servers, canonical existing stdio paths and typed args; no ambient config import. Validation is not connectivity or process execution. Preserve invalid raw drafts, reject duplicate visual names, and clear their feedback when loading a saved policy.
 
 - Empty encrypted Room invitations still use SDK history sharing. Matrix room-key backup GET must return 200 with empty sessions for a valid version without room keys, while missing/trashed/foreign versions remain errors. Client SDK fixture assertions must use the crypto client's actual bearer: preset generic room-creation mocks assume a different default token.
+- **Quality follow-ups, 2026-10-30:** Makepad Modal draws its content with
+  draw_all, so a virtual PortalList nested inside it needs its own drawing
+  widget; the outer widget cannot populate swallowed DrawStep values. Script
+  use imports do not include widget exports declared later in the same script;
+  use the qualified mod.widgets path. SDK restore_session returns before E2EE
+  initialization finishes; observer tests must join its original initialization
+  tasks and distinguish those account-data reads from observer HTTP. Exact room
+  history mutex ownership must travel with actual blocking IO across observer
+  cancellation. A successful share presentation is not a completed delivery;
+  retain private file and pending portal/launcher custody until actual cleanup.
+  Release source gates must include compiled Markdown Agent templates, packaging
+  resources, configuration and toolchains. Existing qualification placeholders
+  must continue refusing public release.
+
+- **Attachment quality work, 2026-10-30:** SDK get_media_file and
+  AttachmentSource::File still use full Vec buffers; verify actual internals.
+  SQLite deadpool interact survives observer cancellation, so quota must travel
+  with original IO, not the observing future. MessagePack decoding also needs
+  bounded borrowed bytes rather than arbitrary sequence allocation hints. Matrix
+  AES-CTR media hash validates ciphertext; a syntactically valid wrong key is
+  not detected by that hash. Do not invent a failing-key integrity guarantee.
+  Native async dialog futures can leave original OS requests alive after Drop;
+  keep the original callback/worker custody, and construct macOS UI on main.
+
+### 2026-10-30 attachment review: SDK cache and native event links
+- SDK MediaStoreLock is a shared cross-process lease, not an exclusive mutex
+  between operations of the same Client. Cancellation tests must hold an actual
+  MediaStore method future or actual SQLite operation, not a same-client lease.
+- SQLite bounded reads must check lazy BLOB type/byte length before UPDATE;
+  updating last_access first can copy the entire oversized BLOB natively. The
+  accepted-row native buffers/page cache are additional to Rust scratch; actual
+  SDK bundled measurement at64MiB observed268599296 extra native highwater bytes.
+- Keep ordinary local read admission through its returned Vec's file write;
+  serializing only SDK reads does not bound caller-owned completed results.
+- R13 native event routing must reuse jump_to_history_event/jump_to_event:
+  focus_timeline_window requires the target registered in backwards_paginate.
+  A thread reply needs its authenticated decrypted m.thread root and explicit
+  SelectedRoom::Thread before event focus; SDK Automatic focus alone cannot
+  safely change the App composer/TimelineKind. Carry via through explicit join.
+- Makepad77c8039 exposes NativeDeepLink, but only Android emission was found;
+  macOS plist registration alone does not establish desktop OS URL delivery.
+  App-contained Matrix links and OS launch qualification are separate evidence.
+
+### 2026-10-30 original receive fixture receipts
+- DomainStore production reply expiry and received.begin replay protection both
+  return OutcomeUnknown. Error text alone cannot identify original physical IO
+  delay; retain event/row/timing evidence rather than label it successful or retry.
+- A durable fixture setup that needs its unique grant cannot assume a two-second
+  production RPC always returns it. The explicit default-off specialized fixture
+  receipt retains the actual writer/transaction/Started cap; external watchdog
+  failure is still failure. Never replace it with a second domain owner, fake
+  Started or recovered/replayed ReceiveWrite. Preserve actual child/retirement
+  and unchanged-byte assertions separately from domain-only unit fixtures.
+
+### 2026-10-30 local mdurl dependency repair
+- mdurl0.3.1's complete original tests are133 (46unit+87parser), not just the108
+  percent/parser subset. Preserve source behavior, all tests and full MIT
+  attribution. The normalized manifest needs idna1.1.0 and two explicit return
+  lifetimes are required by native RUSTFLAGS=-Dwarnings. Original archive hashes
+  make the local same-version patch distinguishable from an upstream release.
+- An excluded path dependency is testable from root with `cargo test -p mdurl`,
+  but Cargo refuses workspace feature selection such as `--all-features` for it.
+  Inventory its actual default test build separately; metadata plus real test
+  names and a missing-selector negative control prove coverage without making it
+  a workspace member or adding selector exceptions.
+- App Matrix formatting uses mdurl percent primitives and separate raw punycode.
+  Removing old IDNA from the lock does not change or qualify IDN display policy.
+
+- Quality follow-up coordination: this repository has both origin hagency-client
+  and upstream hagency-rs. Always pass `--repo hagency-org/hagency-client` to gh
+  PR/check/run commands: implicit gh selection can read upstream PR numbers.
+  No upstream PR action is authorized by client remediation.
+
+
+### 2026-10-30 R13 native Matrix link implementation
+- Matrix URI parsing and typed via/action handling live in App matrix_links;
+  a recognized error remains native. Guard URL length before the legacy user
+  profile parser as well as the common URL entry. Event inspection's512KiB cap
+  occurs after the original SDK has buffered its HTTP response.
+- SDK Megolm compatibility may copy unauthenticated outer m.relates_to into
+  missing inner content. Strip that outer field before SDK decrypt, require
+  authenticated inner m.thread for a thread destination, and reject an outer
+  thread hint with no authenticated inner root. Verify actual root accessibility.
+- Select exact SelectedRoom/TimelineKind before the existing event focus, and
+  retain the original WeakClient/epoch/Arc request identity into the native
+  join modal, direct-contact deferred draw, pending target and scoped popup.
+- Actual RoomScreen draw and completed Contacts badge observation exposed
+  passive Service::for_current calls in notice, profile, project tree, room
+  header and member ownership. Use existing_current only for those reads and
+  capture the original Service before spawning them. for_current is a factory
+  that may create an owner and replay enabled runtime startup; the explicit
+  LoginSuccess recovery and explicit mutations still use it.
+- A Dock-created RoomScreen is not necessarily painted by the first outer
+  frame. Native link tests explicitly draw the selected original RoomScreen
+  too; do not infer absence of startup side effects from an unpainted widget.
+
+- R13 review follow-up: Never whitelist unscoped GoHome/Contacts as internal
+  delivery. Ticket-bound EnterHome/EnterContacts must survive each queue/frame
+  boundary; ordinary navigation always replaces the intent. A lazy desktop
+  queues LoadDock during its first draw, so post the original target only after
+  that draw. Preserve permalink initialization provenance until the original
+  LoadDock consumes it, even when its Ticket is stale; retirement cannot grant
+  permission to enter the management factory. Explicit Home/Projects remain
+  separate authorized factory paths.
+
+- **Tutorial native recovery, 2026-10-30:** Device trust, restored identity secrets and restored historical Megolm sessions are separate observations. A successful SDK recover can still log a failed one-shot backup download. Verify old history on a fresh independent SQLite store with original key-holding clients offline, and inspect the actual backup wire envelope. Palpo25b duplicated valid signatures with500 (PR606); its all-key download also omitted rooms[room].sessions[session] and lost same-room sessions (PR610). Retain these distinct failures rather than labelling metadata Ready as historical recovery. Dialog-local vertical padding can defeat a globally centered fixed-height control; test actual dialog instances as well as the base theme.

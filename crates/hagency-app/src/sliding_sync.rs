@@ -38,7 +38,7 @@ use std::{borrow::Cow, cmp::{max, min}, future::Future, hash::{BuildHasherDefaul
 use std::io;
 #[cfg(test)]
 #[path = "sliding_sync/history_tests.rs"]
-mod history_tests;
+pub(crate) mod history_tests;
 mod room_tags;
 use hashbrown::{HashMap, HashSet};
 use crate::{
@@ -918,6 +918,7 @@ pub enum MatrixRequest {
     DownloadMedia {
         media_source: MediaSource,
         filename: String,
+        max_bytes: u64,
         on_download_result: Box<dyn FnOnce(MediaDownloadResult) + Send + 'static>,
     },
     /// Request to cancel an in-progress download.
@@ -1865,23 +1866,24 @@ async fn matrix_worker_task(
                 let Some(client) = get_client() else { continue };
                 let _upload_avatar_task = crate::account_session::spawn(async move {
                     let name = file_data.file_name();
-                    let size = utils::format_decimal_file_size(file_data.size);
                     log!("Uploading new avatar image {name} ({} bytes)...", file_data.size);
                     let content_type: Mime = file_data.mime_type.parse()
                         .unwrap_or(mime::APPLICATION_OCTET_STREAM);
 
-                    let result = match exceeds_upload_limit(file_data.size, "the new avatar").await {
-                        Some(max_size) => Err(format!(
-                            "\"{name}\" is {size}, over your homeserver's {} upload limit. \
-                             Please choose a smaller image.",
-                            utils::format_decimal_file_size(max_size),
-                        )),
-                        None => match tokio::fs::read(file_data.path()).await {
-                            Err(e) => Err(format!("Couldn't read \"{name}\": {e}")),
-                            Ok(data) => client.account().upload_avatar(&content_type, data).await
-                                .map_err(|e| avatar_rejection_message(&e, &size, &file_data.mime_type)),
-                        },
+                    let original = client.clone();
+                    let limit = upload_server_limit(&client).await;
+                    let result = match crate::upload_source::read(file_data.path().to_owned(), file_data.selection.clone(), limit,
+                        move || epoch == crate::account_session::epoch() && crate::matrix_context::is_current(&original)).await {
+                        Err(error) => Err(error),
+                        Ok(data) => {
+                            let actual_size = utils::format_decimal_file_size(data.bytes.len() as u64);
+                            let _reservation = data.reservation;
+                            if !crate::matrix_context::is_current(&client) { return; }
+                            client.account().upload_avatar(&content_type, data.bytes).await
+                                .map_err(|e| avatar_rejection_message(&e, &actual_size, &file_data.mime_type))
+                        }
                     };
+                    if !crate::matrix_context::is_current(&client) { return; }
                     match result {
                         Ok(avatar_url) => {
                             log!("Successfully uploaded and set new avatar {avatar_url}.");
@@ -2571,23 +2573,12 @@ async fn matrix_worker_task(
                         });
                         SignalToUI::set_ui_signal();
 
-                        if let Some(max_size) = exceeds_upload_limit(upload.file_data.size, &timeline_kind).await {
-                            let error = format!(
-                                "file size of ({}) exceeds the homeserver's {} limit.",
-                                utils::format_decimal_file_size(upload.file_data.size),
-                                utils::format_decimal_file_size(max_size),
-                            );
-                            let _ = sender_clone.send(TimelineUpdate::FileUploadError {
-                                upload_id,
-                                error,
-                                retryable_upload: None,
-                            });
-                            SignalToUI::set_ui_signal();
-                            return false;
-                        }
-
-                        let bytes = match tokio::fs::read(upload.file_data.path()).await {
-                            Ok(bytes) => bytes,
+                        let client = timeline.room().client();
+                        let original = client.clone();
+                        let limit = upload_server_limit(&client).await;
+                        let data = match crate::upload_source::read(upload.file_data.path().to_owned(), upload.file_data.selection.clone(), limit,
+                            move || epoch == crate::account_session::epoch() && crate::matrix_context::is_current(&original)).await {
+                            Ok(data) => data,
                             Err(e) => {
                                 error!("Failed to read attachment {:?} for {timeline_kind}: {e:?}", upload.file_data.path());
                                 let _ = sender_clone.send(TimelineUpdate::FileUploadError {
@@ -2599,12 +2590,16 @@ async fn matrix_worker_task(
                                 return false;
                             }
                         };
+                        let _reservation = data.reservation;
+                        let bytes = data.bytes;
+                        let actual_size = bytes.len() as u64;
+                        if !crate::matrix_context::is_current(&client) { return false; }
 
                         let file_data = &upload.file_data;
                         log!(
                             "Sending attachment to {timeline_kind}: {} ({} bytes)...",
                             file_data.file_name(),
-                            file_data.size,
+                            actual_size,
                         );
 
                         // Parse MIME type, falling back to octet-stream for unknown types
@@ -2617,7 +2612,7 @@ async fn matrix_worker_task(
                         } else {
                             None
                         };
-                        let matrix_file_size = || matrix_sdk::ruma::UInt::try_from(file_data.size).ok();
+                        let matrix_file_size = || matrix_sdk::ruma::UInt::try_from(actual_size).ok();
 
                         // Create AttachmentInfo based on the MIME type
                         let info = match content_type.type_() {
@@ -2958,67 +2953,46 @@ async fn matrix_worker_task(
                 });
             }
 
-            MatrixRequest::DownloadMedia { media_source, filename, on_download_result } => {
+            MatrixRequest::DownloadMedia { media_source, filename: _, max_bytes, on_download_result } => {
                 use crate::shared::attachment_download::{enqueue_already_downloading_notification, MediaDownloadResult};
-            
-                // Note: in this code block, we always want to call `on_download_result` with any error.
-
                 let Some(client) = get_client() else {
-                    on_download_result(MediaDownloadResult::Failed("Matrix client is not available".to_string()));
+                    on_download_result(MediaDownloadResult::Failed("Matrix client is not available".into()));
                     continue;
                 };
                 let mxc_uri = media_source_mxc(&media_source).clone();
-                // Only allow a given MxcUri to be downloaded once at a time.
-                if download_tasks.lock().unwrap().contains_key(&mxc_uri) {
-                    enqueue_already_downloading_notification();
-                    on_download_result(MediaDownloadResult::Cancelled);
-                    continue;
+                {
+                    let tasks = download_tasks.lock().unwrap();
+                    if tasks.contains_key(&mxc_uri) {
+                        drop(tasks);
+                        enqueue_already_downloading_notification();
+                        on_download_result(MediaDownloadResult::Cancelled);
+                        continue;
+                    }
+                    if tasks.len() >= 20 {
+                        drop(tasks);
+                        on_download_result(MediaDownloadResult::Failed("Attachment download queue is full".into()));
+                        continue;
+                    }
                 }
                 let (abort_handle, abort_registration) = futures_util::future::AbortHandle::new_pair();
-                let download_tasks2 = download_tasks.clone();
-                let mxc_uri2 = mxc_uri.clone();
-                let download_future = async move {
-                    let media_request = MediaRequestParameters {
-                        source: media_source,
-                        format: matrix_sdk::media::MediaFormat::File,
-                    };
-                    let res = match client.media().get_media_content(&media_request, true).await {
-                            Ok(bytes) => {
-                                log!("Downloaded attachment {filename:?} ({} bytes) to memory", bytes.len());
-                                Ok(bytes)
-                            }
-                            Err(e) => {
-                                error!("Failed to fetch media content for attachment {filename:?}: {e}");
-                                Err(e.to_string())
-                            }
-                        };
-                    if let Some(active) = download_tasks2.lock().unwrap().remove(&mxc_uri2) {
-                        (active.on_download_result)(match res {
-                            Ok(bytes) => MediaDownloadResult::Downloaded(bytes),
-                            Err(e) => MediaDownloadResult::Failed(e),
-                        });
-                    }
-                };
-                
-                let download_tasks3 = download_tasks.clone();
-                let mxc_uri3 = mxc_uri.clone();
-                download_tasks.lock().unwrap().insert(
-                    mxc_uri,
-                    ActiveDownload { abort_handle, on_download_result },
-                );
+                download_tasks.lock().unwrap().insert(mxc_uri.clone(), ActiveDownload { abort_handle, on_download_result });
+                let tasks = download_tasks.clone();
                 crate::account_session::spawn(async move {
-                    if Abortable::new(download_future, abort_registration).await.is_err() {
-                        if let Some(active) = download_tasks3.lock().unwrap().remove(&mxc_uri3) {
-                            (active.on_download_result)(MediaDownloadResult::Cancelled);
-                        }
+                    let result = Abortable::new(crate::attachment_transport::download(client, media_source, max_bytes, epoch), abort_registration).await;
+                    let active = crate::shared::attachment_download::take_download(&tasks, &mxc_uri);
+                    if let Some(active) = active {
+                        (active.on_download_result)(match result {
+                            Ok(Ok(file)) => MediaDownloadResult::Downloaded(file),
+                            Ok(Err(error)) => MediaDownloadResult::Failed(error),
+                            Err(_) => MediaDownloadResult::Cancelled,
+                        });
                     }
                 });
             }
 
             MatrixRequest::CancelDownload(mxc) => {
-                if let Some(active) = download_tasks.lock().unwrap().get(&mxc) {
-                    active.abort_handle.abort();
-                }
+                let abort = { download_tasks.lock().unwrap().get(&mxc).map(|active| active.abort_handle.clone()) };
+                if let Some(abort) = abort { abort.abort(); }
             }
 
         }
@@ -4008,10 +3982,10 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
         // One-shot, drops on its own; not tracked.
         handle_load_app_state(logged_in_user_id.to_owned());
         subscriber_task_handles.push(handle_sync_indicator_subscriber(&sync_service));
-        subscriber_task_handles.push(handle_sync_service_state_subscriber(sync_service.state()));
 
         let room_list_service = sync_service.room_list_service();
         let sync_service = Arc::new(sync_service);
+        subscriber_task_handles.push(handle_sync_service_state_subscriber(client.clone(),sync_service.clone()));
 
         if let Some(_existing) = SYNC_SERVICE.lock().unwrap().replace(sync_service) {
             error!("BUG: unexpectedly replaced an existing sync service when initializing the matrix client.");
@@ -4984,6 +4958,7 @@ fn is_invalid_token_error(e: &sync_service::Error) -> bool {
 /// (e.g., the token was revoked or expired), this emits a [`LoginAction::LoginFailure`]
 /// so the user is prompted to log in again.
 fn handle_session_changes(client: Client) -> JoinHandle<()> {
+    let epoch=crate::account_session::epoch();
     let mut receiver = client.subscribe_to_session_changes();
     crate::account_session::spawn(async move {
         let mut check = tokio::time::interval(Duration::from_secs(15));
@@ -5007,9 +4982,7 @@ fn handle_session_changes(client: Client) -> JoinHandle<()> {
                         }
                         Ok(Err(error)) if crate::session_auth::http_requires_login(&error) => {
                             error!("Matrix authorization requires a new login (SDK refresh rejected).");
-                            TOKEN_EXPIRED.store(true, Ordering::Release);
-                            TOKEN_EXPIRED_NOTIFY.notify_one();
-                            Cx::post_action(LoginAction::LoginFailure("Your login session has expired. Please log in again.".into()));
+                            notify_invalid_matrix_session(&client,epoch,true).await;
                             break;
                         }
                         _ => {
@@ -5024,16 +4997,7 @@ fn handle_session_changes(client: Client) -> JoinHandle<()> {
             };
             match change {
                 Ok(SessionChange::UnknownToken(data)) => {
-                    let soft_logout = data.soft_logout;
-                    let msg = if soft_logout {
-                        "Your login session has expired.\n\nPlease log in again."
-                    } else {
-                        "Your login token is no longer valid.\n\nPlease log in again."
-                    };
-                    error!("Session token is no longer valid (soft_logout: {soft_logout}). Prompting re-login.");
-                    TOKEN_EXPIRED.store(true, Ordering::Release);
-                    TOKEN_EXPIRED_NOTIFY.notify_one();
-                    Cx::post_action(LoginAction::LoginFailure(msg.to_string()));
+                    notify_invalid_matrix_session(&client,epoch,data.soft_logout).await;
                     // Only prompt once — the SDK will keep emitting UnknownToken
                     // for every rejected request, but one re-login prompt suffices.
                     break;
@@ -5217,28 +5181,24 @@ async fn cancel_hidden_failed_sends(echoes: Vec<LocalEcho>) {
     }
 }
 
-fn handle_sync_service_state_subscriber(mut subscriber: Subscriber<sync_service::State>) -> JoinHandle<()> {
+fn handle_sync_service_state_subscriber(client:Client,service:Arc<SyncService>) -> JoinHandle<()> {
+    let epoch=crate::account_session::epoch();
+    let mut subscriber=service.state();
     log!("Initial sync service state is {:?}", subscriber.get());
     crate::account_session::spawn(async move {
         while let Some(state) = subscriber.next().await {
+            if epoch != crate::account_session::epoch() || !crate::matrix_context::is_current(&client) {break;}
             log!("Received a sync service state update: {state:?}");
             match state {
                 sync_service::State::Error(e) => {
                     SYNC_SERVICE_ASSUMED_RUNNING.store(false, Ordering::Release);
                     if is_invalid_token_error(&e) {
-                        // The access token is invalid; `handle_session_changes` will have
-                        // already posted a LoginAction::LoginFailure, so just log here.
-                        // Stop the sync service and exit this loop to prevent further
-                        // state transitions (e.g., Offline) from triggering misleading
-                        // "cannot reach homeserver" notifications.
-                        // Setting TOKEN_EXPIRED signals the main monitoring loop to
-                        // tear down the current session and wait for re-login.
-                        error!("Sync service stopped due to invalid/expired access token: {e}.");
-                        TOKEN_EXPIRED.store(true, Ordering::Release);
-                        TOKEN_EXPIRED_NOTIFY.notify_one();
-                        if let Some(ss) = get_sync_service() {
-                            ss.stop().await;
-                            SYNC_SERVICE_ASSUMED_RUNNING.store(false, Ordering::Release);
+                        // Use the same scoped terminal-auth action. Never let a
+                        // late old subscriber retire or stop the replacement SDK.
+                        notify_invalid_matrix_session(&client,epoch,true).await;
+                        service.stop().await;
+                        if epoch==crate::account_session::epoch() && crate::matrix_context::is_current(&client) {
+                            SYNC_SERVICE_ASSUMED_RUNNING.store(false,Ordering::Release);
                         }
                         break;
                     } else {
@@ -5266,7 +5226,7 @@ fn handle_sync_service_state_subscriber(mut subscriber: Subscriber<sync_service:
                     IS_OFFLINE.store(matches!(other, sync_service::State::Offline), Ordering::Release);
                     let is_now_running = matches!(other, sync_service::State::Running);
                     Cx::post_action(RoomsListHeaderAction::StateUpdate(other));
-                    if is_now_running && let Some(client) = get_client() {
+                    if is_now_running {
                         client.send_queue().set_enabled(true).await;
                     }
                 }
@@ -5638,26 +5598,47 @@ async fn update_latest_event(room: &Room) {
 }
 
 
-/// Returns the homeserver's max upload size if `size` exceeds it.
-///
-/// Returns `None` if the file fits, or if we couldn't determine the limit,
-/// in which case we let the homeserver be the judge.
-async fn exceeds_upload_limit(size: u64, context: impl std::fmt::Display) -> Option<u64> {
-    let Some(client) = get_client() else {
-        warning!("Could not fetch homeserver max upload size for {context}: client unavailable; continuing without a local size-limit check.");
-        return None;
-    };
-    let max_upload_size = match client.load_or_fetch_max_upload_size().await {
-        Ok(max_upload_size) => max_upload_size,
-        Err(e) => {
-            warning!("Could not fetch homeserver max upload size for {context}: {e:?}; continuing without a local size-limit check.");
-            return None;
+/// The App always enforces its independent actual-source limit, even offline.
+async fn upload_server_limit(client: &Client) -> Option<u64> {
+    match client.load_or_fetch_max_upload_size().await {
+        Ok(limit) => Some(limit.into()),
+        Err(error) => {
+            warning!("Could not fetch homeserver upload limit: {error}; using the application limit");
+            None
         }
+    }
+}
+
+/// Same relogin behavior for SDK requests and streamed media, fenced to the
+/// original SDK session so a delayed old-account failure cannot affect its peer.
+pub(crate) async fn notify_invalid_matrix_session(client:&Client,epoch:u64,soft_logout:bool)->bool {
+    commit_session_expiry_if(
+        ||epoch==crate::account_session::epoch() && crate::matrix_context::is_current(client),
+        || {
+            if TOKEN_EXPIRED.swap(true,Ordering::AcqRel) {return false;}
+            TOKEN_EXPIRED_NOTIFY.notify_one();
+            let message=if soft_logout {"Your login session has expired.\n\nPlease log in again."} else {"Your login token is no longer valid.\n\nPlease log in again."};
+            Cx::post_action(LoginAction::SessionExpired {scope:crate::login::login_screen::SessionFailureScope::new(client.clone(),epoch),message:message.to_owned()});
+            true
+        },
+    ).await
+}
+
+/// The original async caller owns this wait. A filesystem publication may hold
+/// SESSION_IO; retired scopes can leave while current scopes yield the runtime.
+async fn commit_session_expiry_if(current:impl Fn()->bool,commit:impl FnOnce()->bool)->bool {
+    let _session=loop {
+        if !current() {return false;}
+        match crate::persistence::SESSION_IO.try_lock() {
+            Ok(guard)=>break guard,
+            Err(std::sync::TryLockError::WouldBlock)=>{},
+            Err(std::sync::TryLockError::Poisoned(error))=>panic!("Session IO lock poisoned: {error}"),
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     };
-    matrix_sdk::ruma::UInt::try_from(size)
-        .map(|size| size > max_upload_size)
-        .unwrap_or(true)
-        .then(|| max_upload_size.into())
+    // Recheck under the original fence. No await occurs after acquiring it.
+    if !current() {return false;}
+    commit()
 }
 
 /// Returns human-readable errors explaining why the homeserver refused an avatar upload.
@@ -5768,7 +5749,7 @@ const LOG_ROOM_LIST_DIFFS: bool = cfg!(feature = "log_room_list_diffs");
 /// to deliver the resulting diffs before taking the snapshot.
 const LATE_DECRYPTION_REFRESH_DELAY: Duration = Duration::from_millis(250);
 
-async fn build_focused_timeline(room: &Room, kind: &TimelineKind, target: &Option<OwnedEventId>) -> Result<Timeline, String> {
+pub(crate) async fn build_focused_timeline(room: &Room, kind: &TimelineKind, target: &Option<OwnedEventId>) -> Result<Timeline, String> {
         let focus = match (&target, kind.thread_root_event_id()) {
             (Some(event), Some(root)) if event == root => TimelineFocus::Event {
                 target: event.clone(), num_context_events: 50, thread_mode: TimelineEventFocusThreadMode::ForceThread,
@@ -5817,12 +5798,18 @@ async fn build_in_timeline_window<F: std::future::Future>(
     mut requests: watch::Receiver<TimelineRequest>,
     build: F,
     timeout: std::time::Duration,
+    target: Option<OwnedEventId>,
 ) -> Option<Result<F::Output, tokio::time::error::Elapsed>> {
     tokio::select! {
         result = tokio::time::timeout(timeout, build) => Some(result),
         () = async {
             loop {
-                if !requests.borrow_and_update().is_timeline_open { return; }
+                let cancelled = {
+                    let request = requests.borrow_and_update();
+                    !request.is_timeline_open || target.as_ref().is_some_and(|target|
+                        !request.backwards_paginate.iter().any(|pending|&pending.target_event_id == target))
+                };
+                if cancelled { return; }
                 if requests.changed().await.is_err() { return; }
             }
         } => None,
@@ -5846,6 +5833,7 @@ fn focus_timeline_window(kind: TimelineKind, target: Option<OwnedEventId>, rebas
         let Some(result) = build_in_timeline_window(
             old_requests.subscribe(), build_focused_timeline(&room, &kind, &target),
             std::time::Duration::from_secs(30),
+            if rebase {None} else {target.clone()},
         ).await else { return; };
         let result = result.unwrap_or_else(|error| Err(error.to_string()));
         if !crate::matrix_context::is_current(&client) { return }
@@ -6428,6 +6416,10 @@ async fn run_sso_login(homeserver_url: String, provider_id: Option<String>, regi
     let methods = crate::login::homeserver::login_methods(&client).await?;
     if methods.oauth {
         crate::login::homeserver::oauth_browser_login(&client, register, |url| async move {
+            Cx::post_action(LoginAction::Status {
+                title: crate::i18n::tr("Continue in your browser").into(),
+                status: crate::i18n::tr("Finish signing in with Pasion in your browser, then return to Hagency.").into(),
+            });
             Uri::new(&url).open().map_err(|_| anyhow!("Unable to open your browser"))
         }).await?;
         return Ok((client, session));
@@ -6846,7 +6838,7 @@ mod focus_lifetime_tests {
         let held = Arc::new(());
         let weak = Arc::downgrade(&held);
         let build = async move { let _held = held; std::future::pending::<()>().await };
-        let task = tokio::spawn(build_in_timeline_window(receiver, build, std::time::Duration::from_secs(5)));
+        let task = tokio::spawn(build_in_timeline_window(receiver, build, std::time::Duration::from_secs(5), None));
         requests.send_modify(|request| request.is_timeline_open = false);
         assert!(task.await.unwrap().is_none());
         assert!(weak.upgrade().is_none());
@@ -6855,7 +6847,7 @@ mod focus_lifetime_tests {
         let build = async move { let _held = held; std::future::pending::<()>().await };
         // Keep the watch sender alive to exercise the deadline, not disconnection.
         let (requests, receiver) = watch::channel(TimelineRequest { backwards_paginate: Vec::new(), is_timeline_open: true });
-        assert!(matches!(build_in_timeline_window(receiver, build, std::time::Duration::from_millis(1)).await, Some(Err(_))));
+        assert!(matches!(build_in_timeline_window(receiver, build, std::time::Duration::from_millis(1), None).await, Some(Err(_))));
         assert!(weak.upgrade().is_none());
         drop(requests);
     }
@@ -6936,5 +6928,45 @@ impl TimelineProjection {
                 }
             })
             .unwrap_or(index)
+    }
+}
+
+#[cfg(test)]
+mod session_expiry_fence_tests {
+    use super::*;
+    #[tokio::test(flavor="current_thread")]
+    async fn terminal_notification_yields_while_original_publication_holds_session_io() {
+        let (entered,holding)=std::sync::mpsc::sync_channel(1);
+        let (progress,heartbeat)=std::sync::mpsc::sync_channel(1);
+        let original_io=std::thread::spawn(move||{
+            let _publication=crate::persistence::SESSION_IO.lock().unwrap();
+            entered.send(()).unwrap();
+            heartbeat.recv_timeout(Duration::from_millis(250)).is_ok()
+        });
+        holding.recv_timeout(Duration::from_secs(1)).unwrap();
+        let committed=Arc::new(AtomicBool::new(false));let observed=committed.clone();
+        let (started,waiting)=tokio::sync::oneshot::channel();
+        let notification=tokio::spawn(async move {
+            let _=started.send(());
+            commit_session_expiry_if(||true,||{observed.store(true,Ordering::Release);true}).await
+        });
+        waiting.await.unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        assert!(!committed.load(Ordering::Acquire),"terminal notification must not commit before the original publication fence is released");
+        progress.send(()).unwrap();assert!(original_io.join().unwrap(),"the actual notification lock wait blocked the single Tokio thread");
+        assert!(tokio::time::timeout(Duration::from_millis(250),notification).await.unwrap().unwrap());
+        assert!(committed.load(Ordering::Acquire));
+    }
+    #[tokio::test(flavor="current_thread")]
+    async fn terminal_notification_rejects_retired_scope_while_fence_is_still_held() {
+        let (entered,holding)=std::sync::mpsc::sync_channel(1);let (release,waiting)=std::sync::mpsc::sync_channel(1);
+        let original_io=std::thread::spawn(move||{let _publication=crate::persistence::SESSION_IO.lock().unwrap();entered.send(()).unwrap();waiting.recv_timeout(Duration::from_millis(250)).is_ok()});
+        holding.recv_timeout(Duration::from_secs(1)).unwrap();
+        let current=Arc::new(AtomicBool::new(true));let original=current.clone();let committed=Arc::new(AtomicBool::new(false));let observed=committed.clone();
+        let (started,started_rx)=tokio::sync::oneshot::channel();
+        let notification=tokio::spawn(async move {let _=started.send(());commit_session_expiry_if(||original.load(Ordering::Acquire),||{observed.store(true,Ordering::Release);true}).await});
+        started_rx.await.unwrap();current.store(false,Ordering::Release);
+        assert!(!tokio::time::timeout(Duration::from_millis(100),notification).await.unwrap().unwrap());
+        assert!(!committed.load(Ordering::Acquire));release.send(()).unwrap();assert!(original_io.join().unwrap());
     }
 }

@@ -27,7 +27,7 @@ impl ProjectBoard {
         self.column_rows.clear();
         self.column_paint_keys.clear();
         self.label_options.clear();
-        self.clear_quick_create(cx);
+        self.reset_quick_create(cx);
         self.subtask_after_save = None;
         self.clear_media(cx);
         self.layout_key.clear();
@@ -97,6 +97,7 @@ impl ProjectBoard {
         if context_changed {
             self.remember_comment(cx);
             if !self.project.is_empty() && self.identity == identity {
+                self.remember_quick_create(cx);
                 if let Some(pending) = self.pending.take() {
                     self.retained.insert(self.project.clone(), pending);
                 }
@@ -104,6 +105,7 @@ impl ProjectBoard {
             if self.identity != identity {
                 self.retained.clear();
                 self.comment_drafts.clear();
+                self.quick_drafts.clear();
             }
             self.clear_content(cx);
             self.identity = identity.into();
@@ -111,6 +113,7 @@ impl ProjectBoard {
             self.query = Query::default();
             self.reset_viewports(cx);
             self.pending = self.retained.remove(project);
+            self.quick_restore = self.quick_drafts.remove(project);
             self.view.text_input(cx, ids!(search)).set_text(cx, "");
             self.view
                 .text_input(cx, ids!(filter_label))
@@ -888,6 +891,7 @@ impl ProjectBoard {
                             if self.pending.is_some() && !self.saving {
                                 self.notice(cx,tr("A previous save is unconfirmed. Retry its original request to avoid duplicates."));
                             }
+                            self.restore_quick_create(cx);
                         }
                         _ => self.notice(cx, error_message("invalid_server_response")),
                     },

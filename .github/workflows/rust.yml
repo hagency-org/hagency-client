@@ -2,15 +2,13 @@ name: Full matrix
 # The expensive lane: Ubuntu, macOS and Windows tests, Linux cgroup qualification and a release library build. Every PR already
 # gets the fast Ubuntu lane in ci.yml; this one runs
 #   - nightly (and opens/closes a regression issue on the scheduled run),
-#   - on manual dispatch and on desktop `v*` release tags,
+#   - on manual dispatch (releases call engine-checks.yml directly),
 #   - on "major" PRs: labelled `full-ci`, or touching the paths in `scope`.
 on:
   schedule:
     - cron: "0 10 * * *"
   workflow_dispatch:
   workflow_call:
-  push:
-    tags: ['v*']
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, labeled]
@@ -57,108 +55,7 @@ jobs:
   native:
     needs: scope
     if: needs.scope.outputs.run == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, macos-15, windows-2025]
-    runs-on: ${{ matrix.os }}
-    # 2026-09-13 operator decision: Windows is not a release target for now (no
-    # coding agent runs on Windows). The lane keeps running for its diagnostics,
-    # but its verdict no longer blocks the run; Ubuntu and macOS are the gate.
-    continue-on-error: ${{ matrix.os == 'windows-2025' }}
-    # At 082edde2 Windows spent ~14 min in build/inventory and ~42 min in
-    # the original full suite, before release compilation. Budget the whole
-    # Windows job; SDK/test deadlines and fatal test verdicts stay unchanged.
-    timeout-minutes: ${{ matrix.os == 'windows-2025' && 90 || 60 }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.98.0
-        with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22.22.0'
-      - run: cargo fmt -p hagency -p hagency-agent-local -p hagency-core -p hagency-crypto-proof -p hagency-execution -p hagency-files -p hagency-matrix -p hagency-matrix-format -p hagency-media -p hagency-media-store -p hagency-metering -p hagency-palpo -p hagency-permissions -p hagency-platform -p hagency-progress -p hagency-progress-runtime -p hagency-runtime -p hagency-store --check
-      - run: cargo clippy -p hagency -p hagency-agent-local -p hagency-core -p hagency-crypto-proof -p hagency-execution -p hagency-files -p hagency-matrix -p hagency-matrix-format -p hagency-media -p hagency-media-store -p hagency-metering -p hagency-palpo -p hagency-permissions -p hagency-platform -p hagency-progress -p hagency-progress-runtime -p hagency-runtime -p hagency-store --all-targets --locked -- -D warnings
-      # Cold linking belongs to the job's build budget; the bounded inventory
-      # step below still has its unchanged ten-minute deadline and assertions.
-      - name: Compile all-feature test targets before spec inventory
-        run: cargo test -p hagency -p hagency-agent-local -p hagency-core -p hagency-crypto-proof -p hagency-execution -p hagency-files -p hagency-matrix -p hagency-matrix-format -p hagency-media -p hagency-media-store -p hagency-metering -p hagency-palpo -p hagency-permissions -p hagency-platform -p hagency-progress -p hagency-progress-runtime -p hagency-runtime -p hagency-store --all-targets --all-features --locked --no-run
-      - run: node tools/native/check-rust-spec-bindings.mjs
-      - run: node --test tools/native/check-production-callers.test.mjs tools/native/check-spec-bindings.test.mjs
-      - run: node tools/native/check-production-callers.mjs --spec native-owner-client.spec.md
-      - name: Run execution fixtures with independent host resources
-        # Each case owns a real child and strict database/lease clocks. Run
-        # independent cases serially; concurrency and fault gates inside each
-        # case, every deadline and every assertion remain unchanged.
-        run: cargo test --locked -p hagency-execution --all-targets --no-fail-fast -- --skip native_codex_real_app_server --skip native_two_agent_qualification_records_its_evidence --test-threads=1
-      - id: native-tests
-        # ADR-144's operator-run qualification test fails (never skips inside
-        # a test) while its evidence record is a placeholder — by design.
-        # Hosted runners have no real Palpo homeserver and no real owner
-        # client, and will never have real evidence, so the suite here skips
-        # that ONE selector BY NAME; the selector stays present for the
-        # spec-binding gate's --list inventory, the skip is recorded in this
-        # workflow (never inside a test), and the operator runs it on a
-        # qualified host per the ADR-144 runbook. The codex qualification
-        # skip (ADR-140, native_codex_real_app_server) is the same class and
-        # rides the same line; both stay present for the --list inventory.
-        # Execution ran once above. Keep other workspace tests running after
-        # its failure for diagnostics; its failed verdict stays fatal.
-        if: ${{ !cancelled() }}
-        run: cargo test -p hagency -p hagency-agent-local -p hagency-core -p hagency-crypto-proof -p hagency-files -p hagency-matrix -p hagency-matrix-format -p hagency-media -p hagency-media-store -p hagency-metering -p hagency-palpo -p hagency-permissions -p hagency-platform -p hagency-progress -p hagency-progress-runtime -p hagency-runtime -p hagency-store --all-targets --locked --no-fail-fast -- --skip native_codex_real_app_server --skip native_two_agent_qualification_records_its_evidence
-      - name: Qualify default Windows media storage with fresh process restoration
-        if: ${{ !cancelled() && runner.os == 'Windows' }}
-        shell: pwsh
-        run: |
-          cargo build --locked -p hagency-media-store --example windows_directory_flush
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $PSNativeCommandUseErrorActionPreference = $false
-          & target/debug/examples/windows_directory_flush.exe *> windows-media-sync-original.log
-          $syncExit = $LASTEXITCODE
-          "original_exit=$syncExit" | Set-Content windows-media-sync-verdict.txt
-          Get-Content windows-media-sync-original.log
-          exit $syncExit
-      - uses: actions/upload-artifact@v4
-        if: always() && runner.os == 'Windows'
-        with:
-          name: windows-media-sync-original
-          path: |
-            windows-media-sync-original.log
-            windows-media-sync-verdict.txt
-          if-no-files-found: warn
-      - name: Diagnose the Windows Matrix outgoing library after original failure
-        if: failure() && runner.os == 'Windows' && steps.native-tests.outcome == 'failure'
-        timeout-minutes: 5
-        # The original suite remains fatal. This runs the actual failing library
-        # selectors with the same workspace/all-target feature selection,
-        # including unchanged deadlines and refusal assertions.
-        run: cargo test -p hagency -p hagency-agent-local -p hagency-core -p hagency-crypto-proof -p hagency-execution -p hagency-files -p hagency-matrix -p hagency-matrix-format -p hagency-media -p hagency-media-store -p hagency-metering -p hagency-palpo -p hagency-permissions -p hagency-platform -p hagency-progress -p hagency-progress-runtime -p hagency-runtime -p hagency-store --all-targets --locked native_matrix_outgoing -- --test-threads=1 --nocapture
-      - name: Diagnose Windows transport failures without replacing their verdict
-        if: failure() && runner.os == 'Windows' && steps.native-tests.outcome == 'failure'
-        timeout-minutes: 8
-        # The original full-suite failure remains fatal. This unchanged, serial
-        # fixture run distinguishes repeatable failures from concurrent load;
-        # it neither widens a production deadline nor counts as a successful retry.
-        run: cargo test --locked -p hagency-matrix -p hagency-palpo --test transport --no-fail-fast -- --test-threads=1 --nocapture
-      - name: Diagnose a closed Windows MCP helper transport under the same load
-        if: failure() && runner.os == 'Windows' && steps.native-tests.outcome == 'failure'
-        timeout-minutes: 6
-        # The MCP catalog failure has only been seen under parallel load, so a
-        # serial re-run would hide it; the fixture now reports the helper's
-        # try_wait state when tools/list fails. Diagnostic only, never a retry.
-        run: cargo test --locked -p hagency --test mcp_coordination --no-fail-fast -- --test-threads=8 --nocapture
-      - name: Qualify Linux cgroup recovery on a disposable hosted VM
-        # Independently qualify the host even if an unrelated engine test fails.
-        # The original failed step remains fatal, as with Windows media custody.
-        if: ${{ !cancelled() && runner.os == 'Linux' }}
-        shell: bash
-        run: |
-          python3 -B tools/native/test-qualify-linux-cgroup.py
-          cargo build --locked -p hagency-platform --bins
-          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,RUNNER_OS,RUNNER_ARCH /usr/bin/python3 -B tools/native/qualify-linux-cgroup.py --probe "$PWD/target/debug/hagency-cgroup-probe" --uid "$(id -u)" --gid "$(id -g)"
-      - run: cargo build --release --locked -p hagency --lib
+    uses: ./.github/workflows/engine-checks.yml
   regression-issue:
     name: Reconcile nightly regression issue
     needs: [native]

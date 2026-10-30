@@ -149,15 +149,26 @@ fn facts(bytes: &[u8]) -> ReceivedFileFacts {
     }
 }
 async fn grant(f: &Fixture, index: usize, bytes: &[u8]) -> ReceiveWrite {
-    let admission = f
-        .domain
-        .reserve_received_file(f.cap.clone(), format!("$file_{index}"), 4 * 1024 * 1024)
-        .await
-        .unwrap();
-    f.domain
-        .start_received_file_write(f.cap.clone(), admission.reservation.unwrap(), facts(bytes))
-        .await
-        .unwrap()
+    // Fixture setup needs the original unique grant, not a promise that a
+    // durable writer always answers inside the production RPC's two seconds.
+    // The real StartedWorkspace was obtained before this helper; the original
+    // writer still validates actual Started/capability/scope/facts atomically.
+    let expected = facts(bytes);
+    let write = tokio::time::timeout(
+        Duration::from_secs(10),
+        f.domain.fixture_receive_write_once(
+            f.cap.clone(),
+            format!("$file_{index}"),
+            4 * 1024 * 1024,
+            expected.clone(),
+        ),
+    )
+    .await
+    .expect("original fixture writer did not finish within its watchdog")
+    .unwrap_or_else(|error| panic!("original fixture receive grant {index} failed: {error}"));
+    assert!(write.matches_capability(&f.cap));
+    assert_eq!(write.facts(), &expected);
+    write
 }
 fn deadline() -> Instant {
     Instant::now() + Duration::from_secs(4)

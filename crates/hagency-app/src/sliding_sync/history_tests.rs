@@ -1,3 +1,8 @@
+/// Isolated test process only: install no sync/owner/bootstrap side effects.
+pub(crate) fn install_link_client(client: Option<Client>) {
+    *super::CLIENT.lock().unwrap() = client;
+}
+
 use super::*;
 use std::{
     io::{Read, Write},
@@ -10,19 +15,19 @@ fn event(id: &str, timestamp: u64) -> serde_json::Value {
         "type":"m.room.message","content":{"msgtype":"m.text","body":id}})
 }
 
-type ResponseHandler = dyn Fn(&str) -> Option<(u16, serde_json::Value)> + Send + Sync;
+pub(crate) type ResponseHandler = dyn Fn(&str) -> Option<(u16, serde_json::Value)> + Send + Sync;
 
-struct Server {
+pub(crate) struct Server {
     url: String,
     stop: Arc<AtomicBool>,
-    requests: Arc<Mutex<Vec<String>>>,
+    pub(crate) requests: Arc<Mutex<Vec<String>>>,
     thread: Option<thread::JoinHandle<()>>,
 }
 impl Server {
     fn start(context_available: bool) -> Self {
         Self::with_handler(context_available, Arc::new(|_| None))
     }
-    fn with_handler(context_available: bool, handler: Arc<ResponseHandler>) -> Self {
+    pub(crate) fn with_handler(context_available: bool, handler: Arc<ResponseHandler>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -96,10 +101,22 @@ impl Server {
             thread: Some(thread),
         }
     }
-    async fn room(&self) -> Room {
+    pub(crate) async fn room(&self) -> Room {
         self.room_with_store(None).await
     }
+    pub(crate) async fn room_for_links(&self) -> Room {
+        self.room_configured(None,true).await
+    }
     async fn room_with_store(&self, store: Option<&std::path::Path>) -> Room {
+        self.room_configured(store,false).await
+    }
+    pub(crate) async fn space_for_links(&self) -> Room {
+        self.room_configured_kind(None,true,true).await
+    }
+    async fn room_configured(&self, store: Option<&std::path::Path>, threading: bool) -> Room {
+        self.room_configured_kind(store,threading,false).await
+    }
+    async fn room_configured_kind(&self, store: Option<&std::path::Path>, threading: bool, space:bool) -> Room {
         let builder = Client::builder()
             .http_client(
                 matrix_sdk::reqwest::Client::builder()
@@ -109,6 +126,10 @@ impl Server {
             )
             .homeserver_url(&self.url)
             .server_versions([matrix_sdk::ruma::api::MatrixVersion::V1_0]);
+        let builder = if threading {
+            builder.with_threading_support(matrix_sdk::ThreadingSupport::Enabled {with_subscriptions:false})
+                .server_versions([matrix_sdk::ruma::api::MatrixVersion::V1_11])
+        } else {builder};
         let builder = if let Some(store) = store {
             builder.sqlite_store(store, Some("fixture-passphrase"))
         } else {
@@ -132,6 +153,10 @@ impl Server {
             .await
             .unwrap();
         let room_id = ruma::room_id!("!room:example.org");
+        if space {
+            let room=client.get_room(room_id).expect("actual SDK sync must establish the Space");
+            assert!(room.is_space());return room;
+        }
         let (cache, _handles) = client.event_cache().room(room_id).await.unwrap();
         tokio::time::timeout(Duration::from_secs(2), async {
             loop {
@@ -706,4 +731,18 @@ async fn sdk_raw_byte_budget_compacts_large_valid_events() {
             .sum::<usize>()
             <= 8 * 1024 * 1024
     );
+}
+
+#[tokio::test]
+async fn matrix_link_focus_stops_when_original_event_search_is_cancelled() {
+    let target=ruma::event_id!("$linked").to_owned();
+    let (requests, receiver)=watch::channel(TimelineRequest {is_timeline_open:true,
+        backwards_paginate:vec![BackwardsPaginateUntilEventRequest {room_id:ruma::room_id!("!room:example.org").to_owned(),
+            target_event_id:target.clone(),starting_index:0,current_tl_len:0}]});
+    let held=Arc::new(());let weak=Arc::downgrade(&held);
+    let build=async move {let _held=held; std::future::pending::<()>().await};
+    let task=tokio::spawn(build_in_timeline_window(receiver,build,Duration::from_secs(5),Some(target)));
+    requests.send_modify(|request|request.backwards_paginate.clear());
+    assert!(tokio::time::timeout(Duration::from_secs(1),task).await.unwrap().unwrap().is_none());
+    assert!(weak.upgrade().is_none(),"cancelling a target drops its original focused build before its network deadline");
 }

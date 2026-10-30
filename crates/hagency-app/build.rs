@@ -1,3 +1,6 @@
+#[path = "build_support/git_paths.rs"]
+mod git_paths;
+
 fn main() {
     #[cfg(feature = "macos-sparkle")]
     build_sparkle_bridge();
@@ -129,18 +132,8 @@ fn build_sparkle_bridge() {
 
 /// Returns Rinx's own current git commit info as a commit hash and a permalink.
 fn read_rinx_git_info() -> (String, String) {
-    // Tell cargo to re-run when the git-tracked HEAD changes.
-    println!(
-        "cargo:rerun-if-changed={}",
-        workspace_root().join(".git/HEAD").display()
-    );
-    if let Ok(head) = std::fs::read_to_string(workspace_root().join(".git/HEAD")) {
-        if let Some(branch_ref) = head.trim().strip_prefix("ref: ") {
-            println!(
-                "cargo:rerun-if-changed={}",
-                workspace_root().join(".git").join(branch_ref).display()
-            );
-        }
+    for path in git_paths::watch_paths(&workspace_root()) {
+        println!("cargo:rerun-if-changed={}", path.display());
     }
 
     let Ok(output) = std::process::Command::new("git")

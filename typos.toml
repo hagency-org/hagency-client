@@ -61,3 +61,20 @@ extend-exclude = [
     "crates/article-core/tests/fixtures/gfm-0.29.json",
     "crates/article-core/tests/fixtures/commonmark-0.31.2.json",
 ]
+
+# Exact original mdurl strings retained under its checksum provenance record.
+# Type globs match basenames only. These four exact strings stay checked
+# everywhere except files with the corresponding original source basenames.
+[type.mdurl-upstream]
+extend-glob = [
+    "url.rs",
+    "parse.rs",
+    "format.rs",
+    "encode.rs",
+]
+extend-ignore-re = [
+    '[Ff][Ee][Dd][Cc]:[Bb][Aa]98:7654:3210:[Ff][Ee][Dd][Cc]:[Bb][Aa]98:7654:3210',
+    'should_show_common_2nd_level_domains',
+    'blog\.chromium\.org/…/no-more-mixed-messag…',
+    '/// characer set\.',
+]

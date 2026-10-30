@@ -57,7 +57,7 @@ impl AgentRuntimeNotice {
     }
     fn refresh(&mut self,cx:&mut Cx) {
         if self.loading || !self.active || self.room.is_empty() {return;}
-        let Ok(service)=Service::for_current() else {self.view.set_visible(cx,false);return;};
+        let Some(service)=Service::existing_current() else {self.view.set_visible(cx,false);return;};
         if service.identity()!=self.identity {self.view.set_visible(cx,false);return;}
         // Keep the last status and reserve the spinner's width so polling never
         // changes line wrapping or moves the timeline below the notice.
@@ -95,7 +95,7 @@ impl AgentRuntimeNotice {
 }
 impl Widget for AgentRuntimeNotice {
     fn handle_event(&mut self,cx:&mut Cx,event:&Event,scope:&mut Scope) {
-        if !Service::for_current().is_ok_and(|s|s.identity()==self.identity) {self.view.set_visible(cx,false);self.view.widget(cx,ids!(loading_status)).set_visible(cx,false);self.target=None;return;}
+        if !Service::existing_current().is_some_and(|s|s.identity()==self.identity) {self.view.set_visible(cx,false);self.view.widget(cx,ids!(loading_status)).set_visible(cx,false);self.target=None;return;}
         if self.timer.is_event(event).is_some() {self.timer=Timer::default();if self.active {self.refresh(cx);}}
         if let Event::Actions(actions)=event {
             for action in actions {
@@ -125,7 +125,7 @@ impl AgentRuntimeNoticeRef {
     pub fn set_room(&self,cx:&mut Cx,room:&str) {
         let Some(mut this)=self.borrow_mut() else {return;};
         this.active=true;
-        let identity=Service::for_current().map(|s|s.identity()).unwrap_or_default();
+        let identity=Service::existing_current().map(|s|s.identity()).unwrap_or_default();
         if identity!=this.identity || room!=this.room {
             cx.stop_timer(this.timer);this.timer=Timer::default();
             this.identity=identity;this.room=room.into();this.request=this.request.wrapping_add(1);this.set_loading(cx,false);this.target=None;

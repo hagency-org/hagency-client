@@ -75,11 +75,35 @@ jobs:
         with:
           key: ${{ matrix.runner }}-build-${{ hashFiles('Cargo.lock') }}
 
+      - name: Test native Linux library and guarded sharing
+        run: |
+          cargo test --locked -p robius-share --lib
+          cargo test --locked -p hagency-app --lib
+
       - name: Build
         env:
           RUSTFLAGS: "-D warnings"
         run: |
           cargo build --locked -p hagency-app --profile fast
+
+      - name: Measure real attachment heap and file custody
+        if: matrix.runner == 'ubuntu-22.04'
+        run: |
+          cargo build --locked --release -p hagency-app --example attachment_memory_soak --features heap-profile,agent_chat
+          python3 ../../tools/test_attachment_memory_soak.py --binary "$GITHUB_WORKSPACE/target/release/examples/attachment_memory_soak" --output "$GITHUB_WORKSPACE/.run/attachment-memory"
+
+      - name: Retain attachment memory measurements
+        if: always() && matrix.runner == 'ubuntu-22.04'
+        uses: actions/upload-artifact@v4
+        with:
+          name: attachment-memory-linux
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7
+          path: |
+            .run/attachment-memory/**/*.json
+            .run/attachment-memory/**/*.jsonl
+            .run/attachment-memory/**/*.log
 
   build_macos:
     timeout-minutes: 120
@@ -143,8 +167,10 @@ jobs:
       - name: Test Windows update verification and file locking
         run: cargo test --locked -p hagency-updater
 
-      - name: Test native Windows update controls
-        run: cargo test --locked -p hagency-app --lib updates_settings
+      - name: Test native Windows library and guarded sharing
+        run: |
+          cargo test --locked -p robius-share --lib
+          cargo test --locked -p hagency-app --lib
 
       - name: Build
         env:

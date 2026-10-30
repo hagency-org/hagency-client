@@ -295,8 +295,9 @@ impl AppMain for App {
                         "themes/ocean-violet.octotheme"
                     ));
                     cx.action(ThemeStudioAction::Imported {
+                        epoch: hagency_app::current_session_epoch(),
                         owner: None,
-                        result,
+                        result: result.map(Box::new),
                     });
                 }
                 "theme:host-package" => {

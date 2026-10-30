@@ -14,6 +14,7 @@ const CAPTION_PADDING: f64 = if cfg!(target_os = "macos") { 28.0 } else { 0.0 };
 pub enum WebBrowserAction {
     Open(Url),
     OpenMarkdown {
+        epoch: u64,
         title: String,
         source: Arc<str>,
         account: Option<OwnedUserId>,
@@ -32,6 +33,10 @@ pub enum WebBrowserAction {
 
 impl WebBrowserAction {
     pub fn allowed(&self) -> bool {
+        if matches!(self,Self::OpenMarkdown {epoch,..} if *epoch != crate::account_session::epoch())
+        {
+            return false;
+        }
         !matches!(self, Self::OpenMarkdown { account, .. } | Self::Restore { account, .. } if account.as_ref() != crate::sliding_sync::current_user_id().as_ref()
             || crate::logout::logout_state_machine::is_logout_in_progress())
     }
@@ -39,6 +44,7 @@ impl WebBrowserAction {
 
 #[derive(Clone, Debug)]
 struct RestoredMarkdown {
+    epoch: u64,
     tab: LiveId,
     account: Option<OwnedUserId>,
     result: Result<Arc<str>, String>,
@@ -370,25 +376,43 @@ impl WebBrowser {
                     });
                     self.select_tab(cx, self.tabs.len() - 1);
                     let account = self.session_account.clone();
+                    let epoch = crate::account_session::epoch();
                     crate::sliding_sync::submit_async_request(
                         crate::sliding_sync::MatrixRequest::DownloadMedia {
                             media_source: attachment.media_source.clone(),
                             filename: attachment.filename.clone(),
+                            max_bytes: crate::attachment_transport::MARKDOWN_LIMIT,
                             on_download_result: Box::new(move |result| {
-                                let result = match result {
-                                    MediaDownloadResult::Downloaded(bytes) => {
-                                        markdown_source(bytes)
-                                    }
-                                    MediaDownloadResult::Failed(error) => Err(error),
-                                    MediaDownloadResult::Cancelled => {
-                                        Err("Download cancelled".into())
-                                    }
+                                let post = move |result| {
+                                    Cx::post_action(RestoredMarkdown {
+                                        tab: id,
+                                        account,
+                                        epoch,
+                                        result,
+                                    })
                                 };
-                                Cx::post_action(RestoredMarkdown {
-                                    tab: id,
-                                    account,
-                                    result,
-                                });
+                                match result {
+                                    MediaDownloadResult::Downloaded(file) => {
+                                        // The original file remains charged to its owned IO.
+                                        if let Err(error) =
+                                            crate::attachment_transport::io_worker::submit(
+                                                move || {
+                                                    post(file.read_small(crate::attachment_transport::MARKDOWN_LIMIT).and_then(markdown_source));
+                                                },
+                                            )
+                                        {
+                                            crate::shared::popup_list::enqueue_popup_notification(
+                                                error,
+                                                crate::shared::popup_list::PopupKind::Error,
+                                                None,
+                                            );
+                                        }
+                                    }
+                                    MediaDownloadResult::Failed(error) => post(Err(error)),
+                                    MediaDownloadResult::Cancelled => {
+                                        post(Err("Download cancelled".into()))
+                                    }
+                                }
                             }),
                         },
                     );
@@ -404,7 +428,8 @@ impl WebBrowser {
     }
 
     fn finish_markdown_restore(&mut self, cx: &mut Cx, result: &RestoredMarkdown) {
-        if result.account != crate::sliding_sync::current_user_id()
+        if result.epoch != crate::account_session::epoch()
+            || result.account != crate::sliding_sync::current_user_id()
             || crate::logout::logout_state_machine::is_logout_in_progress()
         {
             return;
@@ -697,7 +722,7 @@ impl Widget for WebBrowser {
             {
                 if let Some(tab) = self.active() {
                     if let Some(url) = &tab.original_url {
-                        crate::utils::open_url(url.as_str());
+                        crate::utils::open_url_external(url.as_str());
                     }
                 }
             }
@@ -763,6 +788,7 @@ impl WebBrowserRef {
                 modal.close(cx);
             }
             WebBrowserAction::OpenMarkdown {
+                epoch: _,
                 title,
                 source,
                 attachment,
@@ -917,6 +943,7 @@ mod session_tests {
         });
         inner.open(&mut cx, "https://example.org".parse().unwrap());
         let result = RestoredMarkdown {
+            epoch: crate::account_session::epoch(),
             tab: id,
             account: None,
             result: Ok("# Notes\n\nRestored.".into()),

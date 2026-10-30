@@ -24,3 +24,40 @@ pub(crate) fn ensure_current(client: &Client) -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+/// Opaque, in-process identity of the SDK session that initiated UI work.
+/// Same-user/device re-login must not accept a queued result from its old SDK.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct SessionPin {
+    epoch: u64,
+    instance: usize,
+    owner: matrix_sdk::ruma::OwnedUserId,
+    device: matrix_sdk::ruma::OwnedDeviceId,
+    origin: String,
+}
+impl std::fmt::Debug for SessionPin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MatrixSession")
+            .field("epoch", &self.epoch)
+            .field("owner", &self.owner)
+            .field("device", &self.device)
+            .finish_non_exhaustive()
+    }
+}
+impl SessionPin {
+    pub(crate) fn capture(client: &Client) -> Option<Self> {
+        Some(Self {
+            epoch: crate::account_session::epoch(),
+            instance: std::ptr::from_ref(client.session_meta()?) as usize,
+            owner: client.user_id()?.to_owned(),
+            device: client.device_id()?.to_owned(),
+            origin: client.homeserver().to_string(),
+        })
+    }
+    pub(crate) fn is_current(&self) -> bool {
+        self.epoch == crate::account_session::epoch()
+            && !crate::sliding_sync::account_changing()
+            && crate::sliding_sync::get_client()
+                .is_some_and(|client| Self::capture(&client).as_ref() == Some(self))
+    }
+}

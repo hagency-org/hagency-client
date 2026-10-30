@@ -2,6 +2,7 @@
 use reqwest::Url;
 use serde_json::Value;
 use std::{fmt, time::Duration};
+const SUPPORTED_PROTOCOL_VERSION: u64 = 3;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServerMetadata {
     pub product: String,
@@ -91,7 +92,7 @@ pub fn validate_metadata(origin: &str, value: &Value) -> Result<ServerMetadata, 
     if value["product"] != "hagency-server" {
         return Err(AdmissionError::UnsupportedServer);
     }
-    if value["protocolVersion"].as_u64() != Some(3) {
+    if value["protocolVersion"].as_u64() != Some(SUPPORTED_PROTOCOL_VERSION) {
         return Err(AdmissionError::UnsupportedProtocol);
     }
     let version = value["version"]
@@ -149,7 +150,7 @@ pub fn validate_metadata(origin: &str, value: &Value) -> Result<ServerMetadata, 
     Ok(ServerMetadata {
         product: "hagency-server".into(),
         version: version.into(),
-        protocol_version: 2,
+        protocol_version: SUPPORTED_PROTOCOL_VERSION,
         capabilities,
         homeserver: server.to_string(),
         issuer,
@@ -233,7 +234,13 @@ mod tests {
     #[test]
     fn admission_requires_supported_protocol_capabilities_and_same_origin_issuer() {
         let mut value = metadata();
-        for version in [1, 2] {
+        let admitted = validate_metadata("https://hagency.test/", &value).unwrap();
+        assert_eq!(admitted.protocol_version, 3);
+        assert_eq!(
+            Some(admitted.protocol_version),
+            value["protocolVersion"].as_u64()
+        );
+        for version in [0, 1, 2, 4, u64::MAX] {
             value["protocolVersion"] = json!(version);
             assert_eq!(
                 validate_metadata("https://hagency.test/", &value),
@@ -290,7 +297,7 @@ mod tests {
             .await
             .expect("standard HTTPS certificate/hostname and Hagency metadata validation");
         assert_eq!(metadata.product, "hagency-server");
-        assert_eq!(metadata.protocol_version, 2);
+        assert_eq!(metadata.protocol_version, SUPPORTED_PROTOCOL_VERSION);
     }
     #[tokio::test]
     async fn public_http_admission_never_follows_redirects_or_reads_credentials_for_matrix() {

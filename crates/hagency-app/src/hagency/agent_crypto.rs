@@ -674,6 +674,28 @@ pub async fn prepare_managed(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn isolated_store_test(name: &str) -> bool {
+        const CHILD: &str = "HAGENCY_ISOLATED_CRYPTO_STORE_TEST";
+        if std::env::var(CHILD).as_deref() == Ok(name) {
+            return false;
+        }
+        // A Unix flock belongs to the open file description. An unrelated
+        // test's concurrent fork can inherit that description until exec,
+        // even though File opens it with CLOEXEC. Then drop(lock) in this
+        // process cannot be the last close. Run the original strict drop/
+        // reopen assertions in a real child with no other tests spawning.
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", name, "--nocapture", "--test-threads=1"])
+            .env(CHILD, name)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "isolated crypto store test {name} failed with {}\nstdout: {stdout}\nstderr: {stderr}", output.status);
+        assert!(stdout.contains("1 passed"), "the isolated store test must actually run: {stdout}\n{stderr}");
+        true
+    }
     fn binding() -> Binding {
         Binding {
             origin: "https://example.test/".into(),
@@ -703,6 +725,9 @@ mod tests {
     }
     #[test]
     fn private_crypto_store_retains_exclusive_original_scope_and_keys() {
+        if isolated_store_test("hagency::agent_crypto::tests::private_crypto_store_retains_exclusive_original_scope_and_keys") {
+            return;
+        }
         let root = root();
         let mut binding = binding();
         let (path, lock) = store(root.path(), &binding).unwrap();
@@ -737,6 +762,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn crypto_store_refuses_public_directory_and_symlinked_original_keys() {
+        if isolated_store_test("hagency::agent_crypto::tests::crypto_store_refuses_public_directory_and_symlinked_original_keys") {
+            return;
+        }
         use std::os::unix::{
             fs::{PermissionsExt, symlink},
         };

@@ -393,7 +393,7 @@ makepad_widgets::script_mod! {
                     description_editor := Composer {}
                     attachments_section := RoundedView {width:Fill height:Fit flow:Down spacing:10 padding:12
                         draw_bg +: {color:mod.widgets.RINX_SURFACE border_color:mod.widgets.RINX_BORDER border_size:1.0 border_radius:10.0}
-                        View {width:Fill height:30 align:Align{y:0.5}
+                        View {width:Fill height:Fit align:Align{y:0.5}
                             Text {width:Fill text:#(crate::i18n::tr("Attachments")) i18n_text:"Attachments"}
                             upload_attachment := Action {text:#(crate::i18n::tr("Add file")) i18n_text:"Add file"}
                         }
@@ -414,7 +414,7 @@ makepad_widgets::script_mod! {
                             draw_bg +: {color:mod.widgets.RINX_PANEL_BG border_color:mod.widgets.RINX_BORDER border_size:1.0 border_radius:8.0}
                             delete_filename := Text {width:Fill max_lines:2}
                             Small {text:#(crate::i18n::tr("Delete this attachment? Images in descriptions and comments will become unavailable.")) i18n_text:"Delete this attachment? Images in descriptions and comments will become unavailable."}
-                            View {width:Fill height:32 spacing:8
+                            View {width:Fill height:Fit spacing:8
                                 delete_cancel := RinxGhostButton {text:#(crate::i18n::tr("Cancel")) i18n_text:"Cancel"}
                                 delete_confirm := Action {text:#(crate::i18n::tr("Delete attachment")) i18n_text:"Delete attachment"}
                             }

@@ -65,7 +65,14 @@ FTP text form; unicode-general-category 0.6.0 identifies punctuation.
 We rejected markdown-it 0.6.1 after reproducing an ordinary-input panic on
 `> *a*` followed by `> [`, independent of its bundled linkifier. The selected
 parser renders that fixture correctly. No panic swallowing, source-specific
-placeholder, vendored dependency or alternate JavaScript renderer is used.
+placeholder or alternate JavaScript renderer is used. The sole vendored
+exception is now mdurl 0.3.1: the exact original MIT-licensed registry sources,
+tests and attribution are retained under `vendor/mdurl`, with provenance and
+its active manifest's obsolete IDNA dependency changed to idna 1.1.0, plus
+two explicit anonymous return lifetime annotations needed by native builds
+that deny warnings; neither annotation changes percent behavior.
+This repairs RUSTSEC-2024-0421 without changing the percent primitives, the
+separate raw punycode policy or the retained JavaScript content oracle.
 Unsafe reference definitions are prevented from becoming definitions in one
 compatibility reparse, preserving paragraph continuation and later valid
 references. This is formatting adaptation, never permission or routing inference.

@@ -15,6 +15,7 @@ mod recovery;
 mod crypto;
 mod project_navigation;
 mod model_resources;
+pub mod approval_discovery;
 
 #[derive(Clone, Debug)]
 pub enum HagencyAction {
@@ -31,6 +32,7 @@ pub enum HagencyAction {
     },
     OpenAgents,
     AgentRun {agent_id:String,binding_id:String},
+    ReviewApproval(approval_discovery::ApprovalTarget),
     NewAgent {
         project_id: Option<String>,
     },
@@ -629,6 +631,33 @@ script_mod! {
             empty_message := Text {text: #(crate::i18n::tr("No Projects yet. Create a Project to start a shared workspace.")) i18n_text: "No Projects yet. Create a Project to start a shared workspace."}
         }
     }
+    mod.widgets.ApprovalInboxRows = #(approval_discovery::ApprovalRows::register_widget(vm)) {
+        ..mod.widgets.PortalList
+    }
+    mod.widgets.GlobalApprovalInbox = #(approval_discovery::GlobalApprovalInbox::register_widget(vm)) {
+        width: Fill height: Fit flow: Down
+        open_approval_inbox := RinxGhostButton {width:Fill height:36 text:#(crate::i18n::tr("Approvals")) i18n_text:"Approvals"
+            draw_icon.svg:crate_resource("self://resources/icons/bell.svg") icon_walk:Walk{width:18 height:18} spacing:8}
+        inbox_popup := Modal {
+            content := SmallModal {width:580 height:560 flow:Down spacing:10
+                ModalTitle {text:#(crate::i18n::tr("Pending approvals")) i18n_text:"Pending approvals"}
+                inbox_status := RinxLabel {width:Fill height:Fit max_lines:3 flow:Flow.Right{wrap:true}}
+                inbox_rows := mod.widgets.ApprovalInboxRows {width:Fill height:Fill
+                    Approval := View {width:Fill height:102 flow:Down padding:8 spacing:6
+                        approval_summary := RinxLabel {width:Fill height:Fit max_lines:2 text_overflow:Ellipsis}
+                        review_approval := RinxGhostButton {width:Fill height:32 text:#(crate::i18n::tr("Review exact request")) i18n_text:"Review exact request"}
+                    }
+                    Empty := RinxLabel {width:Fill height:50 text:#(crate::i18n::tr("No pending approvals on this device.")) i18n_text:"No pending approvals on this device."}
+                }
+                View {width:Fill height:Fit flow:Flow.Right{wrap:true} spacing:6
+                    inbox_previous := RinxGhostButton {height:32 text:#(crate::i18n::tr("Previous page")) i18n_text:"Previous page"}
+                    inbox_next := RinxGhostButton {height:32 text:#(crate::i18n::tr("Next page")) i18n_text:"Next page"}
+                    inbox_refresh := RinxGhostButton {height:32 text:#(crate::i18n::tr("Refresh")) i18n_text:"Refresh"}
+                    inbox_close := RinxGhostButton {height:32 text:#(crate::i18n::tr("Close")) i18n_text:"Close"}
+                }
+            }
+        }
+    }
     mod.widgets.HagencyPanel = #(HagencyPanel::register_widget(vm)) {
         ..mod.widgets.SolidView
         width: Fill height: Fill flow: Down padding: Inset{top: 8 left: 12 right: 0 bottom: 0} spacing: 6 draw_bg.color: mod.widgets.RINX_CONTENT_BG
@@ -817,6 +846,10 @@ script_mod! {
                     candidates_more := Action {visible: false text: #(crate::i18n::tr("Refresh / load more Spaces")) i18n_text: "Refresh / load more Spaces"}
                     existing_room_holder := View {visible: false width: Fill height: Fit flow: Down spacing: 4 Text {text: #(crate::i18n::tr("Room ID")) i18n_text: "Room ID"}
  existing_room := Input {empty_text: "!existing-room:server"}}
+                    creation_encryption := View {visible:false width:Fill height:Fit flow:Down spacing:4
+                        creation_encrypted := RinxCheckBox {text:#(crate::i18n::tr("Encrypted room")) i18n_text:"Encrypted room"}
+                        Text {text:#(crate::i18n::tr("Encryption protects new messages and cannot be turned off. Earlier messages stay unencrypted.")) i18n_text:"Encryption protects new messages and cannot be turned off. Earlier messages stay unencrypted." draw_text.color:mod.widgets.RINX_MUTED}
+                    }
                     create_project_room := Primary {text: #(crate::i18n::tr("Create Project")) i18n_text: "Create Project"}
                     creation_result := Text {}
                     recovery := View {visible: false width: Fill height: Fit flow: Down spacing: 8
@@ -1191,7 +1224,7 @@ script_mod! {
                         }
                         Section {width: Fill height: Fit flow: Down spacing: 8
                             Text {text: #(crate::i18n::tr("Agent encryption identity")) i18n_text: "Agent encryption identity" draw_text.text_style: theme.font_bold{font_size: mod.widgets.RINX_TITLE_SIZE}}
-                            Text {text: #(crate::i18n::tr("Encrypted Agent tasks and files are not available yet.")) i18n_text: "Encrypted Agent tasks and files are not available yet." draw_text.color: mod.widgets.RINX_MUTED}
+                            Text {text: #(crate::i18n::tr("Verified owner private Rooms support encrypted tasks, replies and files. Shared requester trust and cross-host key recovery remain unavailable.")) i18n_text: "Verified owner private Rooms support encrypted tasks, replies and files. Shared requester trust and cross-host key recovery remain unavailable." draw_text.color: mod.widgets.RINX_MUTED}
                             crypto_status := Text {}
                             crypto_identity := Text {}
                             crypto_confirm := RinxCheckBox {text: #(crate::i18n::tr("I checked the complete master key and device fingerprints for this Agent.")) i18n_text: "I checked the complete master key and device fingerprints for this Agent."}
@@ -1436,6 +1469,7 @@ pub struct HagencyPanel {
     #[rust] direct_state: Value,
     #[rust] wanted_agent: Option<String>,
     #[rust] wanted_run: Option<(String,String)>,
+    #[rust] wanted_approval: Option<approval_discovery::ApprovalTarget>,
     #[rust] wanted_model: Option<String>,
     #[rust] direct_timer: Timer,
     #[rust] direct_retry: Option<(String,String,u8)>,
@@ -1559,6 +1593,13 @@ impl HagencyPanel {
         self.view.drop_down(cx,ids!(approvals)).set_labels(cx,std::iter::once(crate::i18n::tr("Select a pending approval").to_owned()).chain(self.approvals.iter().map(|v|format!("{} · {}",string(&v["proposal"],"tool"),string(&v["proposal"]["scope"],"requester")))).collect());
         let index=selected.and_then(|id|self.approvals.iter().position(|v|string(v,"proposalId")==id)).map(|i|i+1).unwrap_or(0);
         self.view.drop_down(cx,ids!(approvals)).set_selected_item(cx,index);
+        if let Some(target)=self.wanted_approval.take() {
+            let exact=self.approvals.iter().position(|row|target.matches(&self.identity,row,super::approvals::now()));
+            self.view.drop_down(cx,ids!(approvals)).set_selected_item(cx,exact.map_or(0,|index|index+1));
+            if exact.is_none() {
+                self.view.label(cx,ids!(approval_feedback)).set_text(cx,crate::i18n::tr("This exact approval is no longer pending. No decision was submitted."));
+            }
+        }
         self.view.label(cx,ids!(approval_count)).set_text(cx,&crate::i18n::format("{count} pending approvals in this Room",&[("count",self.approvals.len().to_string())]));
         self.render_approval_details(cx);
         self.sync_navigation(cx);
@@ -2280,6 +2321,11 @@ impl HagencyPanel {
     }
 
     fn sync_navigation(&self, cx: &mut Cx) {
+        let creation_locked=self.busy || self.creation.as_ref().is_some_and(|c|c["phase"]!="complete");
+        self.view.widget(cx,ids!(creation_encrypted)).set_disabled(cx,creation_locked);
+        if creation_locked && let Some(input)=&self.pending_input {
+            self.view.check_box(cx,ids!(creation_encrypted)).set_active(cx,input["encrypted"]==true,Animate::No);
+        }
         self.render_project_controls(cx);
         self.render_owner_direct(cx);
         let agent = self.selected(cx, ids!(agents), &self.agents);
@@ -2671,6 +2717,7 @@ impl HagencyPanel {
             return false;
         }
         self.creation=None;self.pending_input=None;self.create_room=room;
+        self.view.check_box(cx,ids!(creation_encrypted)).set_active(cx,false,Animate::No);
         for id in [ids!(creation_name),ids!(found_room),ids!(existing_room)] {self.view.text_input(cx,id).set_text(cx, "");}
         self.view.label(cx,ids!(creation_result)).set_text(cx, "");
         self.view.view(cx,ids!(recovery)).set_visible(cx,false);
@@ -2681,6 +2728,7 @@ impl HagencyPanel {
         self.view.view(cx,ids!(creation_source_holder)).set_visible(cx,self.create_room);
         self.view.label(cx,ids!(creation_source_label)).set_visible(cx,self.create_room);
         let existing = self.create_room && self.view.drop_down(cx,ids!(creation_source)).selected_item()==1;
+        self.view.view(cx,ids!(creation_encryption)).set_visible(cx,self.create_room && !existing);
         let (title, note) = match (self.create_room, existing) {
             (false, false) => (
                 "Create Project",
@@ -3162,6 +3210,7 @@ impl HagencyPanel {
                         if open_model {self.wanted_model=Some(wanted);}
                         return;
                     }
+                    if self.wanted_approval.is_some() {self.reject_discovered_approval(cx);return;}
                 }
                 if let Some(wanted) = self.wanted_project.take() {
                     if let Some(index) =
@@ -3392,6 +3441,7 @@ impl HagencyPanel {
                 self.bindings = array(value, "bindings");
                 self.label_bindings(cx,ids!(bindings));
                 self.label_bindings(cx,ids!(policy_binding));
+                if self.open_discovered_binding(cx) {return;}
                 let initial = self.bindings.iter().position(|b| string(b,"scopeKind") == "owner_direct" && string(b,"state") == "active").or_else(||self.bindings.iter().position(|b| string(b,"state") == "active"));
                 self.select_policy_room(cx, initial.map_or(0,|i|i+1));
                 if let Some(index)=initial {let label=self.binding_label(cx,&self.bindings[index]);self.view.label(cx,ids!(binding_details)).set_text(cx,&format!("{} · {}",label,string(&self.bindings[index],"state")));}
@@ -3748,6 +3798,7 @@ impl HagencyPanel {
                 self.status(cx, "Select a Project before adding a Room.");
                 return;
             };
+            input["encrypted"] = self.view.check_box(cx,ids!(creation_encrypted)).active(cx).into();
             input["projectId"] = project["id"].clone();
             input["spaceId"] = project["spaceId"].clone();
         }
@@ -4636,6 +4687,7 @@ impl Widget for HagencyPanel {
                 .selected(actions)
                 .is_some()
         {
+            self.wanted_approval=None;
             let index = self.view.drop_down(cx, if budget_room_changed { ids!(policy_binding) } else { ids!(bindings) }).selected_item();
             self.select_policy_room(cx, index);
             for id in [
@@ -5200,10 +5252,13 @@ impl HagencyPanelRef {
         let Some(mut panel) = self.borrow_mut() else {
             return;
         };
+        if let HagencyAction::ReviewApproval(target)=action
+            && !Service::existing_current().is_some_and(|service|service.identity()==target.identity) {return;}
         panel.cancel_direct_retry(cx);
         panel.cancel_read_wait(cx);
-        if matches!(action,HagencyAction::AgentRun {..}|HagencyAction::NewAgent {..}|HagencyAction::NewProject) {panel.reset_detail_scroll(cx);}
+        if matches!(action,HagencyAction::AgentRun {..}|HagencyAction::ReviewApproval(..)|HagencyAction::NewAgent {..}|HagencyAction::NewProject) {panel.reset_detail_scroll(cx);}
         panel.wanted_run=None;
+        panel.wanted_approval=None;
         panel.wanted_model=None;
         if matches!(action, HagencyAction::Close) {
             panel.active = false;
@@ -5364,9 +5419,13 @@ impl HagencyPanelRef {
                 }
                 panel.run(cx, Target::Journal, Command::Creations);
             }
-            HagencyAction::OpenAgents | HagencyAction::NewAgent { .. } | HagencyAction::AgentRun {..} => {
+            HagencyAction::OpenAgents | HagencyAction::NewAgent { .. } | HagencyAction::AgentRun {..} | HagencyAction::ReviewApproval(..) => {
                 panel.set_page(cx, Page::Agents);
                 if let HagencyAction::AgentRun {agent_id,binding_id}=action {panel.wanted_agent=Some(agent_id.clone()); panel.wanted_run=Some((agent_id.clone(),binding_id.clone()));}
+                if let HagencyAction::ReviewApproval(target)=action {
+                    panel.wanted_agent=Some(target.agent.clone());panel.wanted_run=Some((target.agent.clone(),target.binding.clone()));
+                    panel.wanted_approval=Some(target.clone());
+                }
                 if matches!(action, HagencyAction::NewAgent { .. }) {
                     panel.begin_agent_creation(cx);
                 }
@@ -7129,4 +7188,26 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn project_encryption_choice_only_appears_for_new_rooms_and_unknown_intents_stay_frozen() {
+        let mut cx=Cx::new(Box::new(|_,_|{}));
+        let mut panel=cx.with_vm(|vm|{makepad_widgets::script_mod(vm);crate::app::register_widgets(vm);vm.bx.captured_errors=Some(Vec::new());let value=script_eval!(vm,{mod.widgets.HagencyPanel {}});let panel=HagencyPanel::script_from_value(vm,value);assert!(vm.take_errors().is_empty());panel});
+        assert!(panel.begin_creation_form(&mut cx,false));panel.creation_source(&mut cx);
+        assert!(!panel.view.view(&cx,ids!(creation_encryption)).visible());
+        panel.project_home=json!({"canCreateRoom":true});panel.open_room_creation(&mut cx);
+        assert!(panel.view.view(&cx,ids!(creation_encryption)).visible());
+        panel.view.drop_down(&cx,ids!(creation_source)).set_selected_item(&mut cx,1);panel.creation_source(&mut cx);
+        assert!(!panel.view.view(&cx,ids!(creation_encryption)).visible(),"linking an existing Room must not claim to change its encryption");
+        let original=json!({"kind":"room","commandId":"encrypted-room","encrypted":true});
+        panel.pending_input=Some(original.clone());panel.creation=Some(json!({"phase":"unknown"}));panel.sync_navigation(&mut cx);
+        assert!(panel.view.widget(&cx,ids!(creation_encrypted)).disabled(&cx));
+        assert!(panel.view.check_box(&cx,ids!(creation_encrypted)).active(&cx));
+        assert!(!panel.begin_creation_form(&mut cx,true));
+        assert_eq!(panel.pending_input,Some(original.clone()));
+        assert!(matches!(recovery_command(original,"unrecorded",String::new()),Command::CreateMatrix{input} if input["encrypted"]==true));
+        panel.creation=Some(json!({"phase":"complete"}));
+        assert!(panel.begin_creation_form(&mut cx,true));
+        assert!(!panel.view.check_box(&cx,ids!(creation_encrypted)).active(&cx));
+    }
+
 }

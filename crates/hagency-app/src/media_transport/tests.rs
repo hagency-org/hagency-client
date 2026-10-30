@@ -1,4 +1,16 @@
 use super::*;
+// Test-only explicit scope; production fetch always uses the real session fence.
+async fn fetch(client: &Client, request: &MediaRequestParameters) -> matrix_sdk::Result<Vec<u8>> {
+    fetch_with_timeout(client, request, Duration::from_secs(30)).await
+}
+async fn fetch_with_timeout(
+    client: &Client,
+    request: &MediaRequestParameters,
+    timeout: Duration,
+) -> matrix_sdk::Result<Vec<u8>> {
+    super::fetch_with_current(client, request, timeout, std::sync::Arc::new(|| true)).await
+}
+use matrix_sdk::ruma::api::MatrixVersion;
 use std::{
     io::Write,
     net::TcpListener,
@@ -7,7 +19,6 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
 };
-use matrix_sdk::ruma::api::MatrixVersion;
 
 pub(crate) struct Server {
     pub(crate) url: String,
@@ -46,7 +57,10 @@ impl Server {
                 let path = request.split_whitespace().nth(1).unwrap_or("").to_owned();
                 paths.lock().unwrap().push(request);
                 if path.contains("/slow-body") {
-                    let _ = write!(socket, "HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\n");
+                    let _ = write!(
+                        socket,
+                        "HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\n"
+                    );
                     std::thread::sleep(Duration::from_millis(500));
                     let _ = socket.write_all(b"preview");
                 } else if path.contains("/oversized") {
@@ -200,7 +214,6 @@ async fn bounded_transport_preserves_authentication_cache_and_attachment_integri
     );
 }
 
-
 #[tokio::test]
 async fn preview_deadline_covers_queue_and_body_and_releases_permits() {
     let server = Server::new(Vec::new());
@@ -208,11 +221,129 @@ async fn preview_deadline_covers_queue_and_body_and_releases_permits() {
     let gate = FETCHES.acquire_many(4).await.unwrap();
     // More attempts than the request budget catches permits leaked on timeout.
     for _ in 0..160 {
-        let error = fetch_with_timeout(&client, &request("queued"), Duration::from_millis(1)).await.unwrap_err();
-        assert!(matches!(error, Error::UnknownError(ref error) if error.is::<tokio::time::error::Elapsed>()));
+        let error = fetch_with_timeout(&client, &request("queued"), Duration::from_millis(1))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, Error::UnknownError(ref error) if error.is::<tokio::time::error::Elapsed>())
+        );
     }
     drop(gate);
-    let error = fetch_with_timeout(&client, &request("slow-body"), Duration::from_millis(100)).await.unwrap_err();
-    assert!(matches!(error, Error::UnknownError(ref error) if error.is::<tokio::time::error::Elapsed>()));
-    assert_eq!(fetch(&client, &request("recovered")).await.unwrap(), b"preview");
+    let error = fetch_with_timeout(&client, &request("slow-body"), Duration::from_millis(100))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::UnknownError(ref error) if error.is::<tokio::time::error::Elapsed>())
+    );
+    assert_eq!(
+        fetch(&client, &request("recovered")).await.unwrap(),
+        b"preview"
+    );
+}
+
+#[tokio::test]
+async fn bounded_cache_keeps_remote_thumbnail_key_and_local_echo_file_key() {
+    let server = Server::new(Vec::new());
+    let client = server.client(MatrixVersion::V1_11).await;
+    let file = request("cached-formats");
+    let mut thumbnail = file.clone();
+    thumbnail.format = MediaFormat::Thumbnail(matrix_sdk::media::MediaThumbnailSettings::new(
+        32u32.into(),
+        32u32.into(),
+    ));
+    let mut local = thumbnail.clone();
+    local.source = MediaSource::Plain("mxc://send-queue.localhost/echo".into());
+    let mut local_file = local.clone();
+    local_file.format = MediaFormat::File;
+    {
+        let store = client.media_store().lock().await.unwrap();
+        for (key, value) in [
+            (&file, b"file".as_slice()),
+            (&thumbnail, b"thumb".as_slice()),
+            (&local_file, b"local".as_slice()),
+        ] {
+            store
+                .add_media_content(
+                    key,
+                    value.to_vec(),
+                    matrix_sdk_base::media::store::IgnoreMediaRetentionPolicy::No,
+                )
+                .await
+                .unwrap();
+        }
+    }
+    assert_eq!(fetch(&client, &thumbnail).await.unwrap(), b"thumb");
+    assert_eq!(fetch(&client, &file).await.unwrap(), b"file");
+    assert_eq!(fetch(&client, &local).await.unwrap(), b"local");
+    assert!(
+        !server
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|request| request.contains("/media/"))
+    );
+    // A pre-existing oversized local echo must fail at the bounded store API.
+    client
+        .media_store()
+        .lock()
+        .await
+        .unwrap()
+        .add_media_content(
+            &local_file,
+            vec![0; crate::memory_budget::IMAGE_FILE_BYTES + 1],
+            matrix_sdk_base::media::store::IgnoreMediaRetentionPolicy::No,
+        )
+        .await
+        .unwrap();
+    assert!(fetch(&client, &local).await.is_err());
+}
+
+#[tokio::test]
+async fn retired_network_preview_is_neither_cached_nor_published() {
+    let server = Server::new(Vec::new());
+    let client = server.client(MatrixVersion::V1_11).await;
+    let original = client.clone();
+    let key = request("slow-body");
+    let target = key.clone();
+    let live = Arc::new(AtomicBool::new(true));
+    let flag = live.clone();
+    let task = tokio::spawn(async move {
+        super::fetch_with_current(
+            &original,
+            &target,
+            Duration::from_secs(5),
+            Arc::new(move || flag.load(Ordering::Acquire)),
+        )
+        .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if server
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|request| request.contains("/slow-body"))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("real HTTP request began");
+    live.store(false, Ordering::Release);
+    assert!(task.await.unwrap().is_err());
+    assert!(
+        client
+            .media_store()
+            .lock()
+            .await
+            .unwrap()
+            .get_media_content_bounded(&key, crate::memory_budget::IMAGE_FILE_BYTES)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }

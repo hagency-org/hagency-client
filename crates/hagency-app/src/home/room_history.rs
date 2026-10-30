@@ -777,7 +777,9 @@ pub(crate) async fn catch_up_history(
     slot: &Arc<Mutex<Option<hagency_history::Index>>>,
     repair: &Arc<AtomicBool>,
 ) -> anyhow::Result<()> {
-    catch_up_history_checked(client,room,slot,repair,||crate::matrix_context::ensure_current(client)).await
+    let checker=client.clone();
+    let epoch=crate::account_session::epoch();
+    catch_up_history_checked(client,room,slot,repair,move ||crate::history_store::ensure_account(&checker,epoch)).await
 }
 
 pub(crate) async fn catch_up_history_checked(
@@ -785,43 +787,71 @@ pub(crate) async fn catch_up_history_checked(
     room: &matrix_sdk::Room,
     slot: &Arc<Mutex<Option<hagency_history::Index>>>,
     repair: &Arc<AtomicBool>,
-    current: impl Fn()->anyhow::Result<()> + Send + Sync,
+    current: impl Fn()->anyhow::Result<()> + Send + Sync + 'static,
 ) -> anyhow::Result<()> {
-    static CATCHUP:std::sync::OnceLock<[tokio::sync::Mutex<()>;64]>=std::sync::OnceLock::new();
-    let gates=CATCHUP.get_or_init(||std::array::from_fn(|_|tokio::sync::Mutex::new(())));
-    let shard=blake3::hash(room.room_id().as_bytes()).as_bytes()[0] as usize%gates.len();
-    let _guard=gates[shard].lock().await;
+    // Release the exact index gate between committed pages. Foreground catchup
+    // remains complete before search, while another room can make progress.
+    let current=Arc::new(current);
+    loop {
+        let checker=current.clone();
+        if !catch_up_history_step_checked(client,room,slot,repair,move ||checker()).await? {break;}
+        tokio::task::yield_now().await;
+    }
+    Ok(())
+}
+
+/// Commit at most one ordered /messages page. True means more work may remain;
+/// the next turn re-reads the index-owned cursor, never the SDK sync token.
+pub(crate) async fn catch_up_history_step_checked(
+    client: &matrix_sdk::Client,
+    room: &matrix_sdk::Room,
+    slot: &Arc<Mutex<Option<hagency_history::Index>>>,
+    repair: &Arc<AtomicBool>,
+    current: impl Fn()->anyhow::Result<()> + Send + Sync + 'static,
+) -> anyhow::Result<bool> {
+    let guard=crate::history_store::history_gate(client,room.room_id()).lock_owned().await;
+    let current=Arc::new(current);
+    current()?;
     let worker_slot=slot.clone();
     let worker_client=client.clone();
     let room_id=room.room_id().to_owned();
     let repair=repair.clone();
-    let (mut coverage,generation)=tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+    let checker=current.clone();
+    let (mut coverage,generation,guard)=tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        // The original operation owns the guard through open/reset and returns
+        // it only after real IO completes. Cancelling its observer cannot free it.
         let mut slot=worker_slot.lock().unwrap();
+        checker()?;
         if slot.is_none() {*slot=Some(crate::history_store::open(&worker_client,&room_id)?);}
         let index=slot.as_mut().unwrap();
         if repair.swap(false,Ordering::Relaxed) {index.reset_stale()?;}
-        Ok((index.coverage()?,index.generation()?))
+        Ok((index.coverage()?,index.generation()?,guard))
     }).await??;
-    while let Some(cursor)=coverage.head_cursor.clone() {
-        current()?;
-        let mut options=MessagesOptions::new(ruma::api::Direction::Forward);
-        options.from=Some(cursor.clone());
-        options.limit=ruma::uint!(100);
-        let response=room.messages(options).await?;
-        let done=response.end.is_none() || response.end.as_ref()==Some(&cursor);
-        let events=response.chunk.iter().map(|e|crate::history_store::event(e,None)).collect::<anyhow::Result<Vec<_>>>()?.into_iter().flatten().collect::<Vec<_>>();
-        let previous=coverage.clone();
-        coverage.head_cursor=response.end.or(Some(cursor));
-        let next=coverage.clone();
-        let worker_slot=slot.clone();
-        let generation=generation.clone();
-        current()?;
-        coverage=tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-            worker_slot.lock().unwrap().as_mut().unwrap().insert_page(&events,&previous,&next,&generation)
-        }).await??;
-        if done {break;}
-    }
-    Ok(())
+    current()?;
+    let Some(cursor)=coverage.head_cursor.clone() else {return Ok(false)};
+    let mut options=MessagesOptions::new(ruma::api::Direction::Forward);
+    options.from=Some(cursor.clone());
+    options.limit=ruma::uint!(100);
+    let response=room.messages(options).await?;
+    current()?;
+    let done=response.end.is_none() || response.end.as_ref()==Some(&cursor);
+    let events=response.chunk.iter().map(|e|crate::history_store::event(e,None)).collect::<anyhow::Result<Vec<_>>>()?.into_iter().flatten().collect::<Vec<_>>();
+    let previous=coverage.clone();
+    coverage.head_cursor=response.end.or(Some(cursor));
+    let next=coverage;
+    let worker_slot=slot.clone();
+    let checker=current.clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        // Recheck after queue/slot waits, immediately before the original SQLite
+        // write. An already-entered transaction can finish only in its old index;
+        // it is not a cancellable action or an authorization for the next account.
+        let _guard=guard;
+        let mut slot=worker_slot.lock().unwrap();
+        checker()?;
+        slot.as_mut().unwrap().insert_page(&events,&previous,&next,&generation)
+    }).await??;
+    current()?;
+    Ok(!done)
 }
 
 impl Widget for RoomHistoryPanel {

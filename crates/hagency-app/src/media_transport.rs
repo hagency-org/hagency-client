@@ -1,5 +1,4 @@
 //! Bounded chat previews. File-save/download operations keep their own transport.
-use std::{io::Read, time::Duration};
 use matrix_sdk::{
     Client, Error,
     media::{MediaFormat, MediaRequestParameters},
@@ -12,7 +11,7 @@ use matrix_sdk::{
         events::room::MediaSource,
     },
 };
-use matrix_sdk_base::media::store::IgnoreMediaRetentionPolicy;
+use std::{io::Read, time::Duration};
 
 static FETCHES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
 static REQUESTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(128);
@@ -43,12 +42,37 @@ async fn fetch_with_timeout(
     request: &MediaRequestParameters,
     timeout: Duration,
 ) -> matrix_sdk::Result<Vec<u8>> {
-    tokio::time::timeout(timeout, fetch_inner(client, request))
+    fetch_with_current(
+        client,
+        request,
+        timeout,
+        crate::media_cache_reader::scope(client),
+    )
+    .await
+}
+
+async fn fetch_with_current(
+    client: &Client,
+    request: &MediaRequestParameters,
+    timeout: Duration,
+    current: crate::media_cache_reader::Current,
+) -> matrix_sdk::Result<Vec<u8>> {
+    tokio::time::timeout(timeout, fetch_inner(client, request, current))
         .await
         .map_err(|error| Error::UnknownError(Box::new(error)))?
 }
 
-async fn fetch_inner(client: &Client, request: &MediaRequestParameters) -> matrix_sdk::Result<Vec<u8>> {
+fn cache_error(error: String) -> Error {
+    Error::UnknownError(Box::new(std::io::Error::other(error)))
+}
+async fn fetch_inner(
+    client: &Client,
+    request: &MediaRequestParameters,
+    current: crate::media_cache_reader::Current,
+) -> matrix_sdk::Result<Vec<u8>> {
+    if !current() {
+        return Err(cache_error("Matrix session changed".into()));
+    }
     let _request = REQUESTS
         .try_acquire()
         .map_err(|_| Error::UnknownError(Box::new(PreviewLimit::Busy)))?;
@@ -70,16 +94,11 @@ async fn fetch_inner(client: &Client, request: &MediaRequestParameters) -> matri
     } else {
         request.clone()
     };
-    if let Some(bytes) = client
-        .media_store()
-        .lock()
-        .await?
-        .get_media_content(&cached_request)
-        .await?
+    if let Some(bytes) =
+        crate::media_cache_reader::read(client.clone(), cached_request, max, current.clone())
+            .await
+            .map_err(cache_error)?
     {
-        if bytes.len() > max {
-            return Err(limit());
-        }
         return Ok(bytes);
     }
     if local {
@@ -124,6 +143,9 @@ async fn fetch_inner(client: &Client, request: &MediaRequestParameters) -> matri
     let mut response = {
         let mut attempt = 0;
         loop {
+            if !current() {
+                return Err(cache_error("Matrix session changed".into()));
+            }
             let mut builder = client
                 .http_client()
                 .get(url.clone())
@@ -133,6 +155,9 @@ async fn fetch_inner(client: &Client, request: &MediaRequestParameters) -> matri
                     .bearer_auth(client.access_token().ok_or(Error::AuthenticationRequired)?);
             }
             let response = builder.send().await?;
+            if !current() {
+                return Err(cache_error("Matrix session changed".into()));
+            }
             if attempt == 0
                 && authenticated
                 && response.status().as_u16() == 401
@@ -167,6 +192,9 @@ async fn fetch_inner(client: &Client, request: &MediaRequestParameters) -> matri
     }
     let mut content = Vec::new();
     while let Some(chunk) = response.chunk().await? {
+        if !current() {
+            return Err(cache_error("Matrix session changed".into()));
+        }
         let next = content.len().saturating_add(chunk.len());
         if next > max {
             return Err(limit());
@@ -190,12 +218,15 @@ async fn fetch_inner(client: &Client, request: &MediaRequestParameters) -> matri
         }
         content = decrypted;
     }
-    client
-        .media_store()
-        .lock()
-        .await?
-        .add_media_content(request, content.clone(), IgnoreMediaRetentionPolicy::No)
-        .await?;
+    if !current() {
+        return Err(cache_error("Matrix session changed".into()));
+    }
+    crate::media_cache_reader::write(client.clone(), request.clone(), &content, current.clone())
+        .await
+        .map_err(cache_error)?;
+    if !current() {
+        return Err(cache_error("Matrix session changed".into()));
+    }
     Ok(content)
 }
 

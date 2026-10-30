@@ -125,71 +125,218 @@ pub(crate) fn event(event: &TimelineEvent, name: Option<&str>) -> Result<Option<
     }))
 }
 
-/// A single account-scoped consumer; no unbounded task/connection per room.
-/// Lagging never silently leaves searchable stale edits/redactions behind.
+/// Metadata-only FIFO: one queued turn per room and one dirty flag while its
+/// page is in flight. Payloads and open indexes are never retained in this queue.
+#[derive(Default)]
+struct DirtyRooms {
+    ready: std::collections::VecDeque<ruma::OwnedRoomId>,
+    queued: std::collections::BTreeSet<ruma::OwnedRoomId>,
+    active: std::collections::BTreeSet<ruma::OwnedRoomId>,
+    again: std::collections::BTreeSet<ruma::OwnedRoomId>,
+}
+impl DirtyRooms {
+    fn enqueue(&mut self, room: ruma::OwnedRoomId) {
+        if self.active.contains(&room) {
+            self.again.insert(room);
+        } else if self.queued.insert(room.clone()) {
+            self.ready.push_back(room);
+        }
+    }
+    fn begin(&mut self) -> Option<ruma::OwnedRoomId> {
+        let room = self.ready.pop_front()?;
+        self.queued.remove(&room);
+        self.active.insert(room.clone());
+        Some(room)
+    }
+    fn finish(&mut self, room: ruma::OwnedRoomId, more: bool) {
+        self.active.remove(&room);
+        let dirty = self.again.remove(&room);
+        if more || dirty {
+            self.enqueue(room);
+        }
+    }
+}
+
+// The index identity is independent of the SDK sync cursor and login epoch.
+// Weak entries retain no locks after their original operations have finished.
+type HistoryGateKey = (String, Option<String>, Option<String>, ruma::OwnedRoomId);
+type HistoryGate = std::sync::Arc<tokio::sync::Mutex<()>>;
+#[derive(Default)]
+struct HistoryGates {
+    entries: std::collections::BTreeMap<HistoryGateKey, std::sync::Weak<tokio::sync::Mutex<()>>>,
+}
+impl HistoryGates {
+    fn get(&mut self, key: HistoryGateKey) -> HistoryGate {
+        self.entries.retain(|_, gate| gate.strong_count() != 0);
+        if let Some(gate) = self.entries.get(&key).and_then(std::sync::Weak::upgrade) {
+            return gate;
+        }
+        let gate = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        self.entries.insert(key, std::sync::Arc::downgrade(&gate));
+        gate
+    }
+}
+
+pub(crate) fn history_gate(client: &Client, room: &RoomId) -> HistoryGate {
+    static GATES: std::sync::LazyLock<std::sync::Mutex<HistoryGates>> =
+        std::sync::LazyLock::new(|| std::sync::Mutex::new(HistoryGates::default()));
+    GATES.lock().unwrap().get((
+        client.homeserver().to_string(),
+        client.user_id().map(ToString::to_string),
+        client.device_id().map(ToString::to_string),
+        room.to_owned(),
+    ))
+}
+
+pub(crate) fn ensure_account(client: &Client, epoch: u64) -> Result<()> {
+    ensure!(
+        epoch == crate::account_session::epoch(),
+        "History account epoch changed"
+    );
+    crate::matrix_context::ensure_current(client)
+}
+
+const HISTORY_PAGE_WORKERS: usize = 2;
+
+/// Keep receiving SDK wakeups while slow pages are in flight. Each worker owns
+/// one page, rather than an unbounded per-room replay. Repeated wakeups only
+/// mark a room dirty; the persisted index cursor is the sole mutation source.
+async fn drive_history_updates<S, F, Fut, C>(updates: S, mut step: F, current: C) -> Result<()>
+where
+    S: futures_util::Stream<Item = Vec<ruma::OwnedRoomId>>,
+    F: FnMut(ruma::OwnedRoomId) -> Fut,
+    Fut: std::future::Future<Output = Result<bool>>,
+    C: Fn() -> bool,
+{
+    use futures_util::{StreamExt, stream::FuturesUnordered};
+    futures_util::pin_mut!(updates);
+    let mut rooms = DirtyRooms::default();
+    let mut pages = FuturesUnordered::new();
+    let mut input_open = true;
+    loop {
+        if !current() {
+            return Ok(());
+        }
+        while pages.len() < HISTORY_PAGE_WORKERS {
+            let Some(room) = rooms.begin() else {
+                break;
+            };
+            let work = step(room.clone());
+            pages.push(async move { (room, work.await) });
+        }
+        if !input_open && pages.is_empty() {
+            return Ok(());
+        }
+        tokio::select! {
+            batch = updates.next(), if input_open => {
+                if !current() { return Ok(()); }
+                match batch {
+                    Some(batch) => for room in batch { rooms.enqueue(room); },
+                    None => input_open = false,
+                }
+            }
+            Some((room, result)) = pages.next(), if !pages.is_empty() => {
+                if !current() { return Ok(()); }
+                rooms.finish(room, result?);
+            }
+        }
+    }
+}
+
+async fn update_history_page(
+    client: Client,
+    room_id: ruma::OwnedRoomId,
+    epoch: u64,
+) -> Result<bool> {
+    ensure_account(&client, epoch)?;
+    let file = path(&client, &room_id)?;
+    if !file.exists() {
+        return Ok(false);
+    }
+    let Some(room) = client.get_room(&room_id) else {
+        return Ok(false);
+    };
+    let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let repair = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let checker = client.clone();
+    let result = crate::home::room_history::catch_up_history_step_checked(
+        &client,
+        &room,
+        &slot,
+        &repair,
+        move || ensure_account(&checker, epoch),
+    )
+    .await;
+    ensure_account(&client, epoch)?;
+    let more = match result {
+        Ok(more) => more,
+        Err(_) => {
+            let guard = history_gate(&client, &room_id).lock_owned().await;
+            let checker = client.clone();
+            let marked = tokio::task::spawn_blocking(move || -> Result<()> {
+                let _guard = guard;
+                ensure_account(&checker, epoch)?;
+                Index::mark_stale(&file)
+            })
+            .await;
+            ensure_account(&client, epoch)?;
+            if !matches!(marked, Ok(Ok(()))) {
+                FAILED_EPOCH.store(epoch, std::sync::atomic::Ordering::Release);
+                makepad_widgets::SignalToUI::set_ui_signal();
+                return Err(anyhow!("Could not invalidate the lagging history index"));
+            }
+            false
+        }
+    };
+    // Refresh an open search only after this room reaches its live cursor (or
+    // is marked stale). Partial turns must not trigger a full UI query per page.
+    if !more {
+        makepad_widgets::Cx::post_action(HistoryStoreChanged {
+            room: Some(room_id),
+            epoch,
+        });
+    }
+    Ok(more)
+}
+
+/// Two account-scoped page workers, never one task/connection per room. A room
+/// with a large backlog yields after each committed page and rejoins the tail.
+/// Lagged SDK broadcasts reschedule every joined room without skipping cursors.
 pub(crate) fn start(client: Client) {
     FAILED_EPOCH.store(u64::MAX, std::sync::atomic::Ordering::Release);
     start_decryption_updates(client.clone());
-    let mut updates = client.subscribe_to_all_room_updates();
+    let updates = client.subscribe_to_all_room_updates();
     let epoch = crate::account_session::epoch();
     crate::account_session::spawn(async move {
-        loop {
-            let update = updates.recv().await;
-            if !crate::matrix_context::is_current(&client) {
-                break;
-            }
-            let rooms = match update {
-                Ok(update) => update
-                    .joined
-                    .into_keys()
-                    .chain(update.left.into_keys())
-                    .collect::<std::collections::BTreeSet<_>>(),
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => client
-                    .joined_rooms()
-                    .into_iter()
-                    .map(|room| room.room_id().to_owned())
-                    .collect(),
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-            };
-            for room_id in rooms {
-                let Ok(file) = path(&client, &room_id) else {
-                    continue;
+        let source_client = client.clone();
+        let source = futures_util::stream::unfold(updates, move |mut updates| {
+            let client = source_client.clone();
+            async move {
+                let rooms = match updates.recv().await {
+                    Ok(update) => update
+                        .joined
+                        .into_keys()
+                        .chain(update.left.into_keys())
+                        .collect(),
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => client
+                        .joined_rooms()
+                        .into_iter()
+                        .map(|room| room.room_id().to_owned())
+                        .collect(),
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
                 };
-                if !file.exists() {
-                    continue;
-                }
-                let Some(room) = client.get_room(&room_id) else {
-                    continue;
-                };
-                // SDK broadcasts are wakeups only. All message mutations come
-                // from the index's own ordered, persisted /messages cursor.
-                // A newer SDK sync token can never skip an unindexed redaction.
-                let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
-                let repair = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-                let result =
-                    crate::home::room_history::catch_up_history(&client, &room, &slot, &repair)
-                        .await;
-                if !crate::matrix_context::is_current(&client) {
-                    return;
-                }
-                if result.is_err() {
-                    let marked =
-                        tokio::task::spawn_blocking(move || Index::mark_stale(&file)).await;
-                    if !crate::matrix_context::is_current(&client) {
-                        return;
-                    }
-                    if !matches!(marked, Ok(Ok(()))) {
-                        FAILED_EPOCH.store(epoch, std::sync::atomic::Ordering::Release);
-                        makepad_widgets::SignalToUI::set_ui_signal();
-                        return;
-                    }
-                }
-                makepad_widgets::Cx::post_action(HistoryStoreChanged {
-                    room: Some(room_id),
-                    epoch,
-                });
+                Some((rooms, updates))
             }
-        }
+        });
+        let page_client = client.clone();
+        // The page worker persists stale/error status before returning; fatal
+        // invalidation failures retain the account-wide failed epoch latch.
+        let _ = drive_history_updates(
+            source,
+            move |room| update_history_page(page_client.clone(), room, epoch),
+            || ensure_account(&client, epoch).is_ok(),
+        )
+        .await;
     });
 }
 
@@ -328,3 +475,6 @@ fn start_decryption_updates(client: Client) {
         }
     });
 }
+
+#[cfg(test)]
+mod fairness_tests;
