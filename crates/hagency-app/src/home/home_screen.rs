@@ -709,7 +709,12 @@ impl Widget for HomeScreen {
                                 self.explore_return_tab.clone()
                             } else { self.previous_selection.clone() };
                             cx.action(NavigationBarAction::TabSelected(app_state.selected_tab.clone()));
-                            self.update_active_page_from_selection(cx, app_state);
+                            if let Some(page) = self.update_active_page_from_selection(cx, app_state) {
+                                // The covered page missed background signals. Its cached draw
+                                // list may be reused, so a redraw alone cannot catch it up.
+                                page.handle_event(cx, &Event::Signal, &mut Scope::with_data(app_state));
+                                page.redraw(cx);
+                            }
                             self.view.redraw(cx);
                         }
                     }
@@ -1437,6 +1442,32 @@ pub(crate) mod responsive_layout_tests {
             Some(if desktop { id!(Desktop) } else { id!(Mobile) }));
         assert_eq!(effective_is_desktop(cx), desktop);
         assert_eq!(crate::home::account_menu::is_desktop_layout(cx), desktop);
+    }
+
+    #[test]
+    fn closing_settings_catches_up_a_covered_room_before_reusing_its_draw_cache() {
+        let (mut cx, mut home, mut state) = home();
+        state.selected_tab = SelectedTab::Home;
+        let page = home.update_active_page_from_selection(&mut cx, &mut state).unwrap();
+        let probe = cx.with_vm(|vm| {
+            let value = script_eval!(vm, {mod.widgets.RoomScreen {}});
+            WidgetRef::script_from_value(vm, value)
+        });
+        // Mount a real RoomScreen in the restored page, without involving a
+        // network-backed dock or depending on a subsequent draw to dispatch.
+        page.as_view().borrow_mut().unwrap().children.push((id!(resume_probe), probe.clone()));
+        let room = probe.as_room_screen();
+        let sender = super::super::room_screen::skeleton_tests::prepare_resume_probe(&mut cx, &room);
+        draw_pane(&mut cx, &mut home, &mut state, 1280.0);
+        let actions = cx.capture_actions(|cx| cx.action(NavigationBarAction::OpenSettings));
+        home.handle_event(&mut cx, &Event::Actions(actions), &mut Scope::with_data(&mut state));
+        assert_eq!(state.selected_tab, SelectedTab::Settings);
+        sender.send(super::super::room_screen::TimelineUpdate::RoomEncrypted).unwrap();
+        let actions = cx.capture_actions(|cx| cx.action(NavigationBarAction::CloseSettings));
+        home.handle_event(&mut cx, &Event::Actions(actions), &mut Scope::with_data(&mut state));
+        assert_eq!(state.selected_tab, SelectedTab::Home);
+        // No additional draw/Signal or room re-selection is needed.
+        super::super::room_screen::skeleton_tests::assert_resume_probe_updated(&room);
     }
 
     #[test]

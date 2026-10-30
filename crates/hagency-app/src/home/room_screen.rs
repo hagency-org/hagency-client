@@ -8884,7 +8884,7 @@ mod hover_action_bar_tests {
 }
 
 #[cfg(test)]
-mod skeleton_tests {
+pub(crate) mod skeleton_tests {
     #[test]
     fn latest_identity_can_precede_state_events_but_never_match_an_older_window() {
         use matrix_sdk::ruma::event_id;
@@ -8911,6 +8911,23 @@ mod skeleton_tests {
             screen
         });
         (cx, screen)
+    }
+
+    pub(crate) fn prepare_resume_probe(cx: &mut Cx, room: &RoomScreenRef) -> crate::timeline_updates::Sender {
+        let mut room = room.borrow_mut().expect("actual RoomScreen probe");
+        let id = matrix_sdk::ruma::room_id!("!covered-resume:server").to_owned();
+        room.is_loaded = true;
+        room.room_name_id = Some(RoomNameId::empty(id.clone()));
+        let mut state = empty_tl_state(id);
+        let (sender, receiver) = crate::timeline_updates::channel();
+        state.update_receiver = receiver;
+        room.tl_state = Some(state);
+        room.redraw(cx);
+        sender
+    }
+    pub(crate) fn assert_resume_probe_updated(room: &RoomScreenRef) {
+        assert!(room.borrow().unwrap().tl_state.as_ref().unwrap().is_encrypted,
+            "closing Settings must process updates hidden behind the cached page");
     }
 
     #[test]
