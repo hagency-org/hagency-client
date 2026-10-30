@@ -128,3 +128,17 @@ schema2 且不含原 token。未删除 deny、跳过用例、引入生产 testen
 候选空间读取的单独 OwnerHost fixture 保留原真实生产路由；其惰性 Native 构造
 不执行凭据 I/O，case 不走本地撤销持久化，自动化 deny 仍在。没有为此公开额外
 生产 API，也没有将该候选读取通过描述为真实 Native 存储资格。
+
+
+第二轮 Engine all-targets 的 console 目标为 128 通过/2 失败/6 原有忽略，
+原记录 `engine-corrected-all-target-full.log` 保留。两项失败出在新测试读取
+helper：旧 `private::read_secret` 明确只接受最多 512 字节的小秘密，正常 v2
+scope/envelope 已超过此上限，因此返回 `Private`；不是已证的权限或硬链接
+异常。测试观察若直接获取 Document 的 try-lock，会与 offline 后台 writer
+竞争；因此仅将 helper 改为现有 `private::open(path, false)`，保留原私有权限、
+no-follow 和句柄检查，再以 `Read::take(1MiB+1)` 实际累计读并断言不超过 1MiB。
+原 FD 在 atomic rename 后仍指向其原始对象；下一轮再 open 才观察新版本。
+这些观察字节不授权 publish、repair 或恢复认证。Engine 生产撤销正文上限是
+8MiB，这里的 1MiB 是更小的测试观察界限；没有放宽生产 cap、权限或链接校验。
+完整 v2/scope/AEAD/no-token 断言保留。此修正仍待 fresh 验证，不将前轮
+2 项失败或继续运行的旧二进制结果回填为通过。

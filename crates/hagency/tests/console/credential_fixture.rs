@@ -6,6 +6,7 @@ use hagency_store::credential_vault::{
 use serde_json::Value;
 use std::{
     collections::BTreeMap,
+    io::Read,
     path::Path,
     sync::{Arc, Mutex},
 };
@@ -54,7 +55,16 @@ impl CredentialFixture {
     /// Read the actual persisted queue, verify its production scope and AEAD,
     /// then return the original rows for the existing HTTP/progress assertions.
     pub fn revocations(&self, path: &Path) -> Value {
-        let bytes = hagency_store::private::read_secret(path).unwrap();
+        // read_secret is for <=512-byte secrets, not authenticated documents.
+        // Observe an actual private file descriptor without contending with the
+        // writer's Document lock; these bytes never authorize a publication.
+        const OBSERVATION_LIMIT: usize = 1_048_576;
+        let file = hagency_store::private::open(path, false).unwrap();
+        let mut bytes = Zeroizing::new(Vec::new());
+        file.take((OBSERVATION_LIMIT + 1) as u64)
+            .read_to_end(&mut bytes)
+            .unwrap();
+        assert!(bytes.len() <= OBSERVATION_LIMIT);
         let encoded = std::str::from_utf8(&bytes).unwrap();
         for secret in [
             "oauth-user-secret-0123456789",
