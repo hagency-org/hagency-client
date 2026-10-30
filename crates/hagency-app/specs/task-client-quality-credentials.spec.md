@@ -84,6 +84,9 @@ private envelopes and only small scoped keys in the native credential store.
 - crates/hagency/src/console/native/agent_crypto/**
 - crates/hagency/src/console/server_login.rs
 - crates/hagency/src/console/server_login/**
+- crates/hagency/tests/console/fixture.rs
+- crates/hagency/tests/console/credential_fixture.rs
+- crates/hagency/tests/console/server_login.rs
 - crates/hagency-app/specs/task-client-quality-credentials.spec.md
 - crates/hagency-app/README.md
 - crates/hagency-app/README.zh-CN.md
@@ -129,6 +132,16 @@ Scenario: Agent and revoke-only persistence preserve their distinct authority
   Given original Agent keys changed authentication generations pending revocations and inaccessible native credentials
   When the native owner migrates or reopens its persisted credentials
   Then original keys and revoke progress survive without restoring revoked authority or accepting a replacement key
+
+Scenario: Standalone HTTP login revocation survives a credential-backed restart
+  Test:
+    Package: hagency
+    Filter: native_server_login_
+    Level: integration
+    Test Double: real loopback OAuth HTTP and explicit per-profile fake credential vault
+  Given a standalone login refresh and offline revoke queue with the original tokens
+  When logout persists the authenticated queue and the same vault reopens it after connectivity returns
+  Then the original pending hint and empty completion assertions hold without restoring authority or writing plaintext tokens
 
 ## Out of Scope
 

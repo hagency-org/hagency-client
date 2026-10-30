@@ -104,3 +104,27 @@ roundtrip 后再运行 `session_preserves`，实际 1 通过/1 失败，后者�
 主任务另核对首轮 full 原始 stderr，发现远端审批真实 SDK fixture 的后台线程虽未令 harness 失败，却因通用 `capture_put_to_device_traffic` 把合法 `m.secret.request` 的 `*` 当成显式 device 而 panic，并导致队列锁 poisoned。不能把该用例的表面 `ok` 当成完整通过。现仅在项目测试中精确捕获 `m.room.encrypted` 并保留原 SDK queue/device 断言；另外只应答当前 owner、结构和 action 合法的秘密请求，未放宽跨签名、只向可信 REMOTE 分享、拒绝 UNSIGNED 以及原 journal 断言。新增 matcher 拒绝 foreign/unknown/malformed/empty；不修改 SDK 或产品路径。修改后的真实审批 case、完整并行套件仍待 fresh 执行。
 
 整合树新鲜主锁审计仍为 11 条匹配且 exit1，不能标记供应链风险已关闭。当前 cargo metadata 共 1336 个 package；新增 keyring/Secret Service/security-framework 依赖的许可元数据存在，另有 7 个既有包缺少 Cargo license/license_file 元数据（不等于已证明无许可）。完整平台与发行物许可证核验仍开放。Windows platform crate 的 all-targets 交叉检查通过；store 交叉检查因本机缺少 x86_64-w64-mingw32-gcc 未完成，不能代替原生 Windows CI。静态布局、当前 native caller 审查、50 项契约检查及发行资格脚本通过；系统默认 Python 缺 tomllib 的原失败日志保留，改用已安装 Python3.12 后复验通过。引擎格式门禁发现新模块导出顺序后已机械修正，不改变行为。
+
+
+## Engine all-targets 集成 fixture 闭合
+
+主树 fresh `cargo test --locked -p hagency --all-targets` 完整 exit101，38 个 targets
+共 586 通过/4 失败/62 个原有忽略，qualification.rs 另有 1 项 operator filter。
+其中 lib 为 302 通过/9 忽略，console 集成目标为 126 通过/4 失败/6 忽略，
+不能只用 lib 结果描述为全 targets 通过。
+原记录 `.run/quality-credentials-integration/engine-final-full.log` 保留。三项在本地
+退出返回 503，一项在账号切换返回 400；四者共同的集成 Fixture 仍调用 Native
+默认构造，耐久撤销保存因自动化 `HAGENCY_NATIVE_CREDENTIAL_IO=deny` 按设计拒绝。
+这不是系统服务或原生产保存围栏应当宽免的依据。
+
+仅在集成测试目录显式构造独立 Fake SecretStore/Vault，Fixture 全部经已公开的
+显式凭据构造器；同进程重启和原生 facade 重新打开复用原 Vault。原先直接解析
+明文撤销数组的断言改为读取实际 v2 envelope、验证完整原安装域/Revocations
+scope 并用生产 Vault/AEAD 解密后执行相同数组、hint 和清空断言，同时断言落盘
+schema2 且不含原 token。未删除 deny、跳过用例、引入生产 testenv 后端选择或
+文件 fallback，未修改刷新/远端 HTTP/本地失效/DB 断言。fresh focused/all-targets
+验证仍由主任务执行，当前修改本身不计作测试通过。
+
+候选空间读取的单独 OwnerHost fixture 保留原真实生产路由；其惰性 Native 构造
+不执行凭据 I/O，case 不走本地撤销持久化，自动化 deny 仍在。没有为此公开额外
+生产 API，也没有将该候选读取通过描述为真实 Native 存储资格。

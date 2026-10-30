@@ -1,5 +1,8 @@
 #![allow(dead_code)] // Shared by HTTP, process and real-browser selectors.
 use hagency::{App, console::Console};
+#[path = "credential_fixture.rs"]
+mod credential_fixture;
+pub use credential_fixture::CredentialFixture;
 use hagency_core::tasks::*;
 use hagency_metering::{Framework, observation::UsageObservation};
 use hagency_store::*;
@@ -143,12 +146,15 @@ pub struct Fixture {
     pub custody: Store,
     pub engagement: String,
     pub root: tempfile::TempDir,
+    pub credentials: CredentialFixture,
 }
 impl Fixture {
     pub fn new(address: SocketAddr, _built: Option<&Path>) -> Self {
         let root = tempfile::tempdir().unwrap();
         let state = root.path().join("state");
-        let console = Console::for_sdk_with_state(Some(&state)).unwrap();
+        let credentials = CredentialFixture::default();
+        let console =
+            Console::for_sdk_with_state_and_credentials(Some(&state), credentials.vault()).unwrap();
         let custody = Store::start(Repository::open(&state).unwrap(), 16).unwrap();
         let (db, engagement) = seed(&state);
         let domain = DomainStore::start(db, 16).unwrap();
@@ -163,6 +169,7 @@ impl Fixture {
             custody,
             engagement,
             root,
+            credentials,
         }
     }
     pub fn service(&self) -> Service {
