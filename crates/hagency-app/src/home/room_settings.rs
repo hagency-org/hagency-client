@@ -22,9 +22,9 @@ impl Pin {
 }
 fn next_request()->u64 {static NEXT:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(1);NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed)}
 #[derive(Clone,Debug)]
-struct Snapshot {room:RoomNameId,topic:String,can_name:bool,can_topic:bool,can_invite:bool,encrypted:bool,members:usize,mode:Option<RoomNotificationMode>}
+struct Snapshot {room:RoomNameId,topic:String,can_name:bool,can_topic:bool,can_invite:bool,can_encrypt:bool,encrypted:bool,members:usize,mode:Option<RoomNotificationMode>}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-enum Field {Name,Topic,Notifications}
+enum Field {Name,Topic,Notifications,Encryption}
 #[derive(Clone,Debug)]
 struct Intent {field:Field,value:String,base:String}
 #[derive(Debug)]
@@ -36,6 +36,7 @@ fn validate(intent:&Intent)->Result<()> {
     match intent.field {
         Field::Name=>ensure!(!intent.value.trim().is_empty() && intent.value.chars().count()<=255 && !intent.value.chars().any(char::is_control),"Enter a room name of 1–255 characters."),
         Field::Topic=>ensure!(intent.value.chars().count()<=4096,"Keep the room topic under 4096 characters."),
+        Field::Encryption=>ensure!(intent.value=="true" && intent.base=="false", "Encryption can only be enabled, never disabled."),
         Field::Notifications=>ensure!(intent.value.parse::<usize>().is_ok_and(|n|n<4),"Choose a notification setting."),
     }Ok(())
 }
@@ -61,13 +62,25 @@ async fn snapshot(client:&Client,id:&OwnedRoomId)->Result<Snapshot> {
     ensure!(state.joined.contains(user),"You are no longer a member of this room.");
     let mode=room.user_defined_notification_mode().await;
     matrix_context::ensure_current(client)?;
-    Ok(Snapshot {room:state.name,topic:state.topic,can_name:state.levels.user_can_send_state(user,StateEventType::RoomName),can_topic:state.levels.user_can_send_state(user,StateEventType::RoomTopic),can_invite:state.levels.user_can_invite(user),encrypted:state.encrypted,members:state.joined.len(),mode})
+    Ok(Snapshot {room:state.name,topic:state.topic,can_name:state.levels.user_can_send_state(user,StateEventType::RoomName),can_topic:state.levels.user_can_send_state(user,StateEventType::RoomTopic),can_invite:state.levels.user_can_invite(user),can_encrypt:!state.space && state.levels.user_can_send_state(user,StateEventType::RoomEncryption),encrypted:state.encrypted || room.encryption_state().is_encrypted(),members:state.joined.len(),mode})
+}
+async fn confirm_sdk_encryption(room:&Room)->Result<()> {
+    // The SDK's enable operation can return after a sync wait expires. Force
+    // its own state refresh before reporting success, including an unknown
+    // write's reconciliation, so the next SDK send cannot use stale plaintext.
+    ensure!(room.refresh_encryption_state().await?.is_encrypted(),"Encryption is not confirmed yet. Refresh and retry the original request.");
+    Ok(())
 }
 async fn save(client:&Client,id:&OwnedRoomId,intent:&Intent)->(Result<Snapshot,String>,bool) {
     // Permission/conflict refusals have a known outcome. Transport failures may
     // have committed, so the original intent remains available for reconciliation.
     let before=match snapshot(client,id).await {Ok(v)=>v,Err(e)=>return (Err(e.to_string()),false)};
-    let (permitted,current)=match intent.field {Field::Name=>(before.can_name,before.room.display().into_owned()),Field::Topic=>(before.can_topic,before.topic.clone()),Field::Notifications=>(true,mode_index(before.mode).to_string())};
+    if let Err(e)=validate(intent) {return (Err(e.to_string()),true);}
+    if intent.field==Field::Encryption && before.encrypted {
+        let result=async {let room=joined_room(client,id).await?;confirm_sdk_encryption(&room).await?;matrix_context::ensure_current(client)?;Ok(before)}.await;
+        return (result.map_err(|e:anyhow::Error|e.to_string()),false);
+    }
+    let (permitted,current)=match intent.field {Field::Name=>(before.can_name,before.room.display().into_owned()),Field::Topic=>(before.can_topic,before.topic.clone()),Field::Notifications=>(true,mode_index(before.mode).to_string()),Field::Encryption=>(before.can_encrypt,before.encrypted.to_string())};
     if !permitted {return (Err("You do not have permission to change this setting.".into()),true);}
     let changed=match reconcile(&current,intent) {Ok(c)=>c,Err(e)=>return (Err(e.to_string()),true)};
     if !changed {return (Ok(before),true);}
@@ -77,6 +90,7 @@ async fn save(client:&Client,id:&OwnedRoomId,intent:&Intent)->(Result<Snapshot,S
         match intent.field {
             Field::Name=>{room.set_name(intent.value.clone()).await?;},
             Field::Topic=>{room.set_room_topic(&intent.value).await?;},
+            Field::Encryption=>{room.enable_encryption().await?;confirm_sdk_encryption(&room).await?;},
             Field::Notifications=>{
                 let settings=client.notification_settings().await;
                 matrix_context::ensure_current(client)?;
@@ -116,6 +130,14 @@ script_mod! {
                 }
                 topic := RinxInput {width:Fill height:80 is_multiline:true empty_text:#(crate::i18n::tr("No topic set.")) i18n_empty_text:"No topic set."}
                 security := RinxHint {width:Fill height:Fit flow:Flow.Right{wrap:true}}
+                enable_encryption := RinxButton {visible:false text:#(crate::i18n::tr("Enable encryption")) i18n_text:"Enable encryption"}
+                encryption_confirmation := View {visible:false width:Fill height:Fit flow:Down spacing:8
+                    Text {text:#(crate::i18n::tr("Encryption protects new messages and cannot be turned off. Earlier messages stay unencrypted.")) i18n_text:"Encryption protects new messages and cannot be turned off. Earlier messages stay unencrypted."}
+                    View {width:Fill height:Fit flow:Flow.Right{wrap:true} spacing:8
+                        confirm_encryption := RinxPrimaryButton {text:#(crate::i18n::tr("Confirm and enable encryption")) i18n_text:"Confirm and enable encryption"}
+                        cancel_encryption := RinxGhostButton {text:#(crate::i18n::tr("Cancel")) i18n_text:"Cancel"}
+                    }
+                }
                 Text {text:#(crate::i18n::tr("Notifications")) i18n_text:"Notifications"}
                 View {width:Fill height:36 spacing:8
                     notification_mode := RinxDropDown {width:Fill height:36 labels:[#(crate::i18n::tr("All Messages")) #(crate::i18n::tr("Mentions and Keywords")) #(crate::i18n::tr("Mute Notifications")) #(crate::i18n::tr("Use Account Defaults"))]}
@@ -139,12 +161,19 @@ pub struct RoomSettingsPanel {
     #[rust] busy:bool,
     #[rust] close_armed:bool,
     #[rust] refresh_armed:bool,
+    #[rust] encryption_armed:bool,
 }
 impl RoomSettingsPanel {
     fn status(&self,cx:&mut Cx,text:&str) {self.view.label(cx,ids!(status)).set_text(cx,crate::i18n::tr(text));self.view.label(cx,ids!(status)).set_visible(cx,!text.is_empty());}
     fn dirty(&self,cx:&Cx)->bool {self.data.as_ref().is_some_and(|s|self.view.text_input(cx,ids!(name)).text()!=s.room.display() || self.view.text_input(cx,ids!(topic)).text()!=s.topic || self.view.drop_down(cx,ids!(notification_mode)).selected_item()!=mode_index(s.mode))}
     fn sync(&self,cx:&mut Cx) {
         let locked=self.busy || self.pending.is_some();
+        let can_enable=self.data.as_ref().is_some_and(|s|s.can_encrypt && !s.encrypted);
+        self.view.button(cx,ids!(enable_encryption)).set_visible(cx,can_enable && !self.encryption_armed);
+        self.view.button(cx,ids!(enable_encryption)).set_enabled(cx,!locked);
+        self.view.view(cx,ids!(encryption_confirmation)).set_visible(cx,can_enable && self.encryption_armed);
+        self.view.button(cx,ids!(confirm_encryption)).set_enabled(cx,!locked);
+        self.view.button(cx,ids!(cancel_encryption)).set_enabled(cx,!locked);
         for (id,allowed) in [(ids!(name).as_slice(),self.data.as_ref().is_some_and(|s|s.can_name)),(ids!(topic).as_slice(),self.data.as_ref().is_some_and(|s|s.can_topic))] {
             let input=self.view.text_input(cx,id);if input.is_read_only()==(allowed && !locked) {input.set_is_read_only(cx,!allowed || locked);}
         }
@@ -170,7 +199,7 @@ impl RoomSettingsPanel {
     fn start_save(&mut self,cx:&mut Cx,field:Field) {
         if self.busy || self.pending.is_some() {return;}
         let Some(data)=&self.data else{return;};
-        let (value,base)=match field {Field::Name=>(self.view.text_input(cx,ids!(name)).text().trim().to_string(),data.room.display().into_owned()),Field::Topic=>(self.view.text_input(cx,ids!(topic)).text(),data.topic.clone()),Field::Notifications=>(self.view.drop_down(cx,ids!(notification_mode)).selected_item().to_string(),mode_index(data.mode).to_string())};
+        let (value,base)=match field {Field::Name=>(self.view.text_input(cx,ids!(name)).text().trim().to_string(),data.room.display().into_owned()),Field::Topic=>(self.view.text_input(cx,ids!(topic)).text(),data.topic.clone()),Field::Notifications=>(self.view.drop_down(cx,ids!(notification_mode)).selected_item().to_string(),mode_index(data.mode).to_string()),Field::Encryption=>("true".into(),data.encrypted.to_string())};
         let intent=Intent {field,value,base};
         if let Err(e)=validate(&intent) {self.status(cx,&e.to_string());return;}
         self.pending=Some(intent.clone());self.load(cx,Some(intent));
@@ -193,7 +222,7 @@ impl RoomSettingsPanel {
                 if done.saved.as_ref().is_none_or(|s|s.field==Field::Notifications) || !mode_dirty {self.view.drop_down(cx,ids!(notification_mode)).set_selected_item(cx,mode_index(data.mode));}
                 else if let Some(old)=&self.data {accepted.mode=old.mode;}
                 self.view.label(cx,ids!(security)).set_text(cx,&format!("{} · {} {}",crate::i18n::tr(if data.encrypted{"End-to-end encrypted"}else{"Not encrypted"}),data.members,crate::i18n::tr("members")));
-                self.data=Some(accepted);self.pending=None;self.status(cx,if done.saved.is_some(){"Saved"}else{""});
+                self.data=Some(accepted);self.pending=None;self.encryption_armed=false;self.status(cx,if done.saved.is_some(){"Saved"}else{""});
                 if done.saved.is_some() {
                     cx.action(RoomSettingsChanged(data.room.clone()));
                     cx.action(crate::app::AppStateAction::RoomNameUpdated(data.room.clone()));
@@ -212,6 +241,11 @@ impl Widget for RoomSettingsPanel {
         if event.back_pressed() {cx.action(RoomSettingsAction::Close);return;}
         let Event::Actions(actions)=event else{return;};
         for action in actions {if let Some(done)=action.downcast_ref::<Finished>() {self.apply(cx,done);}}
+        if !self.busy && self.pending.is_none() {
+            if self.view.button(cx,ids!(enable_encryption)).clicked(actions) && self.data.as_ref().is_some_and(|s|s.can_encrypt && !s.encrypted) {self.encryption_armed=true;self.sync(cx);}
+            if self.view.button(cx,ids!(cancel_encryption)).clicked(actions) {self.encryption_armed=false;self.sync(cx);}
+            if self.view.button(cx,ids!(confirm_encryption)).clicked(actions) && self.encryption_armed && self.data.as_ref().is_some_and(|s|s.can_encrypt && !s.encrypted) {self.start_save(cx,Field::Encryption);}
+        }
         if self.view.button(cx,ids!(close)).clicked(actions) {cx.action(RoomSettingsAction::Close);}
         if self.view.button(cx,ids!(reload)).clicked(actions) && !self.busy && self.pending.is_none() {
             if self.dirty(cx) && !self.refresh_armed {self.refresh_armed=true;self.status(cx,"Unsaved changes. Refresh again to discard them.");}
@@ -234,7 +268,7 @@ impl RoomSettingsPanelRef {
         match action {
             RoomSettingsAction::Open(room)=>{
                 let Some(client)=get_client() else{return;};let Some(owner)=client.user_id().map(ToOwned::to_owned) else{return;};
-                inner.pin=Some(Pin {owner,origin:client.homeserver().to_string(),epoch:crate::account_session::epoch(),room:room.room_id().clone(),request:next_request()});inner.data=None;inner.pending=None;inner.close_armed=false;inner.refresh_armed=false;
+                inner.pin=Some(Pin {owner,origin:client.homeserver().to_string(),epoch:crate::account_session::epoch(),room:room.room_id().clone(),request:next_request()});inner.data=None;inner.pending=None;inner.encryption_armed=false;inner.close_armed=false;inner.refresh_armed=false;
                 inner.view.text_input(cx,ids!(name)).set_text(cx,"");inner.view.text_input(cx,ids!(topic)).set_text(cx,"");
                 inner.load(cx,None);modal.open(cx);
             }
@@ -252,7 +286,7 @@ mod tests {
     fn metadata_fields_and_invites_follow_independent_permissions_and_unknown_writes_stay_locked() {
         let mut cx=Cx::new(Box::new(|_,_|{}));
         let mut panel=cx.with_vm(|vm| {makepad_widgets::script_mod(vm);crate::app::register_widgets(vm);vm.bx.captured_errors=Some(Vec::new());let value=script_eval!(vm,{mod.widgets.RoomSettingsPanel {}});let panel=RoomSettingsPanel::script_from_value(vm,value);assert!(vm.take_errors().is_empty());panel});
-        panel.data=Some(Snapshot {room:RoomNameId::new(matrix_sdk::RoomDisplayName::Named("Planning".into()),ruma::room_id!("!r:test").to_owned()),topic:"Original".into(),can_name:false,can_topic:true,can_invite:false,encrypted:true,members:2,mode:None});
+        panel.data=Some(Snapshot {room:RoomNameId::new(matrix_sdk::RoomDisplayName::Named("Planning".into()),ruma::room_id!("!r:test").to_owned()),topic:"Original".into(),can_name:false,can_topic:true,can_invite:false,can_encrypt:false,encrypted:true,members:2,mode:None});
         panel.view.text_input(&cx,ids!(name)).set_text(&mut cx,"Planning");panel.view.text_input(&cx,ids!(topic)).set_text(&mut cx,"New topic");panel.view.drop_down(&cx,ids!(notification_mode)).set_selected_item(&mut cx,3);panel.sync(&mut cx);
         assert!(panel.view.text_input(&cx,ids!(name)).is_read_only());assert!(!panel.view.text_input(&cx,ids!(topic)).is_read_only());
         assert!(!panel.view.button(&cx,ids!(save_name)).visible());assert!(panel.view.button(&cx,ids!(save_topic)).visible());assert!(!panel.view.button(&cx,ids!(invite)).visible());
@@ -268,4 +302,56 @@ mod tests {
         assert!(validate(&Intent {field:Field::Topic,value:String::new(),base:String::new()}).is_ok());
         for i in 0..4 {assert_eq!(mode_index(mode(i)),i);}
     }
+    #[test]
+    fn encryption_requires_room_authority_and_explicit_confirmation_and_never_offers_disable() {
+        let mut cx=Cx::new(Box::new(|_,_|{}));
+        let mut panel=cx.with_vm(|vm| {makepad_widgets::script_mod(vm);crate::app::register_widgets(vm);vm.bx.captured_errors=Some(Vec::new());let value=script_eval!(vm,{mod.widgets.RoomSettingsPanel {}});let panel=RoomSettingsPanel::script_from_value(vm,value);assert!(vm.take_errors().is_empty());panel});
+        panel.data=Some(Snapshot {room:RoomNameId::new(matrix_sdk::RoomDisplayName::Named("Planning".into()),ruma::room_id!("!r:test").to_owned()),topic:String::new(),can_name:false,can_topic:false,can_invite:false,can_encrypt:false,encrypted:false,members:2,mode:None});
+        panel.sync(&mut cx);
+        assert!(!panel.view.button(&cx,ids!(enable_encryption)).visible());
+        panel.data.as_mut().unwrap().can_encrypt=true;panel.sync(&mut cx);
+        assert!(panel.view.button(&cx,ids!(enable_encryption)).visible());
+        assert!(!panel.view.view(&cx,ids!(encryption_confirmation)).visible());
+        panel.encryption_armed=true;panel.sync(&mut cx);
+        assert!(panel.view.view(&cx,ids!(encryption_confirmation)).visible());
+        assert!(!panel.view.button(&cx,ids!(enable_encryption)).visible());
+        panel.pending=Some(Intent {field:Field::Encryption,value:"true".into(),base:"false".into()});panel.sync(&mut cx);
+        assert!(!panel.view.button(&cx,ids!(confirm_encryption)).borrow().unwrap().enabled());
+        assert!(panel.view.button(&cx,ids!(retry)).visible());
+        panel.pending=None;panel.data.as_mut().unwrap().encrypted=true;panel.sync(&mut cx);
+        assert!(!panel.view.button(&cx,ids!(enable_encryption)).visible());
+        assert!(!panel.view.view(&cx,ids!(encryption_confirmation)).visible());
+        assert!(validate(&Intent {field:Field::Encryption,value:"false".into(),base:"true".into()}).is_err());
+    }
+
+    #[tokio::test]
+    async fn encryption_confirmation_refreshes_plaintext_sdk_state_and_preserves_known_encryption() {
+        use std::sync::{Arc,atomic::{AtomicUsize,Ordering}};
+        let phase=Arc::new(AtomicUsize::new(0));let current=phase.clone();
+        let server=crate::sliding_sync::history_tests::Server::with_handler(false,Arc::new(move |path| {
+            if path.contains("/state/m.room.encryption") {
+                return Some(match current.load(Ordering::SeqCst) {
+                    1=>(200,serde_json::json!({"algorithm":"m.megolm.v1.aes-sha2"})),
+                    2=>(403,serde_json::json!({"errcode":"M_FORBIDDEN","error":"Not allowed"})),
+                    3=>(200,serde_json::json!({"algorithm":42})),
+                    _=>(404,serde_json::json!({"errcode":"M_NOT_FOUND","error":"No encryption event"})),
+                });
+            }None
+        }));
+        let room=server.room().await;
+        assert!(confirm_sdk_encryption(&room).await.is_err());
+        phase.store(1,Ordering::SeqCst);
+        confirm_sdk_encryption(&room).await.unwrap();
+        assert!(room.encryption_state().is_encrypted(),"the SDK's next send must see encryption too");
+        let reads=server.requests.lock().unwrap().iter().filter(|p|p.contains("/state/m.room.encryption")).count();
+        phase.store(0,Ordering::SeqCst);confirm_sdk_encryption(&room).await.unwrap();
+        assert_eq!(server.requests.lock().unwrap().iter().filter(|p|p.contains("/state/m.room.encryption")).count(),reads,"a known encrypted room must stay encrypted without accepting a downgrade");
+        for failed in [2,3] {
+            phase.store(0,Ordering::SeqCst);let fresh=server.room().await;
+            assert!(confirm_sdk_encryption(&fresh).await.is_err());
+            phase.store(failed,Ordering::SeqCst);
+            assert!(confirm_sdk_encryption(&fresh).await.is_err(),"403/malformed data cannot replace a fresh encryption observation");
+        }
+    }
+
 }

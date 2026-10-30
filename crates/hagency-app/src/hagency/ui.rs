@@ -846,6 +846,10 @@ script_mod! {
                     candidates_more := Action {visible: false text: #(crate::i18n::tr("Refresh / load more Spaces")) i18n_text: "Refresh / load more Spaces"}
                     existing_room_holder := View {visible: false width: Fill height: Fit flow: Down spacing: 4 Text {text: #(crate::i18n::tr("Room ID")) i18n_text: "Room ID"}
  existing_room := Input {empty_text: "!existing-room:server"}}
+                    creation_encryption := View {visible:false width:Fill height:Fit flow:Down spacing:4
+                        creation_encrypted := RinxCheckBox {text:#(crate::i18n::tr("Encrypted room")) i18n_text:"Encrypted room"}
+                        Text {text:#(crate::i18n::tr("Encryption protects new messages and cannot be turned off. Earlier messages stay unencrypted.")) i18n_text:"Encryption protects new messages and cannot be turned off. Earlier messages stay unencrypted." draw_text.color:mod.widgets.RINX_MUTED}
+                    }
                     create_project_room := Primary {text: #(crate::i18n::tr("Create Project")) i18n_text: "Create Project"}
                     creation_result := Text {}
                     recovery := View {visible: false width: Fill height: Fit flow: Down spacing: 8
@@ -2317,6 +2321,11 @@ impl HagencyPanel {
     }
 
     fn sync_navigation(&self, cx: &mut Cx) {
+        let creation_locked=self.busy || self.creation.as_ref().is_some_and(|c|c["phase"]!="complete");
+        self.view.widget(cx,ids!(creation_encrypted)).set_disabled(cx,creation_locked);
+        if creation_locked && let Some(input)=&self.pending_input {
+            self.view.check_box(cx,ids!(creation_encrypted)).set_active(cx,input["encrypted"]==true,Animate::No);
+        }
         self.render_project_controls(cx);
         self.render_owner_direct(cx);
         let agent = self.selected(cx, ids!(agents), &self.agents);
@@ -2708,6 +2717,7 @@ impl HagencyPanel {
             return false;
         }
         self.creation=None;self.pending_input=None;self.create_room=room;
+        self.view.check_box(cx,ids!(creation_encrypted)).set_active(cx,false,Animate::No);
         for id in [ids!(creation_name),ids!(found_room),ids!(existing_room)] {self.view.text_input(cx,id).set_text(cx, "");}
         self.view.label(cx,ids!(creation_result)).set_text(cx, "");
         self.view.view(cx,ids!(recovery)).set_visible(cx,false);
@@ -2718,6 +2728,7 @@ impl HagencyPanel {
         self.view.view(cx,ids!(creation_source_holder)).set_visible(cx,self.create_room);
         self.view.label(cx,ids!(creation_source_label)).set_visible(cx,self.create_room);
         let existing = self.create_room && self.view.drop_down(cx,ids!(creation_source)).selected_item()==1;
+        self.view.view(cx,ids!(creation_encryption)).set_visible(cx,self.create_room && !existing);
         let (title, note) = match (self.create_room, existing) {
             (false, false) => (
                 "Create Project",
@@ -3787,6 +3798,7 @@ impl HagencyPanel {
                 self.status(cx, "Select a Project before adding a Room.");
                 return;
             };
+            input["encrypted"] = self.view.check_box(cx,ids!(creation_encrypted)).active(cx).into();
             input["projectId"] = project["id"].clone();
             input["spaceId"] = project["spaceId"].clone();
         }
@@ -7176,4 +7188,26 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn project_encryption_choice_only_appears_for_new_rooms_and_unknown_intents_stay_frozen() {
+        let mut cx=Cx::new(Box::new(|_,_|{}));
+        let mut panel=cx.with_vm(|vm|{makepad_widgets::script_mod(vm);crate::app::register_widgets(vm);vm.bx.captured_errors=Some(Vec::new());let value=script_eval!(vm,{mod.widgets.HagencyPanel {}});let panel=HagencyPanel::script_from_value(vm,value);assert!(vm.take_errors().is_empty());panel});
+        assert!(panel.begin_creation_form(&mut cx,false));panel.creation_source(&mut cx);
+        assert!(!panel.view.view(&cx,ids!(creation_encryption)).visible());
+        panel.project_home=json!({"canCreateRoom":true});panel.open_room_creation(&mut cx);
+        assert!(panel.view.view(&cx,ids!(creation_encryption)).visible());
+        panel.view.drop_down(&cx,ids!(creation_source)).set_selected_item(&mut cx,1);panel.creation_source(&mut cx);
+        assert!(!panel.view.view(&cx,ids!(creation_encryption)).visible(),"linking an existing Room must not claim to change its encryption");
+        let original=json!({"kind":"room","commandId":"encrypted-room","encrypted":true});
+        panel.pending_input=Some(original.clone());panel.creation=Some(json!({"phase":"unknown"}));panel.sync_navigation(&mut cx);
+        assert!(panel.view.widget(&cx,ids!(creation_encrypted)).disabled(&cx));
+        assert!(panel.view.check_box(&cx,ids!(creation_encrypted)).active(&cx));
+        assert!(!panel.begin_creation_form(&mut cx,true));
+        assert_eq!(panel.pending_input,Some(original.clone()));
+        assert!(matches!(recovery_command(original,"unrecorded",String::new()),Command::CreateMatrix{input} if input["encrypted"]==true));
+        panel.creation=Some(json!({"phase":"complete"}));
+        assert!(panel.begin_creation_form(&mut cx,true));
+        assert!(!panel.view.check_box(&cx,ids!(creation_encrypted)).active(&cx));
+    }
+
 }

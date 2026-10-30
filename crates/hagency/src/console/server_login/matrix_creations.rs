@@ -48,6 +48,8 @@ pub struct Input {
     pub command_id: String,
     pub kind: Kind,
     pub name: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub encrypted: bool,
     pub project_id: Option<String>,
     pub space_id: Option<String>,
 }
@@ -162,8 +164,17 @@ impl MatrixOperation {
                 )
             }
             Self::Create(input, owner, service) => {
-                let marker = json!({"commandId":input.command_id,"owner":owner,"kind":input.kind,"projectId":input.project_id,"spaceId":input.space_id});
+                let mut marker = json!({"commandId":input.command_id,"owner":owner,"kind":input.kind,"projectId":input.project_id,"spaceId":input.space_id});
+                if input.encrypted {
+                    marker["encrypted"] = json!(true);
+                }
                 let mut body = json!({"name":input.name,"visibility":"private","preset":"private_chat","invite":[service],"initial_state":[{"type":"m.room.join_rules","state_key":"","content":{"join_rule":"invite"}},{"type":MARKER,"state_key":"","content":marker}]});
+                if input.encrypted {
+                    if input.kind != Kind::Room {
+                        return Err(error(400, "invalid_arguments"));
+                    }
+                    body["initial_state"].as_array_mut().unwrap().push(json!({"type":"m.room.encryption","state_key":"","content":{"algorithm":"m.megolm.v1.aes-sha2"}}));
+                }
                 if input.kind == Kind::Space {
                     body["creation_content"] = json!({"type":"m.space"});
                 }
@@ -448,7 +459,11 @@ fn validate_input(input: &Input) -> Result<(), OwnerError> {
         return Err(error(400, "invalid_arguments"));
     }
     match input.kind {
-        Kind::Space if input.project_id.is_none() && input.space_id.is_none() => Ok(()),
+        Kind::Space
+            if input.project_id.is_none() && input.space_id.is_none() && !input.encrypted =>
+        {
+            Ok(())
+        }
         Kind::Room => {
             super::operation_id(
                 input
@@ -489,19 +504,34 @@ fn created_by(state: &Value, command: &Command) -> bool {
     if creates.next().is_some() || markers.next().is_some() {
         return false;
     }
+    let encryption_matches = if command.input.encrypted {
+        let mut encryption = events
+            .iter()
+            .filter(|e| e["type"] == "m.room.encryption" && e["state_key"] == "");
+        encryption
+            .next()
+            .is_some_and(|e| e["content"]["algorithm"] == "m.megolm.v1.aes-sha2")
+            && encryption.next().is_none()
+    } else {
+        true
+    };
     let creator = create["content"]
         .get("creator")
         .is_none_or(|v| v == &command.owner);
+    let mut expected_marker = json!({"commandId":command.input.command_id,"owner":command.owner,"kind":command.input.kind,"projectId":command.input.project_id,"spaceId":command.input.space_id});
+    if command.input.encrypted {
+        expected_marker["encrypted"] = json!(true);
+    }
     create["sender"] == command.owner
         && creator
         && marker["sender"] == command.owner
-        && marker["content"]
-            == json!({"commandId":command.input.command_id,"owner":command.owner,"kind":command.input.kind,"projectId":command.input.project_id,"spaceId":command.input.space_id})
+        && marker["content"] == expected_marker
         && (create["content"]["type"] == "m.space") == (command.input.kind == Kind::Space)
+        && encryption_matches
         && content(state, "m.room.join_rules", "").is_some_and(|c| c["join_rule"] == "invite")
 }
 fn public(command: &Command) -> Value {
-    json!({"commandId":command.input.command_id,"kind":command.input.kind,"name":command.input.name,"projectId":command.input.project_id,"spaceId":command.input.space_id,"roomId":command.room_id,"phase":command.phase,"project":command.project,"lastError":command.last_error})
+    json!({"commandId":command.input.command_id,"kind":command.input.kind,"name":command.input.name,"encrypted":command.input.encrypted,"projectId":command.input.project_id,"spaceId":command.input.space_id,"roomId":command.room_id,"phase":command.phase,"project":command.project,"lastError":command.last_error})
 }
 async fn checked_project(
     login: &ServerLogin,

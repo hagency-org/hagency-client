@@ -55,14 +55,14 @@ script_mod! {
             spacing: 10,
 
             retry_button := RobrixIconButton {
-                padding: 10,
+                padding: Inset{left: 10 right: 10 top: 0 bottom: 0},
                 draw_icon.svg: (ICON_SEND)
                 icon_walk: Walk{width: 16, height: 16, margin: Inset{left: -1, right: -1}}
                 text: #(crate::i18n::tr("Retry")) i18n_text: "Retry"
             }
 
             cancel_send_button := RobrixNegativeIconButton {
-                padding: 10,
+                padding: Inset{left: 10 right: 10 top: 0 bottom: 0},
                 draw_icon.svg: (ICON_FORBIDDEN)
                 icon_walk: Walk{width: 16, height: 16, margin: Inset{left: -1, right: -1, top: -1}}
                 text: #(crate::i18n::tr("Cancel Send")) i18n_text: "Cancel Send"

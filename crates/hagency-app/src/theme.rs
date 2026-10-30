@@ -638,6 +638,7 @@ pub(crate) mod tests {
             let mut bottom = f32::NEG_INFINITY;
             for row in &text.rows {
                 for glyph in &row.glyphs {
+                    assert_ne!(glyph.id, 0, "the fixture must render real glyphs, not missing-character boxes");
                     let mut outline = None;
                     if let Some(bounds) = glyph.font.glyph_outline_bounds_in_ems(glyph.id, &mut outline) {
                         if bounds.size.width <= 0.0 || bounds.size.height <= 0.0 {continue;}
@@ -703,6 +704,59 @@ pub(crate) mod tests {
                     assert!((face.pos.y + face.size.y * 0.5 - icon.pos.y - icon.size.y * 0.5).abs() < 0.1,
                         "{text}, font {size}, height {height}: face {face:?}, icon {icon:?}");
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn actual_dialog_button_icons_fit_their_fixed_height() {
+        use makepad_widgets::makepad_draw::cx_draw::CxDraw;
+        let mut cx = Cx::new(Box::new(|_, _| {}));
+        let dialogs = cx.with_vm(|vm| {
+            makepad_widgets::script_mod(vm);
+            crate::app::register_widgets(vm);
+            let value = script_eval!(vm, {mod.widgets.View {
+                join := mod.widgets.JoinLeaveRoomModal {}
+                verify := mod.widgets.VerificationModal {}
+                invite := mod.widgets.InviteModal {}
+                logout := mod.widgets.LogoutConfirmModal {}
+            }});
+            WidgetRef::script_from_value(vm, value)
+        });
+        for resource in cx.script_data.resources.resources.borrow_mut().iter_mut() {
+            let path = resource.abs_path.replace("/draw/../../widgets/", "/widgets/");
+            if let Ok(bytes) = std::fs::read(path) {
+                resource.data = makepad_widgets::makepad_platform::script::res::CxScriptResourceData::Loaded(bytes.into());
+            }
+        }
+        for path in [ids!(join.buttons_view.cancel_button).as_slice(), ids!(join.buttons_view.accept_button),
+            ids!(verify.buttons_view.cancel_button), ids!(verify.buttons_view.accept_button),
+            ids!(invite.buttons_view.cancel_button), ids!(invite.buttons_view.confirm_button),
+            ids!(logout.buttons_view.cancel_button), ids!(logout.buttons_view.confirm_button)] {
+            let widget = dialogs.widget(&cx, path);
+            assert!(!widget.is_empty());
+            let button = widget.as_button();
+            for label in ["Confirm", "确认"] {
+                button.set_text(&mut cx, label);
+                cx.redraw_all();
+                let pass = DrawPass::new(&mut cx);
+                pass.set_size(&mut cx, dvec2(300.0, 100.0));
+                let mut list = DrawList2d::new(&mut cx);
+                let event = DrawEvent::default();
+                {let mut draw = CxDraw::new(&mut cx, &event);
+                let mut cx2d = Cx2d::new(&mut draw);
+                cx2d.begin_pass(&pass, None);
+                list.begin_always(&mut cx2d);
+                cx2d.begin_root_turtle(dvec2(300.0, 100.0), Layout::flow_overlay());
+                widget.draw_walk_all(&mut cx2d, &mut Scope::empty(), Walk::fixed(240.0, 36.0));
+                cx2d.end_pass_sized_turtle();
+                list.end(&mut cx2d);
+                cx2d.end_pass(&pass);}
+                let face = button.area().rect(&cx);
+                let icon = button.borrow().unwrap().draw_icon.area().rect(&cx);
+                assert!(icon.size.y > 0.0);
+                assert!((face.pos.y + face.size.y * 0.5 - icon.pos.y - icon.size.y * 0.5).abs() < 0.1,
+                    "dialog {path:?}, {label}: face {face:?}, icon {icon:?}");
             }
         }
     }

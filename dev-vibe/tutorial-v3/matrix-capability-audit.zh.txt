@@ -1,0 +1,51 @@
+Matrix 客户端能力审查（2026-10-30，修复前基线）
+
+HAgency Client main cf7fbb63；Element Web develop 70e779c3c4def7099847586c9b1dfab9948814ca（本机 /Volumes/Data/Repos/element-web）；Matrix 最新稳定规范页面列为 v1.19。这里只统计下列25组用户可见能力，不能换算为整个 Matrix 协议的“完成百分比”。已有=找到完整产品入口和SDK调用，不等于跨全部服务器/平台资格验收。部分=有相关能力但产品链条缺环。缺失=未找到产品入口。关键词检索用于定位，结合控制流阅读，不把 SDK 方法存在当作 UI 完成。
+
+1 已有：SSO/OAuth客户端登录和会话恢复。H:login/oauth.rs,session_auth.rs；E:Login、OIDC stores。
+2 已有：SAS表情/数字验证。H:verification.rs,verification_modal.rs；E:VerificationShowSas。H明确只协商SasV1；确认后等待SDK Done，不手工伪造可信标记。仍需独立两设备成功/取消/不匹配实测，未声称全协议合规认证。
+3 已有：Megolm消息及加密附件。H:sliding_sync.rs,media_transport,attachment_transport；E:EncryptionPanel/EncryptionInfo。发送密钥/内容密码学由SDK承担；历史消息可读性取决于实际密钥。
+4 已有：回复、编辑、撤回和回应。H:room/message_context_menu.rs,sliding_sync.rs；E:MessageContextMenu。
+5 已有：消息串和历史上下文。H:home/room_screen.rs,sliding_sync/history.rs,matrix_links.rs；E:ThreadView/Timeline。
+6 已有：未读、已读及输入状态。H:sliding_sync.rs,home/rooms_list.rs；E:ReadReceipt/Timestamp/TypingIndicator。
+7 已有：图片、文件、音视频消息和位置内容。H:room/message.rs,location.rs；E:messages/。消息播放不等于实时语音/视频通话。
+8 已有：Space/Room与上下级链接。H:home/space_management.rs；E:SpacePanel/CreateRoomDialog。Project是Space，项目讨论Room只放一层，非多级普通父Room。
+9 部分：设备管理。H:settings/account_settings.rs只提供当前设备资料/认证；E:settings/devices拥有完整会话列表和撤销等控制。缺少用户侧全部设备列表、重命名、逐项退出及认证的完整入口。P1。
+10 部分：备份/恢复与交叉签名首次设置。H:sliding_sync.rs有auto_enable_backups/OneShot，用户无恢复密钥/Secret Storage入口；E:KeyStoragePanel/RecoveryPanel/CreateSecretStorageDialog。首设备无法单独建立恢复闭环，P1，本轮修复目标。
+11 部分：Room创建。H:home/space_management.rs可选加密，hagency/ui.rs项目创建链固定private；E:CreateRoomDialog。本轮统一项目加密选项，P1 #24。
+12 部分：Room安全设置。H:home/room_settings.rs只显示加密状态；E:SecurityRoomSettingsTab有不可逆启用、历史可见性/加入权限等。启用加密P1 #24；更完整历史/访客/别名设置后续P2。
+13 部分：角色与管理。H:项目Access有新鲜权限校验、room_settings独立metadata/invite权限；缺少Room踢出/封禁/解禁产品操作；目前仅有权限bits、事件展示和slash命令TODO；E:RolesRoomSettingsTab/PeopleRoomSettingsTab。P2。
+14 部分：通知。H:房间All/Mentions/Mute以及系统通知；E:推送规则/关键字/更完整配置。服务端/移动推送资格另计。P2。
+15 部分：搜索。H:房间历史查找/上下文入口；E:搜索分类、历史及可选本地加密索引。不能声称全局跨Room加密全文搜索。P2。
+16 部分：Room升级。H:tombstone_footer可跳转后继Room；E:RoomUpgradeWarningBar及升级管理。尚无完整发起升级/版本迁移UI。P2。
+17 缺失：QR设备/用户验证UI。H只协商SasV1；E:verification/QrCode相关流程。Matrix允许协商SAS，无QR不等于SAS违反协议。P2。
+18 缺失：手工导出/导入加密会话密钥。H无export_room_keys/import_room_keys入口；E:ExportE2eKeysDialog/ImportE2eKeysDialog。P2。
+19 缺失：丢失所有设备与恢复密钥时的身份重置UI。E:ResetIdentityPanel/ResetIdentityBody；不能静默以初始化替代重置，需清楚提示旧历史风险。P2。
+20 缺失：恢复密钥轮换/可选安全短语等高级恢复管理。E:ChangeRecoveryKey及CreateSecretStorageDialog。首次生成/恢复基础闭环与高级管理分开，P2。
+21 缺失：设备休眠/恢复（dehydration）产品控制。E:crypto相关模块，部分属于可选/演进扩展，不是每个客户端强制MUST。P3。
+22 缺失：创建/参与/关闭 Matrix Polls 的完整UI。E:views/polls/。P3，可选。
+23 缺失：实时 Matrix/WebRTC/Element Call 语音视频及屏幕共享。E:RoomHeader/CallGuestLinkButton等；H音视频消息不等于此能力。P3，可选。
+24 缺失：Matrix Widgets 协议/集成管理。E:Widget相关视图；H小应用不是Matrix Widgets兼容证明。P3，可选。
+25 缺失：内容/Room举报完整UI。E:举报对话框；H:block_user_modal是屏蔽，不等于向HS举报。P2。
+
+统计：25组中8已有、8部分、9缺失；17组有缺口。按协议/推荐/产品能力拆分后排期，不能把Element独有功能说成所有客户端必须实现。本轮PR解决按钮、项目/设置加密、基础恢复闭环和错误认证文案；其余子项保持 #25 open。
+
+安全结论
+现有SAS路径确实调用Matrix SDK verification并处理Mismatch/Cancel/Done，但目前没有跨独立客户端的互通全流程证据，不能给出“全面符合Matrix”的笼统结论。旧横幅“未认证不能查看加密消息”不准确：认证表示设备/身份信任，持有会话密钥才决定能否解密。备份服务器保存的是加密的房间会话密钥；Secret Storage用于恢复交叉签名私钥及备份密钥。首次设置、导入恢复、身份重置是三种不同操作。
+
+规范依据
+https://spec.matrix.org/latest/client-server-api/#recommended-client-behaviour
+https://spec.matrix.org/latest/client-server-api/#device-verification
+https://spec.matrix.org/latest/client-server-api/#server-side-key-backups
+https://spec.matrix.org/latest/client-server-api/#secret-storage
+https://spec.matrix.org/latest/client-server-api/#mroomencryption
+
+证据分类：本表是源码审查基线。后续补丁、回归测试和实际多客户端录像以各PR和本目录验收记录为准；计划中的功能不提前升级为已有。
+
+
+2026-10-30 修复后资格补充
+基线的25组能力及17组缺口仍保留，不换算全协议完成百分比。PR27已补齐项目Room创建的加密选项和已有Room设置中启用加密；PR28已提供保存后启用的基础Secret Storage/备份/恢复入口及会话隔离。活跃timeline恢复后的刷新由PR38补齐并通过新设备连续真机验证，PR28/38已ready。SAS本机两独立Hagency设备的成功和取消已真实验证，不能据此推断Element互通、QR、联邦或所有平台通过。新设备通过SAS后可读历史；保存密钥离线恢复后，关闭设置直接更新已打开的timeline，下载原附件哈希一致，原备份未重置。
+
+仍未补齐完整设备目录/逐项撤销、QR验证、会话密钥手工导入导出、高级身份重置/密钥轮换、完整Room moderation/通知/搜索/升级/举报等基线子项。实时通话、Polls、Widgets和dehydration等按各自规范/可选扩展排期，不能统称所有Matrix客户端强制功能。加密Agent共享执行的请求者信任与安全边界仍需单独资格，教程中的真实Agent调用发生在启用加密之前的普通筹备Room；加密交接由人工成员完成。
+
+本轮原生验证与故障基线见validation.zh.txt，变更索引见pr-index.json。参考Element源码仅为功能对照，没有使用其品牌或宣称兼容认证。

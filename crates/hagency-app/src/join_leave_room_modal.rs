@@ -26,7 +26,7 @@ script_mod! {
             cancel_button := RobrixNegativeIconButton {
                 width: Fit{min: FitBound.Abs(120.0)},
                 align: Align{x: 0.5, y: 0.5}
-                padding: 15,
+                padding: Inset{left: 15 right: 15 top: 0 bottom: 0},
                 draw_icon.svg: (ICON_FORBIDDEN)
                 icon_walk: Walk{width: 16, height: 16, margin: Inset{left: -2, right: -1} }
                 text: #(crate::i18n::tr("Cancel")) i18n_text: "Cancel"
@@ -35,7 +35,7 @@ script_mod! {
             accept_button := RobrixPositiveIconButton {
                 width: Fit{min: FitBound.Abs(120.0)},
                 align: Align{x: 0.5, y: 0.5}
-                padding: 15,
+                padding: Inset{left: 15 right: 15 top: 0 bottom: 0},
                 draw_icon.svg: (ICON_CHECKMARK)
                 icon_walk: Walk{width: 16, height: 16, margin: Inset{left: -2, right: -1} }
                 text: #(crate::i18n::tr("Yes")) i18n_text: "Yes"
