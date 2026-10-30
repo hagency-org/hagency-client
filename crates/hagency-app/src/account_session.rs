@@ -95,6 +95,7 @@ pub(crate) async fn close() {
             let _ = finished.await;
         }
     }
+    crate::settings::crypto_settings::clear_session();
 }
 pub(crate) fn open() {
     TASKS.lock().unwrap().open = !UPDATE_FROZEN.load(Ordering::Acquire);

@@ -7622,7 +7622,7 @@ dependencies = [
 [[package]]
 name = "matrix-sdk"
 version = "0.19.1"
-source = "git+https://github.com/chrislearn/matrix-rust-sdk.git?rev=c9e3e439d13de2cd74b4cc79b0871d484e2dae44#c9e3e439d13de2cd74b4cc79b0871d484e2dae44"
+source = "git+https://github.com/chrislearn/matrix-rust-sdk.git?rev=5f76abef7715281dd4cdc6c2bc31baaf213d08c2#5f76abef7715281dd4cdc6c2bc31baaf213d08c2"
 dependencies = [
  "anymap2",
  "as_variant",
@@ -7681,7 +7681,7 @@ dependencies = [
 [[package]]
 name = "matrix-sdk-base"
 version = "0.19.1"
-source = "git+https://github.com/chrislearn/matrix-rust-sdk.git?rev=c9e3e439d13de2cd74b4cc79b0871d484e2dae44#c9e3e439d13de2cd74b4cc79b0871d484e2dae44"
+source = "git+https://github.com/chrislearn/matrix-rust-sdk.git?rev=5f76abef7715281dd4cdc6c2bc31baaf213d08c2#5f76abef7715281dd4cdc6c2bc31baaf213d08c2"
 dependencies = [
  "as_variant",
  "assert_matches",
@@ -7712,7 +7712,7 @@ dependencies = [
 [[package]]
 name = "matrix-sdk-common"
 version = "0.19.1"
-source = "git+https://github.com/chrislearn/matrix-rust-sdk.git?rev=c9e3e439d13de2cd74b4cc79b0871d484e2dae44#c9e3e439d13de2cd74b4cc79b0871d484e2dae44"
+source = "git+https://github.com/chrislearn/matrix-rust-sdk.git?rev=5f76abef7715281dd4cdc6c2bc31baaf213d08c2#5f76abef7715281dd4cdc6c2bc31baaf213d08c2"
 dependencies = [
  "eyeball-im",
  "futures-core",
@@ -7735,7 +7735,7 @@ dependencies = [
 [[package]]
 name = "matrix-sdk-crypto"
 version = "0.19.1"
-source = "git+https://github.com/chrislearn/matrix-rust-sdk.git?rev=c9e3e439d13de2cd74b4cc79b0871d484e2dae44#c9e3e439d13de2cd74b4cc79b0871d484e2dae44"
+source = "git+https://github.com/chrislearn/matrix-rust-sdk.git?rev=5f76abef7715281dd4cdc6c2bc31baaf213d08c2#5f76abef7715281dd4cdc6c2bc31baaf213d08c2"
 dependencies = [
  "aes 0.9.3",
  "as_variant",
@@ -7775,7 +7775,7 @@ dependencies = [
 [[package]]
 name = "matrix-sdk-indexeddb"
 version = "0.19.1"
-source = "git+https://github.com/chrislearn/matrix-rust-sdk.git?rev=c9e3e439d13de2cd74b4cc79b0871d484e2dae44#c9e3e439d13de2cd74b4cc79b0871d484e2dae44"
+source = "git+https://github.com/chrislearn/matrix-rust-sdk.git?rev=5f76abef7715281dd4cdc6c2bc31baaf213d08c2#5f76abef7715281dd4cdc6c2bc31baaf213d08c2"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -7807,7 +7807,7 @@ dependencies = [
 [[package]]
 name = "matrix-sdk-sqlite"
 version = "0.19.1"
-source = "git+https://github.com/chrislearn/matrix-rust-sdk.git?rev=c9e3e439d13de2cd74b4cc79b0871d484e2dae44#c9e3e439d13de2cd74b4cc79b0871d484e2dae44"
+source = "git+https://github.com/chrislearn/matrix-rust-sdk.git?rev=5f76abef7715281dd4cdc6c2bc31baaf213d08c2#5f76abef7715281dd4cdc6c2bc31baaf213d08c2"
 dependencies = [
  "as_variant",
  "async-trait",
@@ -7835,7 +7835,7 @@ dependencies = [
 [[package]]
 name = "matrix-sdk-store-encryption"
 version = "0.19.1"
-source = "git+https://github.com/chrislearn/matrix-rust-sdk.git?rev=c9e3e439d13de2cd74b4cc79b0871d484e2dae44#c9e3e439d13de2cd74b4cc79b0871d484e2dae44"
+source = "git+https://github.com/chrislearn/matrix-rust-sdk.git?rev=5f76abef7715281dd4cdc6c2bc31baaf213d08c2#5f76abef7715281dd4cdc6c2bc31baaf213d08c2"
 dependencies = [
  "base64 0.23.1",
  "blake3",
@@ -7857,7 +7857,7 @@ dependencies = [
 [[package]]
 name = "matrix-sdk-test"
 version = "0.19.1"
-source = "git+https://github.com/chrislearn/matrix-rust-sdk.git?rev=c9e3e439d13de2cd74b4cc79b0871d484e2dae44#c9e3e439d13de2cd74b4cc79b0871d484e2dae44"
+source = "git+https://github.com/chrislearn/matrix-rust-sdk.git?rev=5f76abef7715281dd4cdc6c2bc31baaf213d08c2#5f76abef7715281dd4cdc6c2bc31baaf213d08c2"
 dependencies = [
  "as_variant",
  "ctor 1.0.13",
@@ -7880,7 +7880,7 @@ dependencies = [
 [[package]]
 name = "matrix-sdk-test-macros"
 version = "0.19.1"
-source = "git+https://github.com/chrislearn/matrix-rust-sdk.git?rev=c9e3e439d13de2cd74b4cc79b0871d484e2dae44#c9e3e439d13de2cd74b4cc79b0871d484e2dae44"
+source = "git+https://github.com/chrislearn/matrix-rust-sdk.git?rev=5f76abef7715281dd4cdc6c2bc31baaf213d08c2#5f76abef7715281dd4cdc6c2bc31baaf213d08c2"
 dependencies = [
  "quote",
  "syn 3.0.5",
@@ -7889,7 +7889,7 @@ dependencies = [
 [[package]]
 name = "matrix-sdk-ui"
 version = "0.19.1"
-source = "git+https://github.com/chrislearn/matrix-rust-sdk.git?rev=c9e3e439d13de2cd74b4cc79b0871d484e2dae44#c9e3e439d13de2cd74b4cc79b0871d484e2dae44"
+source = "git+https://github.com/chrislearn/matrix-rust-sdk.git?rev=5f76abef7715281dd4cdc6c2bc31baaf213d08c2#5f76abef7715281dd4cdc6c2bc31baaf213d08c2"
 dependencies = [
  "as_variant",
  "async-rx",
