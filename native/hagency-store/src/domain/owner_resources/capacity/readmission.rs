@@ -26,10 +26,19 @@ pub(super) fn closed_grants(
             return Err(Error::LocalAuthority);
         }
         if grant.contribution_id != contribution { continue }
+        // Chain history without its own closure: a successor that never held
+        // capacity, or a grant superseded within its month by an amendment
+        // whose chain was then closed. Their identity checks still apply.
+        if grant.executor_device_id == device && grant.capability == CAPABILITY
+            && grant.supported_shape()
+            && (super::succession::void(db, &id)? || super::succession::superseded_into_closed_head(db, &id)?)
+            && enrollment != Some(grant.enrollment_id.as_str())
+            && !admission.is_some_and(|value| grant.admission_request_id.as_deref() == Some(value))
+        { result.push(id); continue }
         if row.get::<_, bool>(2)? || grant.executor_device_id != device
             || grant.capability != CAPABILITY
             || enrollment == Some(grant.enrollment_id.as_str())
-            || !matches!((grant.version, grant.admission_request_id.as_ref()), (1, None) | (2, Some(_)))
+            || !grant.supported_shape()
             || admission.is_some_and(|id| grant.admission_request_id.as_deref() == Some(id))
         { return Err(Error::Conflict) }
         checked_closure(db, profile, device, &grant, false)?.ok_or(Error::Conflict)?;
@@ -44,7 +53,7 @@ pub(super) fn checked_closure(
 ) -> Result<Option<NativeGrantSettlementReceipt>, Error> {
     if grant.owner_mxid != profile.account || grant.executor_device_id != device
         || grant.capability != CAPABILITY
-        || !matches!((grant.version, grant.admission_request_id.as_ref()), (1, None) | (2, Some(_)))
+        || !grant.supported_shape()
     { return Err(Error::LocalAuthority) }
     let saved: Option<(u64, u64, String, String)> = db.query_row(
         "SELECT fence_revision,retained_tokens,receipt,receipt_digest FROM owner_parent_settlements WHERE grant_id=?1",

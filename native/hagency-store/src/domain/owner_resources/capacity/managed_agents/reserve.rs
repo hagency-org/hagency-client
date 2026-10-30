@@ -187,6 +187,20 @@ fn pool_authority(db: &Connection, d: &VerifiedManagedAgentDelivery, now: u64) -
         [&grant.grant_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)),
     ).optional()?;
     let Some((profile, receipt, active, mode)) = saved else { return Ok(Some("authority_changed")) };
+    // The command's grant must govern its chain natively now. A successor the
+    // server accepted before this store observed it is not answered yet: the
+    // server redelivers after its lease, once publication observation flips it.
+    match super::super::succession::row(db, &grant.grant_id)? {
+        Some(link) if link.state == super::super::succession::State::Pending => return Err(Error::Busy),
+        Some(link) if link.state != super::super::succession::State::Effective || link.effective_from_ms > now => {
+            return Ok(Some("authority_changed"));
+        }
+        _ => {}
+    }
+    let next = super::super::succession::live_successor(db, &grant.grant_id)?;
+    if next.as_ref().is_some_and(|s| s.amendment() && s.state == super::super::succession::State::Effective && s.effective_from_ms <= now) {
+        return Ok(Some("authority_changed"));
+    }
     let closed: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM owner_parent_settlements WHERE grant_id=?1)",
         [&grant.grant_id], |r| r.get(0))?;
     if profile != e.profile.digest || !active || closed
@@ -209,9 +223,27 @@ fn pool_authority(db: &Connection, d: &VerifiedManagedAgentDelivery, now: u64) -
     let duplicate: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM owner_managed_agents WHERE profile=?1 AND (request_id=?2 OR agent_id=?3))",
         params![e.profile.digest,c.request_id,c.proposed_agent_id], |r| r.get(0))?;
     if duplicate { return Ok(Some("request_conflict")); }
-    let held = accounting::grant_floor(db,&grant.grant_id)?.retained;
-    if c.requested_tokens > grant.allocated_tokens.saturating_sub(held) {
+    // Every hold of this month's chain stays inside the governing grant.
+    let floor = accounting::period_floor(db, &grant.grant_id, now)?;
+    if c.requested_tokens > grant.allocated_tokens.saturating_sub(floor.total.retained) {
         return Ok(Some("insufficient_capacity"));
+    }
+    // With a pending amendment or a scheduled renewal the new Agent must also
+    // fit what that successor will cover after the change.
+    if let Some(next) = next {
+        let successor: u64 = db.query_row(
+            "SELECT allocated_tokens FROM owner_capacity_grants WHERE id=?1",
+            [&next.grant_id],
+            |r| r.get(0),
+        )?;
+        let covered = if next.amendment() {
+            floor.total.retained
+        } else {
+            accounting::accounted_floor(db, &grant.grant_id, now)?.moving.retained
+        };
+        if c.requested_tokens > successor.saturating_sub(covered) {
+            return Ok(Some("insufficient_capacity"));
+        }
     }
     Ok(None)
 }

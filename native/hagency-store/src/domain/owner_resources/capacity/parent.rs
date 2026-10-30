@@ -270,7 +270,13 @@ impl DomainRepository {
         if fence_revision <= grant.ledger_revision {
             return Err(Error::Conflict);
         }
-        let liability = liabilities(&tx, &grant, &mode, previous.as_ref())?;
+        let now = graphs::now_ms()?;
+        // The server holds only successors it accepted, so its closure of one
+        // proves acceptance. A renewal that never started is cancelled, which
+        // frees its predecessor's successor slot; any other pending successor
+        // becomes effective first, so its children's liability is closed here.
+        super::successor::settle_on_close(&tx, &grant, now)?;
+        let liability = liabilities(&tx, &grant, &mode, previous.as_ref(), now)?;
         let result = NativeGrantSettlementReceipt {
             version: 1,
             command_id: c.command_id.clone(),
@@ -328,6 +334,7 @@ fn liabilities(
     grant: &NativeGrantReceipt,
     mode: &str,
     previous: Option<&NativeGrantSettlementReceipt>,
+    now: u64,
 ) -> Result<Liabilities, Error> {
     // Stream a bounded, canonical child manifest. Its SHA256 commits every
     // ordered row, including tombstones, without a large in-memory JSON array.
@@ -383,7 +390,9 @@ fn liabilities(
             count += 1;
         }
     }
-    let (direct,direct_count)=managed_agents::pool_liability(db,&grant.grant_id)?;
+    // The children whose hold this grant carries now: its own and those its
+    // chain moved here, never children that stayed with a predecessor.
+    let (direct,direct_count)=managed_agents::accounted_pool_liability(db,&grant.grant_id,now)?;
     if direct_count>0 {
         if child_count>0 {digest.update(b",");}
         digest.update(canonical::encode(&json!({"poolAgentsDigest":direct.digest,"count":direct_count}))?.as_bytes());

@@ -200,23 +200,206 @@ pub(in super::super) fn grant_floor(db: &Connection, grant: &str) -> Result<Liab
     Ok(value)
 }
 
-pub(in super::super) fn pool_liability(db: &Connection, grant: &str) -> Result<(Liability,u64), Error> {
-    let mut q=db.prepare("SELECT id FROM owner_managed_agents WHERE pool_grant_id=?1 ORDER BY id")?;
-    let rows=q.query_map([grant],|r|r.get::<_,String>(0))?;
-    let mut value=Liability {retained:0,consumed:0,unresolved:0,complete:true,digest:String::new()};
-    let mut digest=Sha256::new();let mut count=0;
-    for row in rows {
-        if count>=100_000 {return Err(Error::Capacity);}
-        let child=child(db,&row?)?;
-        value.retained=add(value.retained,child.retained)?;
-        value.consumed=add(value.consumed,child.consumed)?;
-        value.complete&=child.complete;
-        digest.update(canonical::encode(&child.manifest)?.as_bytes());
-        count+=1;
+/// Direct pool children whose accounting grant at `at` is `grant`, in id
+/// order: children of this grant or of a predecessor that the chain carried
+/// here (section 3.3). For a grant without succession links these are exactly
+/// the children whose original grant is `grant`.
+pub(in super::super) fn accounted_children(
+    db: &Connection,
+    grant: &str,
+    at: u64,
+) -> Result<Vec<(String, bool)>, Error> {
+    let mut out = Vec::new();
+    for original in super::super::succession::lineage(db, grant)? {
+        let mut q = db.prepare(
+            "SELECT id FROM owner_managed_agents WHERE pool_grant_id=?1 ORDER BY id LIMIT 100001",
+        )?;
+        let ids = q
+            .query_map([&original], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        for id in ids {
+            if out.len() >= 100_000 {
+                return Err(Error::Capacity);
+            }
+            let fenced = super::super::succession::fenced_at(db, &id)?;
+            if super::super::succession::accounting_grant(db, &original, fenced, at)? == grant {
+                out.push((id, fenced.is_some()));
+            }
+        }
     }
-    value.unresolved=value.retained.saturating_sub(value.consumed);
-    value.digest=format!("{:x}",digest.finalize());
-    Ok((value,count))
+    out.sort();
+    Ok(out)
+}
+/// A grant's hold split for section 3.5: what stays with it when its chain
+/// moves on (project reservations and permanently fenced children) and what an
+/// amendment or renewal carries (live direct children).
+pub(in super::super) struct AccountedFloor {
+    pub total: Liability,
+    pub staying: Liability,
+    pub moving: Liability,
+    pub moving_children: u64,
+}
+fn empty() -> Liability {
+    Liability {
+        retained: 0,
+        consumed: 0,
+        unresolved: 0,
+        complete: true,
+        digest: String::new(),
+    }
+}
+fn include(into: &mut Liability, retained: u64, consumed: u64, complete: bool) -> Result<(), Error> {
+    into.retained = add(into.retained, retained)?;
+    into.consumed = add(into.consumed, consumed)?;
+    into.complete &= complete;
+    into.unresolved = into.retained.saturating_sub(into.consumed);
+    Ok(())
+}
+/// `grant_floor` by accounting grant at `at`. For a grant without succession
+/// links it is the same set, so the same numbers.
+pub(in super::super) fn accounted_floor(
+    db: &Connection,
+    grant: &str,
+    at: u64,
+) -> Result<AccountedFloor, Error> {
+    let mut floor = AccountedFloor {
+        total: empty(),
+        staying: empty(),
+        moving: empty(),
+        moving_children: 0,
+    };
+    let mut digest = Sha256::new();
+    let mut q =
+        db.prepare("SELECT id FROM owner_project_reservations WHERE grant_id=?1 ORDER BY id")?;
+    let rows = q.query_map([grant], |r| r.get::<_, String>(0))?;
+    for (count, row) in rows.enumerate() {
+        if count >= 100_000 {
+            return Err(Error::Capacity);
+        }
+        let child = project_liability(db, &row?)?;
+        include(&mut floor.total, child.retained, child.consumed, child.complete)?;
+        include(&mut floor.staying, child.retained, child.consumed, child.complete)?;
+        digest.update(child.digest.as_bytes());
+    }
+    for (id, fenced) in accounted_children(db, grant, at)? {
+        let child = child(db, &id)?;
+        include(&mut floor.total, child.retained, child.consumed, child.complete)?;
+        if fenced {
+            include(&mut floor.staying, child.retained, child.consumed, child.complete)?;
+        } else {
+            include(&mut floor.moving, child.retained, child.consumed, child.complete)?;
+            floor.moving_children += 1;
+        }
+        digest.update(canonical::encode(&child.manifest)?.as_bytes());
+    }
+    floor.total.digest = format!("{:x}", digest.finalize());
+    Ok(floor)
+}
+fn merge(into: &mut Liability, part: &Liability) -> Result<(), Error> {
+    include(into, part.retained, part.consumed, part.complete)
+}
+/// The same-period floor of `grant` at `at`: children accounted to it or to a
+/// predecessor it superseded within this UTC month (an amendment chain). Fenced
+/// children stay in it, so an amendment never moves a hold outside the cap of
+/// the grant now heading the month. For a root it is `accounted_floor`.
+pub(in super::super) fn period_floor(
+    db: &Connection,
+    grant: &str,
+    at: u64,
+) -> Result<AccountedFloor, Error> {
+    let key = |id: &str| -> Result<String, Error> {
+        let raw: String = db.query_row(
+            "SELECT receipt FROM owner_capacity_grants WHERE id=?1",
+            [id],
+            |r| r.get(0),
+        )?;
+        Ok(serde_json::from_str::<NativeGrantReceipt>(&raw)?.period_key)
+    };
+    let period = key(grant)?;
+    let mut floor = AccountedFloor {
+        total: empty(),
+        staying: empty(),
+        moving: empty(),
+        moving_children: 0,
+    };
+    let mut digest = Sha256::new();
+    for (index, id) in super::super::succession::lineage(db, grant)?.into_iter().enumerate() {
+        if index > 0 && key(&id)? != period {
+            break;
+        }
+        let part = accounted_floor(db, &id, at)?;
+        merge(&mut floor.total, &part.total)?;
+        merge(&mut floor.staying, &part.staying)?;
+        merge(&mut floor.moving, &part.moving)?;
+        floor.moving_children = floor
+            .moving_children
+            .checked_add(part.moving_children)
+            .ok_or(Error::Capacity)?;
+        digest.update(part.total.digest.as_bytes());
+    }
+    floor.total.digest = format!("{:x}", digest.finalize());
+    Ok(floor)
+}
+/// The direct pool children a closure or settlement of `grant` must cover:
+/// those whose accounting grant at `at` is `grant`.
+pub(in super::super) fn accounted_pool_liability(
+    db: &Connection,
+    grant: &str,
+    at: u64,
+) -> Result<(Liability, u64), Error> {
+    let mut value = empty();
+    let mut digest = Sha256::new();
+    let mut count = 0;
+    for (id, _) in accounted_children(db, grant, at)? {
+        let child = child(db, &id)?;
+        include(&mut value, child.retained, child.consumed, child.complete)?;
+        digest.update(canonical::encode(&child.manifest)?.as_bytes());
+        count += 1;
+    }
+    value.digest = format!("{:x}", digest.finalize());
+    Ok((value, count))
+}
+/// E20 for a successor: a carried child's in-flight usage is bounded by its
+/// hold, so it counts as held instead of blocking. Usage that cannot be
+/// represented still blocks, as does any unsettled child outside `chain`.
+pub(in crate::domain) fn unsettled_resource_except(
+    db: &Connection,
+    resource: &Resource,
+    chain: &std::collections::BTreeSet<String>,
+) -> Result<bool, Error> {
+    let mut q=db.prepare("SELECT id FROM owner_capacity_grants WHERE accounting_mode=?1 AND (preset_id=?2 OR seat_id=?3)")?;
+    let rows = q
+        .query_map(params![MANAGED, resource.preset_id, resource.seat_id], |r| {
+            r.get::<_, String>(0)
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    for grant in rows {
+        if !chain.contains(&grant) {
+            if !grant_floor(db, &grant)?.complete {
+                return Ok(true);
+            }
+            continue;
+        }
+        let projects: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM owner_project_reservations WHERE grant_id=?1)",
+            [&grant],
+            |r| r.get(0),
+        )?;
+        if projects && !grant_floor(db, &grant)?.complete {
+            return Ok(true);
+        }
+        let overflow: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM owner_managed_calls c JOIN owner_managed_agents a ON a.id=c.child_id WHERE a.pool_grant_id=?1 AND c.unrepresentable_usage=1)",
+            [&grant],
+            |r| r.get(0),
+        )?;
+        if overflow {
+            return Ok(true);
+        }
+        // Bounded sums only: an overflowing hold cannot be counted as held.
+        grant_floor(db, &grant)?;
+    }
+    Ok(false)
 }
 pub(in crate::domain) fn unsettled_resource(
     db: &Connection,

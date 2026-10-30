@@ -110,7 +110,8 @@ impl ManagedAgentReserveCommand {
                     || !self.project_id.is_empty() || !self.setup_id.is_empty()
                     || !self.domain_project_id.is_empty() || !self.allocation_receipt_digest.is_empty()
                     || self.project_revision != 0 || self.setup_binding_revision != 0
-                    || grant.version != 2 || grant.admission_request_id.is_none()
+                    || !matches!(grant.version, 2 | 3) || !grant.supported_shape()
+                    || grant.admission_request_id.is_none()
                     || grant.capability != CAPABILITY || grant.owner_mxid != grant.coordinator_mxid
                     || self.decision_actor_mxid != grant.owner_mxid
                     || !grant.eligible_managers.contains(&self.manager_mxid)

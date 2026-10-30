@@ -29,14 +29,27 @@ impl OwnerResourceRegistry {
             {return Err(Error::LocalAuthority);}
             let closed:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM owner_parent_settlements WHERE grant_id=?1)",[&receipt.grant_id],|r|r.get(0))?;
             let now=graphs::now_ms()?;
+            // A successor is publishable while it is pending (or already
+            // effective, for a retry) and its predecessor is still open. A
+            // renewal is published during its window, before its month starts.
+            let link=super::succession::row(&tx,&receipt.grant_id)?;
+            let opens=if link.as_ref().is_some_and(|l|l.renewal()) {receipt.period_start_ms.saturating_sub(RENEWAL_WINDOW_MS)} else {receipt.period_start_ms};
             if !active || closed || !matches!(mode.as_str(),parent::RESERVATION_ONLY|managed_agents::MANAGED)
-                || now<receipt.period_start_ms || now>=receipt.period_end_ms || now>=receipt.delegation_expires_at_ms
+                || now<opens || now>=receipt.period_end_ms || now>=receipt.delegation_expires_at_ms
                 || authorize_resource(&tx,&enrollment.profile,&resource_id).is_err()
             {return Err(Error::Conflict);}
+            if let Some(link)=&link {
+                let open:bool=tx.query_row("SELECT g.active AND NOT EXISTS(SELECT 1 FROM owner_parent_settlements WHERE grant_id=g.id) FROM owner_capacity_grants g WHERE g.id=?1",[&link.predecessor_grant_id],|r|r.get(0))?;
+                if link.state.void() || !open {return Err(Error::Conflict);}
+            }
             let resource=read_resource(&tx,&resource_id)?;
+            // E20 for successors: their own chain's in-flight usage is held.
+            let unsettled=if link.is_some() {
+                managed_agents::unsettled_resource_except(&tx,&resource,&super::succession::chain(&tx,&receipt.grant_id)?)?
+            } else {managed_agents::unsettled_resource(&tx,&resource)?};
             if resource.preset_id!=preset || resource.seat_id!=seat
                 || resource_publication_revision(&resource)?!=enrollment.resource_revision
-                || managed_agents::unsettled_resource(&tx,&resource)?
+                || unsettled
             {return Err(Error::Conflict);}
             if let Some(binding)=&enrollment.verified_resource {binding.check_canonical(&tx,&fence.id)?;}
             enrollment.check()?;

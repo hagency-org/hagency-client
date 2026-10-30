@@ -143,7 +143,7 @@ pub struct DomainRepository {
     _legacy_writer: Option<hagency_platform::legacy_writer::LegacyWriterAdmission>,
 }
 /// Current domain schema version (the last sequential migration).
-pub const DOMAIN_SCHEMA_VERSION: i32 = 103;
+pub const DOMAIN_SCHEMA_VERSION: i32 = 104;
 const DOMAIN_MIGRATIONS: &[(i32, &str)] = &[
     (2, include_str!("migrations/002-role-publication.sql")),
     (3, include_str!("migrations/003-task-dispatch.sql")),
@@ -394,6 +394,7 @@ const DOMAIN_MIGRATIONS: &[(i32, &str)] = &[
     (101, include_str!("migrations/103-owner-shared-tool-policy.sql")),
     (102, include_str!("migrations/104-owner-unstarted-shared-attempts.sql")),
     (103, include_str!("migrations/105-owner-shared-long-replies.sql")),
+    (104, include_str!("migrations/106-owner-capacity-grant-succession.sql")),
 ];
 
 impl DomainRepository {
@@ -1013,6 +1014,27 @@ fn budget_with_grant(
     within_grant: Option<&str>,
     at: u64,
 ) -> Result<Budget, Error> {
+    budget_with_options(
+        db,
+        resource,
+        exclude_engagement_id,
+        for_auto_join,
+        within_grant,
+        at,
+        None,
+    )
+}
+/// `succession`: the capacity chain whose own carried in-flight usage counts
+/// as held instead of making the figures unknown (E20 for successors only).
+fn budget_with_options(
+    db: &Connection,
+    resource: &Resource,
+    exclude_engagement_id: Option<&str>,
+    for_auto_join: bool,
+    within_grant: Option<&str>,
+    at: u64,
+    succession: Option<&std::collections::BTreeSet<String>>,
+) -> Result<Budget, Error> {
     let declaration: Option<String> = db
         .query_row(
             "SELECT config FROM seats WHERE id=?1",
@@ -1064,12 +1086,22 @@ fn budget_with_grant(
         exclude_engagement_id: exclude_engagement_id.map(str::to_owned),
         for_auto_join,
     })?;
-    if owner_resources::unsettled_resource(db, resource)? {
+    if unsettled_for(db, resource, succession)? {
         result.remaining_tokens = None;
         result.pool.remaining = None;
         result.seat.remaining = None;
     }
     Ok(result)
+}
+fn unsettled_for(
+    db: &Connection,
+    resource: &Resource,
+    succession: Option<&std::collections::BTreeSet<String>>,
+) -> Result<bool, Error> {
+    match succession {
+        None => owner_resources::unsettled_resource(db, resource),
+        Some(chain) => owner_resources::unsettled_resource_except(db, resource, chain),
+    }
 }
 
 /// The headroom an approval or a top-up is checked against (ADR-186 §A2):
@@ -1094,8 +1126,29 @@ fn headroom_with_grant(
     at: u64,
     within_grant: Option<&str>,
 ) -> Result<Headroom, Error> {
+    headroom_with_options(db, resource, at, within_grant, None)
+}
+/// The headroom a capacity grant successor is checked against at `at`: the
+/// same figure as an approval's, except that in-flight usage of the
+/// successor's own chain counts as held (E20). `None` when it is unknown.
+pub(crate) fn successor_remaining(
+    db: &Connection,
+    resource: &Resource,
+    at: u64,
+    chain: &std::collections::BTreeSet<String>,
+) -> Result<Option<u64>, Error> {
+    Ok(headroom_with_options(db, resource, at, None, Some(chain))?.remaining)
+}
+fn headroom_with_options(
+    db: &Connection,
+    resource: &Resource,
+    at: u64,
+    within_grant: Option<&str>,
+    succession: Option<&std::collections::BTreeSet<String>>,
+) -> Result<Headroom, Error> {
     let report = usage::ceiling_report(db, &resource.id(), at)?;
-    let spent_budget = budget_with_grant(db, resource, None, false, within_grant, at)?;
+    let spent_budget =
+        budget_with_options(db, resource, None, false, within_grant, at, succession)?;
     // backend-v2.js:14057: a seat declaration whose period mismatches the
     // pool's nulls the whole figure rather than falling back to the pool.
     let period_mismatch = spent_budget.seat.status == allocation::SeatStatus::PeriodMismatch;
@@ -1107,7 +1160,7 @@ fn headroom_with_grant(
         .reserved
         .saturating_sub(credit)
         .max(report.spent.unwrap_or(0));
-    let unsettled = owner_resources::unsettled_resource(db, resource)?;
+    let unsettled = unsettled_for(db, resource, succession)?;
     let by_ceiling = report
         .ceiling_tokens
         .map(|c| c.saturating_sub(effective_draw))

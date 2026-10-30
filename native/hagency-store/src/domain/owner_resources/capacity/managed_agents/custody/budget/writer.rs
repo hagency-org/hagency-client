@@ -116,8 +116,10 @@ fn live(db: &Connection, d: &VerifiedAgentBudgetDelivery) -> Result<Binding, Err
     Ok(binding)
 }
 fn conserved(db: &Connection, b: &Binding, owner_funded: bool) -> Result<(), Error> {
+    let now = graphs::now_ms()?;
     let grant_id = if let Some(grant) = &b.command.pool_grant {
-        grant.grant_id.clone()
+        // The grant governing the child's chain now covers its hold.
+        super::super::super::super::succession::effective_at(db, &grant.grant_id, now)?
     } else {
         let (project_tokens, grant_id): (u64, String) = db.query_row(
         "SELECT requested_tokens,grant_id FROM owner_project_reservations WHERE id=?1",
@@ -139,8 +141,30 @@ fn conserved(db: &Connection, b: &Binding, owner_funded: bool) -> Result<(), Err
     // original published grant. It grants no reusable pool capacity. The full
     // resulting liability (including siblings/unknown calls) is still charged
     // by the account/resource collector below in the same transaction.
-    if !owner_funded && accounting::grant_floor(db, &grant_id)?.retained > grant_tokens {
-        return Err(Error::Capacity);
+    if !owner_funded {
+        let floor = accounting::period_floor(db, &grant_id, now)?;
+        if floor.total.retained > grant_tokens {
+            return Err(Error::Capacity);
+        }
+        // A pending amendment or scheduled renewal must still cover the chain
+        // after this change.
+        if b.command.pool_grant.is_some()
+            && let Some(next) = super::super::super::super::succession::live_successor(db, &grant_id)?
+        {
+            let successor: u64 = db.query_row(
+                "SELECT allocated_tokens FROM owner_capacity_grants WHERE id=?1",
+                [&next.grant_id],
+                |r| r.get(0),
+            )?;
+            let covered = if next.amendment() {
+                floor.total.retained
+            } else {
+                accounting::accounted_floor(db, &grant_id, now)?.moving.retained
+            };
+            if covered > successor {
+                return Err(Error::Capacity);
+            }
+        }
     }
     // Shared collector rejects unbounded sibling evidence while accepting
     // bounded unknown holds already conserved inside their original parents.

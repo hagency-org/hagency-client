@@ -38,7 +38,7 @@ fn collect(db: &mut Connection, profile: &str) -> Result<ProfileLedgerAudit, Err
     let tx = db.transaction_with_behavior(TransactionBehavior::Deferred)?;
     let schema: i32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
     let application: i32 = tx.pragma_query_value(None, "application_id", |r| r.get(0))?;
-    if !matches!(schema, 71..=103) || application != 0x48414732 {
+    if !matches!(schema, 71..=104) || application != 0x48414732 {
         return Err(Error::Schema);
     }
     // Existing domain schema contains views. We never query them; every
@@ -430,6 +430,9 @@ fn collect(db: &mut Connection, profile: &str) -> Result<ProfileLedgerAudit, Err
     ))).chain((schema >= 102).then_some([
         ("owner_shared_unstarted_attempts", &["command_id", "payload", "digest", "ledger_revision"][..]),
         ("owner_shared_budget_demand_terminals", &["demand_id", "payload", "digest", "ledger_revision"][..]),
+    ]).into_iter().flatten()).chain((schema >= 104).then_some([
+        ("owner_capacity_grant_successions", &["grant_id", "predecessor_grant_id", "profile", "kind", "state", "effective_from_ms", "command_id", "created_at_ms", "decided_at_ms"][..]),
+        ("owner_managed_fence_times", &["child_id", "fenced_at_ms"][..]),
     ]).into_iter().flatten()) {
         let ordinary = tx
             .query_row(
@@ -546,6 +549,7 @@ fn collect(db: &mut Connection, profile: &str) -> Result<ProfileLedgerAudit, Err
             | "usage_periods"
             | "coordinator_resources"
             | "owner_capacity_grants"
+            | "owner_capacity_grant_successions"
             | "owner_project_reservations"
             | "owner_parent_settlements" => {
                 history.capacity_and_usage_rows.add(&count);

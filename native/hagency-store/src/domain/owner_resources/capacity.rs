@@ -9,10 +9,16 @@ mod parent;
 mod publication;
 mod readmission;
 mod regrant;
+mod succession;
+mod successor;
+#[cfg(test)]
+mod succession_tests;
+pub use successor::{CapacityGrantChainHead, CapacityGrantSuccession, CapacityGrantSuccessionFacts};
 use super::*;
 use crate::resource_publication_revision;
 use hagency_core::project::identifier;
 pub(in super::super) use managed_agents::unsettled_resource;
+pub(in super::super) use managed_agents::unsettled_resource_except;
 #[cfg(feature = "resource-adoption")]
 pub(in super::super) use managed_agents::unsettled_exact_resource;
 pub use managed_agents::{
@@ -64,6 +70,49 @@ pub struct NativeGrantReceipt {
     pub period_start_ms: u64,
     pub period_end_ms: u64,
     pub ledger_revision: u64,
+    /// Present exactly on v3 successor receipts. Omitted otherwise, so every
+    /// stored v1/v2 receipt keeps its canonical digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub succession: Option<GrantSuccession>,
+}
+pub const SUCCESSION_RENEWAL: &str = "renewal";
+pub const SUCCESSION_AMENDMENT: &str = "amendment";
+/// The immutable link of a v3 receipt to the chain head it succeeds: a renewal
+/// (next UTC month) or an amendment (same month). Identical to the server's.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GrantSuccession {
+    pub kind: String,
+    pub predecessor_grant_id: String,
+    /// Canonical digest of the predecessor's receipt.
+    pub predecessor_receipt_digest: String,
+    /// Live Agent children carried at native creation, and their hold.
+    pub carried_children: u64,
+    pub carried_retained_tokens: u64,
+}
+impl NativeGrantReceipt {
+    /// The `(version, admission, succession)` shapes shared with the server:
+    /// v1 without admission, v2 with one, v3 with one and a valid succession.
+    pub fn supported_shape(&self) -> bool {
+        match (
+            self.version,
+            self.admission_request_id.as_ref(),
+            self.succession.as_ref(),
+        ) {
+            (1, None, None) | (2, Some(_), None) => true,
+            (3, Some(_), Some(s)) => {
+                matches!(s.kind.as_str(), SUCCESSION_RENEWAL | SUCCESSION_AMENDMENT)
+                    && identifier(&s.predecessor_grant_id, 128).is_ok()
+                    && s.predecessor_grant_id != self.grant_id
+                    && hash(&s.predecessor_receipt_digest).is_ok()
+                    && s.carried_children <= JSON_SAFE_MAX
+                    && s.carried_retained_tokens <= JSON_SAFE_MAX
+                    && s.carried_retained_tokens <= self.allocated_tokens
+                    && self.grant_revision >= 2
+            }
+            _ => false,
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -246,7 +295,7 @@ impl VerifiedManagementEnrollment {
             && self.admitted_coordinator == receipt.coordinator_mxid
     }
     fn matches_cleanup(&self, receipt: &NativeGrantReceipt) -> bool {
-        matches!((receipt.version, receipt.admission_request_id.as_ref()), (1, None) | (2, Some(_)))
+        receipt.supported_shape()
             && receipt.capability == CAPABILITY
             && self.admission_request_id == receipt.admission_request_id
             && self.enrollment_id == receipt.enrollment_id
@@ -304,7 +353,24 @@ impl OwnerGrantPeriod {
         }
         Ok(())
     }
+    /// The UTC month a receipt covers, rechecked against the calendar.
+    fn of_receipt(receipt: &NativeGrantReceipt) -> Result<Self, Error> {
+        let period = Self::at(receipt.period_start_ms)?;
+        if period.period_key != receipt.period_key
+            || period.period_start_ms != receipt.period_start_ms
+            || period.period_end_ms != receipt.period_end_ms
+        {
+            return Err(Error::LocalAuthority);
+        }
+        Ok(period)
+    }
+    /// The UTC month that starts when this one ends.
+    fn next(&self) -> Result<Self, Error> {
+        Self::at(self.period_end_ms)
+    }
 }
+/// A renewal may be scheduled during the last 7 days of the current month.
+pub const RENEWAL_WINDOW_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 /// Immutable native review data. This snapshot is not execution authority and
 /// must never be accepted as a deserialized enrollment proof.
 #[derive(Clone, Debug, Serialize)]
@@ -429,6 +495,8 @@ pub struct OwnerGrantConsent {
     closed_prior_admissions: bool,
     regrant_after_period_end: bool,
     reviewed_budget: Option<String>,
+    /// A v3 successor of this exact predecessor receipt; `None` for a root.
+    succession: Option<successor::Plan>,
 }
 impl OwnerGrantConsent {
     pub fn selection(&self) -> &OwnerGrantSelection {
@@ -613,6 +681,7 @@ impl OwnerResourceRegistry {
             closed_prior_admissions: false,
             regrant_after_period_end: false,
             reviewed_budget: None,
+            succession: None,
         };
         consent.check()?;
         Ok(consent)
@@ -870,6 +939,9 @@ impl DomainRepository {
         consent: OwnerGrantConsent,
         mut now_ms: impl FnMut() -> Result<u64, Error>,
     ) -> Result<NativeGrantReceipt, Error> {
+        if consent.succession.is_some() {
+            return self.owner_capacity_grant_successor_with_clock(consent, now_ms);
+        }
         consent.check()?;
         let e = &consent.enrollment;
         let s = &consent.selection;
@@ -979,6 +1051,7 @@ impl DomainRepository {
             period_start_ms: consent.period.period_start_ms,
             period_end_ms: consent.period.period_end_ms,
             ledger_revision,
+            succession: None,
         };
         // Shared with the central 16-KiB request envelope; leave space for its
         // command/revision wrapper and for the later executor command fields.
@@ -1316,16 +1389,19 @@ fn apply_child(
 
 /// Only parent holds are added to the existing allocation engine. Project
 /// children spend that already-counted capacity; ACL changes do not silently
-/// free it or erase unknown/legacy commitments. The ceiling is monthly: once a
-/// grant's UTC month has ended before `at`, its allocation (or settled amount)
-/// no longer counts. It keeps its children's unresolved liability, or their
-/// whole retained hold while any of their usage is unknown.
+/// free it or erase unknown/legacy commitments. The ceiling is monthly, and a
+/// pool's capacity is a chain of grants (section 3.5): a grant counts in its
+/// own UTC month; once that month ended before `at` it keeps only its
+/// children's unresolved liability, or their whole retained hold while any of
+/// their usage is unknown. Each child counts in exactly one grant: the
+/// effective grant of its chain at `min(at, fenced_at)`. A chain of length 1
+/// gives exactly the numbers of a single grant.
 pub(in super::super) fn additional_commitments(
     db: &Connection,
     resource: &Resource,
     at: u64,
 ) -> Result<Vec<allocation::Commitment>, Error> {
-    let mut q=db.prepare("SELECT g.id,g.preset_id,g.seat_id,COALESCE(p.retained_tokens,g.allocated_tokens),CASE WHEN json_valid(g.receipt) AND json_type(g.receipt,'$.periodEndMs')='integer' THEN json_extract(g.receipt,'$.periodEndMs') END FROM owner_capacity_grants g LEFT JOIN owner_parent_settlements p ON p.grant_id=g.id WHERE g.preset_id=?1 OR g.seat_id=?2")?;
+    let mut q=db.prepare("SELECT g.id,g.preset_id,g.seat_id,COALESCE(p.retained_tokens,g.allocated_tokens),CASE WHEN json_valid(g.receipt) AND json_type(g.receipt,'$.periodEndMs')='integer' THEN json_extract(g.receipt,'$.periodEndMs') END,CASE WHEN json_valid(g.receipt) AND json_type(g.receipt,'$.periodStartMs')='integer' THEN json_extract(g.receipt,'$.periodStartMs') END FROM owner_capacity_grants g LEFT JOIN owner_parent_settlements p ON p.grant_id=g.id WHERE g.preset_id=?1 OR g.seat_id=?2")?;
     let rows = q.query_map(params![resource.preset_id, resource.seat_id], |r| {
         Ok((
             r.get::<_, String>(0)?,
@@ -1333,22 +1409,12 @@ pub(in super::super) fn additional_commitments(
             r.get::<_, String>(2)?,
             r.get::<_, u64>(3)?,
             r.get::<_, Option<i64>>(4)?,
+            r.get::<_, Option<i64>>(5)?,
         ))
     })?;
     rows.map(|row| {
-        let (id, preset, seat, tokens, period_end) = row?;
-        let floor = managed_agents::grant_floor(db, &id)?;
-        // A receipt without a readable period end is never treated as ended.
-        let ended = period_end.is_some_and(|end| u64::try_from(end).is_ok_and(|end| end <= at));
-        let tokens = if ended {
-            if floor.complete {
-                floor.unresolved
-            } else {
-                floor.retained
-            }
-        } else {
-            tokens.max(floor.retained)
-        };
+        let (id, preset, seat, tokens, period_end, period_start) = row?;
+        let tokens = grant_commitment(db, &id, tokens, period_start, period_end, at)?;
         Ok(allocation::Commitment {
             id: format!("owner_grant_{id}"),
             preset_id: Some(preset),
@@ -1359,4 +1425,71 @@ pub(in super::super) fn additional_commitments(
         })
     })
     .collect()
+}
+/// One grant's hold at `at` (section 3.5, with the same-period floor). `tokens`
+/// is its allocation, or its settled retained amount once canonically closed.
+/// Totals never increase when an amendment flips: while it is pending the
+/// head counts `max(A_g, A_s, floor)` and the successor 0; afterwards the
+/// successor heads the month with `max(A_s, floor)` and the old head counts 0.
+fn grant_commitment(
+    db: &Connection,
+    id: &str,
+    tokens: u64,
+    period_start: Option<i64>,
+    period_end: Option<i64>,
+    at: u64,
+) -> Result<u64, Error> {
+    if let Some(link) = succession::row(db, id)? {
+        // Rejected successors and cancelled renewals never held capacity.
+        if link.state.void() {
+            return Ok(0);
+        }
+        // A renewal counts only from its own month. A receipt without a
+        // readable start is never treated as future.
+        if link.renewal()
+            && period_start.is_some_and(|start| u64::try_from(start).is_ok_and(|start| start > at))
+        {
+            return Ok(0);
+        }
+        // An amendment not yet effective at `at` counts inside its
+        // predecessor's hold.
+        if link.amendment()
+            && (link.state == succession::State::Pending || link.effective_from_ms > at)
+        {
+            return Ok(0);
+        }
+    }
+    // A receipt without a readable period end is never treated as ended.
+    let ended = period_end.is_some_and(|end| u64::try_from(end).is_ok_and(|end| end <= at));
+    if ended {
+        let floor = managed_agents::accounted_floor(db, id, at)?.total;
+        return Ok(if floor.complete {
+            floor.unresolved
+        } else {
+            floor.retained
+        });
+    }
+    let next = succession::live_successor(db, id)?;
+    // Superseded within its month: the grant now heading the month counts
+    // this grant's children in its same-period floor.
+    if next.as_ref().is_some_and(|s| {
+        s.amendment() && s.state == succession::State::Effective && s.effective_from_ms <= at
+    }) {
+        return Ok(0);
+    }
+    let current = tokens.max(managed_agents::period_floor(db, id, at)?.total.retained);
+    Ok(match next {
+        Some(s)
+            if s.amendment()
+                && (s.state == succession::State::Pending || s.effective_from_ms > at) =>
+        {
+            let successor: u64 = db.query_row(
+                "SELECT allocated_tokens FROM owner_capacity_grants WHERE id=?1",
+                [&s.grant_id],
+                |r| r.get(0),
+            )?;
+            current.max(successor)
+        }
+        _ => current,
+    })
 }

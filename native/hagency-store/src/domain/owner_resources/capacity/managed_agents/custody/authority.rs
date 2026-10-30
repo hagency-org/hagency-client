@@ -58,6 +58,24 @@ pub(super) fn original(
             |r| Ok((r.get(0)?, r.get(1)?)),
         )? };
         let now = graphs::now_ms()?;
+        // A pool child's authority is the grant governing its chain now: the
+        // original receipt digest is checked above, the live grant here.
+        let head = if c.pool_grant.is_some() {
+            super::super::super::succession::effective_at(db, &g.grant_id, now)?
+        } else {
+            g.grant_id.clone()
+        };
+        let (governing, active, parent_mode) = if head == g.grant_id {
+            (g.clone(), active, parent_mode)
+        } else {
+            let (raw, active, mode): (String, bool, String) = db.query_row(
+                "SELECT receipt,active,accounting_mode FROM owner_capacity_grants WHERE id=?1",
+                [&head],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?;
+            (serde_json::from_str::<NativeGrantReceipt>(&raw)?, active, mode)
+        };
+        let g = &governing;
         if fenced
             || !active
             || state != "reserved"

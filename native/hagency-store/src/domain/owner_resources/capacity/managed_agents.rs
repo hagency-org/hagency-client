@@ -27,7 +27,11 @@ mod types;
 pub(in crate::domain) use accounting::unsettled_resource;
 #[cfg(feature = "resource-adoption")]
 pub(in crate::domain) use accounting::unsettled_exact_resource;
-pub(super) use accounting::{MANAGED, grant_floor, pool_liability, project_liability, release_project};
+pub(super) use accounting::{
+    Liability, MANAGED, accounted_floor, accounted_pool_liability, grant_floor,
+    period_floor, project_liability, release_project,
+};
+pub(in crate::domain) use accounting::unsettled_resource_except;
 pub use fence::{
     AGENT_FENCE_CAPABILITY, ManagedAgentFenceCommand, ManagedAgentFenceReceipt,
     VerifiedManagedAgentFence,

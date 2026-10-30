@@ -75,6 +75,9 @@ pub enum IntentOperation {
     AllocationDecide,
     AllocationRelease,
     PublishGrant,
+    /// A v3 successor of a published grant (`grant.succeed`). Kept separate
+    /// from `PublishGrant` so each keeps its own exact replay identity.
+    PublishGrantSuccessor,
     PersonalAgentPolicy,
     PersonalAgentModel,
     PersonalAgentWorkspace,
@@ -134,12 +137,16 @@ impl IntentOperation {
             Self::AgentRunControl => Permission::ChangeAgentRunControl,
             Self::AllocationDecide => Permission::DecideAllocations,
             Self::AllocationRelease => Permission::ReleaseAllocations,
-            Self::PublishGrant => Permission::PublishGrants,
+            Self::PublishGrant | Self::PublishGrantSuccessor => Permission::PublishGrants,
             Self::PersonalAgentPolicy | Self::PersonalAgentRules => Permission::EditPersonalAgentPolicy,
             Self::PersonalAgentModel => Permission::EditPersonalAgentModel,
             Self::PersonalAgentWorkspace => Permission::PreparePersonalAgentWorkspace,
             Self::PersonalAgentObservation => Permission::RequestPersonalAgentSettings,
         }
+    }
+    /// Publication of an owner-ledger grant receipt, root or successor.
+    pub(crate) fn publishes_grant(self) -> bool {
+        matches!(self, Self::PublishGrant | Self::PublishGrantSuccessor)
     }
     pub(crate) fn is_graph(self) -> bool {
         matches!(
@@ -200,7 +207,7 @@ impl Intent {
         {
             return Err(hagency_core::InvalidInput("invalid management intent").into());
         }
-        if operation == IntentOperation::PublishGrant {
+        if operation.publishes_grant() {
             identifier(
                 input["receipt"]["grantId"]
                     .as_str()
@@ -433,11 +440,27 @@ fn pending(id: String, row: &Stored) -> Result<PendingIntent, Error> {
 }
 fn require_unused_publication(db: &Connection, actor: &str, grant_id: &str) -> Result<(), Error> {
     let operation = serde_json::to_string(&IntentOperation::PublishGrant)?;
+    let successor = serde_json::to_string(&IntentOperation::PublishGrantSuccessor)?;
     let scrubbed: bool = db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM management_intents WHERE actor_scope=?1 AND operation=?2 AND (state='acknowledged' OR input IS NULL))",
-        params![actor, operation], |r| r.get(0))?;
+        "SELECT EXISTS(SELECT 1 FROM management_intents WHERE actor_scope=?1 AND operation IN(?2,?3) AND (state='acknowledged' OR input IS NULL))",
+        params![actor, operation, successor], |r| r.get(0))?;
     if scrubbed {
         return Err(Error::Conflict);
+    }
+    // Successor publications are bounded by the 2048-grant ledger instead of
+    // the original eight root publications.
+    let mut query = db.prepare(
+        "SELECT input FROM management_intents WHERE actor_scope=?1 AND operation=?2 LIMIT 2049",
+    )?;
+    let inputs = query.query_map(params![actor, successor], |r| r.get::<_, String>(0))?;
+    for (index, old) in inputs.enumerate() {
+        if index >= 2048 {
+            return Err(Error::Capacity);
+        }
+        let old: Value = serde_json::from_str(&old?)?;
+        if old["receipt"]["grantId"].as_str().ok_or(Error::Conflict)? == grant_id {
+            return Err(Error::Conflict);
+        }
     }
     let mut query = db.prepare(
         "SELECT input FROM management_intents WHERE actor_scope=?1 AND operation=?2 LIMIT 9",
@@ -520,7 +543,7 @@ pub(crate) fn execute_intent(
                 if count >= 8 || total >= 100_000 {
                     return Err(Error::Capacity);
                 }
-                if intent.operation == IntentOperation::PublishGrant {
+                if intent.operation.publishes_grant() {
                     if intent.require_unused_publication {
                         require_unused_publication(
                             &tx,
@@ -537,7 +560,7 @@ pub(crate) fn execute_intent(
                         let inputs = query.query_map(
                             params![
                                 actor,
-                                serde_json::to_string(&IntentOperation::PublishGrant)?
+                                serde_json::to_string(&intent.operation)?
                             ],
                             |r| r.get::<_, String>(0),
                         )?;

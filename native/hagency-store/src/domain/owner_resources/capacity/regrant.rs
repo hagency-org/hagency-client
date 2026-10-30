@@ -54,12 +54,20 @@ pub(super) fn prior_periods_ended(
         if grant.contribution_id != contribution {
             continue;
         }
+        // A rejected successor or a cancelled renewal never held capacity; it
+        // is history whatever month it named.
+        if grant.executor_device_id == device
+            && grant.capability == CAPABILITY
+            && grant.supported_shape()
+            && grant.admission_request_id.as_deref() == Some(admission)
+            && super::succession::void(db, &id)?
+        {
+            result.push(id);
+            continue;
+        }
         if grant.executor_device_id != device
             || grant.capability != CAPABILITY
-            || !matches!(
-                (grant.version, grant.admission_request_id.as_ref()),
-                (1, None) | (2, Some(_))
-            )
+            || !grant.supported_shape()
             || grant.period_key == period.period_key
             || grant.period_end_ms > period.period_start_ms
         {
