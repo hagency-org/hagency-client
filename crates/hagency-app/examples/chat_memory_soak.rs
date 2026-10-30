@@ -103,10 +103,8 @@ impl AppMain for App {
             );
             if cfg!(windows) {
                 assert!(
-                    directory
-                        .to_string_lossy()
-                        .replace('\\', "/")
-                        .starts_with("D:/")
+                    directory.is_absolute(),
+                    "HAGENCY_STRESS_OUTPUT must select an absolute output directory"
                 );
             }
             std::fs::create_dir_all(&directory).unwrap();

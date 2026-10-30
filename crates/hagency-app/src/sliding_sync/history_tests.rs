@@ -214,15 +214,9 @@ async fn sdk_sqlite_raw_decoded_and_chunk_metadata_stay_bounded_through_live_rol
             ))
         }),
     );
+    // Use the host's configured temporary volume. CI qualifies credential
+    // directory durability separately; SDK history bounds do not require D:.
     let directory = std::env::temp_dir().join(format!("sdk-history-{}", uuid::Uuid::new_v4()));
-    if cfg!(windows) {
-        assert!(
-            directory
-                .to_string_lossy()
-                .replace('\\', "/")
-                .starts_with("D:/")
-        );
-    }
     std::fs::create_dir_all(&directory).unwrap();
     let room = server.room_with_store(Some(&directory)).await;
     let client = room.client();
