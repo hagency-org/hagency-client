@@ -1,7 +1,10 @@
 use super::{DomainRepository, resource_ceiling};
 use crate::{
     Error,
-    management::{PROTOCOL, ResourceDetail, ResourceEditBlocker, ResourceEditing},
+    management::{
+        CeilingAmendment, CeilingAmendmentBlocker, PROTOCOL, ResourceDetail,
+        ResourceEditBlocker, ResourceEditing,
+    },
 };
 use hagency_core::qualification;
 
@@ -43,6 +46,14 @@ impl DomainRepository {
             editing: ResourceEditing {
                 allowed: false,
                 reason: Some(ResourceEditBlocker::ContributionHistoryNotProven),
+            },
+            // Only the canonical owner ledger proves offer history and amends.
+            ceiling_amendment: CeilingAmendment {
+                allowed: false,
+                reason: Some(CeilingAmendmentBlocker::ContributionHistoryNotProven),
+                sequence: resource_ceiling::latest_amendment(&self.db, id)?.map_or(0, |(s, _)| s),
+                minimum_tokens: None,
+                per_request_tokens: None,
             },
         };
         if serde_json::to_vec(&detail)?.len() > 64 * 1024 {

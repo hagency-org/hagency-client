@@ -1,5 +1,10 @@
 //! Closed in-place editing. Creating configurations and amending an admitted
 //! resource are separate operations, never caller-controlled flags here.
+//!
+//! A ceiling-only request that names `expectedCeilingSequence` is a request to
+//! amend the monthly maximum of an offered, published or committed resource.
+//! It is never applied as a definition edit, and an edit request is never
+//! applied as an amendment: the input alone selects the operation.
 use super::*;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -13,8 +18,33 @@ pub struct EditLocalResource {
     /// Omission preserves both the stored default and legacy receipt hashes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_policy: Option<hagency_core::execution::ExecutionPolicy>,
+    /// Only for a monthly-maximum amendment: the `ceilingAmendment.sequence`
+    /// the caller reviewed. Omission keeps an in-place edit and its hashes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_ceiling_sequence: Option<u64>,
+}
+
+/// Why a monthly-maximum amendment was refused before any ledger effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CeilingAmendmentRefusal {
+    /// Editable in place instead, unknown history, or no monthly maximum.
+    NotAvailable,
+    /// An offered resource's monthly maximum can change but never be cleared.
+    ClearRefused,
+    /// The monthly maximum already has this value.
+    Unchanged,
+    /// Below this month's published capacity, Agent holds or measured use.
+    BelowCommitments,
+    /// Usage on the resource is unsettled; the maximum can only be raised.
+    UsageUnsettled,
 }
 impl EditLocalResource {
+    /// An amendment request: it names the sequence it expects and changes
+    /// nothing but the monthly maximum (`validate` enforces the shape).
+    pub fn is_ceiling_amendment(&self) -> bool {
+        self.expected_ceiling_sequence.is_some()
+    }
     pub fn validate(&self) -> Result<(), Error> {
         identifier(&self.command_id, 128)?;
         identifier(&self.resource_id, 128)?;
@@ -35,6 +65,21 @@ impl EditLocalResource {
                 }))
         {
             return Err(hagency_core::InvalidInput("invalid resource configuration").into());
+        }
+        // An amendment keeps the model and the default permissions, and sets
+        // a whole monthly maximum of at least one token. A clear request stays
+        // well-formed here so the writer can refuse it with its own reason.
+        if let Some(sequence) = self.expected_ceiling_sequence
+            && (sequence > hagency_core::JSON_SAFE_MAX
+                || !matches!(self.profile, ProfileChange::Preserve {})
+                || self.execution_policy.is_some()
+                || match self.ceiling {
+                    CeilingChange::Preserve {} => true,
+                    CeilingChange::Clear {} => false,
+                    CeilingChange::Monthly { tokens } => u64::from(tokens) == 0,
+                })
+        {
+            return Err(hagency_core::InvalidInput("invalid ceiling amendment").into());
         }
         Ok(())
     }
@@ -93,6 +138,33 @@ impl Session {
             )
             .await?;
         self.check(context, Permission::ConfigureResources)?;
+        Ok(result)
+    }
+
+    /// Trusted host only, after the native review of this same input. No
+    /// provider metadata is needed: the definition and its model are unchanged.
+    pub async fn amend_resource_ceiling(
+        &self,
+        context: &HostContext,
+        input: EditLocalResource,
+        confirmed_until: std::time::Instant,
+    ) -> Result<ResourceConfigurationResult, Error> {
+        let _pending = self.scope.pending.try_acquire().map_err(|_| Error::Busy)?;
+        let _command = self.scope.commands.lock().await;
+        self.check(context, Permission::ConfigureResources)?;
+        input.validate()?;
+        if !input.is_ceiling_amendment() {
+            return Err(hagency_core::InvalidInput("not a ceiling amendment").into());
+        }
+        let SessionStore::Adopted(store) = &self.store else {
+            return Err(Error::LocalAuthority);
+        };
+        let receipt = input.receipt(context, store.identity().0)?;
+        let result = store
+            .amend_resource_ceiling(&self.adopted_profile(store)?, input, receipt, confirmed_until)
+            .await?;
+        self.check(context, Permission::ConfigureResources)
+            .map_err(|_| Error::OutcomeUnknown)?;
         Ok(result)
     }
 

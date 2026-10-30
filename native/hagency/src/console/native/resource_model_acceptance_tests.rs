@@ -48,13 +48,13 @@ async fn native_ready_model_child(){
     let resource=m.enroll_account_resource(NamespaceEnrollment{command_id:"ready_resource".into(),account:query,model:"gpt-5.6-sol".into(),reasoning:Some("high".into()),monthly_tokens:700},until()).await.unwrap();
     let id=resource.resource_id;let namespace=find(installation.path(),&account.account_id).unwrap();
     let detail=m.resource_detail(ResourceDetailQuery{id:id.clone()}).await.unwrap();assert!(detail.editing.allowed);
-    let input=EditLocalResource{command_id:"ready_model_apply".into(),resource_id:id.clone(),expected_revision:detail.resource.revision,profile:hagency_store::ProfileChange::Select{model:"gpt-5.6-sol".into(),reasoning:Some("medium".into())},ceiling:hagency_store::CeilingChange::Preserve{},execution_policy:None};
+    let input=EditLocalResource{command_id:"ready_model_apply".into(),resource_id:id.clone(),expected_revision:detail.resource.revision,profile:hagency_store::ProfileChange::Select{model:"gpt-5.6-sol".into(),reasoning:Some("medium".into())},ceiling:hagency_store::CeilingChange::Preserve{},execution_policy:None,expected_ceiling_sequence:None};
     let copy=||serde_json::from_value::<EditLocalResource>(serde_json::to_value(&input).unwrap()).unwrap();
     assert!(matches!(m.review_local_resource_edit(&input).await.unwrap(),LocalResourceEditReview::Editable(_)));
     let applied=m.edit_local_resource(copy(),until()).await.unwrap();let changed=m.resource_detail(ResourceDetailQuery{id:id.clone()}).await.unwrap();
     assert_eq!(changed.resource.reasoning.as_deref(),Some("medium"));assert_eq!(changed.resource.budget.seat.quota.map(u64::from),Some(700));
     std::fs::write(namespace.join("fixture-withheld"),"").unwrap();
-    let unavailable=EditLocalResource{command_id:"ready_model_withheld".into(),resource_id:id.clone(),expected_revision:applied.revision.clone(),profile:hagency_store::ProfileChange::Select{model:"gpt-5.6-sol".into(),reasoning:Some("high".into())},ceiling:hagency_store::CeilingChange::Preserve{},execution_policy:None};
+    let unavailable=EditLocalResource{command_id:"ready_model_withheld".into(),resource_id:id.clone(),expected_revision:applied.revision.clone(),profile:hagency_store::ProfileChange::Select{model:"gpt-5.6-sol".into(),reasoning:Some("high".into())},ceiling:hagency_store::CeilingChange::Preserve{},execution_policy:None,expected_ceiling_sequence:None};
     assert_eq!(m.edit_local_resource(unavailable,until()).await.unwrap_err().code,"provider_model_changed");assert_eq!(m.resource_detail(ResourceDetailQuery{id:id.clone()}).await.unwrap().resource.revision,applied.revision);
     let calls=std::fs::read_to_string(namespace.join("fixture-methods")).unwrap();assert!(calls.lines().all(|m|matches!(m,"initialize"|"config/read"|"account/read"|"account/rateLimits/read"|"model/list")));
     drop(m);f=f.restart_onboarding(selected).await;std::fs::remove_file(fake).unwrap();let m=f.owner.management(package()).await.unwrap();

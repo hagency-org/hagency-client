@@ -161,6 +161,7 @@ impl AdoptedManagementStore {
             provenance::created(&tx, &owner_receipt, &digest, &authority.digest)?;
             let result = ResourceConfigurationResult {
                 resource_id: resource.id(), revision: resource_publication_revision(&resource)?, published: true,
+                ceiling_amendment: None,
             };
             receipt.record(&tx, &result)?;
             if let Some(namespace) = &namespace { namespace.launch.check()?; }

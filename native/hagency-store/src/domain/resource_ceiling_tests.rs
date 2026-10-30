@@ -41,6 +41,16 @@ const RAW_READS: &[(&str, usize, &str)] = &[
         "the legacy configure command's CeilingChange input",
     ),
     (
+        "hagency-store/src/management/resource_edit.rs",
+        1,
+        "validates the edit or amendment request's CeilingChange input",
+    ),
+    (
+        "hagency-store/src/domain/owner_resources/adoption/management/resource_ceiling.rs",
+        1,
+        "the amendment writer's CeilingChange input",
+    ),
+    (
         "hagency-store/src/domain/accounts.rs",
         1,
         "builds a new definition from an enrollment command",
@@ -357,6 +367,7 @@ fn the_latest_amendment_is_the_maximum_every_capacity_reader_uses() {
         detail.ceiling.and_then(|c| c.tokens).map(u64::from),
         Some(2500)
     );
+    assert_eq!(detail.ceiling_amendment.sequence, 1);
     let entry = catalog_entry(&db.db, &resource).unwrap();
     assert_eq!(
         entry.ceiling.as_ref().and_then(|c| c.tokens).map(u64::from),

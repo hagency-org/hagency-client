@@ -1014,6 +1014,8 @@ mod resource_name_tests;
 mod resource_edit_tests;
 #[path = "resource_create_tests.rs"]
 mod resource_create_tests;
+#[path = "resource_ceiling_tests.rs"]
+mod resource_ceiling_tests;
 
 #[tokio::test]
 async fn shared_demand_schema85_history_is_never_silently_adopted() {

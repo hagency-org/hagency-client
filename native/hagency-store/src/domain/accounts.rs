@@ -1194,6 +1194,7 @@ impl DomainRepository {
             resource_id: resource.id(),
             revision: resource_publication_revision(&resource)?,
             published: true,
+            ceiling_amendment: None,
         };
         check(clock())?;
         self.accounts.current(&tx, &command.binding)?;

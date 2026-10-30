@@ -290,7 +290,7 @@ async fn verify_namespace_edit_contract(
 ) {
     use hagency_store::{management::EditLocalResource, ProfileChange, CeilingChange};
     let original=registry.resource(authority,resource_id.into()).await.unwrap();
-    let make=|command:&str,model:&str| EditLocalResource{command_id:command.into(),resource_id:resource_id.into(),expected_revision:original.revision.clone(),profile:ProfileChange::Select{model:model.into(),reasoning:Some("medium".into())},ceiling:CeilingChange::Monthly{tokens:450.try_into().unwrap()},execution_policy:None};
+    let make=|command:&str,model:&str| EditLocalResource{command_id:command.into(),resource_id:resource_id.into(),expected_revision:original.revision.clone(),profile:ProfileChange::Select{model:model.into(),reasoning:Some("medium".into())},ceiling:CeilingChange::Monthly{tokens:450.try_into().unwrap()},execution_policy:None,expected_ceiling_sequence:None};
     let before_review = manager.saved_commands().await.unwrap().len();
     let methods_before_review = std::fs::read_to_string(namespace.join("namespace-provider-methods")).unwrap();
     let review = manager.review_local_resource_edit(&make("native-review-only","gpt-5.6-sol")).await.unwrap();
@@ -331,7 +331,7 @@ async fn verify_namespace_edit_contract(
     assert_eq!(registry.resource(authority,resource_id.into()).await.unwrap().revision,edited.revision);
     // A pending attempt followed by a temporary provider failure remains
     // recoverable. Never turn an uncertain original attempt into a new command.
-    let deferred=EditLocalResource{command_id:"native-edit-deferred".into(),resource_id:resource_id.into(),expected_revision:edited.revision.clone(),profile:ProfileChange::Preserve{},ceiling:CeilingChange::Monthly{tokens:400.try_into().unwrap()},execution_policy:None};
+    let deferred=EditLocalResource{command_id:"native-edit-deferred".into(),resource_id:resource_id.into(),expected_revision:edited.revision.clone(),profile:ProfileChange::Preserve{},ceiling:CeilingChange::Monthly{tokens:400.try_into().unwrap()},execution_policy:None,expected_ceiling_sequence:None};
     assert!(manager.edit_local_resource(deferred,Instant::now()+Duration::from_secs(30)).await.is_err());
     assert!(manager.saved_commands().await.unwrap().iter().find(|c|c.command_id=="native-edit-deferred").unwrap().reply.is_none());
     *manager.owner.0.account_logins.executable.lock().unwrap()=Some(root.join("namespace-provider-probe.py"));

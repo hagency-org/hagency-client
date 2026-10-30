@@ -86,6 +86,7 @@ async fn definition(f: &Fixture, id: &str) -> Resource {
 async fn input(f: &Fixture, id: &str, command: &str) -> EditLocalResource {
     EditLocalResource {
         execution_policy: None,
+        expected_ceiling_sequence: None,
         command_id: command.into(),
         resource_id: id.into(),
         expected_revision: f
