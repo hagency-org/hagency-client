@@ -2792,5 +2792,15 @@
   "Unstarted recovery setup discarded. No server keys were changed.": "Unstarted recovery setup discarded. No server keys were changed.",
   "Finish signing in with Pasion in your browser, then return to Hagency.": "Finish signing in with Pasion in your browser, then return to Hagency.",
   "Continue in your browser": "Continue in your browser",
-  "Setup not confirmed": "Setup not confirmed"
+  "Setup not confirmed": "Setup not confirmed",
+  "this message was sent before you joined the room.": "this message was sent before you joined the room.",
+  "this message was sent by an unverified user.": "this message was sent by an unverified user.",
+  "the sending device wasn't signed by its owner.": "the sending device wasn't signed by its owner.",
+  "the sending device's signature was not found.": "the sending device's signature was not found.",
+  "historical messages are not available on this device because server-side key backup was disabled.": "historical messages are not available on this device because server-side key backup was disabled.",
+  "your device doesn't meet the sender's security requirements.": "your device doesn't meet the sender's security requirements.",
+  "the sender withheld this message from you.": "the sender withheld this message from you.",
+  "This device needs historical room keys. Verify it with another trusted device or restore your recovery key.": "This device needs historical room keys. Verify it with another trusted device or restore your recovery key.",
+  "Unable to decrypt: {reason}": "Unable to decrypt: {reason}",
+  "Unable to decrypt this message.": "Unable to decrypt this message."
 }
