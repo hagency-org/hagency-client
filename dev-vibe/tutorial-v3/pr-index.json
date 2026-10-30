@@ -6,7 +6,7 @@
     "31": "邀请同意弹窗、加密输入提示和任务附件布局",
     "34": "历史下载失败可重试",
     "36": "Makepad无界滚动溢出修复pin",
-    "38": "Settings返回缓存房间时处理已恢复timeline更新"
+    "38": "Settings返回缓存房间时处理已恢复timeline更新；会话关闭回归去除调度竞态"
   },
   "server": {
     "20": "Pasion传输peer绑定",
@@ -32,6 +32,7 @@
     "hagency-org/hagency-client#29: 原移动平台构建缺口"
   ],
   "pending_merge_fixes": [
-    "hagency-org/hagency-client#37: 修复PR38真机验证通过，待合并"
+    "hagency-org/hagency-client#37: 修复PR38真机验证通过，待合并",
+    "hagency-org/hagency-client#40: 会话关闭测试调度竞态已在PR38修正，待合并"
   ]
 }

@@ -30,6 +30,11 @@ Hagency v3 最终原生验收（2026-10-30）
 - 修复831测试通过/2原有忽略；strict Clippy --no-deps --all-targets通过；原生编译通过。SDK备份下载的额外回归在原SDK也已通过，因此没有发布未经证实的SDK改动。
 
 
+CI复跑记录
+- 10a2ca16的Intel Mac CI为837通过、1失败、2原有忽略；失败是已有会话关闭回归用250ms调度心跳判断让出线程，受高负载调度影响。Issue #40记录现场。
+- PR38的dfc6b5c0仅修改cfg(test)：显式首次poll必须在原IO锁仍被持有时返回Pending，随后握手释放锁并完成关闭；阻塞锁反例仍稳定失败。修正后本地831通过、2原有忽略，严格Clippy通过。
+- 已验证account_session生产代码与录制源10a2ca16完全一致，成片无需重录。最终各PR提交和CI结论见交付包ci-status.json；移动平台受控skip仍明确保留。
+
 早期故障与阶段记录（历史记录，不能作为当前状态）
 构建与隔离
 Client 当前集成分支 codex/tutorial-invite-consent，核心安全补丁 PR28，额外原生发现 PR31；每次演练构建的确切提交和二进制摘要保存在本机 native-provenance.json。三个虚构用户分别使用不同 .app、数据目录、SQLite 加密存储与 Matrix 设备。第二设备也使用全新存储，不复制旧数据库。测试使用独立8098监听器和三套 tutorial_v3 数据库；旧8088环境保留。录制中的应用切换代表不同角色，禁止使用同一应用内账号切换素材。
