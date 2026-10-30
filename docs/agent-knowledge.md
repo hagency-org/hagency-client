@@ -5910,3 +5910,5 @@ SDK 恢复 timeline 可包含同一事件多个句柄。保留原始 Vector 的�
   LoadDock consumes it, even when its Ticket is stale; retirement cannot grant
   permission to enter the management factory. Explicit Home/Projects remain
   separate authorized factory paths.
+
+- **Tutorial native recovery, 2026-10-30:** Device trust, restored identity secrets and restored historical Megolm sessions are separate observations. A successful SDK recover can still log a failed one-shot backup download. Verify old history on a fresh independent SQLite store with original key-holding clients offline, and inspect the actual backup wire envelope. Palpo25b duplicated valid signatures with500 (PR606); its all-key download also omitted rooms[room].sessions[session] and lost same-room sessions (PR610). Retain these distinct failures rather than labelling metadata Ready as historical recovery. Dialog-local vertical padding can defeat a globally centered fixed-height control; test actual dialog instances as well as the base theme.
