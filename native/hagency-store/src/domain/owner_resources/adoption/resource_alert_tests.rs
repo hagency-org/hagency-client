@@ -25,6 +25,56 @@ async fn resource_alert_pagination_projection_notes_and_resource_authority(){
     backing.shutdown().await.unwrap();f.registry.shutdown().await.unwrap();
 }
 #[tokio::test]
+async fn resource_alert_kind_and_params_localize_without_parsing_english_or_guessing(){
+    let f=fixture().await;let backing=resource_name_tests::active(&f).await;let ctx=context(&f);let s=session(backing.clone(),&ctx);
+    let resource=f.resource.id();
+    // 2026-10-29 08:12 UTC, inside the fixture's monthly ceiling period.
+    let seen:u64=1_793_261_520_000;
+    f.registry.0.store.call(8192,move|db|{
+        let native=serde_json::json!({"agent":resource,"presetId":"original","ceilingTokens":1000,"committedTokens":1200,"measuredTokens":null,"drawnTokens":1200,"overByTokens":200}).to_string();
+        let insert="INSERT INTO ceiling_alerts(dedupe_key,resource_id,summary,detail,runbook,impact,recovery_condition,occurrences,first_seen_ms,last_seen_ms,alert_type) VALUES(?1,?2,'English summary',?3,'English runbook','English impact','English recovery',1,?4,?4,?5)";
+        db.db.execute(insert,params!["a_native",resource,native,seen,"agent_ceiling_overrun"])?;
+        db.db.execute(insert,params!["b_transferred",resource,r#"{"ceilingTokens":1000,"drawnTokens":1200}"#,seen,"provider_rate_limit"])?;
+        db.db.execute(insert,params!["c_truncated",resource,r#"{"agent":"cut","ceilingTok"#,seen,"agent_ceiling_overrun"])?;
+        Ok(())
+    }).await.unwrap();
+    let page=s.resource_alerts(&ctx,list(&f)).await.unwrap();
+    let row=|id:&str|page.alerts.iter().find(|a|a.id==id).unwrap().clone();
+    let native=row("a_native");
+    assert_eq!(native.kind,crate::ALERT_KIND_CEILING_OVERRUN);
+    assert_eq!(serde_json::Value::Object(native.params.clone()),serde_json::json!({
+        "ceilingTokens":1000,"drawnTokens":1200,"overByTokens":200,"committedTokens":1200,"measuredTokens":null,
+        "percent":120,"period":"month","periodStartMs":1_790_812_800_000u64,"periodEndMs":1_793_491_200_000u64,
+    }));
+    // The English text stays for older clients; the kind never depends on it.
+    assert_eq!((native.summary.as_str(),native.runbook.as_str()),("English summary","English runbook"));
+    for id in ["b_transferred","c_truncated"] {
+        let other=row(id);assert_eq!(other.kind,crate::ALERT_KIND_OTHER,"{id}");assert!(other.params.is_empty(),"{id}");
+    }
+    assert!(page.alerts.iter().all(|a|crate::ALERT_KINDS.contains(&a.kind.as_str())));
+    // Detail and the triage result carry the same identity.
+    let detail_row=s.resource_alert(&ctx,detail(&f,"a_native")).await.unwrap().alert;
+    assert_eq!((detail_row.kind.as_str(),&detail_row.params),(native.kind.as_str(),&native.params));
+    let triaged=s.triage_resource_alert(&ctx,change(&detail_row,"kind_triage","acknowledged")).await.unwrap();
+    assert_eq!((triaged.kind.as_str(),&triaged.params),(native.kind.as_str(),&native.params));
+    // A daily ceiling reports the UTC day that holds the last observation.
+    let mut daily=f.resource.clone();daily.preset_id="daily_ceiling".into();
+    daily.ceiling=Some(serde_json::from_value(serde_json::json!({"tokens":1000,"period":"daily"})).unwrap());
+    let daily_id=daily.id();
+    f.registry.0.store.call(8192,move|db|{
+        db.db.execute("INSERT INTO resources(id,preset_id,config) VALUES(?1,?2,?3)",params![daily.id(),daily.preset_id,serde_json::to_string(&daily)?])?;
+        db.db.execute("INSERT INTO ceiling_alerts(dedupe_key,resource_id,summary,detail,runbook,impact,recovery_condition,occurrences,first_seen_ms,last_seen_ms) VALUES('daily',?1,'s',?2,'r','i','c',1,?3,?3)",params![daily.id(),r#"{"ceilingTokens":1000,"drawnTokens":1001}"#,seen])?;
+        let page=db.management_resource_alerts(&ResourceAlertQuery{resource_id:daily.id(),after:String::new(),status:None},|_|Ok(()))?;
+        let params=&page.alerts[0].params;
+        assert_eq!((params["period"].as_str(),params["percent"].as_u64(),params["overByTokens"].as_u64()),(Some("day"),Some(100),Some(1)));
+        assert_eq!((params["periodStartMs"].as_u64(),params["periodEndMs"].as_u64()),(Some(1_793_232_000_000),Some(1_793_318_400_000)));
+        assert!(params["committedTokens"].is_null() && params["measuredTokens"].is_null());
+        Ok(())
+    }).await.unwrap();
+    assert!(s.resource_alerts(&ctx,ResourceAlertQuery{resource_id:daily_id,after:String::new(),status:None}).await.is_err(),"unowned resources stay hidden");
+    backing.shutdown().await.unwrap();f.registry.shutdown().await.unwrap();
+}
+#[tokio::test]
 async fn resource_alert_atomic_triage_cas_suppression_original_receipt_and_restart(){
     let mut f=fixture().await;let backing=resource_name_tests::active(&f).await;let ctx=context(&f);let s=session(backing.clone(),&ctx);seed(&f,1).await;
     let resource_before=serde_json::to_value(f.registry.resource(&f.profile,f.resource.id()).await.unwrap()).unwrap();

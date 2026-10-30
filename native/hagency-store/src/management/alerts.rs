@@ -60,6 +60,12 @@ impl TriageResourceAlert {
 }
 /// Public numeric evidence only; arbitrary provider detail JSON never crosses
 /// the mini-app boundary. Operator-authored summary/runbook/notes remain text.
+///
+/// `kind` and `params` identify the alert for localized display. `kind` is one
+/// of [`crate::ALERT_KINDS`] and `params` holds exactly that kind's documented
+/// keys (see `crate::domain::ceiling_alerts::management`). The English
+/// `summary`/`impact`/`runbook`/`recoveryCondition` stay for older clients.
+/// Both default when an older triage receipt is replayed.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all="camelCase")]
 pub struct ResourceAlert {
@@ -69,7 +75,10 @@ pub struct ResourceAlert {
     pub first_seen_ms:u64, pub last_seen_ms:u64, pub resolved:bool,
     pub note:Option<String>, pub assignee:Option<String>, pub suppress_until_ms:Option<u64>,
     pub next:Vec<String>, pub budget:std::collections::BTreeMap<String,u64>,
+    #[serde(default="other_alert_kind")] pub kind:String,
+    #[serde(default)] pub params:serde_json::Map<String,serde_json::Value>,
 }
+fn other_alert_kind()->String {crate::ALERT_KIND_OTHER.into()}
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all="camelCase")]
 pub struct ResourceAlertPage {
@@ -162,4 +171,23 @@ impl Session {
 fn require_alert_resource(db:&Connection,id:&str)->Result<(),Error>{
     if db.query_row("SELECT 1 FROM resources WHERE id=?1",[id],|r|r.get::<_,u8>(0)).optional()?.is_none(){return Err(Error::NotFound);}
     Ok(())
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn triage_receipts_recorded_before_alert_kinds_still_replay() {
+        // The exact shape an original `alert.triage` receipt stored before
+        // `kind`/`params` existed. Replay must not fail on the missing keys.
+        let old = serde_json::json!({"id":"agent_ceiling_overrun:r","resourceId":"r","revision":"a".repeat(64),
+            "summary":"s","runbook":"r","impact":"i","recoveryCondition":"c","status":"acknowledged",
+            "severity":"warning","occurrences":1,"firstSeenMs":1,"lastSeenMs":2,"resolved":false,"note":null,
+            "assignee":null,"suppressUntilMs":null,"next":["assigned","resolved"],"budget":{"ceilingTokens":1}});
+        let replayed: ResourceAlert = serde_json::from_value(old).unwrap();
+        assert_eq!(replayed.kind, crate::ALERT_KIND_OTHER);
+        assert!(replayed.params.is_empty());
+        let current = serde_json::to_value(&replayed).unwrap();
+        assert_eq!(current["kind"], "other");
+        assert_eq!(current["params"], serde_json::json!({}));
+    }
 }

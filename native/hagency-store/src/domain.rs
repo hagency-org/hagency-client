@@ -50,7 +50,7 @@ pub use attempt_events::{
 pub use catalog_publication::{PublishedCatalog, publication_fingerprint};
 mod ceiling_alerts;
 pub use ceiling_alerts::{
-    ALERT_STATUSES, AlertListFilter, AlertNote, AlertPatch, AlertStats, AlertTransition,
+    ALERT_KIND_CEILING_OVERRUN, ALERT_KIND_OTHER, ALERT_KINDS, ALERT_STATUSES, AlertListFilter, AlertNote, AlertPatch, AlertStats, AlertTransition,
     CeilingAlert, MAX_OPEN_CEILING_ALERTS, SweepOutcome, allowed_transitions,
 };
 mod command_notices;
