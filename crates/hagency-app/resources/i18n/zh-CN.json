@@ -2753,5 +2753,8 @@
   "This Matrix link target is unsupported.": "暂不支持此 Matrix 链接目标。",
   "This encrypted message cannot be decrypted on this device.": "此设备无法解密这条消息。",
   "Agent information is unavailable for this account.": "当前账号的 Agent 信息不可用。",
-  "The local service is not running for this account.": "此账号的本地服务尚未运行。"
+  "The local service is not running for this account.": "此账号的本地服务尚未运行。",
+  "Encryption protects new messages and cannot be turned off. Earlier messages stay unencrypted.": "加密会保护之后的新消息，启用后不能关闭。以前的消息不会被追溯加密。",
+  "Enable encryption": "启用加密",
+  "Confirm and enable encryption": "确认并启用加密"
 }
