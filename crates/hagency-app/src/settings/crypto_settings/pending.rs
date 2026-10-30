@@ -77,6 +77,14 @@ impl Plan {
         }
         result
     }
+    pub fn discard(&self, root: &Path) -> Result<()> {
+        ensure!(
+            !self.applying && !self.complete,
+            "Published recovery cannot be discarded"
+        );
+        directory(root)?.remove_file(self.name())?;
+        Ok(())
+    }
     pub fn load(root: &Path, client: &Client) -> Result<Option<Self>> {
         let dir = directory(root)?;
         let filename = name(
@@ -233,6 +241,11 @@ mod tests {
         let mut value: serde_json::Value = serde_json::from_str(&bytes).unwrap();
         value["private_key"] = serde_json::json!("forbidden");
         assert!(serde_json::from_value::<Plan>(value).is_err());
+        let mut started = plan.clone();
+        started.applying = true;
+        assert!(started.discard(root.path()).is_err());
+        plan.discard(root.path()).unwrap();
+        assert!(!root.path().join(plan.name()).exists());
         let mut corrupted = plan;
         corrupted.info["mac"] = serde_json::json!("AAAA");
         assert!(corrupted.restore_key(&saved).is_err());

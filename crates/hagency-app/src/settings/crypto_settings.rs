@@ -49,6 +49,7 @@ script_mod! {
                 width: Fill height: Fit flow: Flow.Right{wrap: true} spacing: 10 align: Align{y: 0.5}
                 save := RinxButton {width: Fit height: RINX_BUTTON_HEIGHT text: #(crate::i18n::tr("Save recovery key…")) i18n_text: "Save recovery key…"}
                 load_pending := RinxButton {width: Fit height: RINX_BUTTON_HEIGHT text: #(crate::i18n::tr("Load saved key to resume…")) i18n_text: "Load saved key to resume…"}
+                discard := RinxButton {width: Fit height: RINX_BUTTON_HEIGHT text: #(crate::i18n::tr("Discard unfinished setup")) i18n_text: "Discard unfinished setup"}
                 enable := RinxButton {width: Fit height: RINX_BUTTON_HEIGHT text: #(crate::i18n::tr("I saved my key — enable recovery")) i18n_text: "I saved my key — enable recovery"}
             }
         }
@@ -141,6 +142,13 @@ impl Widget for CryptoSettings {
             && self.state.as_ref().is_some_and(Snapshot::can_prepare)
         {
             Some(Operation::Prepare)
+        } else if self.view.button(cx, ids!(discard)).clicked(actions)
+            && self
+                .state
+                .as_ref()
+                .is_some_and(|s| s.pending && !s.applying)
+        {
+            Some(Operation::Discard)
         } else if self.view.button(cx, ids!(save)).clicked(actions) {
             Some(Operation::Save)
         } else if self.view.button(cx, ids!(load_pending)).clicked(actions) {
@@ -221,8 +229,8 @@ impl CryptoSettings {
                 } else {
                     crate::i18n::tr("Not verified")
                 },
-                crate::i18n::tr("Recovery"),
-                if s.default_key.is_some() { yes } else { no },
+                crate::i18n::tr("Key recovery"),
+                if s.pending {crate::i18n::tr("Setup not confirmed")} else if s.default_key.is_some() { yes } else { no },
                 crate::i18n::tr("Room key backup"),
                 if s.backup_connected {
                     yes
@@ -241,9 +249,10 @@ impl CryptoSettings {
             .widget(cx, ids!(notice))
             .set_visible(cx, !self.notice.is_empty());
         let s = self.state.as_ref();
-        self.view
-            .widget(cx, ids!(setup))
-            .set_visible(cx, backend::file_picker_supported() && s.is_some_and(Snapshot::can_prepare));
+        self.view.widget(cx, ids!(setup)).set_visible(
+            cx,
+            backend::file_picker_supported() && s.is_some_and(Snapshot::can_prepare),
+        );
         self.view.widget(cx, ids!(existing_keys)).set_visible(
             cx,
             s.is_some_and(|s| !s.pending && s.default_key.is_none() && !s.can_prepare()),
@@ -257,14 +266,19 @@ impl CryptoSettings {
         self.view
             .widget(cx, ids!(load_pending))
             .set_visible(cx, s.is_some_and(|s| s.pending && !s.key_loaded));
+        self.view
+            .widget(cx, ids!(discard))
+            .set_visible(cx, s.is_some_and(|s| s.pending && !s.applying));
         self.view.button(cx, ids!(enable)).set_enabled(
             cx,
             !self.busy && s.is_some_and(|s| s.pending && s.key_saved),
         );
         self.view
             .widget(cx, ids!(restore_section))
-            .set_visible(cx, s.is_some_and(|s| s.default_key.is_some()));
-        self.view.widget(cx,ids!(restore_file)).set_visible(cx,backend::file_picker_supported());
+            .set_visible(cx, s.is_some_and(|s| s.default_key.is_some() && !s.pending));
+        self.view
+            .widget(cx, ids!(restore_file))
+            .set_visible(cx, backend::file_picker_supported());
         self.view
             .widget(cx, ids!(upload))
             .set_visible(cx, s.is_some_and(|s| s.backup_connected));
@@ -272,6 +286,7 @@ impl CryptoSettings {
             ids!(refresh),
             ids!(setup),
             ids!(save),
+            ids!(discard),
             ids!(load_pending),
             ids!(restore),
             ids!(restore_file),
@@ -380,6 +395,10 @@ mod tests {
                     .unwrap()
                     .enabled()
             );
+            assert!(panel.view.button(&cx, ids!(discard)).visible());
+            panel.state.as_mut().unwrap().applying = true;
+            panel.sync(&mut cx);
+            assert!(!panel.view.button(&cx, ids!(discard)).visible());
             panel.state.as_mut().unwrap().key_saved = true;
             panel.sync(&mut cx);
             assert!(

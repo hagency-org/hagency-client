@@ -6416,6 +6416,10 @@ async fn run_sso_login(homeserver_url: String, provider_id: Option<String>, regi
     let methods = crate::login::homeserver::login_methods(&client).await?;
     if methods.oauth {
         crate::login::homeserver::oauth_browser_login(&client, register, |url| async move {
+            Cx::post_action(LoginAction::Status {
+                title: crate::i18n::tr("Continue in your browser").into(),
+                status: crate::i18n::tr("Finish signing in with Pasion in your browser, then return to Hagency.").into(),
+            });
             Uri::new(&url).open().map_err(|_| anyhow!("Unable to open your browser"))
         }).await?;
         return Ok((client, session));

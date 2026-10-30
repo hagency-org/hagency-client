@@ -2786,5 +2786,11 @@
   "This device is not verified. Verify it or restore your recovery key.": "This device is not verified. Verify it or restore your recovery key.",
   "This device is verified. Encrypted history also requires its room keys.": "This device is verified. Encrypted history also requires its room keys.",
   "Verification checks device identity. Recovery protects the keys needed to read encrypted history on another device.": "Verification checks device identity. Recovery protects the keys needed to read encrypted history on another device.",
-  "Verification completed. The compared keys matched. Encrypted history still requires its room keys.": "Verification completed. The compared keys matched. Encrypted history still requires its room keys."
+  "Verification completed. The compared keys matched. Encrypted history still requires its room keys.": "Verification completed. The compared keys matched. Encrypted history still requires its room keys.",
+  "Key recovery": "Key recovery",
+  "Discard unfinished setup": "Discard unfinished setup",
+  "Unstarted recovery setup discarded. No server keys were changed.": "Unstarted recovery setup discarded. No server keys were changed.",
+  "Finish signing in with Pasion in your browser, then return to Hagency.": "Finish signing in with Pasion in your browser, then return to Hagency.",
+  "Continue in your browser": "Continue in your browser",
+  "Setup not confirmed": "Setup not confirmed"
 }
