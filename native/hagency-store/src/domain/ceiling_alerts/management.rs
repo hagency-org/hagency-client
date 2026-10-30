@@ -55,7 +55,9 @@ fn display_kind(db:&Connection,alert:&CeilingAlert)->Result<(&'static str,serde_
     // Display metadata only: an unreadable resource leaves the period unknown
     // rather than hiding every alert on the page.
     let resource=config.and_then(|config|serde_json::from_str::<Resource>(&config).ok());
-    let daily=resource.and_then(|r|r.ceiling).and_then(|c|serde_json::to_value(&c.period).ok()).map(|p|p==json!("daily"));
+    // The maximum in force (an amendment never changes its period kind).
+    let maximum=resource.and_then(|r|crate::domain::resource_ceiling::effective_ceiling(db,&r).ok().flatten());
+    let daily=maximum.and_then(|c|serde_json::to_value(&c.period).ok()).map(|p|p==json!("daily"));
     let bounds=daily.and_then(|daily|period_bounds(alert.last_seen_ms,daily));
     let percent=(ceiling>0).then(||u64::try_from(u128::from(drawn)*100/u128::from(ceiling)).unwrap_or(u64::MAX));
     let params=json!({
