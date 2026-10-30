@@ -86,7 +86,7 @@ pub(crate) struct Unlocked {
 impl Unlocked {
     fn next_revision(&self) -> Result<u64> {
         self.revision
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |value| {
                 value.checked_add(1)
             })
             .map(|value| value + 1)

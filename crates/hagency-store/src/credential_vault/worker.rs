@@ -77,7 +77,7 @@ impl Worker {
     pub fn new() -> Result<Self, Error> {
         reap_retired();
         ORIGINAL_WORKERS
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
                 (n < MAX_WORKERS).then_some(n + 1)
             })
             .map_err(|_| Error::Unavailable)?;
