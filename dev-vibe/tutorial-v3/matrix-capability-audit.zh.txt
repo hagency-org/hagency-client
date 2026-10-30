@@ -41,3 +41,11 @@ https://spec.matrix.org/latest/client-server-api/#secret-storage
 https://spec.matrix.org/latest/client-server-api/#mroomencryption
 
 证据分类：本表是源码审查基线。后续补丁、回归测试和实际多客户端录像以各PR和本目录验收记录为准；计划中的功能不提前升级为已有。
+
+
+2026-10-30 修复后资格补充
+基线的25组能力及17组缺口仍保留，不换算全协议完成百分比。PR27已补齐项目Room创建的加密选项和已有Room设置中启用加密；PR28已提供保存后启用的基础Secret Storage/备份/恢复入口及会话隔离。活跃timeline恢复后的刷新由PR38补齐并通过新设备连续真机验证，PR28/38已ready。SAS本机两独立Hagency设备的成功和取消已真实验证，不能据此推断Element互通、QR、联邦或所有平台通过。新设备通过SAS后可读历史；保存密钥离线恢复后，关闭设置直接更新已打开的timeline，下载原附件哈希一致，原备份未重置。
+
+仍未补齐完整设备目录/逐项撤销、QR验证、会话密钥手工导入导出、高级身份重置/密钥轮换、完整Room moderation/通知/搜索/升级/举报等基线子项。实时通话、Polls、Widgets和dehydration等按各自规范/可选扩展排期，不能统称所有Matrix客户端强制功能。加密Agent共享执行的请求者信任与安全边界仍需单独资格，教程中的真实Agent调用发生在启用加密之前的普通筹备Room；加密交接由人工成员完成。
+
+本轮原生验证与故障基线见validation.zh.txt，变更索引见pr-index.json。参考Element源码仅为功能对照，没有使用其品牌或宣称兼容认证。
