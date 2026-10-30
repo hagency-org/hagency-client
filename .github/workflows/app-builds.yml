@@ -152,7 +152,11 @@ jobs:
         shell: pwsh
         run: |
           $root = 'D:/BuildCache/hagency-client'
-          $paths = @{CARGO_HOME="$root/cargo"; CARGO_TARGET_DIR="$root/target"; TEMP="$root/tmp"; TMP="$root/tmp"}
+          # Some Windows 2022 D volumes carry FILE_PORTABLE_DEVICE, which the
+          # credential durability adapter correctly refuses. Keep test data on
+          # the system volume; large build caches can still use the D volume.
+          $temporary = "$($env:SystemDrive)/hagency-ci-tmp"
+          $paths = @{CARGO_HOME="$root/cargo"; CARGO_TARGET_DIR="$root/target"; TEMP=$temporary; TMP=$temporary}
           foreach ($entry in $paths.GetEnumerator()) {
             New-Item -ItemType Directory -Force -Path $entry.Value | Out-Null
             "$($entry.Key)=$($entry.Value)" >> $env:GITHUB_ENV
@@ -168,6 +172,9 @@ jobs:
 
       - name: Test Windows update verification and file locking
         run: cargo test --locked -p hagency-updater
+
+      - name: Verify actual credential directory durability on the test volume
+        run: cargo run --locked -p hagency-store --example windows_credential_sync
 
       - name: Test native Windows library and guarded sharing
         run: |
