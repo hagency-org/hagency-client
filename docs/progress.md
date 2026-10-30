@@ -15289,6 +15289,9 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
 
 - User authorized fixing failed Client/Server CI and merging both PRs only after their checks pass. Server PR8 quality passed; Client PR16 Windows build exposed unused_mut in the Agent crypto directory builder, since only Unix sets its mode. Limited the mutable binding to the Unix branch, retaining private creation permissions and all store checks. Existing crypto-store tests2/2 and own App all-targets strict Clippy pass locally. Original failure log and CI snapshots are retained in ignored .run/pr-ci-20261029. Remaining CI and merge outcomes are verified directly on GitHub; no provisioned task-writer exists.
 
+## 2026-10-29 — Tutorial issue regressions
+
+- User requested fixing Server issues9/10 with separate Client/Server PRs and passing CI. Encrypted empty-room failure comes from embedded Palpo's room-backup response, not permission to bypass SDK history sharing. Client adds actual SDK crypto/cross-signing HTTP regressions for a valid empty backup and negative version/permission/server/malformed responses; focused4/4 pass. Protocol implementation and pagination filters are in the paired Server/dependency work. No task-writer is provisioned in this source checkout; tutorial screenplay files remain separate and uncommitted.
 ## 2026-10-29 — Quality remediation first batch
 
 - Operator authorized implementing the multidimensional review, opening reviewable PRs and merging only after direct review and all current-head CI/platform jobs pass. Created isolated managed worktree quality-improvements on codex/quality-hardening from origin/main932dcdea; original tutorial branch and untracked material remain untouched. No task-writer is provisioned.
