@@ -61,6 +61,7 @@ private envelopes and only small scoped keys in the native credential store.
 - crates/hagency-app/src/login/login_screen.rs
 - crates/hagency-app/src/login/homeserver.rs
 - crates/hagency-app/src/login/oauth_tests.rs
+- crates/hagency-app/src/hagency/backend/remote_approvals/tests/crypto_tests.rs
 - crates/hagency-app/src/lib.rs
 - crates/hagency-app/resources/i18n/en.json
 - crates/hagency-app/resources/i18n/zh-CN.json

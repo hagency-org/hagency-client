@@ -99,3 +99,8 @@ roundtrip 后再运行 `session_preserves`，实际 1 通过/1 失败，后者�
 故意删会话→真实刷新、原数据库/历史/令牌断言全部保留；未清空生产 pending，
 未改生产 epoch/flush/授权逻辑，未降低完整 suite 的默认并行度。该 test-only
 补丁的 fresh 因果两项与完整默认并行重验由主任务执行，不能用旧二进制代替。
+
+
+主任务另核对首轮 full 原始 stderr，发现远端审批真实 SDK fixture 的后台线程虽未令 harness 失败，却因通用 `capture_put_to_device_traffic` 把合法 `m.secret.request` 的 `*` 当成显式 device 而 panic，并导致队列锁 poisoned。不能把该用例的表面 `ok` 当成完整通过。现仅在项目测试中精确捕获 `m.room.encrypted` 并保留原 SDK queue/device 断言；另外只应答当前 owner、结构和 action 合法的秘密请求，未放宽跨签名、只向可信 REMOTE 分享、拒绝 UNSIGNED 以及原 journal 断言。新增 matcher 拒绝 foreign/unknown/malformed/empty；不修改 SDK 或产品路径。修改后的真实审批 case、完整并行套件仍待 fresh 执行。
+
+整合树新鲜主锁审计仍为 11 条匹配且 exit1，不能标记供应链风险已关闭。当前 cargo metadata 共 1336 个 package；新增 keyring/Secret Service/security-framework 依赖的许可元数据存在，另有 7 个既有包缺少 Cargo license/license_file 元数据（不等于已证明无许可）。完整平台与发行物许可证核验仍开放。Windows platform crate 的 all-targets 交叉检查通过；store 交叉检查因本机缺少 x86_64-w64-mingw32-gcc 未完成，不能代替原生 Windows CI。静态布局、当前 native caller 审查、50 项契约检查及发行资格脚本通过；系统默认 Python 缺 tomllib 的原失败日志保留，改用已安装 Python3.12 后复验通过。引擎格式门禁发现新模块导出顺序后已机械修正，不改变行为。
