@@ -409,36 +409,36 @@ pub fn text_preview_of_encrypted_message(
         EncryptedMessage::MegolmV1AesSha2 { cause, .. } => match cause {
             UtdCause::Unknown => None,
             UtdCause::SentBeforeWeJoined => Some(
-                "this message was sent before you joined the room."
+                crate::i18n::tr("this message was sent before you joined the room.")
             ),
             UtdCause::VerificationViolation => Some(
-                "this message was sent by an unverified user."
+                crate::i18n::tr("this message was sent by an unverified user.")
             ),
             UtdCause::UnsignedDevice => Some(
-                "the sending device wasn't signed by its owner."
+                crate::i18n::tr("the sending device wasn't signed by its owner.")
             ),
             UtdCause::UnknownDevice => Some(
-                "the sending device's signature was not found."
+                crate::i18n::tr("the sending device's signature was not found.")
             ),
             UtdCause::HistoricalMessageAndBackupIsDisabled => Some(
-                "historical messages are not available on this device because server-side key backup was disabled."
+                crate::i18n::tr("historical messages are not available on this device because server-side key backup was disabled.")
             ),
             UtdCause::WithheldForUnverifiedOrInsecureDevice => Some(
-                "your device doesn't meet the sender's security requirements."
+                crate::i18n::tr("your device doesn't meet the sender's security requirements.")
             ),
             UtdCause::WithheldBySender => Some(
-                "the sender withheld this message from you."
+                crate::i18n::tr("the sender withheld this message from you.")
             ),
             UtdCause::HistoricalMessageAndDeviceIsUnverified => Some(
-                "historical messages are not available; you must verify this device."
+                crate::i18n::tr("This device needs historical room keys. Verify it with another trusted device or restore your recovery key.")
             ),
         }
         _ => None,
     };
     let text = if let Some(cause) = cause_str {
-        format!("Unable to decrypt: {cause}")
+        crate::i18n::format("Unable to decrypt: {reason}", &[("reason", cause.into())])
     } else {
-        String::from("Unable to decrypt this message.")
+        crate::i18n::tr("Unable to decrypt this message.").to_owned()
     };
     TextPreview::from((text, BeforeText::UsernameWithColon))
 }

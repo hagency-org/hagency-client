@@ -2792,5 +2792,15 @@
   "Unstarted recovery setup discarded. No server keys were changed.": "已放弃尚未启用的恢复设置，服务器密钥未改变。",
   "Finish signing in with Pasion in your browser, then return to Hagency.": "请在浏览器中完成 Pasion 登录，然后返回 Hagency。",
   "Continue in your browser": "在浏览器中继续",
-  "Setup not confirmed": "设置尚未确认"
+  "Setup not confirmed": "设置尚未确认",
+  "this message was sent before you joined the room.": "此消息发送于你加入房间之前。",
+  "this message was sent by an unverified user.": "此消息来自尚未验证的用户。",
+  "the sending device wasn't signed by its owner.": "发送设备尚未由其所有者签名。",
+  "the sending device's signature was not found.": "未找到发送设备的签名。",
+  "historical messages are not available on this device because server-side key backup was disabled.": "此设备缺少历史消息密钥，且服务端密钥备份此前未启用。",
+  "your device doesn't meet the sender's security requirements.": "此设备尚不满足发送者的安全要求。",
+  "the sender withheld this message from you.": "发送者未向你提供此消息的密钥。",
+  "This device needs historical room keys. Verify it with another trusted device or restore your recovery key.": "此设备需要历史房间密钥。请通过其他可信设备验证，或使用恢复密钥恢复。",
+  "Unable to decrypt: {reason}": "无法解密：{reason}",
+  "Unable to decrypt this message.": "无法解密此消息。"
 }
