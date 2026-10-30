@@ -27,7 +27,7 @@ script_mod! {
             cancel_button := RobrixNeutralIconButton {
                 width: Fit{min: FitBound.Abs(120.0)},
                 align: Align{x: 0.5, y: 0.5}
-                padding: 12,
+                padding: Inset{left: 12 right: 12 top: 0 bottom: 0},
                 draw_icon.svg: (ICON_FORBIDDEN)
                 icon_walk: Walk{width: 16, height: 16, margin: Inset{left: -2, right: -1} }
                 text: #(crate::i18n::tr("Cancel")) i18n_text: "Cancel"
@@ -36,7 +36,7 @@ script_mod! {
             confirm_button := RobrixNegativeIconButton {
                 width: Fit{min: FitBound.Abs(120.0)}
                 align: Align{x: 0.5, y: 0.5}
-                padding: 12,
+                padding: Inset{left: 12 right: 12 top: 0 bottom: 0},
                 draw_icon.svg: (ICON_LOGOUT)
                 icon_walk: Walk{width: 16, height: 16, margin: Inset{left: -2, right: -1} }
                 text: #(crate::i18n::tr("Log out now")) i18n_text: "Log out now"
