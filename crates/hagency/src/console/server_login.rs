@@ -14,6 +14,9 @@ use std::{
 };
 use tokio::sync::Mutex;
 
+#[cfg(test)]
+pub(crate) mod credential_tests;
+mod credentials;
 pub(super) mod matrix_creations;
 mod profiles;
 mod shared_matrix;
@@ -138,7 +141,7 @@ impl AuthorizedDevice {
         self.valid_until
     }
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Revocation {
     origin: String,
@@ -148,6 +151,13 @@ struct Revocation {
     hint: String,
     session_done: bool,
     oauth_done: bool,
+}
+impl Drop for Revocation {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.session_token.zeroize();
+        self.oauth_token.zeroize();
+    }
 }
 pub(super) struct ServerLogin {
     pub(super) native_expected: std::sync::Mutex<Option<(String, String)>>,
@@ -159,6 +169,10 @@ pub(super) struct ServerLogin {
     worker_started: AtomicBool,
     stopped: std::sync::Arc<AtomicBool>,
     revocations_path: Option<PathBuf>,
+    pub(in crate::console) credential_io: credentials::CredentialIo,
+    pub(in crate::console) credential_publication: std::sync::Arc<std::sync::Mutex<()>>,
+    revocations_loaded: AtomicBool,
+    revocations_dirty: AtomicBool,
     revocations: Mutex<Vec<Revocation>>,
     binding: Mutex<Option<Binding>>,
     pending: Mutex<Option<Pending>>,
@@ -181,7 +195,10 @@ fn read_private_json(path: &Path, limit: u64) -> Result<Vec<u8>, Error> {
     Ok(raw)
 }
 impl ServerLogin {
-    pub(super) fn new(state: Option<&Path>) -> Result<Self, Error> {
+    pub(super) fn new_with_vault(
+        state: Option<&Path>,
+        vault: hagency_store::credential_vault::Vault,
+    ) -> Result<Self, Error> {
         let path = state.map(|dir| dir.join("server-login.json"));
         let binding = match &path {
             Some(path) if path.exists() => {
@@ -222,33 +239,10 @@ impl ServerLogin {
         let profiles_path = state.map(|dir| dir.join("server-login-profiles.json"));
         let profiles = profiles::Profiles::load(profiles_path.as_deref(), binding.as_ref())?;
         let revocations_path = state.map(|dir| dir.join("server-login-revocations.json"));
-        let revocations: Vec<Revocation> = match &revocations_path {
-            Some(path) if path.exists() => {
-                let raw = read_private_json(path, 1024 * 1024)?;
-                if raw.len() > 1024 * 1024 {
-                    return Err(Error::Unavailable);
-                }
-                let values: Vec<Revocation> =
-                    serde_json::from_slice(&raw).map_err(|_| Error::Unavailable)?;
-                if values.len() > 64
-                    || values.iter().any(|v| {
-                        origin(&v.origin).is_err()
-                            || v.client_id.is_empty()
-                            || v.client_id.len() > 128
-                            || (v.session_token.is_empty() && !v.session_done)
-                            || (!v.session_token.is_empty() && v.session_token.len() != 64)
-                            || (!v.oauth_done && v.oauth_token.is_empty())
-                            || v.oauth_token.len() > 4096
-                            || !["access_token", "refresh_token"].contains(&v.hint.as_str())
-                    })
-                {
-                    return Err(Error::Unavailable);
-                }
-                values
-            }
-            _ => vec![],
-        };
-        let revocation_pending = !revocations.is_empty();
+        // Construction never unlocks native secrets or reads legacy revoke
+        // credentials. The original owned credential worker initializes them.
+        let revocation_pending = revocations_path.as_ref().is_some_and(|p| p.exists());
+        let revocations = Vec::new();
         Ok(Self {
             native_expected: std::sync::Mutex::new(None),
             path,
@@ -257,6 +251,10 @@ impl ServerLogin {
             transition: Mutex::new(()),
             renewal: Mutex::new(()),
             revocations_path,
+            credential_io: credentials::CredentialIo::new(vault),
+            credential_publication: std::sync::Arc::new(std::sync::Mutex::new(())),
+            revocations_loaded: AtomicBool::new(false),
+            revocations_dirty: AtomicBool::new(false),
             revocations: Mutex::new(revocations),
             worker_started: AtomicBool::new(false),
             stopped: std::sync::Arc::new(AtomicBool::new(false)),
@@ -457,10 +455,26 @@ impl ServerLogin {
             session_done: false,
             oauth_done: shared,
         };
+        // Stop capabilities immediately. This is the retirement request; the
+        // acknowledgement below also crosses the actual Agent rename gate.
         invalidate(session);
+        // Native IO stays outside this gate. A slow filesystem publication
+        // never blocks a Tokio worker while retirement waits for its turn.
+        loop {
+            match self.credential_publication.try_lock() {
+                Ok(_gate) => break,
+                Err(std::sync::TryLockError::Poisoned(_)) => {
+                    // The in-memory grant is already fenced. A poisoned
+                    // publication gate cannot authorize further publications.
+                    break;
+                }
+                Err(std::sync::TryLockError::WouldBlock) => (),
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
         let mut revocations = self.revocations.lock().await;
         revocations.push(pending);
-        let _ = self.save_revocations(&revocations);
+        let _ = self.save_revocations(&mut revocations).await;
     }
     pub(super) async fn revoke_native_all(&self) {
         for session in self.sessions.lock().await.values_mut() {
@@ -472,11 +486,15 @@ impl ServerLogin {
         self.flush_revocations().await;
     }
     pub(super) async fn persist_revocations_for_update(&self) -> crate::shutdown::Result {
-        let pending = self.revocations.lock().await;
-        if pending.is_empty() {
+        let mut pending = self.revocations.lock().await;
+        self.load_revocations(&mut pending)
+            .await
+            .map_err(|_| crate::shutdown::Error::Revocation)?;
+        if pending.is_empty() && !self.revocations_dirty.load(Ordering::Acquire) {
             return Ok(());
         }
-        self.save_revocations(&pending)
+        self.save_revocations(&mut pending)
+            .await
             .map_err(|_| crate::shutdown::Error::Revocation)
     }
     pub(super) async fn sign_out(&self, cookie: &str) {
@@ -490,10 +508,52 @@ impl ServerLogin {
         drop(sessions);
         self.flush_revocations().await;
     }
-    fn save_revocations(&self, values: &[Revocation]) -> Result<(), Error> {
-        let path = self.revocations_path.as_ref().ok_or(Error::Unavailable)?;
-        let raw = serde_json::to_vec(values).map_err(|_| Error::Unavailable)?;
-        hagency_store::private::replace(path, &raw).map_err(|_| Error::Unavailable)
+    async fn load_revocations(&self, values: &mut Vec<Revocation>) -> Result<(), Error> {
+        if !self.revocations_loaded.load(Ordering::Acquire) {
+            let path = self.revocations_path.clone().ok_or(Error::Unavailable)?;
+            let mut persisted = self
+                .credential_io
+                .load_revocations(path)
+                .await
+                .map_err(|_| Error::Unavailable)?;
+            if persisted
+                .len()
+                .checked_add(values.len())
+                .is_none_or(|n| n > 64)
+            {
+                return Err(Error::Unavailable);
+            }
+            persisted.append(values);
+            *values = persisted;
+            self.revocations_loaded.store(true, Ordering::Release);
+        }
+        Ok(())
+    }
+    async fn save_revocations(&self, values: &mut Vec<Revocation>) -> Result<(), Error> {
+        self.revocations_dirty.store(true, Ordering::Release);
+        let result = async {
+            self.load_revocations(values).await?;
+            let path = self.revocations_path.clone().ok_or(Error::Unavailable)?;
+            self.credential_io
+                .save_revocations(path, values.clone())
+                .await
+                .map_err(|_| Error::Unavailable)
+        }
+        .await;
+        if result.is_ok() {
+            self.revocations_dirty.store(false, Ordering::Release);
+            let mut status = self.status.lock().await;
+            if status["code"] == "local_state_unavailable"
+                && let Some(status) = status.as_object_mut()
+            {
+                status.remove("code");
+            }
+        } else {
+            let mut status = self.status.lock().await;
+            status["remoteRevocationPending"] = json!(true);
+            status["code"] = json!("local_state_unavailable");
+        }
+        result
     }
     async fn revoke_failed_login(
         &self,
@@ -517,7 +577,8 @@ impl ServerLogin {
             session_done: session_token.is_empty(),
             oauth_done: false,
         });
-        self.save_revocations(&revocations)
+        self.save_revocations(&mut revocations)
+            .await
             .map_err(|_| "local_state_unavailable")?;
         drop(revocations);
         self.flush_revocations().await;
@@ -525,7 +586,25 @@ impl ServerLogin {
     }
     async fn flush_revocations(&self) {
         let mut pending = self.revocations.lock().await;
+        if self.load_revocations(&mut pending).await.is_err() {
+            let mut status = self.status.lock().await;
+            status["remoteRevocationPending"] = json!(true);
+            status["code"] = json!("local_state_unavailable");
+            return;
+        }
+        // RAM intent can survive a failed native/FS save. Do not issue an
+        // irreversible remote revoke until this exact queue has a durable
+        // authenticated receipt. Loading an older queue is not such a receipt.
+        if self.revocations_dirty.load(Ordering::Acquire)
+            && self.save_revocations(&mut pending).await.is_err()
+        {
+            return;
+        }
         if pending.is_empty() {
+            let mut status = self.status.lock().await;
+            if status["state"] == "signed_out" {
+                status["remoteRevocationPending"] = json!(false);
+            }
             return;
         }
         let Ok(client) = http() else { return };
@@ -559,8 +638,8 @@ impl ServerLogin {
             }
         }
         pending.retain(|p| !(p.session_done && p.oauth_done));
-        let _ = self.save_revocations(&pending);
-        if pending.is_empty() {
+        let saved = self.save_revocations(&mut pending).await.is_ok();
+        if pending.is_empty() && saved {
             let mut status = self.status.lock().await;
             if status["state"] == "signed_out" {
                 status["remoteRevocationPending"] = json!(false);
@@ -1043,8 +1122,8 @@ async fn sign_out(req: &mut Request, depot: &Depot, res: &mut Response) {
     console.stop_owned_runtimes().await;
     console.stop_owner_provider().await;
     {
-        let records = console.0.server_login.revocations.lock().await;
-        if let Err(error) = console.0.server_login.save_revocations(&records) {
+        let mut records = console.0.server_login.revocations.lock().await;
+        if let Err(error) = console.0.server_login.save_revocations(&mut records).await {
             super::failed(res, error);
             return;
         }
@@ -1137,6 +1216,13 @@ async fn begin(req: &mut Request, depot: &Depot) -> Result<(String, String), &'s
         .is_some_and(|b| b.owner.is_some() && b.origin != server.as_str())
     {
         return Err("owner_mismatch");
+    }
+    {
+        let mut records = login.revocations.lock().await;
+        login
+            .load_revocations(&mut records)
+            .await
+            .map_err(|_| "local_state_unavailable")?;
     }
     if login.revocations.lock().await.len() >= 63 {
         return Err("local_session_limit");
@@ -2097,9 +2183,11 @@ impl super::Console {
 #[cfg(test)]
 mod private_json_tests {
     use super::*;
-    #[test]
-    fn restart_reads_bounded_json_larger_than_a_single_token_without_restoring_authority() {
-        let root = tempfile::tempdir().unwrap();
+    #[tokio::test]
+    async fn restart_reads_bounded_json_larger_than_a_single_token_without_restoring_authority() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("state");
+        hagency_store::private::directory(&root).unwrap();
         let binding = Binding {
             origin: "http://127.0.0.1:13377/".into(),
             client_id: "c".repeat(128),
@@ -2110,7 +2198,7 @@ mod private_json_tests {
         };
         let body = serde_json::to_vec(&binding).unwrap();
         assert!(body.len() > 512);
-        hagency_store::private::replace(&root.path().join("server-login.json"), &body).unwrap();
+        hagency_store::private::replace(&root.as_path().join("server-login.json"), &body).unwrap();
         let mut records = vec![Revocation {
             origin: binding.origin.clone(),
             client_id: binding.client_id.clone(),
@@ -2130,14 +2218,17 @@ mod private_json_tests {
             oauth_done: false,
         });
         hagency_store::private::replace(
-            &root.path().join("server-login-revocations.json"),
+            &root.as_path().join("server-login-revocations.json"),
             &serde_json::to_vec(&records).unwrap(),
         )
         .unwrap();
-        let login = ServerLogin::new(Some(root.path())).unwrap();
+        let login =
+            ServerLogin::new_with_vault(Some(root.as_path()), credential_tests::vault()).unwrap();
         assert!(login.sessions.try_lock().unwrap().is_empty());
-        assert_eq!(login.revocations.try_lock().unwrap().len(), 2);
-        assert!(read_private_json(&root.path().join("server-login.json"), 512).is_err());
+        let mut pending = login.revocations.lock().await;
+        login.load_revocations(&mut pending).await.unwrap();
+        assert_eq!(pending.len(), 2);
+        assert!(read_private_json(&root.as_path().join("server-login.json"), 512).is_err());
     }
 }
 
@@ -2292,7 +2383,9 @@ mod oauth_refresh_tests {
                 // Standalone OAuth must reach renewal after the old proof
                 // expires, rather than turning a temporary outage into logout.
                 let root = tempfile::tempdir().unwrap();
-                let login = ServerLogin::new(Some(root.path())).unwrap();
+                let login =
+                    ServerLogin::new_with_vault(Some(root.path()), credential_tests::vault())
+                        .unwrap();
                 login
                     .sessions
                     .lock()

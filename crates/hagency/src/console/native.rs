@@ -982,11 +982,36 @@ impl NativeOwner {
     pub async fn open(state: &Path, origin: &str, owner: &str) -> Result<Self, NativeError> {
         Self::open_inner(state, origin, owner, true).await
     }
+    /// Explicit credential backend injection for isolated hosts and tests.
+    pub async fn open_with_credentials(
+        state: &Path,
+        origin: &str,
+        owner: &str,
+        vault: hagency_store::credential_vault::Vault,
+    ) -> Result<Self, NativeError> {
+        Self::open_inner_with_credentials(state, origin, owner, true, vault).await
+    }
     async fn open_inner(
         state: &Path,
         origin: &str,
         owner: &str,
         start_worker: bool,
+    ) -> Result<Self, NativeError> {
+        Self::open_inner_with_credentials(
+            state,
+            origin,
+            owner,
+            start_worker,
+            hagency_store::credential_vault::Vault::native(),
+        )
+        .await
+    }
+    async fn open_inner_with_credentials(
+        state: &Path,
+        origin: &str,
+        owner: &str,
+        start_worker: bool,
+        vault: hagency_store::credential_vault::Vault,
     ) -> Result<Self, NativeError> {
         let origin = server_login::origin(origin)
             .map_err(|e| failure(400, e))?
@@ -1001,7 +1026,7 @@ impl NativeOwner {
         let address = acceptor
             .local_addr()
             .map_err(|_| failure(503, "native_callback_unavailable"))?;
-        let host = OwnerHost::open_native(state, address)
+        let host = OwnerHost::open_native_with_credentials(state, address, vault)
             .map_err(|_| failure(409, "native_owner_state_unavailable"))?;
         *host
             .console
@@ -1082,7 +1107,24 @@ impl NativeOwner {
         owner: &str,
         source: Arc<dyn MatrixTokenSource>,
     ) -> Result<Self, NativeError> {
-        let native = Self::open_inner(state, origin, owner, false).await?;
+        Self::open_with_matrix_and_credentials(
+            state,
+            origin,
+            owner,
+            source,
+            hagency_store::credential_vault::Vault::native(),
+        )
+        .await
+    }
+    /// Explicit native credential dependency for SDK and controlled fixtures.
+    pub async fn open_with_matrix_and_credentials(
+        state: &Path,
+        origin: &str,
+        owner: &str,
+        source: Arc<dyn MatrixTokenSource>,
+        vault: hagency_store::credential_vault::Vault,
+    ) -> Result<Self, NativeError> {
+        let native = Self::open_inner_with_credentials(state, origin, owner, false, vault).await?;
         *native
             .0
             .matrix_source
@@ -1645,11 +1687,12 @@ mod tests {
     #[tokio::test]
     async fn native_desktop_listener_exposes_only_oauth_callback() {
         let root = tempfile::tempdir().unwrap();
-        let owner = NativeOwner::open_inner(
+        let owner = NativeOwner::open_inner_with_credentials(
             &root.path().join("state"),
             "http://127.0.0.1:9",
             "@owner:example.test",
             false,
+            crate::console::server_login::credential_tests::vault(),
         )
         .await
         .unwrap();
@@ -1919,10 +1962,11 @@ mod tests {
     #[tokio::test]
     async fn shutdown_from_configuration_task_joins_the_aborted_initiator_without_deadlock() {
         let root = tempfile::tempdir().unwrap();
-        let owner = NativeOwner::open(
+        let owner = NativeOwner::open_with_credentials(
             &root.path().join("state"),
             "https://example.test/",
             "@owner:example.test",
+            crate::console::server_login::credential_tests::vault(),
         )
         .await
         .unwrap();
@@ -1948,10 +1992,11 @@ mod tests {
     #[tokio::test]
     async fn shutdown_worker_panic_remains_a_failure_on_repeated_shutdown() {
         let root = tempfile::tempdir().unwrap();
-        let owner = NativeOwner::open(
+        let owner = NativeOwner::open_with_credentials(
             &root.path().join("state"),
             "https://example.test/",
             "@owner:example.test",
+            crate::console::server_login::credential_tests::vault(),
         )
         .await
         .unwrap();
@@ -1973,9 +2018,14 @@ mod tests {
     async fn native_host_needs_no_web_assets_and_restart_never_restores_remote_authority() {
         let root = tempfile::tempdir().unwrap();
         let state = root.path().join("state");
-        let owner = NativeOwner::open(&state, "https://example.test/", "@owner:example.test")
-            .await
-            .unwrap();
+        let owner = NativeOwner::open_with_credentials(
+            &state,
+            "https://example.test/",
+            "@owner:example.test",
+            crate::console::server_login::credential_tests::vault(),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             owner.execute(Command::Projects).await.unwrap_err().code,
             "owner_authorization_required"
@@ -1984,9 +2034,14 @@ mod tests {
         owner.shutdown().await;
         assert!(owner.execute(Command::BeginLogin).await.is_err());
         drop(owner);
-        let restored = NativeOwner::open(&state, "https://example.test/", "@owner:example.test")
-            .await
-            .unwrap();
+        let restored = NativeOwner::open_with_credentials(
+            &state,
+            "https://example.test/",
+            "@owner:example.test",
+            crate::console::server_login::credential_tests::vault(),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             restored.execute(Command::Agents).await.unwrap_err().code,
             "owner_authorization_required"

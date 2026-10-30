@@ -15416,3 +15416,10 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   rerun on unchanged head after workflow completion. EngineMac/Win and IntelApp
   still running; no merge before all individual final-head jobs pass. SDK2
   a70f three native suites+strict passed, last benchmark jobs still required.
+
+
+## 2026-10-30 — R05 desktop credentials and R19 safe retention local freeze
+
+Managed branch `codex/quality-credentials` implements explicit OS key adapters, authenticated large-document envelopes, original-key migration/journals, per-grant SDK custody, retained DB identity, revoke-only late refresh handling, and startup DB deletion deferral. Explicit fake/deny validation: core 17/17; final App default-parallel credential selectors 32/32; original OAuth compatibility 1/1; App own lib/tests strict and core strict pass. Engine latest platform-selected focused 13 and earlier full 299+9 original ignored are recorded separately, not promoted to final current-source full qualification. Independent review found and closed capture ordering, retirement canonical selection, logout epoch and maintenance fairness edges.
+
+Local source is frozen for parent integration with actual merged main and independent Data target full/strict/lifecycle/current-head CI. Real OS credential prompts/services, production OAuth, mobile protection, complete OS-key GC and cross-process automatic DB deletion are not qualified. Detailed report: `dev-vibe/client-credential-storage-remediation-2026-10-30.zh.md`; original failed/partial logs remain in `.run/quality-credentials/`.

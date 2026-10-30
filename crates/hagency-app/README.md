@@ -23,6 +23,14 @@ Matrix servers are not supported by the current login flow.
 - One device can run multiple Agents. Switching accounts stops the current owner
   runtime; it does not transfer Agents or merge account data.
 
+Desktop sign-in uses the operating system credential store for small original
+DB/Agent secrets and wrapping keys. Session and revocation documents remain in
+private local files as authenticated encrypted envelopes. Unlock the OS store
+before signing in; unavailable credentials stop restore or migration. Logout
+can finish locally with durable remote revocation still pending. iOS/Android
+retain their previous private-file v1 format; this desktop change does not
+remediate mobile credential storage. See [storage and recovery](docs/privacy.md).
+
 ## Quick start
 
 1. Enter your Hagency server address and complete Pasion sign-in in the browser.

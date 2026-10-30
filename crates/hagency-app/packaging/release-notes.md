@@ -30,3 +30,18 @@ Provider runtimes and accounts must be installed/configured on the execution dev
 Dependency audit follow-up remains open for the embedded and bundled Octos runtime,
 including PDF/XML parsing. See the [recorded assessment](https://github.com/hagency-org/hagency-client/blob/main/dev-vibe/desktop/release-0.5.0/assessment.zh.md)
 for scope and evidence; this release does not claim a clean dependency audit.
+
+Desktop credential source changes use explicit OS storage for small original
+DB/Agent secrets and wrapping keys, with authenticated private envelopes for
+sessions and revoke-only records. Unavailable native credentials stop restore;
+original database keys are retained. Local logout and remote revocation have
+separate confirmed/pending outcomes. Old grant OS keys may remain until complete
+reference proof permits removal. Synchronous SDK persistence and remote rotation
+still have crash/unknown-outcome limits. iOS/Android retain their v1 private-file
+secret format. Isolated fake-store migration tests do not establish real native
+credential-store or mobile qualification; package installation/launch coverage
+remains separate from these source changes.
+Startup database-directory deletion remains deferred until all writers and
+cleanup share a cross-process protocol; old databases can retain disk space.
+A Matrix expired-access response with an unconfirmed refresh token can remain
+pending; retries do not guarantee remote session termination.

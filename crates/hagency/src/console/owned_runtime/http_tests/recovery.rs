@@ -41,10 +41,15 @@ async fn native_owner_stopped_recovery_preserves_scope_and_never_rearms_lost_con
     let temp = tempfile::tempdir().unwrap();
     let source = Arc::new(Capture::default());
     source.unknown.store(true, Ordering::SeqCst);
-    let native =
-        NativeOwner::open_with_matrix(&temp.path().join("state"), &origin, OWNER, source.clone())
-            .await
-            .unwrap();
+    let native = NativeOwner::open_with_matrix_and_credentials(
+        &temp.path().join("state"),
+        &origin,
+        OWNER,
+        source.clone(),
+        crate::console::server_login::credential_tests::vault(),
+    )
+    .await
+    .unwrap();
     let device = native.test_console().authorized_device().await.unwrap();
     let (path, profile) = intent_location(native.test_console(), &device).unwrap();
     let mut ledger =

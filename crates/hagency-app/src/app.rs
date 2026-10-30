@@ -123,6 +123,7 @@ mod embedded_content {
 
                 // Show the logout confirmation modal.
                 logout_confirm_modal := Modal {
+                    can_dismiss: false
                     content := LogoutConfirmModal {}
                 }
 
@@ -476,7 +477,16 @@ impl MatchEvent for App {
             }
 
             match action.downcast_ref() {
-                Some(LogoutAction::LogoutSuccess) => {
+                Some(LogoutAction::LogoutSuccess { revocation_pending, epoch }) => {
+                    if *epoch != crate::account_session::epoch() { continue; }
+                    if *revocation_pending {
+                        crate::shared::popup_list::enqueue_scoped_popup_notification(
+                            crate::account_session::epoch(),
+                            crate::i18n::tr("Signed out locally. Remote token revocation remains pending."),
+                            PopupKind::Warning,
+                            None,
+                        );
+                    }
                     robius_speech::cancel_all();
                     crate::speech::capture::cancel_all(cx);
                     self.app_state.logged_in = false;
@@ -1219,6 +1229,7 @@ fn workspace_navigation(action: &Action) -> bool {
 /// Clears all thread-local UI caches (user profiles, invited rooms, and timeline states).
 /// The `cx` parameter ensures that these thread-local caches are cleared on the main UI thread, 
 fn clear_all_app_state(cx: &mut Cx) {
+    crate::persistence::credential_state::retire();
     crate::temp_storage::retire_account_shares();
     clear_user_profile_cache(cx);
     clear_all_invited_rooms(cx);
@@ -1850,6 +1861,7 @@ impl App {
                 crate::sliding_sync::set_sync_service_desired_running(true, "app foreground");
             }
             Event::Shutdown => {
+                if !crate::persistence::credential_state::shutdown() { warning!("Credential worker shutdown remains unconfirmed"); }
                 crate::temp_storage::shutdown_temp_storage();
                 robius_speech::cancel_all();
                 self.handle_shutdown(cx);

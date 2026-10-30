@@ -7,6 +7,12 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 use zeroize::Zeroizing;
+#[cfg(all(test, not(any(target_os = "ios", target_os = "android"))))]
+mod credential_tests;
+#[cfg(any(target_os = "ios", target_os = "android", test))]
+mod legacy;
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+mod persistence;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum AgentCryptoAction {
@@ -33,10 +39,24 @@ pub struct AgentCryptoAuthority {
     owner: Weak<Inner>,
     pin: DeviceIdentity,
     retired: Arc<AtomicBool>,
+    publication: Arc<StdMutex<()>>,
 }
 impl AgentCryptoAuthority {
     pub fn retire(&self) {
         self.retired.store(true, Ordering::Release);
+        drop(self.publication.try_lock());
+    }
+    async fn finish_retire(&self) -> crate::shutdown::Result {
+        loop {
+            match self.publication.try_lock() {
+                Ok(_gate) => return Ok(()),
+                Err(std::sync::TryLockError::Poisoned(_)) => {
+                    return Err(crate::shutdown::Error::Worker);
+                }
+                Err(std::sync::TryLockError::WouldBlock) => (),
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
     }
     pub fn is_retired(&self) -> bool {
         self.retired.load(Ordering::Acquire)
@@ -68,6 +88,14 @@ impl NativeOwner {
             owner: Arc::downgrade(&self.0),
             pin: DeviceIdentity::from(&device),
             retired: Arc::new(AtomicBool::new(false)),
+            publication: self
+                .0
+                .host
+                .console
+                .0
+                .server_login
+                .credential_publication
+                .clone(),
         })
     }
 }
@@ -536,14 +564,13 @@ impl Drop for Credential {
 fn unavailable() -> NativeError {
     failure(409, "agent_crypto_local_state_unavailable")
 }
-fn material(
+async fn material(
     native: &NativeOwner,
     d: &AuthorizedDevice,
     agent: &str,
     generation: i64,
     authority: AgentCryptoAuthority,
 ) -> Result<AgentCryptoContext, NativeError> {
-    use std::io::Read;
     let root = native
         .0
         .host
@@ -552,81 +579,34 @@ fn material(
         .server_login
         .state_directory()
         .ok_or_else(unavailable)?;
-    let ledger =
-        owned_agents::ledger_path(&root, d.origin(), d.issuer(), d.subject(), d.owner_mxid())
-            .map_err(|_| unavailable())?;
-    let profile =
-        owned_agents::profile_identity(d.origin(), d.issuer(), d.subject(), d.owner_mxid())
-            .map_err(|_| unavailable())?;
-    let parent = ledger
-        .parent()
-        .ok_or_else(unavailable)?
-        .join("agent-crypto");
-    hagency_store::private::directory(&parent).map_err(|_| unavailable())?;
-    use sha2::{Digest, Sha256};
-    let digest = Sha256::digest(
-        serde_json::to_vec(&(&profile, agent, d.device_id())).map_err(|_| unavailable())?,
-    );
-    let directory = parent.join(format!("agent_{digest:x}"));
-    hagency_store::private::directory(&directory).map_err(|_| unavailable())?;
-    let path = directory.join("credential.json");
-    let credential = match hagency_store::private::open(&path, false) {
-        Ok(file) => {
-            let mut bytes = Zeroizing::new(Vec::new());
-            file.take(16385)
-                .read_to_end(&mut bytes)
-                .map_err(|_| unavailable())?;
-            if bytes.len() > 16384 {
-                return Err(unavailable());
-            }
-            serde_json::from_slice::<Credential>(&bytes).map_err(|_| unavailable())?
-        }
-        Err(_)
-            if std::fs::symlink_metadata(&path)
-                .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
-        {
-            if std::fs::read_dir(&directory)
-                .map_err(|_| unavailable())?
-                .next()
-                .is_some()
+    let device = d.clone();
+    let agent = agent.to_owned();
+    native
+        .0
+        .host
+        .console
+        .0
+        .server_login
+        .credential_io
+        .call(move |vault| {
+            #[cfg(any(target_os = "ios", target_os = "android"))]
             {
-                return Err(failure(409, "agent_crypto_original_secret_missing"));
+                let _ = vault;
+                legacy::load(root, device, agent, generation, authority)
             }
-            let mut random = Zeroizing::new([0u8; 48]);
-            getrandom::fill(random.as_mut()).map_err(|_| unavailable())?;
-            use base64::Engine;
-            let credential = Credential {
-                version: 1,
-                profile: profile.clone(),
-                agent: agent.into(),
-                device: d.device_id().into(),
-                passphrase: base64::engine::general_purpose::URL_SAFE_NO_PAD
-                    .encode(random.as_slice()),
-            };
-            let bytes = Zeroizing::new(serde_json::to_vec(&credential).map_err(|_| unavailable())?);
-            hagency_store::private::write_new(&path, &bytes).map_err(|_| unavailable())?;
-            credential
-        }
-        Err(_) => return Err(unavailable()),
-    };
-    if credential.version != 1
-        || credential.profile != profile
-        || credential.agent != agent
-        || credential.device != d.device_id()
-        || credential.passphrase.len() != 64
-    {
-        return Err(unavailable());
-    }
-    let sdk = directory.join("sdk");
-    hagency_store::private::directory(&sdk).map_err(|_| unavailable())?;
-    let mut credential = credential;
-    Ok(AgentCryptoContext {
-        authority,
-        agent: agent.into(),
-        generation,
-        root: sdk,
-        passphrase: Zeroizing::new(std::mem::take(&mut credential.passphrase)),
-    })
+            #[cfg(not(any(target_os = "ios", target_os = "android")))]
+            {
+                persistence::load(vault, root, device, agent, generation, authority)
+            }
+        })
+        .await
+        .map_err(|error| match error {
+            hagency_store::credential_vault::Error::Missing => {
+                failure(409, "agent_crypto_original_secret_missing")
+            }
+            hagency_store::credential_vault::Error::Retired => failure(410, "native_owner_stopped"),
+            _ => unavailable(),
+        })
 }
 
 static STARTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
@@ -679,7 +659,7 @@ impl Registry {
         if let Ok(mut slots) = self.slots.lock() {
             for s in slots.values_mut() {
                 s.authority.retire();
-                s.phase = "stopped";
+                s.phase = "stopping";
                 if let Some(h) = &s.session {
                     h.retire();
                 }
@@ -704,7 +684,17 @@ impl Registry {
             .lock()
             .map_err(|_| crate::shutdown::Error::Worker)?
             .clone();
+        let authorities = self
+            .slots
+            .lock()
+            .map_err(|_| crate::shutdown::Error::Worker)?
+            .values()
+            .map(|s| s.authority.clone())
+            .collect::<Vec<_>>();
         let mut result = Ok(());
+        for authority in authorities {
+            result = result.and(authority.finish_retire().await);
+        }
         for (_, task) in receives {
             result = result.and(task.wait().await);
         }
@@ -728,6 +718,7 @@ impl Registry {
         {
             for s in slots.values_mut() {
                 s.session = None;
+                s.phase = "stopped";
             }
         }
         result
@@ -758,6 +749,7 @@ async fn stop(native: &NativeOwner, agent: &str) -> Result<(), NativeError> {
         }
         if slot.closing.is_none() {
             slot.phase = "stopping";
+            let authority = slot.authority.clone();
             let init = slot.init.clone();
             let verification = slot.verification.clone();
             let receives = native
@@ -778,11 +770,13 @@ async fn stop(native: &NativeOwner, agent: &str) -> Result<(), NativeError> {
                 .ok_or_else(|| failure(409, "update_in_progress"))?;
             slot.closing = Some(crate::shutdown::Task::start(async move {
                 let _update = update;
+                let retired = authority.finish_retire().await;
                 let mut result = if let Some(init) = init {
                     init.wait().await
                 } else {
                     Ok(())
                 };
+                result = result.and(retired);
                 if let Some(verification) = verification {
                     result = result.and(verification.wait().await);
                 }
@@ -1055,8 +1049,18 @@ pub(super) async fn execute(
         owner: Arc::downgrade(&native.0),
         pin: pin.clone(),
         retired: Arc::new(AtomicBool::new(false)),
+        publication: native
+            .0
+            .host
+            .console
+            .0
+            .server_login
+            .credential_publication
+            .clone(),
     };
-    let context = material(native, &d, agent, generation, authority.clone())?;
+    let task_owner = native.clone();
+    let task_authority = authority.clone();
+    let (launch, launched) = tokio::sync::oneshot::channel();
     let update = crate::update_guard::PROCESS
         .continue_task()
         .ok_or_else(|| failure(409, "update_in_progress"))?;
@@ -1069,7 +1073,14 @@ pub(super) async fn execute(
     let task = crate::shutdown::Task::start(async move {
         let _update = update;
         let _start = start;
-        let result = source.prepare_agent_crypto(context).await;
+        if launched.await.is_err() {
+            return Err(crate::shutdown::Error::Worker);
+        }
+        let result = match material(&task_owner, &d, &id, generation, task_authority).await {
+            Ok(context) => source.prepare_agent_crypto(context).await,
+            Err(error) => Err(error),
+        };
+        drop(task_owner);
         let session = match result {
             Ok(session) => session,
             Err(e) => {
@@ -1149,6 +1160,7 @@ pub(super) async fn execute(
             trust_error: None,
         },
     );
+    let _ = launch.send(());
     Ok(json!({"agentId":agent,"crypto":view(slots.get(agent))}))
 }
 /// Normal create/start/assignment actions initialize identities on this device;
@@ -1201,9 +1213,15 @@ mod tests {
     use std::time::Duration;
 
     async fn owner(root: &Path) -> NativeOwner {
-        NativeOwner::open_inner(root, "http://127.0.0.1:9", "@owner:example.test", false)
-            .await
-            .unwrap()
+        NativeOwner::open_inner_with_credentials(
+            root,
+            "http://127.0.0.1:9",
+            "@owner:example.test",
+            false,
+            crate::console::server_login::credential_tests::vault(),
+        )
+        .await
+        .unwrap()
     }
     fn device() -> AuthorizedDevice {
         crate::console::server_login::fixture_device(
@@ -1218,6 +1236,14 @@ mod tests {
             owner: Arc::downgrade(&owner.0),
             pin: DeviceIdentity::from(d),
             retired: Arc::new(AtomicBool::new(false)),
+            publication: owner
+                .0
+                .host
+                .console
+                .0
+                .server_login
+                .credential_publication
+                .clone(),
         }
     }
     #[tokio::test]
@@ -1225,11 +1251,17 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let owner = owner(&root.path().join("state")).await;
         let d = device();
-        let a = material(&owner, &d, "agent-a", 1, authority(&owner, &d)).unwrap();
-        let again = material(&owner, &d, "agent-a", 2, authority(&owner, &d)).unwrap();
+        let a = material(&owner, &d, "agent-a", 1, authority(&owner, &d))
+            .await
+            .unwrap();
+        let again = material(&owner, &d, "agent-a", 2, authority(&owner, &d))
+            .await
+            .unwrap();
         assert_eq!(a.root, again.root);
         assert_eq!(a.passphrase, again.passphrase);
-        let b = material(&owner, &d, "agent-b", 1, authority(&owner, &d)).unwrap();
+        let b = material(&owner, &d, "agent-b", 1, authority(&owner, &d))
+            .await
+            .unwrap();
         assert_ne!(a.root, b.root);
         assert_ne!(a.passphrase, b.passphrase);
         let other = crate::console::server_login::fixture_device(
@@ -1238,7 +1270,9 @@ mod tests {
             "@other:example.test",
         )
         .0;
-        let c = material(&owner, &other, "agent-a", 1, authority(&owner, &other)).unwrap();
+        let c = material(&owner, &other, "agent-a", 1, authority(&owner, &other))
+            .await
+            .unwrap();
         assert_ne!(a.root, c.root);
         assert_ne!(a.passphrase, c.passphrase);
         #[cfg(unix)]
@@ -1264,12 +1298,15 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let owner = owner(&root.path().join("state")).await;
         let d = device();
-        let original = material(&owner, &d, "agent-a", 1, authority(&owner, &d)).unwrap();
+        let original = material(&owner, &d, "agent-a", 1, authority(&owner, &d))
+            .await
+            .unwrap();
         let path = original.root.parent().unwrap().join("credential.json");
         let bytes = std::fs::read(&path).unwrap();
         std::fs::remove_file(&path).unwrap();
         assert_eq!(
             material(&owner, &d, "agent-a", 1, authority(&owner, &d))
+                .await
                 .err()
                 .unwrap()
                 .code,
@@ -1281,6 +1318,7 @@ mod tests {
         hagency_store::private::write_new(&path, &serde_json::to_vec(&wrong).unwrap()).unwrap();
         assert_eq!(
             material(&owner, &d, "agent-a", 1, authority(&owner, &d))
+                .await
                 .err()
                 .unwrap()
                 .code,
@@ -1298,13 +1336,19 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let owner = owner(&root.path().join("state")).await;
         let d = device();
-        let original = material(&owner, &d, "agent-a", 1, authority(&owner, &d)).unwrap();
+        let original = material(&owner, &d, "agent-a", 1, authority(&owner, &d))
+            .await
+            .unwrap();
         let path = original.root.parent().unwrap().join("credential.json");
         let target = root.path().join("untouched");
         std::fs::write(&target, b"original").unwrap();
         std::fs::remove_file(&path).unwrap();
         std::os::unix::fs::symlink(&target, &path).unwrap();
-        assert!(material(&owner, &d, "agent-a", 1, authority(&owner, &d)).is_err());
+        assert!(
+            material(&owner, &d, "agent-a", 1, authority(&owner, &d))
+                .await
+                .is_err()
+        );
         assert_eq!(std::fs::read(target).unwrap(), b"original");
         owner.shutdown_checked().await.unwrap();
     }

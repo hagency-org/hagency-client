@@ -27,7 +27,14 @@ struct State {
     _lock: std::fs::File,
 }
 fn allowed_entry(name: &str) -> bool {
-    matches!(name,MARKER|LOCK|"server-login.json"|"server-login-revocations.json"|"server-login-profiles.json"|"owned-agent-owners"|"owner-console.sock")
+    matches!(name,MARKER|LOCK|"server-login.json"|"server-login-revocations.json"|"server-login-profiles.json"|"owned-agent-owners"|"owner-console.sock"|"credentials-v1"|".server-login-revocations.json.vault-lock"|".server-login-revocations.json.vault-journal")
+        // Only this revoke document's private journal-owned candidate names are
+        // admitted. Its Document decoder still verifies scope/hash/AEAD before
+        // recovery; admission grants no session authority.
+        || name.strip_prefix(".server-login-revocations.json.vault-").and_then(|n| n.strip_suffix(".tmp")).is_some_and(|id| id.len()==32 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+        // A crash while writing the journal itself can precede its rename.
+        // Retain only this exact nonsecret temporary shape, without importing it.
+        || name.strip_prefix(".server-login-revocations.json.vault-journal-").and_then(|n| n.strip_suffix(".tmp")).is_some_and(|id| id.len()==32 && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
         // Interrupted private JSON replacement files are never opened/imported.
         || (name.len()==21 && name.starts_with('.') && name.ends_with(".tmp") && name.as_bytes()[1..17].iter().all(|b|b.is_ascii_hexdigit()))
 }
@@ -89,11 +96,23 @@ impl OwnerHost {
     }
     /// In-process native management. No web assets are loaded or presented.
     pub fn open_native(state: &Path, address: SocketAddr) -> Result<Self, Error> {
+        Self::open_native_with_credentials(
+            state,
+            address,
+            hagency_store::credential_vault::Vault::native(),
+        )
+    }
+    pub(crate) fn open_native_with_credentials(
+        state: &Path,
+        address: SocketAddr,
+        vault: hagency_store::credential_vault::Vault,
+    ) -> Result<Self, Error> {
         if !address.ip().is_loopback() || address.port() == 0 {
             return Err(Error::Address);
         }
         let state = prepare(state)?;
-        let console = Console::native_with_state(&state.path).map_err(|_| Error::Engine)?;
+        let console = Console::native_with_state_and_credentials(&state.path, vault)
+            .map_err(|_| Error::Engine)?;
         Ok(Self {
             console,
             authority: address.to_string(),
@@ -179,5 +198,51 @@ mod tests {
         assert!(initialize(&path).is_ok());
         assert!(!path.join("domain.sqlite3").exists());
         assert!(!path.join("operator.token").exists());
+    }
+
+    #[test]
+    fn credential_migration_owner_host_restart_retains_exact_interrupted_journal_temp() {
+        let temp = temporary();
+        let path = temp.path().join("state");
+        drop(prepare(&path).unwrap());
+        let name =
+            ".server-login-revocations.json.vault-journal-0123456789abcdef0123456789abcdef.tmp";
+        let journal = path.join(name);
+        let bytes = b"{\"version\":1,\"incomplete_journal\":true}";
+        hagency_store::private::write_new(&journal, bytes).unwrap();
+        let original = hagency_store::private::open(&journal, false).unwrap();
+        // This is the actual production restart admission. A partial journal
+        // temporary is retained, never parsed as credentials or imported.
+        drop(prepare(&path).unwrap());
+        let reopened = hagency_store::private::open(&journal, false).unwrap();
+        assert!(hagency_platform::same_file(&original, &reopened).unwrap());
+        assert_eq!(std::fs::read(&journal).unwrap(), bytes);
+        assert!(!path.join("server-login-revocations.json").exists());
+        assert!(
+            !path
+                .join(".server-login-revocations.json.vault-journal")
+                .exists()
+        );
+
+        for name in [
+            ".other.json.vault-journal-0123456789abcdef0123456789abcdef.tmp",
+            ".server-login-revocations.json.vault-journal-0123456789abcdef.tmp",
+            ".server-login-revocations.json.vault-journal-0123456789abcdef0123456789abcdeg.tmp",
+            ".server-login-revocations.json.vault-journal-0123456789ABCDEF0123456789ABCDEF.tmp",
+            ".server-login-revocations.json.vault-unrecognized-0123456789abcdef0123456789abcdef.tmp",
+        ] {
+            // Isolate each namespace: case-insensitive filesystems would alias
+            // the uppercase-ID negative with the retained lowercase witness.
+            let foreign_temp = temporary();
+            let foreign_root = foreign_temp.path().join("state");
+            drop(prepare(&foreign_root).unwrap());
+            let foreign = foreign_root.join(name);
+            hagency_store::private::write_new(&foreign, b"foreign sentinel").unwrap();
+            assert!(
+                matches!(prepare(&foreign_root), Err(Error::State)),
+                "{name}"
+            );
+            assert_eq!(std::fs::read(&foreign).unwrap(), b"foreign sentinel");
+        }
     }
 }

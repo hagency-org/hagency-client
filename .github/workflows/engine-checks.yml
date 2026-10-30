@@ -6,6 +6,9 @@ on:
 permissions:
   contents: read
 
+env:
+  HAGENCY_NATIVE_CREDENTIAL_IO: deny
+
 jobs:
   native:
     strategy:

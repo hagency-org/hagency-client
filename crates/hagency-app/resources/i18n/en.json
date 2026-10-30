@@ -1,4 +1,5 @@
 {
+  "Signed out locally.": "Signed out locally.",
   "Restore your Matrix cross-signing keys before verifying an Agent.": "Restore your Matrix cross-signing keys before verifying an Agent.",
   "Encrypted Agent tasks and files are not available yet.": "Encrypted Agent tasks and files are not available yet.",
   "I checked the complete master key and device fingerprints for this Agent.": "I checked the complete master key and device fingerprints for this Agent.",
@@ -2727,5 +2728,9 @@
   "{count} pending approvals across this device. Open a request to review its exact action.": "{count} pending approvals across this device. Open a request to review its exact action.",
   "This exact approval is no longer pending. No decision was submitted.": "This exact approval is no longer pending. No decision was submitted.",
   "Previous page": "Previous page",
-  "Next page": "Next page"
+  "Next page": "Next page",
+  "Logout cancelled by user": "Logout cancelled by user",
+  "Local sign-out is durable. Local session cleanup failed; restart before signing in again. Any pending remote revocation will be retried.": "Local sign-out is durable. Local session cleanup failed; restart before signing in again. Any pending remote revocation will be retried.",
+  "Local session cleanup remains incomplete": "Local session cleanup remains incomplete",
+  "Signed out locally. Remote token revocation remains pending.": "Signed out locally. Remote token revocation remains pending."
 }

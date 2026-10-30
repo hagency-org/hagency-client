@@ -8,7 +8,7 @@ mod directory_identity;
 pub use directory_identity::{DirectoryIdentity, directory_identity, same_directory};
 #[allow(unsafe_code)]
 mod file_identity;
-pub use file_identity::same_file;
+pub use file_identity::{FileIdentity, file_identity, same_file};
 mod supervisor;
 #[cfg(unix)]
 pub use supervisor::run_guardian;

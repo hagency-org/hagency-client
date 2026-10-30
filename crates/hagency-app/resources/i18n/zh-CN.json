@@ -1,4 +1,5 @@
 {
+  "Signed out locally.": "已在本地退出。",
   "Restore your Matrix cross-signing keys before verifying an Agent.": "验证 Agent 前，请先恢复你的 Matrix 交叉签名密钥。",
   "Encrypted Agent tasks and files are not available yet.": "Agent 加密任务和文件功能暂未开放。",
   "I checked the complete master key and device fingerprints for this Agent.": "我已核对此 Agent 的完整主密钥和设备指纹。",
@@ -2727,5 +2728,9 @@
   "{count} pending approvals across this device. Open a request to review its exact action.": "此设备共有 {count} 项待处理审批。打开请求以核对具体操作。",
   "This exact approval is no longer pending. No decision was submitted.": "此审批请求已不再待处理，未提交任何决定。",
   "Previous page": "上一页",
-  "Next page": "下一页"
+  "Next page": "下一页",
+  "Logout cancelled by user": "用户已取消退出",
+  "Local sign-out is durable. Local session cleanup failed; restart before signing in again. Any pending remote revocation will be retried.": "本地退出已持久保存，但本地会话清理失败。请重启后再登录；尚未完成的远端令牌撤销会继续重试。",
+  "Local session cleanup remains incomplete": "本地会话清理尚未完成",
+  "Signed out locally. Remote token revocation remains pending.": "已在本地退出，远端令牌撤销仍待完成。"
 }

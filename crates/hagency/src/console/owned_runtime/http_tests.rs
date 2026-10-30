@@ -565,9 +565,15 @@ async fn fixture_with_files(
     } else {
         Arc::new(Source)
     };
-    let native = NativeOwner::open_with_matrix(&root.join("state"), &origin, OWNER, source)
-        .await
-        .unwrap();
+    let native = NativeOwner::open_with_matrix_and_credentials(
+        &root.join("state"),
+        &origin,
+        OWNER,
+        source,
+        crate::console::server_login::credential_tests::vault(),
+    )
+    .await
+    .unwrap();
     let console = native.test_console().clone();
     let device = console.authorized_device().await.unwrap();
     let path = ledger_path(
@@ -906,11 +912,12 @@ async fn typed_http_runtime_intent_recovery_rechecks_scope_and_explicit_stop_sur
  {
     let (origin, state, server) = server(false, 0).await;
     let temp = tempfile::tempdir().unwrap();
-    let native = NativeOwner::open_with_matrix(
+    let native = NativeOwner::open_with_matrix_and_credentials(
         &temp.path().canonicalize().unwrap().join("state"),
         &origin,
         OWNER,
         Arc::new(Source),
+        crate::console::server_login::credential_tests::vault(),
     )
     .await
     .unwrap();
@@ -1042,9 +1049,15 @@ async fn typed_http_runtime_intent_positive_restore_child() {
     }
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap().join("state");
-    let native = NativeOwner::open_with_matrix(&root, &origin, OWNER, Arc::new(Source))
-        .await
-        .unwrap();
+    let native = NativeOwner::open_with_matrix_and_credentials(
+        &root,
+        &origin,
+        OWNER,
+        Arc::new(Source),
+        crate::console::server_login::credential_tests::vault(),
+    )
+    .await
+    .unwrap();
     let device = native.test_console().authorized_device().await.unwrap();
     let paths = super::super::owner_provider::paths(
         &root,
@@ -1122,9 +1135,15 @@ async fn typed_http_runtime_intent_positive_restore_child() {
     // The next grant keeps the installation/device ID but increments generation.
     // Until natural expiry, the old generation's lease is a precise 409 conflict.
     state.lock().unwrap().restart_busy_remaining = 2;
-    let restarted = NativeOwner::open_with_matrix(&root, &origin, OWNER, Arc::new(Source))
-        .await
-        .unwrap();
+    let restarted = NativeOwner::open_with_matrix_and_credentials(
+        &root,
+        &origin,
+        OWNER,
+        Arc::new(Source),
+        crate::console::server_login::credential_tests::vault(),
+    )
+    .await
+    .unwrap();
     let recovery = restarted.restore_runtime_intents().await.unwrap();
     assert_eq!(recovery["recoveries"][0]["restored"], true, "{recovery}");
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -1180,9 +1199,15 @@ async fn typed_http_runtime_intent_positive_restore_child() {
         .unwrap();
     restarted.shutdown().await;
     drop(restarted);
-    let stopped = NativeOwner::open_with_matrix(&root, &origin, OWNER, Arc::new(Source))
-        .await
-        .unwrap();
+    let stopped = NativeOwner::open_with_matrix_and_credentials(
+        &root,
+        &origin,
+        OWNER,
+        Arc::new(Source),
+        crate::console::server_login::credential_tests::vault(),
+    )
+    .await
+    .unwrap();
     assert!(
         stopped.restore_runtime_intents().await.unwrap()["recoveries"]
             .as_array()
@@ -1296,9 +1321,15 @@ async fn typed_http_runtime_intent_positive_restore_child() {
     // independently replaying every Room snapshot that discovery published.
     stopped.shutdown().await;
     drop(stopped);
-    let stopped = NativeOwner::open_with_matrix(&root, &origin, OWNER, Arc::new(Source))
-        .await
-        .unwrap();
+    let stopped = NativeOwner::open_with_matrix_and_credentials(
+        &root,
+        &origin,
+        OWNER,
+        Arc::new(Source),
+        crate::console::server_login::credential_tests::vault(),
+    )
+    .await
+    .unwrap();
     let recovery = stopped.restore_runtime_intents().await.unwrap();
     assert_eq!(recovery["recoveries"].as_array().unwrap().len(), 1);
     assert_eq!(recovery["recoveries"][0]["bindingId"], "*");
@@ -1348,9 +1379,15 @@ async fn typed_http_runtime_intent_positive_restore_child() {
     // Preferences survive a fresh host, but never represent execution consent.
     stopped.shutdown().await;
     drop(stopped);
-    let stopped = NativeOwner::open_with_matrix(&root, &origin, OWNER, Arc::new(Source))
-        .await
-        .unwrap();
+    let stopped = NativeOwner::open_with_matrix_and_credentials(
+        &root,
+        &origin,
+        OWNER,
+        Arc::new(Source),
+        crate::console::server_login::credential_tests::vault(),
+    )
+    .await
+    .unwrap();
     assert!(
         stopped.restore_runtime_intents().await.unwrap()["recoveries"]
             .as_array()
@@ -1466,11 +1503,12 @@ async fn heartbeat_retries_transport_failure_but_never_extends_unconfirmed_lease
     for recover in [true, false] {
         let (origin, state, server) = server(false, 0).await;
         let root = tempfile::tempdir().unwrap();
-        let native = NativeOwner::open_with_matrix(
+        let native = NativeOwner::open_with_matrix_and_credentials(
             &root.path().join("state"),
             &origin,
             OWNER,
             Arc::new(Source),
+            crate::console::server_login::credential_tests::vault(),
         )
         .await
         .unwrap();
@@ -1548,9 +1586,15 @@ async fn typed_http_attachment_response_is_private_and_pinned_to_original_execut
     let (origin, state, server) = server(false, 0).await;
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap().join("state");
-    let native = NativeOwner::open_with_matrix(&root, &origin, OWNER, Arc::new(Source))
-        .await
-        .unwrap();
+    let native = NativeOwner::open_with_matrix_and_credentials(
+        &root,
+        &origin,
+        OWNER,
+        Arc::new(Source),
+        crate::console::server_login::credential_tests::vault(),
+    )
+    .await
+    .unwrap();
     let console = native.test_console();
     let attachment = hagency_agent_local::attachments::Attachment::from_content(&json!({"msgtype":"m.file","body":"file.txt","url":"mxc://media.test/opaque","info":{"size":5}})).unwrap();
     let expected =
@@ -1671,11 +1715,12 @@ async fn typed_http_file_delivery_pins_manifest_and_preserves_unknown_without_se
     use hagency_agent_local::file_delivery::{Manifest, Target};
     let (origin, state, server) = server(false, 0).await;
     let temp = tempfile::tempdir().unwrap();
-    let native = NativeOwner::open_with_matrix(
+    let native = NativeOwner::open_with_matrix_and_credentials(
         &temp.path().canonicalize().unwrap().join("state"),
         &origin,
         OWNER,
         Arc::new(Source),
+        crate::console::server_login::credential_tests::vault(),
     )
     .await
     .unwrap();
@@ -2014,9 +2059,15 @@ async fn native_pending_approvals_pages_all_local_scopes_without_provider_or_new
     let (origin, wire, server) = server(false, 0).await;
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap().join("state");
-    let native = NativeOwner::open_with_matrix(&root, &origin, OWNER, Arc::new(Source))
-        .await
-        .unwrap();
+    let native = NativeOwner::open_with_matrix_and_credentials(
+        &root,
+        &origin,
+        OWNER,
+        Arc::new(Source),
+        crate::console::server_login::credential_tests::vault(),
+    )
+    .await
+    .unwrap();
     let console = native.test_console();
     let device = console.authorized_device().await.unwrap();
     let empty = native

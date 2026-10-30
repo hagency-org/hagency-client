@@ -5848,3 +5848,12 @@ SDK 恢复 timeline 可包含同一事件多个句柄。保留原始 Vector 的�
 - Makepad77c8039 exposes NativeDeepLink, but only Android emission was found;
   macOS plist registration alone does not establish desktop OS URL delivery.
   App-contained Matrix links and OS launch qualification are separate evidence.
+
+
+## Desktop credential migration review, 2026-10-30
+
+- Native credential construction is not qualification. Automated commands must explicitly set `HAGENCY_NATIVE_CREDENTIAL_IO=deny` and inject a fake Vault. Native is the production default; no backend error authorizes Mock/plaintext fallback. Linux Agent/server-login also requires Secret Service and user D-Bus.
+- SDK callback ownership follows the shared AuthCtx callback family, not only `ClientInner` weak identity: `notification_client` has a different Inner but shares callbacks/refresh coordination. Reserve finite snapshot custody before activation; hold the short latest lock across actual SDK token read and cell replacement, release it before pending/SESSION_IO/IO.
+- Migration journals preserve original source ID+digest and their own physical witness. Verify journal/candidate before rename; any error after actual rename is a committed/unknown durability result, never a precommit rollback signal.
+- Retained database identity uses the SDK's dedicated READONLY/no-create inspector, on the original owned worker; normal SqliteCryptoStore::open can create/migrate/checkpoint. Preserve LegacyDatabase ref/raw context/passphrase and verify actual owner/device before handoff.
+- Startup database deletion is deferred (R19): an inventory snapshot does not serialize other processes creating new stores. Old DB directories and OS keys may remain; mobile uses compile-time v1 compatibility and remains outside desktop remediation qualification.

@@ -26,6 +26,7 @@ on:
   workflow_dispatch:
 
 env:
+  HAGENCY_NATIVE_CREDENTIAL_IO: deny
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   CARGO_INCREMENTAL: 0

@@ -1152,10 +1152,11 @@ mod tests {
     #[tokio::test]
     async fn update_fence_refuses_background_configuration_before_authorization_or_claim() {
         let root = tempfile::tempdir().unwrap();
-        let owner = NativeOwner::open(
+        let owner = NativeOwner::open_with_credentials(
             &root.path().join("state"),
             "https://example.test/",
             "@owner:example.test",
+            crate::console::server_login::credential_tests::vault(),
         )
         .await
         .unwrap();

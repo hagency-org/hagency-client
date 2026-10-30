@@ -384,11 +384,12 @@ mod tests {
                 .unwrap();
         });
         let root = tempfile::tempdir().unwrap();
-        let error = crate::native_owner::NativeOwner::open_with_matrix(
+        let error = crate::native_owner::NativeOwner::open_with_matrix_and_credentials(
             &root.path().join("state"),
             &origin,
             "@owner:test",
             std::sync::Arc::new(ForbiddenSource),
+            crate::console::server_login::credential_tests::vault(),
         )
         .await
         .err()
