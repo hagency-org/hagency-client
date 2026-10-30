@@ -616,6 +616,20 @@ impl NativeManagement {
     }
 }
 
+/// Closed codes for a refused monthly-maximum amendment; nothing was written.
+pub(super) fn ceiling_refusal_code(
+    reason: hagency_store::management::CeilingAmendmentRefusal,
+) -> &'static str {
+    use hagency_store::management::CeilingAmendmentRefusal as Refusal;
+    match reason {
+        Refusal::NotAvailable => "management_ceiling_amendment_not_available",
+        Refusal::ClearRefused => "management_ceiling_clear_refused",
+        Refusal::Unchanged => "management_ceiling_unchanged",
+        Refusal::BelowCommitments => "management_ceiling_below_commitments",
+        Refusal::UsageUnsettled => "management_ceiling_usage_unsettled",
+    }
+}
+
 pub(super) fn store_error(error: hagency_store::Error) -> NativeError {
     use hagency_store::Error;
     let (status, code) = match error {
@@ -632,6 +646,7 @@ pub(super) fn store_error(error: hagency_store::Error) -> NativeError {
         Error::ResourceEditRevisionChanged => (409, "management_resource_edit_changed"),
         Error::ResourceConfigurationSourceChanged => (409, "management_resource_source_changed"),
         Error::ResourceEditNotAvailable => (409, "management_resource_edit_not_available"),
+        Error::CeilingAmendmentRefused(reason) => (409, ceiling_refusal_code(reason)),
         Error::State => (409, "management_resource_in_use"),
         Error::ManagementChangeCancelled => (409, "management_change_cancelled"),
         Error::Unqualified => (409, "management_model_unqualified"),

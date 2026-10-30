@@ -64,3 +64,70 @@ async fn native_ready_model_child(){
     assert_eq!(m.resource_detail(ResourceDetailQuery{id}).await.unwrap().resource.reasoning.as_deref(),Some("medium"));
     drop(m);f.stop().await;
 }
+
+fn amendment_package()->ManagementPackage{let mut p=package();p.permissions.push(Permission::PublishResources);p}
+#[test]
+fn native_ceiling_amendment_reviews_and_records_without_provider_or_definition_change(){
+    let result=std::process::Command::new(std::env::current_exe().unwrap()).args(["console::native::resource_edit::process_tests::native_ceiling_amendment_child","--exact","--nocapture"]).env("HAGENCY_CEILING_AMENDMENT_FIXTURE","1").output().unwrap();
+    assert!(result.status.success(),"{} {}",String::from_utf8_lossy(&result.stdout),String::from_utf8_lossy(&result.stderr));
+}
+#[tokio::test]
+async fn native_ceiling_amendment_child(){
+    use hagency_store::management::{CeilingAmendmentBlocker,PublishResource,ResourceEditBlocker};
+    use hagency_store::{CeilingAmendmentResult,CeilingChange,ProfileChange};
+    if std::env::var("HAGENCY_CEILING_AMENDMENT_FIXTURE").as_deref()!=Ok("1"){return}
+    let installation=tempfile::tempdir().unwrap();initialize_resource_activation_fixture(&installation.path().join("installation")).unwrap();
+    let f=Fixture::with_configured_installation().await;let(db,path,_)=f.domain();drop(db);
+    let db=rusqlite::Connection::open(path.join("domain.sqlite3")).unwrap();db.set_db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,true).unwrap();db.execute("DELETE FROM resources",[]).unwrap();drop(db);
+    let review=f.owner.review_device_setup(amendment_package(),None,None).await.unwrap();let selected=f.owner.confirm_device_setup(review,amendment_package(),||true).await.unwrap();
+    let f=f.restart_onboarding(selected).await;executable(&f);let m=f.owner.management(amendment_package()).await.unwrap();
+    let account=m.prepare_account(PrepareAccount{command_id:"amend_account".into()}).await.unwrap();
+    let row=m.account_inventory(AccountInventoryQuery{id:Some(account.account_id.clone()),after:None}).await.unwrap().account.unwrap();
+    let query=AccountModelQuery{account_id:account.account_id.clone(),expected_revision:row.revision.unwrap()};
+    assert_eq!(m.account_models(query.clone()).await.unwrap()["enrollmentReady"],true);
+    let id=m.enroll_account_resource(NamespaceEnrollment{command_id:"amend_resource".into(),account:query,model:"gpt-5.6-sol".into(),reasoning:Some("high".into()),monthly_tokens:700},until()).await.unwrap().resource_id;
+    let namespace=find(installation.path(),&account.account_id).unwrap();
+    let amend=|command:&str,revision:&str,sequence:Option<u64>,ceiling:CeilingChange|EditLocalResource{command_id:command.into(),resource_id:id.clone(),expected_revision:revision.into(),profile:ProfileChange::Preserve{},ceiling,execution_policy:None,expected_ceiling_sequence:sequence};
+    let monthly=|tokens:u64|CeilingChange::Monthly{tokens:tokens.try_into().unwrap()};
+    // Never offered: edit the definition in place; there is nothing to amend.
+    let detail=m.resource_detail(ResourceDetailQuery{id:id.clone()}).await.unwrap();
+    assert!(detail.editing.allowed);assert!(!detail.ceiling_amendment.allowed);
+    assert_eq!(detail.ceiling_amendment.reason,Some(CeilingAmendmentBlocker::NotOffered));
+    assert_eq!(m.review_local_resource_edit(&amend("amend_early",&detail.resource.revision,Some(0),monthly(900))).await.unwrap_err().code,"management_ceiling_amendment_not_available");
+    let revision=m.publish_resource(PublishResource{command_id:"amend_publish".into(),resource_id:id.clone(),expected_revision:detail.resource.revision.clone(),published:true}).await.unwrap().revision;
+    let detail=m.resource_detail(ResourceDetailQuery{id:id.clone()}).await.unwrap();
+    assert_eq!(detail.editing.reason,Some(ResourceEditBlocker::Published));
+    assert!(detail.ceiling_amendment.allowed);assert_eq!(detail.ceiling_amendment.sequence,0);
+    let calls=std::fs::read_to_string(namespace.join("fixture-methods")).unwrap();
+    let input=amend("amend_raise",&revision,Some(0),monthly(900));
+    let copy=||serde_json::from_value::<EditLocalResource>(serde_json::to_value(&input).unwrap()).unwrap();
+    match m.review_local_resource_edit(&input).await.unwrap(){
+        LocalResourceEditReview::CeilingAmendment(review)=>{
+            assert_eq!((review.previous_tokens,review.tokens,review.sequence,review.per_request_tokens),(700,900,0,None));
+            assert_eq!((review.resource_id.as_str(),review.revision.as_str()),(id.as_str(),revision.as_str()));
+        }
+        other=>panic!("expected a ceiling amendment review, got {other:?}"),
+    }
+    let applied=m.edit_local_resource(copy(),until()).await.unwrap();
+    assert_eq!(applied.revision,revision,"the definition revision is unchanged");
+    assert_eq!(applied.ceiling_amendment,Some(CeilingAmendmentResult{sequence:1,previous_tokens:700,tokens:900}));
+    assert_eq!(std::fs::read_to_string(namespace.join("fixture-methods")).unwrap(),calls,"an amendment never queries the provider");
+    let detail=m.resource_detail(ResourceDetailQuery{id:id.clone()}).await.unwrap();
+    assert_eq!(detail.resource.revision,revision);assert_eq!(detail.ceiling.and_then(|c|c.tokens).map(u64::from),Some(900));
+    assert_eq!(detail.ceiling_amendment.sequence,1);assert_eq!(detail.resource.budget.seat.quota.map(u64::from),Some(700));
+    // The original command recovers its recorded result and writes nothing.
+    assert!(matches!(m.review_local_resource_edit(&input).await.unwrap(),LocalResourceEditReview::Recorded(_)));
+    assert_eq!(m.edit_local_resource(copy(),until()).await.unwrap().ceiling_amendment,applied.ceiling_amendment);
+    for (input,code) in [
+        (amend("amend_stale",&revision,Some(0),monthly(1000)),"management_resource_edit_changed"),
+        (amend("amend_clear",&revision,Some(1),CeilingChange::Clear{}),"management_ceiling_clear_refused"),
+        (amend("amend_same",&revision,Some(1),monthly(900)),"management_ceiling_unchanged"),
+    ]{
+        assert_eq!(m.review_local_resource_edit(&input).await.unwrap_err().code,code);
+        assert_eq!(m.edit_local_resource(input,until()).await.unwrap_err().code,code);
+    }
+    // Without the amendment sequence it is an in-place edit, which stays refused.
+    assert_eq!(m.review_local_resource_edit(&amend("edit_in_place",&revision,None,monthly(1000))).await.unwrap_err().code,"management_resource_edit_not_available");
+    assert_eq!(m.resource_detail(ResourceDetailQuery{id}).await.unwrap().ceiling.and_then(|c|c.tokens).map(u64::from),Some(900));
+    drop(m);f.stop().await;
+}

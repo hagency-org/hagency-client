@@ -117,6 +117,12 @@ const RAW_READS: &[(&str, usize, &str)] = &[
         1,
         "budget.pool.ceiling of a budget computed from effective_ceiling",
     ),
+    (
+        "hagency/src/console/native/resource_edit.rs",
+        2,
+        "the request's CeilingChange input, and ResourceDetail::ceiling, \
+         which the detail already fills from effective_ceiling",
+    ),
 ];
 
 /// Production text: full-line comments and inline `#[cfg(test)] mod … { … }`
