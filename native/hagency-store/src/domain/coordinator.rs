@@ -161,13 +161,12 @@ pub(super) fn verified_after_probe(
     Ok(())
 }
 
-fn period(resource: &Resource, now: u64) -> Result<(String, String), Error> {
+fn period(db: &Connection, resource: &Resource, now: u64) -> Result<(String, String), Error> {
     let millis = i64::try_from(now).map_err(|_| InvalidInput("clock exceeds storage"))?;
     let date = time::OffsetDateTime::from_unix_timestamp(millis / 1000)
         .map_err(|_| InvalidInput("invalid budget clock"))?
         .date();
-    let daily = resource
-        .ceiling
+    let daily = super::resource_ceiling::effective_ceiling(db, resource)?
         .as_ref()
         .map(|c| serde_json::to_value(&c.period))
         .transpose()?
@@ -324,7 +323,7 @@ pub(super) fn check_agent(
         || parent != legacy.agent_definition.resource_id
         || resource.preset_id != preset
         || resource.seat_id != seat
-        || period(&resource, now)? != (granularity, key)
+        || period(db, &resource, now)? != (granularity, key)
         || !managers.contains(&command.request.project_owner)
     {
         return Err(Error::LocalAuthority);
@@ -564,7 +563,7 @@ impl DomainRepository {
             return Err(Error::State);
         }
         let resource = read_resource(&tx, &agent.resource_id)?;
-        let (granularity, key) = period(&resource, now)?;
+        let (granularity, key) = period(&tx, &resource, now)?;
         let (stored_period,stored_key,managers):(String,String,String)=tx.query_row("SELECT period,period_key,managers FROM coordinator_resources WHERE id=?1 AND engagement_id=?2",params![grant,fleet],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?)))?;
         if granularity != stored_period
             || key != stored_key
@@ -1068,7 +1067,7 @@ pub(super) fn put_resource_transaction(
     }
     let resource = read_resource(tx, &grant.resource_id)?;
     accounts.check_resource(tx, &resource)?;
-    let (granularity, key) = period(&resource, now)?;
+    let (granularity, key) = period(tx, &resource, now)?;
     let old: Option<StoredResourceGrant> = tx.query_row("SELECT engagement_id,resource_id,preset_id,seat_id,revision,allocated_tokens,period,period_key,managers FROM coordinator_resources WHERE id=?1", [grant.id.as_str()], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?,r.get(8)?))).optional()?;
     let amount = u64::from(grant.allocated_tokens);
     let managers = serialize(&grant.eligible_managers)?;

@@ -1,6 +1,7 @@
 //! Allocation and canonical task/dispatch state share this one database owner.
 pub mod owner_resources;
 mod reconciliation;
+pub(crate) mod resource_ceiling;
 mod resource_detail;
 use crate::{Error, database};
 use hagency_core::{
@@ -143,7 +144,7 @@ pub struct DomainRepository {
     _legacy_writer: Option<hagency_platform::legacy_writer::LegacyWriterAdmission>,
 }
 /// Current domain schema version (the last sequential migration).
-pub const DOMAIN_SCHEMA_VERSION: i32 = 103;
+pub const DOMAIN_SCHEMA_VERSION: i32 = 104;
 const DOMAIN_MIGRATIONS: &[(i32, &str)] = &[
     (2, include_str!("migrations/002-role-publication.sql")),
     (3, include_str!("migrations/003-task-dispatch.sql")),
@@ -394,6 +395,8 @@ const DOMAIN_MIGRATIONS: &[(i32, &str)] = &[
     (101, include_str!("migrations/103-owner-shared-tool-policy.sql")),
     (102, include_str!("migrations/104-owner-unstarted-shared-attempts.sql")),
     (103, include_str!("migrations/105-owner-shared-long-replies.sql")),
+    // Board migration number 107 (track C); the next sequential tuple is 104.
+    (104, include_str!("migrations/107-owner-resource-ceiling-amendments.sql")),
 ];
 
 impl DomainRepository {
@@ -1056,7 +1059,7 @@ fn budget_with_grant(
     let mut result = allocation::resource_budget(&allocation::Input {
         preset: allocation::Preset {
             id: resource.preset_id.clone(),
-            ceiling: resource.ceiling.clone(),
+            ceiling: resource_ceiling::effective_ceiling(db, resource)?,
         },
         seat_id: resource.seat_id.clone(),
         declaration,
@@ -1303,6 +1306,7 @@ impl DomainRepository {
                     "SELECT profile,resource_id,revision,active FROM owner_resource_grants LIMIT 0",
                     "SELECT command_id,digest,result FROM owner_resource_receipts LIMIT 0",
                     "SELECT resource_id,registry_id,creation_command_id,creation_digest,creation_profile,first_offer_kind,first_offer_profile,first_offer_command_id,first_offer_revision,first_offer_at_ms FROM owner_resource_provenance LIMIT 0",
+                    "SELECT resource_id,sequence,profile,command_id,base_revision,previous_tokens,tokens,period,created_at_ms FROM owner_resource_ceiling_amendments LIMIT 0",
                     "SELECT id,profile,resource_id,preset_id,seat_id,allocated_tokens,receipt,active FROM owner_capacity_grants LIMIT 0",
                     "SELECT id,grant_id,project_id,project_revision,reserve_command_id,reserve_digest,requested_tokens,retained_tokens,state,binding_digest FROM owner_project_reservations LIMIT 0",
                     "SELECT command_id,profile,executor_device_id,digest,result FROM owner_capacity_receipts LIMIT 0",
@@ -1615,8 +1619,9 @@ impl DomainRepository {
         let resource = prepare_resource_write(&tx, resource, Some(false), true)?;
         self.accounts.check_resource(&tx, &resource)?;
         write_resource_configuration(&tx, &resource, true)?;
+        let catalog = resource_ceiling::catalog_entry(&tx, &resource)?;
         tx.commit()?;
-        Ok(resource.catalog())
+        Ok(catalog)
     }
     pub fn edit_resource(
         &mut self,
@@ -1629,8 +1634,9 @@ impl DomainRepository {
         let resource = prepare_resource_write(&tx, resource, publication, false)?;
         self.accounts.check_resource(&tx, &resource)?;
         write_resource_configuration(&tx, &resource, false)?;
+        let catalog = resource_ceiling::catalog_entry(&tx, &resource)?;
         tx.commit()?;
-        Ok(resource.catalog())
+        Ok(catalog)
     }
     pub fn put_seat(&mut self, seat: &Seat) -> Result<(), Error> {
         seat.validate()?;
@@ -1676,7 +1682,7 @@ impl DomainRepository {
                 Err(Error::LocalAuthority | Error::Unqualified) => continue,
                 Err(error) => return Err(error),
             }
-            let mut public = resource.catalog();
+            let mut public = resource_ceiling::catalog_entry(&self.db, &resource)?;
             public.roles.retain(|role| allowed.contains(role.as_str()));
             if !public.roles.is_empty() {
                 output.push(public);
@@ -1689,6 +1695,16 @@ impl DomainRepository {
     }
     pub fn resource_configuration(&self, id: &str) -> Result<Resource, Error> {
         read_resource(&self.db, id)
+    }
+    /// The stored definition and the monthly maximum in force, one snapshot.
+    pub fn configured_resource(&self, id: &str) -> Result<ConfiguredResource, Error> {
+        let config = read_resource(&self.db, id)?;
+        let effective_ceiling = resource_ceiling::effective_ceiling(&self.db, &config)?;
+        Ok(ConfiguredResource {
+            id: id.to_owned(),
+            config,
+            effective_ceiling,
+        })
     }
     pub fn resource_configurations(
         &self,
@@ -1709,7 +1725,12 @@ impl DomainRepository {
                 let (id, config) = row?;
                 let mut config: Resource = serde_json::from_str(&config)?;
                 config.roles = config.eligible_roles();
-                Ok(ConfiguredResource { id, config })
+                let effective_ceiling = resource_ceiling::effective_ceiling(&self.db, &config)?;
+                Ok(ConfiguredResource {
+                    id,
+                    config,
+                    effective_ceiling,
+                })
             })
             .collect()
     }

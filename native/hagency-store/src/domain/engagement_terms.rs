@@ -384,9 +384,10 @@ impl DomainRepository {
         if live > 0 {
             return Err(Error::Conflict);
         }
+        let catalog = resource_ceiling::catalog_entry(&tx, &resource)?;
         tx.execute("DELETE FROM resources WHERE id=?1", [id])?;
         tx.commit()?;
-        Ok(resource.catalog())
+        Ok(catalog)
     }
 
     /// TS DELETE /api/seats/:seatId: 404 when no declaration exists.
@@ -412,13 +413,17 @@ impl DomainRepository {
 
     /// TS qualifies (backend-v2.js:1760-1763): provisionable framework, a
     /// known role, and the resource itself qualifying at the role's default
-    /// tier with a ceiling. Role PUBLICATION is deliberately not consulted —
-    /// TS's resourcesForRole does not either.
-    fn definition_qualifies(resource: &Resource, role: &str) -> bool {
-        resource.provisionable()
+    /// tier with a ceiling (the effective monthly maximum). Role PUBLICATION is
+    /// deliberately not consulted — TS's resourcesForRole does not either.
+    fn definition_qualifies(
+        db: &Connection,
+        resource: &Resource,
+        role: &str,
+    ) -> Result<bool, Error> {
+        Ok(resource.provisionable()
             && qualification::roles().any(|r| r == role)
-            && resource.ceiling.as_ref().and_then(|c| c.tokens).is_some()
-            && qualification::qualifies(&resource.profile(), role, None)
+            && resource_ceiling::effective_ceiling_tokens(db, resource)?.is_some()
+            && qualification::qualifies(&resource.profile(), role, None))
     }
 
     /// TS resourceAgentDefinitions.edit, ported with its exact rules and
@@ -510,7 +515,7 @@ impl DomainRepository {
                 {
                     return Err(Error::Conflict);
                 }
-                if !Self::definition_qualifies(&resource, &role) {
+                if !Self::definition_qualifies(&tx, &resource, &role)? {
                     return Err(Error::Unqualified);
                 }
                 if old.is_none() && previous.len() >= 200 {

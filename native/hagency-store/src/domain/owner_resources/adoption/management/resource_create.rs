@@ -121,7 +121,10 @@ impl AdoptedManagementStore {
                 .any(|choice| choice.model == resource.model && choice.reasoning == resource.reasoning)
             { return Err(Error::Unqualified); }
             match input.ceiling {
-                CeilingChange::Preserve {} => {}
+                // A copy starts from the maximum in force, including an amendment.
+                CeilingChange::Preserve {} => {
+                    resource.ceiling = crate::domain::resource_ceiling::effective_ceiling(&tx, &source)?
+                }
                 CeilingChange::Clear {} => resource.ceiling = None,
                 CeilingChange::Monthly { tokens } => resource.ceiling = Some(serde_json::from_value(
                     json!({"tokens":tokens,"period":"monthly"}),

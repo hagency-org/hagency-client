@@ -944,13 +944,11 @@ impl DomainRepository {
             return Err(Error::LocalAuthority);
         }
         check_grant(&tx, &resource, &s.grant_id, s.allocated_tokens, now)?;
+        // The monthly maximum in force, including an owner's native amendment.
         if serde_json::to_value(
-            resource
-                .ceiling
-                .as_ref()
+            crate::domain::resource_ceiling::effective_ceiling(&tx, &resource)?
                 .ok_or(Error::NoCeiling)?
-                .period
-                .clone(),
+                .period,
         )? != json!("monthly")
         {
             return Err(Error::NoCeiling);

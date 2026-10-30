@@ -1,4 +1,4 @@
-use super::DomainRepository;
+use super::{DomainRepository, resource_ceiling};
 use crate::{
     Error,
     management::{PROTOCOL, ResourceDetail, ResourceEditBlocker, ResourceEditing},
@@ -32,7 +32,8 @@ impl DomainRepository {
             protocol: PROTOCOL,
             observed_at_ms: at,
             resource: self.management_resource(id, at)?,
-            ceiling: config.ceiling,
+            // The maximum in force; the definition keeps its own for the revision.
+            ceiling: resource_ceiling::effective_ceiling(&self.db, &config)?,
             execution_policy: config.execution_policy.unwrap_or(hagency_core::execution::ExecutionPolicy { yolo: false }),
             choices: qualification::configuration_choices(&profile)?,
             model_tier: qualification::model(&profile).0,

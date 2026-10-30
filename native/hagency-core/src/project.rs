@@ -261,7 +261,12 @@ pub struct CatalogResource {
 #[derive(Debug, Serialize)]
 pub struct ConfiguredResource {
     pub id: String,
+    /// The stored definition; its revision never covers an amended maximum.
     pub config: Resource,
+    /// The monthly maximum in force: the latest native amendment of an offered
+    /// resource, else `config.ceiling`. Display this, never `config.ceiling`.
+    #[serde(skip)]
+    pub effective_ceiling: Option<Ceiling>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

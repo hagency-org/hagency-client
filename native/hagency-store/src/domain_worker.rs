@@ -4004,6 +4004,10 @@ impl DomainStore {
         self.call(256, move |db| db.resource_configuration(&id))
             .await
     }
+    /// The definition with the monthly maximum in force; display this one.
+    pub async fn configured_resource(&self, id: String) -> Result<ConfiguredResource, Error> {
+        self.call(256, move |db| db.configured_resource(&id)).await
+    }
 
     /// The operator's own task list (board #23). One writer job per command,
     /// the same shape every other console read/write uses; the routes add no

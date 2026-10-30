@@ -38,7 +38,7 @@ fn collect(db: &mut Connection, profile: &str) -> Result<ProfileLedgerAudit, Err
     let tx = db.transaction_with_behavior(TransactionBehavior::Deferred)?;
     let schema: i32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
     let application: i32 = tx.pragma_query_value(None, "application_id", |r| r.get(0))?;
-    if !matches!(schema, 71..=103) || application != 0x48414732 {
+    if !matches!(schema, 71..=104) || application != 0x48414732 {
         return Err(Error::Schema);
     }
     // Existing domain schema contains views. We never query them; every
@@ -430,7 +430,10 @@ fn collect(db: &mut Connection, profile: &str) -> Result<ProfileLedgerAudit, Err
     ))).chain((schema >= 102).then_some([
         ("owner_shared_unstarted_attempts", &["command_id", "payload", "digest", "ledger_revision"][..]),
         ("owner_shared_budget_demand_terminals", &["demand_id", "payload", "digest", "ledger_revision"][..]),
-    ]).into_iter().flatten()) {
+    ]).into_iter().flatten()).chain((schema >= 104).then_some((
+        "owner_resource_ceiling_amendments",
+        &["resource_id","sequence","profile","command_id","base_revision","previous_tokens","tokens","period","created_at_ms"][..],
+    ))) {
         let ordinary = tx
             .query_row(
                 "SELECT type='table' FROM pragma_table_list WHERE schema='main' AND name=?1",
@@ -547,7 +550,8 @@ fn collect(db: &mut Connection, profile: &str) -> Result<ProfileLedgerAudit, Err
             | "coordinator_resources"
             | "owner_capacity_grants"
             | "owner_project_reservations"
-            | "owner_parent_settlements" => {
+            | "owner_parent_settlements"
+            | "owner_resource_ceiling_amendments" => {
                 history.capacity_and_usage_rows.add(&count);
             }
             "effects" | "runner_dispatches" | "runner_attempts" | "owned_task_completions" => {
