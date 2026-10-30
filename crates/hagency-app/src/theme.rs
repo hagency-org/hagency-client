@@ -502,6 +502,9 @@ mod controls {
         mod.widgets.RinxButton = ButtonFlat {
             height: RINX_BUTTON_HEIGHT
             padding: Inset{left: 12 * RINX_SPACING right: 12 * RINX_SPACING top: 0 bottom: 0}
+            // Button layout centers each walk independently. RowAlign.Center
+            // would add a second icon offset before this container alignment.
+            flow: Flow.Right{row_align: RowAlign.Top}
             spacing: 6 margin: 0 align: Center
             icon_walk: Walk{width: 16 height: 16}
             grab_key_focus: false
@@ -609,6 +612,99 @@ pub(crate) mod tests {
         script_mod(vm);
         let errors = vm.take_errors();
         assert!(errors.is_empty(), "Theme registration failed: {errors:?}");
+    }
+
+    #[test]
+    fn control_label_ink_is_centered_for_real_latin_and_cjk_glyphs() {
+        use makepad_widgets::makepad_draw::cx_draw::CxDraw;
+        let mut cx = Cx::new(Box::new(|_, _| {}));
+        let label = cx.with_vm(|vm| {
+            install(vm, Selection::default());
+            let value = script_eval!(vm, {mod.widgets.RinxButton.draw_text});
+            DrawText::script_from_value(vm, value)
+        });
+        for resource in cx.script_data.resources.resources.borrow_mut().iter_mut() {
+            let path = resource.abs_path.replace("/draw/../../widgets/", "/widgets/");
+            if let Ok(bytes) = std::fs::read(path) {
+                resource.data = makepad_widgets::makepad_platform::script::res::CxScriptResourceData::Loaded(bytes.into());
+            }
+        }
+        let event = DrawEvent::default();
+        let mut draw = CxDraw::new(&mut cx, &event);
+        let mut cx2d = Cx2d::new(&mut draw);
+        for text in ["my tasks", "Refresh", "保存模型配置", "Agent 设置"] {
+            let text = label.layout(&mut cx2d, 0.0, 0.0, None, false, Align::default(), text);
+            let mut top = f32::INFINITY;
+            let mut bottom = f32::NEG_INFINITY;
+            for row in &text.rows {
+                for glyph in &row.glyphs {
+                    let mut outline = None;
+                    if let Some(bounds) = glyph.font.glyph_outline_bounds_in_ems(glyph.id, &mut outline) {
+                        if bounds.size.width <= 0.0 || bounds.size.height <= 0.0 {continue;}
+                        let baseline = row.origin_in_lpxs.y + glyph.origin_in_lpxs.y;
+                        top = top.min(baseline - (bounds.origin.y + bounds.size.height) * glyph.font_size_in_lpxs);
+                        bottom = bottom.max(baseline - bounds.origin.y * glyph.font_size_in_lpxs);
+                    }
+                }
+            }
+            assert!(top.is_finite() && bottom.is_finite(), "real fonts must be loaded");
+            let ink_center = (top + bottom) * 0.5 + text.ink_center_offset_in_lpxs();
+            assert!((ink_center - text.size_in_lpxs.height * 0.5).abs() < 0.1,
+                "actual ink, not the primary font's cap-height band, must be centered: {:?}, ink center {}, box center {}",text.text,ink_center,text.size_in_lpxs.height*0.5);
+        }
+    }
+
+    #[test]
+    fn button_icons_stay_vertically_centered_with_taller_labels() {
+        use makepad_widgets::makepad_draw::cx_draw::CxDraw;
+        let mut cx = Cx::new(Box::new(|_, _| {}));
+        for size in [13.0, 20.0, 26.0] {
+            for text in ["Save model", "保存模型配置", "Agent 设置"] {
+                for height in [36.0, 44.0] {
+                    let mut button = cx.with_vm(|vm| {
+                        makepad_widgets::script_mod(vm);
+                        crate::app::register_widgets(vm);
+                        vm.bx.captured_errors = Some(Vec::new());
+                        let value = script_eval!(vm, {mod.widgets.RinxButton {
+                            height: #(height)
+                            text: #(text)
+                            draw_text.text_style.font_size: #(size)
+                            draw_icon.svg: mod.widgets.ICON_ADD
+                        }});
+                        let button = Button::script_from_value(vm, value);
+                        assert!(vm.take_errors().is_empty());
+                        button
+                    });
+                    // Headless Cx has no platform resource loader. Populate the
+                    // same declared resources directly, without initializing AppKit.
+                    for resource in cx.script_data.resources.resources.borrow_mut().iter_mut() {
+                        let path = resource.abs_path.replace("/draw/../../widgets/", "/widgets/");
+                        if let Ok(bytes) = std::fs::read(path) {
+                            resource.data = makepad_widgets::makepad_platform::script::res::CxScriptResourceData::Loaded(bytes.into());
+                        }
+                    }
+                    cx.redraw_all();
+                    let pass = DrawPass::new(&mut cx);
+                    pass.set_size(&mut cx, dvec2(420.0, 100.0));
+                    let mut list = DrawList2d::new(&mut cx);
+                    let event = DrawEvent::default();
+                    {let mut draw = CxDraw::new(&mut cx, &event);
+                    let mut cx2d = Cx2d::new(&mut draw);
+                    cx2d.begin_pass(&pass, None);
+                    list.begin_always(&mut cx2d);
+                    cx2d.begin_root_turtle(dvec2(420.0, 100.0), Layout::flow_overlay());
+                    button.draw_walk_all(&mut cx2d, &mut Scope::empty(), Walk::fixed(360.0, height));
+                    cx2d.end_pass_sized_turtle();
+                    list.end(&mut cx2d);
+                    cx2d.end_pass(&pass);}
+                    let face = button.area().rect(&cx);
+                    let icon = button.draw_icon.area().rect(&cx);
+                    assert!(icon.size.y > 0.0, "the real icon must be drawn");
+                    assert!((face.pos.y + face.size.y * 0.5 - icon.pos.y - icon.size.y * 0.5).abs() < 0.1,
+                        "{text}, font {size}, height {height}: face {face:?}, icon {icon:?}");
+                }
+            }
+        }
     }
 
     #[test]
