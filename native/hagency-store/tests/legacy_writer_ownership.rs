@@ -209,7 +209,7 @@ fn durable_refusal_precedes_fresh_creation_and_old_schema_migration() {
         true,
     )
     .unwrap();
-    db.execute_batch("DROP TABLE owner_managed_fences;DROP TABLE IF EXISTS owner_shared_tool_policies;PRAGMA user_version=76;")
+    db.execute_batch("DROP TABLE owner_managed_fences;DROP TRIGGER IF EXISTS owner_resource_amended_ceiling_retained;DROP TABLE IF EXISTS owner_resource_ceiling_amendments;DROP TABLE IF EXISTS owner_shared_tool_policies;PRAGMA user_version=76;")
         .unwrap();
     drop(db);
     let files = ["domain.sqlite3", "domain.sqlite3-wal"];

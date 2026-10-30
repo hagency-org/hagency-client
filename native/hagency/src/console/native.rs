@@ -128,7 +128,7 @@ pub use source_quiescence::{
 mod initialization_tests;
 mod resource_name;
 mod resource_edit;
-pub use resource_edit::LocalResourceEditReview;
+pub use resource_edit::{CeilingAmendmentReview, LocalResourceEditReview};
 mod resource_create;
 pub use resource_create::ResourceConfigurationReview;
 pub use hagency_store::{ProfileChange, CeilingChange};
@@ -156,12 +156,13 @@ pub use hagency_store::management::{
     AccountInventory, AccountInventoryQuery, AccountSummary, PrepareAccount, AccountPreparation, RetireAccount, AccountRetirement,
     AccountLoginRequest, AccountLoginStatus, AccountModelQuery,
     RenameResource, EditLocalResource, CreateResourceConfiguration, ResourceDetail, ResourceDetailQuery, ResourceNameResult, ResourcePage,
+    CeilingAmendment, CeilingAmendmentBlocker,
     ResourceQuery,
 };
 pub use hagency_store::management::{
     OperatorBoardQuery, OperatorTaskDetailQuery, OperatorTaskQuery,
 };
-pub use hagency_store::{ResourceConfigurationResult, ResourcePublicationResult};
+pub use hagency_store::{CeilingAmendmentResult, ResourceConfigurationResult, ResourcePublicationResult};
 pub use management::{ManagementPackage, NativeManagement};
 pub use management_server::{AgentRunMode, ManagementCommand};
 pub use resource_onboarding::ManagementRuntime;

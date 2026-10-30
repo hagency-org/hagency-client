@@ -5,6 +5,7 @@ mod resource_publication;
 mod web_catalog;
 mod resource_name;
 mod resource_edit;
+mod resource_ceiling;
 mod resource_create;
 mod alerts;
 mod approval_bindings;
@@ -167,6 +168,12 @@ impl AdoptedManagementStore {
                 result.resource.local_name = Some(backing.name_for(&tx, &id)?);
                 crate::domain::web_catalog::filter_capabilities(&tx, &authority.digest, &mut result.resource.capabilities)?;
                 result.editing = resource_edit::editing(&tx, backing.registry.id(), &id)?;
+                result.ceiling_amendment = resource_ceiling::amendment_state(
+                    &tx,
+                    backing.registry.id(),
+                    &read_resource(&tx, &id)?,
+                    result.observed_at_ms,
+                )?;
                 if serde_json::to_vec(&result)?.len() > 64 * 1024 {
                     return Err(Error::Capacity);
                 }

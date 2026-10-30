@@ -739,7 +739,7 @@ pub use resource_templates::{ResourceTemplate,ResourceTemplatePage,ResourceTempl
 mod resource_name;
 pub use resource_name::{RenameResource, ResourceLocalName, ResourceNameResult};
 mod resource_edit;
-pub use resource_edit::EditLocalResource;
+pub use resource_edit::{CeilingAmendmentRefusal, EditLocalResource};
 mod resource_create;
 pub use resource_create::CreateResourceConfiguration;
 pub(crate) mod accounts;
@@ -765,7 +765,8 @@ pub use operator_tasks::{
 };
 pub use enrollment::{EnrollResource, ProviderSelection};
 pub use resource_detail::{
-    ResourceDetail, ResourceDetailQuery, ResourceEditBlocker, ResourceEditing,
+    CeilingAmendment, CeilingAmendmentBlocker, ResourceDetail, ResourceDetailQuery,
+    ResourceEditBlocker, ResourceEditing,
 };
 mod connection;
 pub use connection::ProviderWitness;

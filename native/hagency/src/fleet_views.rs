@@ -518,6 +518,8 @@ async fn capability(_req: &mut Request, depot: &mut Depot, res: &mut Response) {
     // the config carries the model identity the tier judgement needs.
     let mut row_ids: Vec<String> = Vec::new();
     let mut flat: Vec<Resource> = Vec::new();
+    // The monthly maximum in force per row (an offered resource's amendment).
+    let mut ceilings: Vec<Option<u64>> = Vec::new();
     let mut after = String::new();
     loop {
         let page = match store.resource_configurations(after.clone(), 100).await {
@@ -531,6 +533,7 @@ async fn capability(_req: &mut Request, depot: &mut Depot, res: &mut Response) {
         for row in page {
             after = row.id.clone();
             row_ids.push(row.id);
+            ceilings.push(row.effective_ceiling.and_then(|c| c.tokens).map(u64::from));
             flat.push(row.config);
         }
         match next_after {
@@ -541,11 +544,10 @@ async fn capability(_req: &mut Request, depot: &mut Depot, res: &mut Response) {
     // `resources_for_role` answers references INTO `flat`; map one back to
     // its row id by offset (valid because every reference comes from that
     // exact slice).
-    let row_id = |r: &Resource| -> &str {
-        let offset = (r as *const Resource as usize - flat.as_ptr() as usize)
-            / std::mem::size_of::<Resource>();
-        row_ids[offset].as_str()
+    let offset = |r: &Resource| -> usize {
+        (r as *const Resource as usize - flat.as_ptr() as usize) / std::mem::size_of::<Resource>()
     };
+    let row_id = |r: &Resource| -> &str { row_ids[offset(r)].as_str() };
     // The resolved model and preset row id per agent: agent_detail names the
     // backing resource row; the roster alone carries only the framework.
     let mut profiles: std::collections::HashMap<String, hagency_core::qualification::ModelProfile> =
@@ -669,7 +671,7 @@ async fn capability(_req: &mut Request, depot: &mut Depot, res: &mut Response) {
                     "family": family.map(Value::from).unwrap_or(Value::Null),
                     "tier": tier,
                     "overTier": tier.map(|t| rank(t) - rank(need)).unwrap_or(0),
-                    "ceilingTokens": r.ceiling.as_ref().and_then(|c| c.tokens).map(u64::from),
+                    "ceilingTokens": ceilings[offset(r)],
                 })
             })
             .collect();

@@ -161,7 +161,7 @@ impl DomainRepository {
             }
             let resource = read_resource(&tx, &grant.resource_id)?;
             self.accounts.check_resource(&tx, &resource)?;
-            let (period, key) = period(&resource, now)?;
+            let (period, key) = period(&tx, &resource, now)?;
             bounded_row(&tx, "coordinator_resources", "id", grant.id.as_str(), 2000)?;
             tx.execute("INSERT INTO coordinator_resources(id,engagement_id,resource_id,preset_id,seat_id,revision,allocated_tokens,period,period_key,managers) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",params![grant.id.as_str(),fleet,grant.resource_id,resource.preset_id,resource.seat_id,u64::from(grant.revision),u64::from(grant.allocated_tokens),period,key,serialize(&grant.eligible_managers)?])?;
             resource_rows.insert(grant.id.as_str(), (resource, period, key));

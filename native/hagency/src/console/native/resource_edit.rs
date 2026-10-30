@@ -13,6 +13,95 @@ use std::time::Instant;
 pub enum LocalResourceEditReview {
     Editable(Box<hagency_store::management::ResourceDetail>),
     Recorded(ResourceConfigurationResult),
+    /// A ceiling-only request (`expectedCeilingSequence`) on a resource that
+    /// was offered, published or retains commitments: an append-only
+    /// amendment of its monthly maximum. The definition, its server admission,
+    /// running Agents and the live per-request limit are unchanged.
+    CeilingAmendment(CeilingAmendmentReview),
+}
+
+/// Exactly what the native confirmation shows and the writer re-checks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CeilingAmendmentReview {
+    pub resource_id: String,
+    /// The owner's local name for the resource, when one is set.
+    pub name: Option<String>,
+    /// The definition revision; an amendment leaves it unchanged.
+    pub revision: String,
+    /// The amendment sequence the request expects: the current one.
+    pub sequence: u64,
+    /// The monthly maximum in force now.
+    pub previous_tokens: u64,
+    /// The proposed monthly maximum.
+    pub tokens: u64,
+    /// The live grant's per-request limit, which this amendment never changes.
+    pub per_request_tokens: Option<u64>,
+}
+
+/// The review checks the writer repeats atomically, so a refusal is shown
+/// before the owner confirms anything.
+#[cfg(feature = "resource-adoption")]
+fn ceiling_amendment_review(
+    input: &EditLocalResource,
+    detail: &hagency_store::management::ResourceDetail,
+) -> Result<CeilingAmendmentReview, NativeError> {
+    let current = detail.ceiling.as_ref().and_then(|c| c.tokens).map(u64::from);
+    let (previous_tokens, tokens) = checked_amendment(input, &detail.ceiling_amendment, current)?;
+    Ok(CeilingAmendmentReview {
+        resource_id: detail.resource.id.clone(),
+        name: detail
+            .resource
+            .local_name
+            .as_ref()
+            .map(|n| n.name.clone())
+            .filter(|n| !n.is_empty()),
+        revision: detail.resource.revision.clone(),
+        sequence: detail.ceiling_amendment.sequence,
+        previous_tokens,
+        tokens,
+        per_request_tokens: detail.ceiling_amendment.per_request_tokens,
+    })
+}
+
+/// `(previous, proposed)` monthly maximum when the request passes review:
+/// the reviewed sequence is current, the resource can be amended, and the
+/// proposal is neither a clear, nor unchanged, nor below this month's floor.
+#[cfg(any(feature = "resource-adoption", test))]
+fn checked_amendment(
+    input: &EditLocalResource,
+    amendment: &hagency_store::management::CeilingAmendment,
+    current: Option<u64>,
+) -> Result<(u64, u64), NativeError> {
+    if input.expected_ceiling_sequence != Some(amendment.sequence) {
+        return Err(failure(409, "management_resource_edit_changed"));
+    }
+    if !amendment.allowed {
+        return Err(failure(409, "management_ceiling_amendment_not_available"));
+    }
+    let previous =
+        current.ok_or_else(|| failure(409, "management_ceiling_amendment_not_available"))?;
+    let tokens = match &input.ceiling {
+        hagency_store::CeilingChange::Monthly { tokens } => u64::from(*tokens),
+        hagency_store::CeilingChange::Clear {} => {
+            return Err(failure(409, "management_ceiling_clear_refused"));
+        }
+        hagency_store::CeilingChange::Preserve {} => {
+            return Err(failure(400, "invalid_management_arguments"));
+        }
+    };
+    if tokens == previous {
+        return Err(failure(409, "management_ceiling_unchanged"));
+    }
+    if tokens < previous {
+        match amendment.minimum_tokens {
+            None => return Err(failure(409, "management_ceiling_usage_unsettled")),
+            Some(minimum) if tokens < minimum => {
+                return Err(failure(409, "management_ceiling_below_commitments"));
+            }
+            Some(_) => {}
+        }
+    }
+    Ok((previous, tokens))
 }
 
 pub(super) fn known_failure(error: &NativeError) -> bool {
@@ -26,6 +115,11 @@ pub(super) fn known_failure(error: &NativeError) -> bool {
                     | "provider_model_changed"
                     | "resource_namespace_required"
                     | "provider_connection_required"
+                    | "management_ceiling_amendment_not_available"
+                    | "management_ceiling_clear_refused"
+                    | "management_ceiling_unchanged"
+                    | "management_ceiling_below_commitments"
+                    | "management_ceiling_usage_unsettled"
             ))
 }
 
@@ -71,6 +165,16 @@ impl NativeManagement {
                 .map_err(store_error)?;
             if detail.resource.revision != input.expected_revision {
                 return Err(failure(409, "management_resource_edit_changed"));
+            }
+            if input.is_ceiling_amendment() {
+                let review = ceiling_amendment_review(input, &detail)?;
+                return self
+                    .finish(
+                        &context,
+                        Ok(LocalResourceEditReview::CeilingAmendment(review)),
+                        false,
+                    )
+                    .await;
             }
             if let Some(policy) = input.execution_policy {
                 policy.validate_for(&detail.resource.framework)
@@ -144,6 +248,21 @@ impl NativeManagement {
                 .map_err(store_error)?
             {
                 return self.finish(&context, Ok(result), false).await;
+            }
+            // A monthly-maximum amendment needs no provider: the definition,
+            // its model and its account namespace are all left unchanged.
+            if input.is_ceiling_amendment() {
+                if Instant::now() >= confirmed_until {
+                    return Err(failure(403, "provider_confirmation_expired"));
+                }
+                let deadline = session
+                    .valid_until()
+                    .min(confirmed_until)
+                    .min(Instant::now() + std::time::Duration::from_secs(30));
+                let result = session
+                    .amend_resource_ceiling(&context, input, deadline)
+                    .await;
+                return self.finish(&context, result, true).await;
             }
             let (registry, profile) = session
                 .local_resource_editor_registry(&context)
@@ -268,6 +387,51 @@ mod tests {
             )
             .is_err()
         );
+    }
+    #[test]
+    fn ceiling_amendment_review_refuses_before_native_confirmation() {
+        use hagency_store::management::{CeilingAmendment, CeilingAmendmentBlocker};
+        use hagency_store::{CeilingChange, ProfileChange};
+        let state = |allowed: bool, minimum: Option<u64>| CeilingAmendment {
+            allowed,
+            reason: (!allowed).then_some(CeilingAmendmentBlocker::NotOffered),
+            sequence: 2,
+            minimum_tokens: minimum,
+            per_request_tokens: Some(700),
+        };
+        let request = |sequence: Option<u64>, ceiling: CeilingChange| EditLocalResource {
+            command_id: "amend".into(),
+            resource_id: "resource_1".into(),
+            expected_revision: "a".repeat(64),
+            profile: ProfileChange::Preserve {},
+            ceiling,
+            execution_policy: None,
+            expected_ceiling_sequence: sequence,
+        };
+        let monthly = |tokens: u64| CeilingChange::Monthly {
+            tokens: tokens.try_into().unwrap(),
+        };
+        let code = |input: EditLocalResource, state: CeilingAmendment, current: Option<u64>| {
+            checked_amendment(&input, &state, current).map_err(|e| e.code)
+        };
+        // Raising and lowering to the floor pass; the floor bounds only lowering.
+        assert_eq!(code(request(Some(2), monthly(1500)), state(true, Some(800)), Some(1000)), Ok((1000, 1500)));
+        assert_eq!(code(request(Some(2), monthly(800)), state(true, Some(800)), Some(1000)), Ok((1000, 800)));
+        assert_eq!(code(request(Some(2), monthly(1500)), state(true, None), Some(1000)), Ok((1000, 1500)));
+        assert_eq!(code(request(Some(2), monthly(1100)), state(true, Some(1200)), Some(1000)), Ok((1000, 1100)));
+        for (input, state, current, expected) in [
+            (request(Some(2), monthly(799)), state(true, Some(800)), Some(1000), "management_ceiling_below_commitments"),
+            (request(Some(2), monthly(999)), state(true, None), Some(1000), "management_ceiling_usage_unsettled"),
+            (request(Some(2), CeilingChange::Clear {}), state(true, Some(800)), Some(1000), "management_ceiling_clear_refused"),
+            (request(Some(2), monthly(1000)), state(true, Some(800)), Some(1000), "management_ceiling_unchanged"),
+            (request(Some(1), monthly(1500)), state(true, Some(800)), Some(1000), "management_resource_edit_changed"),
+            (request(None, monthly(1500)), state(true, Some(800)), Some(1000), "management_resource_edit_changed"),
+            (request(Some(2), monthly(1500)), state(false, None), Some(1000), "management_ceiling_amendment_not_available"),
+            (request(Some(2), monthly(1500)), state(true, Some(800)), None, "management_ceiling_amendment_not_available"),
+        ] {
+            assert_eq!(code(input, state, current), Err(expected.to_owned()), "{expected}");
+            assert!(known_failure(&failure(409, expected)), "{expected} settles its intent");
+        }
     }
     #[test]
     fn local_editor_known_failures_never_settle_uncertain_or_scope_errors() {

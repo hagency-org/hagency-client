@@ -3,7 +3,9 @@ use super::*;
 use crate::{CeilingChange, ProfileChange, ResourceConfigurationResult, resource_publication_revision};
 use crate::management::{CommandReceipt, EditLocalResource, ResourceEditBlocker, ResourceEditing};
 
-fn blocker(db: &Connection, registry: &str, resource: &Resource) -> Result<Option<ResourceEditBlocker>, Error> {
+/// Why the definition cannot be edited in place. An amended monthly maximum
+/// is retained history too: the definition keeps the maximum it started from.
+pub(super) fn blocker(db: &Connection, registry: &str, resource: &Resource) -> Result<Option<ResourceEditBlocker>, Error> {
     match provenance::history(db, registry, &resource.id())? {
         provenance::History::Unknown => return Ok(Some(ResourceEditBlocker::ContributionHistoryNotProven)),
         provenance::History::Offered => return Ok(Some(ResourceEditBlocker::PreviouslyOffered)),
@@ -15,7 +17,7 @@ fn blocker(db: &Connection, registry: &str, resource: &Resource) -> Result<Optio
     // Even a contradictory historical hold must not be erased or reinterpreted.
     // Offered resources require amendment, including after their grant closes.
     let retained: bool = db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM owner_capacity_grants WHERE resource_id=?1 UNION ALL SELECT 1 FROM engagements WHERE resource_id=?1)",
+        "SELECT EXISTS(SELECT 1 FROM owner_capacity_grants WHERE resource_id=?1 UNION ALL SELECT 1 FROM engagements WHERE resource_id=?1 UNION ALL SELECT 1 FROM owner_resource_ceiling_amendments WHERE resource_id=?1)",
         [resource.id()], |r| r.get(0))?;
     if retained || unsettled_resource(db, resource)? {
         return Ok(Some(ResourceEditBlocker::RetainedCommitments));
@@ -88,6 +90,10 @@ impl AdoptedManagementStore {
     ) -> Result<ResourceConfigurationResult, Error> {
         self.check(profile)?;
         input.validate()?;
+        // An amendment request is never applied as a definition edit.
+        if input.is_ceiling_amendment() {
+            return Err(hagency_core::InvalidInput("a ceiling amendment is not an in-place edit").into());
+        }
         let backing = self.clone();
         let authority = profile.clone();
         let expires = binding.expires();
@@ -149,6 +155,7 @@ impl AdoptedManagementStore {
                     resource_id: resource.id(),
                     revision: resource_publication_revision(&resource)?,
                     published: false,
+                    ceiling_amendment: None,
                 };
                 write_resource_configuration(&tx, &resource, false)?;
                 receipt.record(&tx, &result)?;

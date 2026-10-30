@@ -47,14 +47,16 @@ fn revision(resource: &Resource, rows: &[Definition]) -> Result<String, Error> {
         ))?)
     ))
 }
-fn roles(resource: &Resource) -> Vec<String> {
-    if !resource.provisionable() || resource.ceiling.as_ref().and_then(|v| v.tokens).is_none() {
-        return vec![];
+fn roles(db: &Connection, resource: &Resource) -> Result<Vec<String>, Error> {
+    if !resource.provisionable()
+        || crate::domain::resource_ceiling::effective_ceiling_tokens(db, resource)?.is_none()
+    {
+        return Ok(vec![]);
     }
-    hagency_core::qualification::roles()
+    Ok(hagency_core::qualification::roles()
         .filter(|r| hagency_core::qualification::qualifies(&resource.profile(), r, None))
         .map(str::to_owned)
-        .collect()
+        .collect())
 }
 fn use_counts(db: &Connection, name: &str) -> Result<(u64, u64, bool), Error> {
     let active: u64 = db.query_row(
@@ -119,7 +121,7 @@ impl AdoptedManagementStore {
                 let resource = read_resource(&tx, &id)?;
                 let rows = definitions(&tx, &id)?;
                 let revision = revision(&resource, &rows)?;
-                let roles = roles(&resource);
+                let roles = roles(&tx, &resource)?;
                 let remaining: Vec<_> = rows
                     .iter()
                     .filter(|r| after.as_ref().is_none_or(|a| r.id > *a))
@@ -179,7 +181,7 @@ impl AdoptedManagementStore {
                     resource_id,
                     revision: revision(&resource, &rows)?,
                     definition,
-                    roles: roles(&resource),
+                    roles: roles(&tx, &resource)?,
                     can_edit_identity: !used,
                     can_toggle: true,
                     can_delete: !used,
@@ -226,7 +228,7 @@ impl AdoptedManagementStore {
                 // Toggle-only changes retain old snapshots and remain available
                 // even after a resource no longer qualifies for new agents.
                 let identity_changed=old.is_none_or(|old|old.name!=change.name||old.role!=change.role);
-                if (identity_changed||change.enabled)&&!roles(&resource).contains(&change.role){return Err(Error::Unqualified)}
+                if (identity_changed||change.enabled)&&!roles(&tx,&resource)?.contains(&change.role){return Err(Error::Unqualified)}
                 let duplicate:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM agent_definitions WHERE name=?1 AND id<>?2)",params![change.name,input.definition_id],|r|r.get(0))?;
                 if duplicate || (identity_changed&&use_counts(&tx,&change.name)?.2){return Err(Error::Conflict)}
                 if creating {

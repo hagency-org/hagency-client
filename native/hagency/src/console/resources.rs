@@ -38,9 +38,12 @@ pub(super) struct ResourceRow {
     revision: String,
 }
 impl ResourceRow {
-    pub(super) fn from_resource(
-        resource: hagency_core::project::Resource,
+    /// The revision covers the stored definition; `ceiling` is the monthly
+    /// maximum in force, including an offered resource's native amendment.
+    pub(super) fn from_configured(
+        configured: hagency_core::project::ConfiguredResource,
     ) -> Result<Self, hagency_store::Error> {
+        let resource = configured.config;
         Ok(Self {
             id: resource.id(),
             revision: resource_publication_revision(&resource)?,
@@ -49,7 +52,7 @@ impl ResourceRow {
             model: resource.model,
             provider: resource.provider,
             reasoning: resource.reasoning,
-            ceiling: resource.ceiling,
+            ceiling: configured.effective_ceiling,
             published: resource.published,
         })
     }
@@ -141,7 +144,7 @@ async fn configurations(req: &mut Request, depot: &mut Depot, res: &mut Response
                     model: r.config.model,
                     provider: r.config.provider,
                     reasoning: r.config.reasoning,
-                    ceiling: r.config.ceiling,
+                    ceiling: r.effective_ceiling,
                     published: r.config.published,
                     roles: r.config.roles,
                     revision,

@@ -219,11 +219,12 @@ pub(crate) fn ceiling_report(
 ) -> Result<CeilingReport, Error> {
     identifier(resource_id, 128)?;
     let resource = read_resource(db, resource_id)?;
+    // The monthly maximum in force: an offered resource's latest amendment.
+    let ceiling = super::super::resource_ceiling::effective_ceiling(db, &resource)?;
     // Period granularity from the ceiling declaration, monthly unless the
     // preset says daily — mirroring backend-v2.js:14015. `Period` keeps the
     // JS missing-vs-null distinction private; serde reads the plain value.
-    let period_value = resource
-        .ceiling
+    let period_value = ceiling
         .as_ref()
         .map(|c| serde_json::to_value(&c.period))
         .transpose()?
@@ -233,11 +234,7 @@ pub(crate) fn ceiling_report(
     } else {
         UsagePeriodKind::Monthly
     };
-    let ceiling_tokens = resource
-        .ceiling
-        .as_ref()
-        .and_then(|c| c.tokens)
-        .map(u64::from);
+    let ceiling_tokens = ceiling.as_ref().and_then(|c| c.tokens).map(u64::from);
     let key = match period {
         UsagePeriodKind::Daily => period_keys(at)?.0,
         UsagePeriodKind::Monthly => period_keys(at)?.1,

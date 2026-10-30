@@ -6,7 +6,7 @@ use super::{
 };
 use crate::resources::domain;
 use hagency_core::{
-    project::{Resource, identifier},
+    project::{ConfiguredResource, identifier},
     qualification::{self, ConfigurationChoice, Tier},
 };
 use hagency_store::{CeilingChange, ProfileChange};
@@ -42,8 +42,8 @@ struct Observation {
     model_roles: Vec<String>,
 }
 impl Observation {
-    fn from(resource: Resource) -> Result<Self, hagency_store::Error> {
-        let profile = resource.profile();
+    fn from(configured: ConfiguredResource) -> Result<Self, hagency_store::Error> {
+        let profile = configured.config.profile();
         Ok(Self {
             choices: qualification::configuration_choices(&profile)?,
             model_tier: qualification::model(&profile).0,
@@ -51,7 +51,7 @@ impl Observation {
                 .filter(|r| qualification::qualifies(&profile, r, None))
                 .map(str::to_owned)
                 .collect(),
-            resource: ResourceRow::from_resource(resource)?,
+            resource: ResourceRow::from_configured(configured)?,
         })
     }
 }
@@ -68,7 +68,7 @@ async fn observation(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         return;
     };
     let result = store
-        .resource_configuration(id)
+        .configured_resource(id)
         .await
         .and_then(Observation::from);
     if let Err(error) = recheck(depot) {

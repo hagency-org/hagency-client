@@ -1,8 +1,8 @@
 //! A single SQLite owner on a dedicated bounded worker; no IO in async handlers.
 pub use domain::owner_resources;
 pub use domain::resource_configuration::{
-    CeilingChange, ProfileChange, ResourceConfigurationAccess, ResourceConfigurationCommand,
-    ResourceConfigurationResult, ResourceEngagementChange,
+    CeilingAmendmentResult, CeilingChange, ProfileChange, ResourceConfigurationAccess,
+    ResourceConfigurationCommand, ResourceConfigurationResult, ResourceEngagementChange,
 };
 pub mod agent_home;
 pub mod backup;
@@ -110,6 +110,9 @@ pub enum Error {
     ResourceConfigurationSourceChanged,
     #[error("resource configuration requires an amendment or history recovery")]
     ResourceEditNotAvailable,
+    /// A monthly-maximum amendment was refused before any ledger effect.
+    #[error("the monthly maximum amendment was refused: {0:?}")]
+    CeilingAmendmentRefused(management::CeilingAmendmentRefusal),
     #[error("operator task revision changed")]
     OperatorTaskRevisionChanged,
     #[error("domain object does not exist")]

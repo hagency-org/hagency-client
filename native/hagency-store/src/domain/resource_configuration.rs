@@ -179,6 +179,20 @@ pub struct ResourceConfigurationResult {
     pub resource_id: String,
     pub revision: String,
     pub published: bool,
+    /// Present only when the command amended an offered resource's monthly
+    /// maximum; the definition and `revision` were then left unchanged.
+    /// Omission keeps every earlier recorded result byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ceiling_amendment: Option<CeilingAmendmentResult>,
+}
+/// The amendment a command recorded: `sequence` is its position in the
+/// resource's chain, `previous_tokens` the maximum it replaced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CeilingAmendmentResult {
+    pub sequence: u64,
+    pub previous_tokens: u64,
+    pub tokens: u64,
 }
 impl DomainRepository {
     pub fn configure_resource(
@@ -317,6 +331,7 @@ impl DomainRepository {
             resource_id: resource.id(),
             revision: resource_publication_revision(&resource)?,
             published: resource.published,
+            ceiling_amendment: None,
         };
         check(clock())?;
         self.accounts.check_resource(&tx, &resource)?;
@@ -409,6 +424,7 @@ impl DomainRepository {
             resource_id: resource.id(),
             revision: resource_publication_revision(&resource)?,
             published: false,
+            ceiling_amendment: None,
         };
         command.receipt.record(&tx, &result)?;
         check()?;

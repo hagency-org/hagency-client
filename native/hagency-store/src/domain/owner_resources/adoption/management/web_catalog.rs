@@ -139,7 +139,7 @@ impl AdoptedManagementStore {
                     // Managed-agent approvals and existing allocations are immutable.
                     let row:Option<(String,String)>=tx.query_row("SELECT e.resource_id,COALESCE(e.preset_id,'') FROM engagements e WHERE e.id=?1 AND e.state='pending' AND NOT EXISTS(SELECT 1 FROM effects f WHERE f.engagement_id=e.id)",[engagement_id],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
                     let (old,preset)=row.ok_or(Error::State)?;authorize_resource(&tx,&authority,&old)?;if !preset.is_empty(){return Err(Error::State)}
-                    if !resource.provisionable()||resource.ceiling.as_ref().and_then(|c|c.tokens).is_none(){return Err(Error::Unqualified)}
+                    if !resource.provisionable()||crate::domain::resource_ceiling::effective_ceiling_tokens(&tx,&resource)?.is_none(){return Err(Error::Unqualified)}
                     crate::domain::agent_lifecycle::rebind_resource_in_transaction(&tx,engagement_id,&resource.preset_id,graphs::now_ms()?)?;
                 },
             }

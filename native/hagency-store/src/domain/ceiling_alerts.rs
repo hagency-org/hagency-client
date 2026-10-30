@@ -100,12 +100,7 @@ fn reconcile_resource(db: &rusqlite::Connection, resource: &Resource, now: u64) 
     // No declared ceiling is unknown, not zero: such a resource cannot
     // be past a limit that does not exist and is skipped entirely
     // (`backend-v2.js:9397-9400`).
-    let Some(ceiling) = resource
-        .ceiling
-        .as_ref()
-        .and_then(|c| c.tokens)
-        .map(u64::from)
-    else {
+    let Some(ceiling) = super::resource_ceiling::effective_ceiling_tokens(db, resource)? else {
         return Ok(outcome);
     };
     let ceiling = bounded(ceiling)?;

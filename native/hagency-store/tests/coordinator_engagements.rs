@@ -1201,7 +1201,7 @@ fn scoped_agent_rename_preserves_identity_budget_and_newer_name_across_restart()
     drop(db);
     let sql = rusqlite::Connection::open(dir.path().join("state/domain.sqlite3")).unwrap();
     common::remove_owner_resource_schema(&sql);
-    sql.execute_batch("DROP TABLE management_intents; DROP TABLE management_commands; DROP TABLE management_identity; DROP TABLE coordinator_migrations; DROP TABLE coordinator_project_setup; DROP TABLE coordinator_project_setup_attempts; DROP TABLE coordinator_agent_profiles; DROP TABLE IF EXISTS owner_shared_tool_policies;PRAGMA user_version=65;")
+    sql.execute_batch("DROP TABLE management_intents; DROP TABLE management_commands; DROP TABLE management_identity; DROP TABLE coordinator_migrations; DROP TABLE coordinator_project_setup; DROP TABLE coordinator_project_setup_attempts; DROP TABLE coordinator_agent_profiles; DROP TRIGGER IF EXISTS owner_resource_amended_ceiling_retained;DROP TABLE IF EXISTS owner_resource_ceiling_amendments;DROP TABLE IF EXISTS owner_shared_tool_policies;PRAGMA user_version=65;")
         .unwrap();
     drop(sql);
     let mut db = DomainRepository::open(&dir.path().join("state")).unwrap();

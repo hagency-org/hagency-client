@@ -132,6 +132,7 @@ pub fn store_error_label(error: &hagency_store::Error) -> &'static str {
         ResourceEditRevisionChanged => "management_resource_edit_changed",
         ResourceConfigurationSourceChanged => "management_resource_source_changed",
         ResourceEditNotAvailable => "management_resource_edit_not_available",
+        CeilingAmendmentRefused(_) => "management_ceiling_amendment_refused",
         NotFound => "not_found",
         Unqualified => "unqualified",
         InsufficientCapacity => "insufficient_capacity",
