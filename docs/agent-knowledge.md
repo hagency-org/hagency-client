@@ -5806,6 +5806,7 @@ SDK 恢复 timeline 可包含同一事件多个句柄。保留原始 Vector 的�
 - Model resources use runtime-specific labels; Octos owns profile reasoning, so hide the complete reasoning holder. Makepad DropDown's generic Widget visibility setter is insufficient; use a wrapping View.
 - MCP draft validation is exposed by NativeOwner using the same Programming contract as execution: max16named HTTP/stdio servers, canonical existing stdio paths and typed args; no ambient config import. Validation is not connectivity or process execution. Preserve invalid raw drafts, reject duplicate visual names, and clear their feedback when loading a saved policy.
 
+- Empty encrypted Room invitations still use SDK history sharing. Matrix room-key backup GET must return 200 with empty sessions for a valid version without room keys, while missing/trashed/foreign versions remain errors. Client SDK fixture assertions must use the crypto client's actual bearer: preset generic room-creation mocks assume a different default token.
 - **Quality follow-ups, 2026-10-30:** Makepad Modal draws its content with
   draw_all, so a virtual PortalList nested inside it needs its own drawing
   widget; the outer widget cannot populate swallowed DrawStep values. Script
