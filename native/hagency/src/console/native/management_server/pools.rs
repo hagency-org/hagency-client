@@ -59,6 +59,20 @@ struct Pool {
     native_available_tokens: Option<i64>,
     can_request: bool,
     blocking_reason: Option<String>,
+    /// End of the governing grant's UTC month (pool succession, phase 1b).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    current_period_end_ms: Option<i64>,
+    /// Next month's scheduled grant of this pool, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    renewal: Option<Renewal>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Renewal {
+    period_key: String,
+    period_start_ms: i64,
+    published_tokens: i64,
+    grant_revision: i64,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -86,6 +100,10 @@ struct Request {
     can_cancel: bool,
     can_stop_supply: bool,
     blocking_reason: Option<String>,
+    /// When a reserved Agent's authority ends: the end of its pool's
+    /// contiguous capacity chain, or its reserve expiry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    authority_until_ms: Option<i64>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
