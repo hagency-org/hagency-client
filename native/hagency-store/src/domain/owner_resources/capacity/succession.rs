@@ -197,3 +197,41 @@ pub(crate) fn superseded_into_closed_head(db: &Connection, grant: &str) -> Resul
         |r| r.get(0),
     )?)
 }
+
+fn receipt_of(db: &Connection, grant: &str) -> Result<(NativeGrantReceipt, bool), Error> {
+    let (raw, open): (String, bool) = db.query_row(
+        "SELECT g.receipt,g.active AND NOT EXISTS(SELECT 1 FROM owner_parent_settlements WHERE grant_id=g.id) FROM owner_capacity_grants g WHERE g.id=?1",
+        [grant],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    Ok((serde_json::from_str(&raw)?, open))
+}
+
+/// When the contiguous capacity chain governing `original` at `now` ends
+/// (phase 1b, E8): the governing grant's own end, extended by each open,
+/// effective renewal that starts exactly when its predecessor's month ends
+/// while that predecessor's delegation still reaches the month end.
+pub(crate) fn chain_until(db: &Connection, original: &str, now: u64) -> Result<u64, Error> {
+    let head = effective_at(db, original, now)?;
+    let (mut receipt, _) = receipt_of(db, &head)?;
+    let mut until = receipt.period_end_ms.min(receipt.delegation_expires_at_ms);
+    for _ in 0..MAX_CHAIN {
+        let Some(next) = live_successor(db, &receipt.grant_id)? else {
+            break;
+        };
+        if !next.renewal()
+            || next.state != State::Effective
+            || until != receipt.period_end_ms
+            || next.effective_from_ms != receipt.period_end_ms
+        {
+            break;
+        }
+        let (renewal, open) = receipt_of(db, &next.grant_id)?;
+        if !open || renewal.period_start_ms != receipt.period_end_ms {
+            break;
+        }
+        until = renewal.period_end_ms.min(renewal.delegation_expires_at_ms);
+        receipt = renewal;
+    }
+    Ok(until)
+}

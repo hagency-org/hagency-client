@@ -103,6 +103,15 @@ pub(super) fn original(
         allocated,
     })
 }
+/// When a child's authority ends. A pool child lives while its capacity chain
+/// continues (phase 1b): the chain lifetime replaces its reserve command's
+/// expiry. A project child keeps its original command's expiry.
+pub(super) fn lifetime(db: &Connection, b: &Binding, now: u64) -> Result<u64, Error> {
+    match &b.command.pool_grant {
+        Some(grant) => super::super::super::succession::chain_until(db, &grant.grant_id, now),
+        None => Ok(b.command.expires_at_ms),
+    }
+}
 pub(super) fn cleanup(db: &Connection, a: &ManagedCleanupAuthority) -> Result<Binding, Error> {
     original(db, &a.enrollment, &a.child, true)
 }

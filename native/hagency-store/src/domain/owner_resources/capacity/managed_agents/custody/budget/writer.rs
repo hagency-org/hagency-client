@@ -86,8 +86,8 @@ fn live(db: &Connection, d: &VerifiedAgentBudgetDelivery) -> Result<Binding, Err
     let now = graphs::now_ms()?;
     if now < c.issued_at_ms
         || now >= c.expires_at_ms
-        || now >= binding.command.expires_at_ms
-        || c.expires_at_ms > binding.command.expires_at_ms
+        || now >= authority::lifetime(db, &binding, now)?
+        || c.expires_at_ms > authority::lifetime(db, &binding, now)?
     {
         return Err(Error::LocalAuthority);
     }

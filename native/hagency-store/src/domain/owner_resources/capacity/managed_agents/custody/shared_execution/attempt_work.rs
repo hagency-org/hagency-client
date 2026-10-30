@@ -16,7 +16,7 @@ pub(super) fn live(
     let now = graphs::now_ms()?;
     if original.provider != c.provider
         || original.digest != c.command.original_runtime_command.reserve_command_digest
-        || now >= original.command.expires_at_ms
+        || now >= authority::lifetime(db, &original, now)?
     {
         return Err(Error::LocalAuthority);
     }

@@ -536,3 +536,162 @@ async fn the_successor_table_allows_one_live_successor_and_one_decision() {
     f.registry.shutdown().await.unwrap();
     drop(f.temp);
 }
+
+/// A renewal prepared and written at native time `now` (the window is the
+/// last 7 days of the predecessor's month).
+async fn renew_at(f: &Chain, head: &NativeGrantReceipt, id: &str, tokens: u64, now: u64) -> Result<NativeGrantReceipt, Error> {
+    let next_end = month(head.period_end_ms).unwrap().2;
+    let consent = f.registry.prepare_capacity_grant_successor_at(
+        enrollment(f),
+        head.clone(),
+        SUCCESSION_RENEWAL,
+        selection(id, tokens, &[MANAGER], next_end),
+        Instant::now() + Duration::from_secs(30),
+        now,
+    )?;
+    f.registry
+        .0
+        .store
+        .call(32 * 1024, move |db| db.owner_capacity_grant_with_clock(consent, || Ok(now)))
+        .await
+}
+/// A native time inside the renewal window that is not before the real
+/// clock, so effective times written by the real clock precede it.
+fn in_window(head: &NativeGrantReceipt) -> u64 {
+    let day = 24 * 60 * 60 * 1000;
+    (graphs::now_ms().unwrap() + 1000)
+        .max(head.period_end_ms - day)
+        .min(head.period_end_ms - 1)
+}
+async fn at<T: Send + 'static>(f: &Chain, read: impl FnOnce(&Connection) -> Result<T, Error> + Send + 'static) -> T {
+    f.registry.0.store.call(4096, move |db| read(&db.db)).await.unwrap()
+}
+
+#[tokio::test]
+async fn a_renewal_needs_its_window_and_fits_after_a_full_month() {
+    // This month used the whole ceiling; next month starts empty.
+    let f = chain(1000, 1000).await;
+    let end = f.root.period_end_ms;
+    let day = 24 * 60 * 60 * 1000;
+    let early = renew_at(&f, &f.root, "too_early", 1000, end - 7 * day - 1).await;
+    assert!(matches!(early, Err(Error::LocalAuthority)), "{early:?}");
+    let late = renew_at(&f, &f.root, "too_late", 1000, end).await;
+    assert!(matches!(late, Err(Error::LocalAuthority)), "{late:?}");
+    let r = renew_at(&f, &f.root, "chain_renewal", 1000, in_window(&f.root)).await.unwrap();
+    assert_eq!(r.period_start_ms, end);
+    assert_eq!(r.period_key, month(end).unwrap().0);
+    assert_eq!(r.succession.as_ref().unwrap().kind, "renewal");
+    // Pending: it counts only in its own month, as its full amount.
+    assert_eq!(commitments(&f, end - 1).await["chain_renewal"], 0);
+    assert_eq!(commitments(&f, end).await["chain_renewal"], 1000);
+    assert_eq!(commitments(&f, end).await["chain_root"], 0);
+    let state = confirm(&f, "chain_renewal").await;
+    assert_eq!(state.effective_from_ms, end);
+    // Scheduled: the root governs until the boundary, the renewal after it.
+    let root = f.root.grant_id.clone();
+    let (before, after) = at(&f, move |db| Ok((succession::effective_at(db, &root, end - 1)?, succession::effective_at(db, &root, end)?))).await;
+    assert_eq!((before.as_str(), after.as_str()), ("chain_root", "chain_renewal"));
+    // A scheduled renewal blocks a same-month amendment until cancelled (Q7).
+    assert!(matches!(amend(&f, &f.root, "blocked", 900).await, Err(Error::OwnerGrantReviewChanged)));
+    f.registry.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn carried_and_fenced_children_split_at_the_boundary() {
+    let f = chain(1000, 700).await;
+    let (_, live) = child(&f, &f.root, "live", 300).await;
+    let (_, gone) = child(&f, &f.root, "gone", 200).await;
+    let end = f.root.period_end_ms;
+    // The live child is carried; the renewal must cover its hold.
+    let below = renew_at(&f, &f.root, "below", 299, in_window(&f.root)).await;
+    assert!(matches!(below, Err(Error::InsufficientCapacity)), "{below:?}");
+    // Fenced before the boundary with unknown usage: it stays in the ended month.
+    fence_unknown(&f, &gone, Some(1)).await;
+    let r = renew_at(&f, &f.root, "chain_renewal", 600, in_window(&f.root)).await.unwrap();
+    let link = r.succession.clone().unwrap();
+    assert_eq!((link.carried_children, link.carried_retained_tokens), (1, 300));
+    confirm(&f, "chain_renewal").await;
+    let (l, g) = (live.clone(), gone.clone());
+    let accounted = at(&f, move |db| Ok((
+        succession::accounting_grant(db, "chain_root", succession::fenced_at(db, &l)?, end)?,
+        succession::accounting_grant(db, "chain_root", succession::fenced_at(db, &g)?, end)?,
+    ))).await;
+    assert_eq!((accounted.0.as_str(), accounted.1.as_str()), ("chain_renewal", "chain_root"));
+    let next = commitments(&f, end).await;
+    assert_eq!(next["chain_root"], 200);
+    assert_eq!(next["chain_renewal"], 600);
+    // Before the boundary the root still counts the whole month.
+    assert_eq!(commitments(&f, end - 1).await["chain_root"], 700);
+    // The chain lives on through the renewal: the root's delegation reaches
+    // its month end and the renewal starts exactly there.
+    let until = at(&f, move |db| succession::chain_until(db, "chain_root", end - 1)).await;
+    assert_eq!(until, r.period_end_ms.min(r.delegation_expires_at_ms));
+    f.registry.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_reserve_beside_a_scheduled_renewal_must_fit_both_months() {
+    let f = chain(1000, 700).await;
+    child(&f, &f.root, "a", 300).await;
+    renew_at(&f, &f.root, "chain_renewal", 400, in_window(&f.root)).await.unwrap();
+    confirm(&f, "chain_renewal").await;
+    // 400 left this month, but next month carries 300 of 400.
+    assert_eq!(reserve(&f, command(&f, &f.root, "big", 101)).await.unwrap().reason.as_deref(), Some("insufficient_capacity"));
+    assert_eq!(reserve(&f, command(&f, &f.root, "small", 100)).await.unwrap().state, "reserved");
+    f.registry.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_cancelled_renewal_frees_the_slot_for_cancel_amend_renew() {
+    let f = chain(1000, 700).await;
+    let end = f.root.period_end_ms;
+    let r = renew_at(&f, &f.root, "chain_renewal", 500, in_window(&f.root)).await.unwrap();
+    confirm(&f, "chain_renewal").await;
+    // The server revoked the never-started renewal and asked for its closure.
+    let close = GrantClosureCommand {
+        version: 1,
+        command_id: "chain_close_renewal".into(),
+        operation: "grant.close".into(),
+        grant_id: r.grant_id.clone(),
+        grant_receipt_digest: canonical::digest(&serde_json::to_value(&r).unwrap()).unwrap(),
+        previous_settlement_digest: None,
+        reason: "owner_withdrawal".into(),
+        requested_at_ms: graphs::now_ms().unwrap(),
+    };
+    let digest = canonical::digest(&serde_json::to_value(&close).unwrap()).unwrap();
+    let settled = f
+        .registry
+        .apply_parent_settlement(VerifiedParentDelivery::new(enrollment(&f), close, digest, true, Instant::now() + Duration::from_secs(20)).unwrap())
+        .await
+        .unwrap();
+    assert_eq!((settled.state.as_str(), settled.retained_tokens), ("closed", 0));
+    let state = f.registry.capacity_grant_succession(f.profile.clone(), "chain_device".into(), r.grant_id.clone()).await.unwrap().unwrap();
+    assert_eq!(state.state, "cancelled");
+    assert_eq!(commitments(&f, end).await["chain_renewal"], 0);
+    let until = at(&f, move |db| succession::chain_until(db, "chain_root", end - 1)).await;
+    assert_eq!(until, f.root.period_end_ms.min(f.root.delegation_expires_at_ms));
+    // Cancel renewal -> amend -> renew (Q7).
+    amend(&f, &f.root, "chain_amend", 800).await.unwrap();
+    confirm(&f, "chain_amend").await;
+    let amended = f.registry.recover_capacity_grant(f.profile.clone(), "chain_device".into(), "chain_amend".into()).await.unwrap().unwrap();
+    renew_at(&f, &amended, "chain_renewal_2", 800, in_window(&amended)).await.unwrap();
+    f.registry.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_pool_child_is_not_bounded_by_its_reserve_command_expiry() {
+    let f = chain(1000, 700).await;
+    // The server used to cap a pool Agent at its request + 7 days; its
+    // authority is now the chain, so child commands may outlast that expiry.
+    let mut c = command(&f, &f.root, "short", 100);
+    c.expires_at_ms = graphs::now_ms().unwrap() + 1500;
+    let receipt = reserve(&f, c.clone()).await.unwrap();
+    let id = receipt.agent_reservation_id.unwrap();
+    assert!(eligible(&f, &c, &id, "within").await);
+    tokio::time::sleep(Duration::from_millis(1600)).await;
+    assert!(graphs::now_ms().unwrap() > c.expires_at_ms);
+    assert!(eligible(&f, &c, &id, "after").await);
+    let until = at(&f, |db| succession::chain_until(db, "chain_root", graphs::now_ms()?)).await;
+    assert_eq!(until, f.root.period_end_ms.min(f.root.delegation_expires_at_ms));
+    f.registry.shutdown().await.unwrap();
+}

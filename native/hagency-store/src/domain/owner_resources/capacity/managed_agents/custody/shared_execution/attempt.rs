@@ -103,7 +103,8 @@ impl SharedAttemptCommand {
             || b.remaining_tokens != b.allocated_tokens.saturating_sub(b.retained_tokens)
             || self.expires_at_ms <= self.issued_at_ms
             || self.expires_at_ms - self.issued_at_ms > 30_000
-            || self.expires_at_ms > original.reserve_command.expires_at_ms
+            || (original.reserve_command.pool_grant.is_none()
+                && self.expires_at_ms > original.reserve_command.expires_at_ms)
             || serde_json::to_vec(self)?.len() > 32 * 1024
         {
             return Err(Error::LocalAuthority);
@@ -327,7 +328,7 @@ impl OwnerResourceRegistry {
             let control_revision=demand::attempt_control_revision(&tx, &p.enrollment.profile.digest, c)?;
             let now=graphs::now_ms()?;
             let b=authority::original(&tx,&p.enrollment,&c.agent_reservation_id,false)?;
-            if now>=c.original_runtime_command.reserve_command.expires_at_ms{return Err(Error::LocalAuthority)}
+            if now>=authority::lifetime(&tx,&b,now)?{return Err(Error::LocalAuthority)}
             let current=if c.process_attempt==2 {successor::snapshot(&tx,&p.enrollment,&c.original_runtime_command)?}else{
                 let payload:String=tx.query_row("SELECT command_payload FROM owner_shared_successor_attempts WHERE id=?1 AND child_id=?2",params![c.predecessor.command_id,c.agent_reservation_id],|r|r.get(0))?;
                 let predecessor:SharedAttemptCommand=serde_json::from_str(&payload)?;

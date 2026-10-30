@@ -179,7 +179,8 @@ impl SharedBudgetAttemptCommand {
             || !positive(self.expires_at_ms)
             || self.expires_at_ms <= self.issued_at_ms
             || self.expires_at_ms - self.issued_at_ms > 30_000
-            || self.expires_at_ms > original.reserve_command.expires_at_ms
+            || (original.reserve_command.pool_grant.is_none()
+                && self.expires_at_ms > original.reserve_command.expires_at_ms)
             || serde_json::to_vec(self).map_or(true, |v| v.len() > 32 * 1024)
         {
             return Err(invalid());

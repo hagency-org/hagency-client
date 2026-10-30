@@ -46,7 +46,8 @@ impl ManagedAgentMatrixChallenge {
             || self.puppet_mxid.len() > 255
             || self.expires_at_ms <= self.issued_at_ms
             || self.expires_at_ms - self.issued_at_ms > 30_000
-            || self.expires_at_ms > self.reserve_command.expires_at_ms
+            || (self.reserve_command.pool_grant.is_none()
+                && self.expires_at_ms > self.reserve_command.expires_at_ms)
             || serde_json::to_vec(self)?.len() > 16 * 1024
         {
             return Err(Error::LocalAuthority);

@@ -51,7 +51,8 @@ impl ManagedRuntimeProvisionCommand {
             || !(1..=JSON_SAFE_MAX).contains(&self.issued_at_ms)
             || self.expires_at_ms <= self.issued_at_ms
             || self.expires_at_ms - self.issued_at_ms > 30_000
-            || self.expires_at_ms > self.reserve_command.expires_at_ms
+            || (self.reserve_command.pool_grant.is_none()
+                && self.expires_at_ms > self.reserve_command.expires_at_ms)
         {
             return Err(Error::LocalAuthority);
         }

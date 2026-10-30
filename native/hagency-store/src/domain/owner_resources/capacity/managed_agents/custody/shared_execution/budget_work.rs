@@ -28,7 +28,10 @@ pub(super) fn live(
     let original = authority::original(db, &a.enrollment, &c.command.agent_reservation_id, false)?;
     if original.provider != c.provider
         || original.digest != c.command.original_runtime_command.reserve_command_digest
-        || graphs::now_ms()? >= original.command.expires_at_ms
+        || {
+            let now = graphs::now_ms()?;
+            now >= authority::lifetime(db, &original, now)?
+        }
     {
         return Err(Error::LocalAuthority);
     }

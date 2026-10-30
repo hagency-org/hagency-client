@@ -96,7 +96,7 @@ impl AgentBudgetCommand {
                 .checked_add(self.add_tokens)
                 .is_none_or(|v| v > JSON_SAFE_MAX)
             || self.expires_at_ms <= self.issued_at_ms
-            || self.expires_at_ms > c.expires_at_ms
+            || (c.pool_grant.is_none() && self.expires_at_ms > c.expires_at_ms)
             || self.reserve_command_digest != digest(c)?
             || self.reserve_receipt_digest != digest(r)?
             || c.pool_grant.as_ref().is_some_and(|g|

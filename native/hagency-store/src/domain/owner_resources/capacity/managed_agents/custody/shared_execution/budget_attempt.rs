@@ -174,7 +174,7 @@ impl OwnerResourceRegistry {
             let control_revision=budget_attempt::control_revision(&tx, &p.enrollment.profile.digest, c)?;
             let now=graphs::now_ms()?;
             let b=authority::original(&tx,&p.enrollment,&c.agent_reservation_id,false)?;
-            if now>=c.original_runtime_command.reserve_command.expires_at_ms{return Err(Error::LocalAuthority)}
+            if now>=authority::lifetime(&tx,&b,now)?{return Err(Error::LocalAuthority)}
             let selection=budget_snapshot::snapshot(&tx,&p.enrollment,&c.original_runtime_command)?;
             if selection.execution_budget != c.execution_budget
                 || canonical::digest(&serde_json::to_value(&selection.predecessor)?)? != canonical::digest(&serde_json::to_value(&c.predecessor)?)? {return Err(Error::Conflict)}
