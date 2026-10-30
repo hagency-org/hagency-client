@@ -42,6 +42,10 @@ jobs:
             $code = $LASTEXITCODE
             "drive=$drive exit=$code" | Add-Content probe-logs/summary.txt
             if ($code -ne 0) { $failures++ }
+            cargo run --locked -p hagency-store --example windows_credential_sync 2>&1 | Tee-Object -FilePath "probe-logs/$drive-production.log"
+            $code = $LASTEXITCODE
+            "drive=$drive production_exit=$code" | Add-Content probe-logs/summary.txt
+            if ($code -ne 0) { $failures++ }
           }
           Get-Content probe-logs/summary.txt
           if ($failures -gt 0) { exit 1 }
