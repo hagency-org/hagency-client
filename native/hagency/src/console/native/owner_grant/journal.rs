@@ -205,6 +205,7 @@ impl History {
         original: Original,
         prior: &[String],
         regrant: bool,
+        void: &[String],
     ) -> Result<(), NativeError> {
         original.validate(&self.data.identity)?;
         if self.data.records.len() >= MAX_RECORDS {
@@ -212,6 +213,7 @@ impl History {
         }
         if self.data.records.iter().any(|r| {
             r.state != State::Declined
+                && !void.contains(&r.original.selection.grant_id)
                 && r.original.binding.contribution_id == original.binding.contribution_id
                 && !(original.receipt_version == 2
                     && r.state == State::Recorded
@@ -260,13 +262,20 @@ impl History {
     /// The contribution has recorded grants on this admission and every one
     /// covers a UTC month that ended by `now`: a new month may be granted on
     /// the same admission. The canonical writer repeats this check.
-    fn admission_month_ended(&self, contribution: &str, admission: &str, now: u64) -> bool {
+    fn admission_month_ended(
+        &self,
+        contribution: &str,
+        admission: &str,
+        now: u64,
+        void: &[String],
+    ) -> bool {
         let mut recorded = self
             .data
             .records
             .iter()
             .filter(|r| {
                 r.state == State::Recorded
+                    && !void.contains(&r.original.selection.grant_id)
                     && r.original.binding.contribution_id == contribution
                     && r.original
                         .admission

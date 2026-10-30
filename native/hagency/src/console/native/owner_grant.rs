@@ -413,11 +413,13 @@ impl OwnerGrantIntents {
         // state machine, which also runs on ordinary small worker stacks.
         let admission = Box::pin(self.observe_grant_admission(&io, &binding)).await?;
         let receipt_version = if Box::pin(self.supports_admission_receipts(&io)).await? { 2 } else { 1 };
+        let void = Box::pin(self.void_successors(&io, registry, &binding.contribution_id)).await?;
         let regrant = receipt_version == 2
             && History::load(&io.path, io.identity.clone())?.admission_month_ended(
                 &binding.contribution_id,
                 &admission.request_id,
                 now_ms()?,
+                &void,
             );
         let (consent, prior) = if regrant {
             // A new UTC month on the same admission, after every earlier month ended.
@@ -472,7 +474,7 @@ impl OwnerGrantIntents {
         io.check().await?;
         let (consent, context) = self.review_context(&io, registry, consent).await?;
         let mut history = History::load(&io.path, io.identity.clone())?;
-        history.insert_after(original.clone(), &prior, regrant)?;
+        history.insert_after(original.clone(), &prior, regrant, &void)?;
         io.check().await?;
         consent.binding().map_err(storage)?;
         Ok(OwnerGrantReview {
@@ -570,11 +572,13 @@ impl OwnerGrantIntents {
             return Err(failure(409, "owner_grant_original_review_expired"));
         }
         let admission = Box::pin(self.check_grant_admission(&io, &original)).await?;
+        let void = Box::pin(self.void_successors(&io, registry, &original.binding.contribution_id)).await?;
         let regrant = original.receipt_version == 2
             && history.admission_month_ended(
                 &original.binding.contribution_id,
                 &admission.request_id,
                 now_ms()?,
+                &void,
             );
         let consent = if original.receipt_version == 2 {
             if !Box::pin(self.supports_admission_receipts(&io)).await? {

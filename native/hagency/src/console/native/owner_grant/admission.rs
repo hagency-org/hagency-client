@@ -43,7 +43,8 @@ impl OwnerGrantIntents {
             && r.original.admission.as_ref().is_some_and(|a| a.request_id == current.request_id)) {
             // The same admission may be granted again only for a new UTC month,
             // once every one of its recorded grants covers a month that ended.
-            if !history.admission_month_ended(&contribution, &current.request_id, now_ms()?) {
+            let void = Box::pin(self.void_successors(&io, registry, &contribution)).await?;
+            if !history.admission_month_ended(&contribution, &current.request_id, now_ms()?, &void) {
                 return Err(failure(409, "owner_grant_new_admission_required"));
             }
             if !Box::pin(self.supports_monthly_regrant(&io)).await? {

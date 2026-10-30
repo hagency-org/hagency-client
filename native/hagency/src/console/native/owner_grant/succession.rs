@@ -299,6 +299,38 @@ impl OwnerGrantIntents {
         })
     }
 
+    /// Recorded successors of `contribution` that never held capacity: a
+    /// rejected successor or a cancelled renewal. They are history only.
+    pub(super) async fn void_successors(
+        &self,
+        io: &NativeIo<'_>,
+        registry: &OwnerResourceRegistry,
+        contribution: &str,
+    ) -> Result<Vec<String>, NativeError> {
+        let history = History::load(&io.path, io.identity.clone())?;
+        let mut out = Vec::new();
+        for record in &history.data.records {
+            if record.state != State::Recorded
+                || record.original.succession.is_none()
+                || record.original.binding.contribution_id != contribution
+            {
+                continue;
+            }
+            let state = registry
+                .capacity_grant_succession(
+                    io.profile.clone(),
+                    record.original.binding.executor_device_id.clone(),
+                    record.original.selection.grant_id.clone(),
+                )
+                .await
+                .map_err(storage)?;
+            if state.is_some_and(|s| matches!(s.state.as_str(), "rejected" | "cancelled")) {
+                out.push(record.original.selection.grant_id.clone());
+            }
+        }
+        io.check().await?;
+        Ok(out)
+    }
     /// Rebuild the consent of an unattempted successor intent for a fresh
     /// review. The predecessor is its exact recorded receipt.
     pub(super) async fn successor_consent(
