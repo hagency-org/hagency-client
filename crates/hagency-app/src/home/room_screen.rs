@@ -1973,6 +1973,12 @@ impl Widget for RoomScreen {
             return DrawStep::done();
         }
 
+        // Settings and other covering pages can suppress Signal delivery to
+        // this widget. Catch up before drawing it again, including late
+        // decryption updates, rather than painting the stale cached rows.
+        let list = self.view.portal_list(cx, ids!(timeline.list));
+        self.process_timeline_updates(cx, &list);
+
         // While the timeline's first pagination is in flight and nothing has
         // arrived yet, show skeleton message rows instead of a blank area.
         // RestoreStatusView (room restore spinner) is unaffected: it takes
@@ -8937,6 +8943,48 @@ mod skeleton_tests {
                 assert!(screen.tl_state.as_ref().unwrap().is_live);
             }
         }
+    }
+
+    #[test]
+    fn resumed_draw_applies_updates_without_a_signal_event() {
+        let (mut cx, mut screen) = screen();
+        let room = matrix_sdk::ruma::room_id!("!recovered-while-hidden:server").to_owned();
+        screen.room_name_id = Some(RoomNameId::empty(room.clone()));
+        screen.is_loaded = true;
+        let mut state = empty_tl_state(room);
+        let (sender, receiver) = crate::timeline_updates::channel();
+        state.update_receiver = receiver;
+        // A previously painted timeline has cached rows. While another page
+        // covers it, the subscriber queues a replacement and encryption state.
+        state.content_drawn_since_last_update.insert(0..3);
+        state.profile_drawn_since_last_update.insert(0..3);
+        screen.tl_state = Some(state);
+        sender.send(TimelineUpdate::RoomEncrypted).unwrap();
+        sender.send(TimelineUpdate::NewItems {
+            new_items: Vector::new(), changed_indices: 0..3,
+            clear_cache: true, is_append: false,
+        }).unwrap();
+
+        // No Event::Signal is delivered: exposing the Room only asks it to draw.
+        let pass = DrawPass::new(&mut cx);
+        pass.set_size(&mut cx, dvec2(560.0, 700.0));
+        let mut draw_list = DrawList2d::new(&mut cx);
+        let event = DrawEvent::default();
+        {
+            let mut draw = makepad_widgets::makepad_draw::cx_draw::CxDraw::new(&mut cx, &event);
+            let mut cx2d = Cx2d::new(&mut draw);
+            cx2d.begin_pass(&pass, None);
+            draw_list.begin_always(&mut cx2d);
+            cx2d.begin_root_turtle(dvec2(560.0, 700.0), Layout::flow_overlay());
+            screen.draw_walk_all(&mut cx2d, &mut Scope::empty(), Walk::fill());
+            cx2d.end_pass_sized_turtle();
+            draw_list.end(&mut cx2d);
+            cx2d.end_pass(&pass);
+        }
+        let state = screen.tl_state.as_ref().unwrap();
+        assert!(state.is_encrypted, "a resumed draw must consume the queued update");
+        assert!(!state.content_drawn_since_last_update.contains(&0), "the stale message cache must be invalidated before repainting");
+        assert!(!state.profile_drawn_since_last_update.contains(&0));
     }
 
     #[test]
