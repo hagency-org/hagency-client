@@ -144,7 +144,7 @@ pub struct DomainRepository {
     _legacy_writer: Option<hagency_platform::legacy_writer::LegacyWriterAdmission>,
 }
 /// Current domain schema version (the last sequential migration).
-pub const DOMAIN_SCHEMA_VERSION: i32 = 105;
+pub const DOMAIN_SCHEMA_VERSION: i32 = 106;
 const DOMAIN_MIGRATIONS: &[(i32, &str)] = &[
     (2, include_str!("migrations/002-role-publication.sql")),
     (3, include_str!("migrations/003-task-dispatch.sql")),
@@ -398,6 +398,7 @@ const DOMAIN_MIGRATIONS: &[(i32, &str)] = &[
     (104, include_str!("migrations/106-owner-capacity-grant-succession.sql")),
     // Board migration number 107 (track C) lands as the next sequential tuple 105.
     (105, include_str!("migrations/107-owner-resource-ceiling-amendments.sql")),
+    (106, include_str!("migrations/108-owner-shared-decrypted-inputs.sql")),
 ];
 
 impl DomainRepository {

@@ -294,6 +294,7 @@ async fn work_loop(
         .await?;
         if let Some(w) = reply.value.work {
             w.validate().map_err(store)?;
+            if w.encrypted { return Err(failure(409,"shared_encrypted_budget_runtime_required")); }
             if cfg!(feature = "shared-intake") {
                 super::demands::bind_work(&b, r, sink.command(), &w, verified, a.until).await?;
                 let (_, fresh) = proof(io, r, sink, a).await?;

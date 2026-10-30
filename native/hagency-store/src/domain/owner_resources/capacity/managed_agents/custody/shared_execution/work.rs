@@ -287,7 +287,7 @@ pub struct SharedCallCustody {
 }
 impl SharedCallCustody {
     pub fn model_input(&self)->&str { self.input.as_ref().map_or(&self.work.body,SharedPreparedInput::text) }
-    pub fn context_input_digest(&self)->Option<String> { self.input.as_ref().filter(|i|i.context().is_some()).map(SharedPreparedInput::input_digest) }
+    pub fn context_input_digest(&self)->Option<String> { self.input.as_ref().filter(|i|self.work.encrypted || i.context().is_some()).map(SharedPreparedInput::input_digest) }
     /// Send only this issued call's exact pinned input to its original actual
     /// process. A caller never supplies replacement text at the effect boundary.
     pub async fn start_turn(&self,process:&mut hagency_runtime::owned::OwnedSession)->Result<(),Error>{

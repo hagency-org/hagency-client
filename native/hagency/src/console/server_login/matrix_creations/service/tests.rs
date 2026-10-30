@@ -31,7 +31,7 @@ fn owner_read() -> (&'static str, Value, Option<Value>) {
 fn discovery() -> (&'static str, Value, Option<Value>) {
     (
         "GET /hagency/api/v1/discovery",
-        json!({"serverName":"example.test","serviceMxid":"@_hagency_service:example.test"}),
+        json!({"serverName":"example.test","serviceMxid":"@_hagency_service:example.test","capabilities":["shared-agent-e2ee-v1"]}),
         None,
     )
 }

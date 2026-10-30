@@ -302,6 +302,7 @@ async fn work_loop(
         .await?;
         if let Some(w) = reply.value.work {
             w.validate().map_err(store)?;
+            if w.encrypted { return Err(failure(409,"shared_encrypted_budget_runtime_required")); }
             if cfg!(feature = "shared-intake") {
                 super::demands::bind_work(
                     &b,
@@ -396,7 +397,7 @@ async fn work_loop(
         let Some(event)=event else {
             guarded(cancel,a.until,maybe_renew(io,r,sink,control,a)).await?;
             let b=io.bound().await?;
-            if let Some(receipt)=guarded(cancel,a.until,approvals.poll(&b,&work,&a.lease.authority,a.until,process,&mut capture)).await? {break receipt;}
+            if let Some(receipt)=guarded(cancel,a.until,approvals.poll(io,&b,&work,&a.lease.authority,a.until,process,&mut capture)).await? {break receipt;}
             continue;
         };
         let approval=event.approval().cloned();
@@ -416,7 +417,7 @@ async fn work_loop(
         }
         if let Some(request)=approval {
             let b=io.bound().await?;
-            guarded(cancel,a.until,approvals.register(&b,&work,&a.lease.authority,a.until,process,request)).await?;
+            guarded(cancel,a.until,approvals.register(io,&b,&work,&a.lease.authority,a.until,process,request)).await?;
         }
     };
     // Reply delivery uses the central durable Matrix transaction. Keep this same

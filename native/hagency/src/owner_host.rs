@@ -41,7 +41,7 @@ struct State {
     directory: std::fs::File,
 }
 fn allowed_entry(name: &str) -> bool {
-    matches!(name,MARKER|LOCK|"server-login.json"|"server-login-sdk-resume.json"|"server-login-revocations.json"|"server-login-profiles.json"|"owned-agent-owners"|"owner-console.sock")
+    matches!(name,MARKER|LOCK|"server-login.json"|"server-login-sdk-resume.json"|"server-login-revocations.json"|"server-login-profiles.json"|"owned-agent-owners"|"shared-matrix-devices"|"owner-console.sock")
         || (cfg!(feature = "resource-adoption") && name == "adopted-management-initializer-v1.json")
         // Interrupted private JSON replacement files are never opened/imported.
         || (name.len()==21 && name.starts_with('.') && name.ends_with(".tmp") && name.as_bytes()[1..17].iter().all(|b|b.is_ascii_hexdigit()))
@@ -432,6 +432,21 @@ mod tests {
         assert!(initialize(temp.path()).is_ok());
         assert!(!temp.path().join("domain.sqlite3").exists());
         assert!(!temp.path().join("operator.token").exists());
+    }
+    #[test]
+    fn shared_matrix_device_storage_survives_owner_restart() {
+        let temp = temporary();
+        let state = prepare(temp.path()).unwrap();
+        let devices = state.path.join("shared-matrix-devices");
+        hagency_store::private::directory(&devices).unwrap();
+        let store = devices.join("device-store");
+        hagency_store::private::replace(&store, b"retained crypto store").unwrap();
+        drop(state);
+        let reopened = prepare(temp.path()).unwrap();
+        assert_eq!(hagency_store::private::read_secret(&store).unwrap(), b"retained crypto store");
+        drop(reopened);
+        std::fs::write(temp.path().join("foreign-state"), b"foreign").unwrap();
+        assert!(matches!(prepare(temp.path()), Err(Error::State)));
     }
     fn bundle(root: &Path, legacy: bool) -> PathBuf {
         use sha2::{Digest, Sha256};

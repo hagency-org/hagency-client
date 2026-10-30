@@ -171,6 +171,7 @@ impl MatrixOperation {
                 let mut body = json!({"name":input.name,"visibility":"private","preset":"private_chat","invite":[service],"initial_state":[{"type":"m.room.join_rules","state_key":"","content":{"join_rule":"invite"}},{"type":MARKER,"state_key":"","content":marker}]});
                 if input.kind == Kind::AgentRoom {
                     body["initial_state"].as_array_mut().unwrap().extend([
+                        json!({"type":"m.room.encryption","state_key":"","content":{"algorithm":"m.megolm.v1.aes-sha2"}}),
                         json!({"type":"m.room.history_visibility","state_key":"","content":{"history_visibility":"joined"}}),
                         json!({"type":"m.room.guest_access","state_key":"","content":{"guest_access":"forbidden"}}),
                     ]);

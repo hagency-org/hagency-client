@@ -55,7 +55,7 @@ pub(super) async fn refuse_unissued(
     let sent=Instant::now();
     let response:Timed<RefusalReply>=b.request(WorkAction::Refuse{
         work:w.id.clone(),input:SharedBudgetWorkRefusalInput{
-            runtime_command_digest:digest(c)?,work_digest:digest(w)?,input_digest:input.map_or_else(||w.body_digest.clone(),SharedPreparedInput::input_digest),
+            runtime_command_digest:digest(c)?,work_digest:digest(w)?,input_digest:if w.encrypted {w.body_digest.clone()} else {input.map_or_else(||w.body_digest.clone(),SharedPreparedInput::input_digest)},
         },
     }.into(),false).await?;
     let Some(record)=response.value.refusal else{return Ok(None)};

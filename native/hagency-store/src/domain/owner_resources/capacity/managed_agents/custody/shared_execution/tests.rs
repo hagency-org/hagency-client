@@ -44,7 +44,8 @@ fn shared_wire_rejects_changed_work_and_oversized_escaped_receipt() {
     let work: SharedWorkItem = serde_json::from_value(fixture["work"].clone()).unwrap();
     let mut receipt: SharedWorkReceipt =
         serde_json::from_value(fixture["receipt"].clone()).unwrap();
-    receipt.body = Some("\"".repeat(8192));
+    // The current wire ceiling is 48 KiB; the raw body still fits 32 KiB.
+    receipt.body = Some("\"".repeat(24 * 1024));
     use sha2::{Digest, Sha256};
     receipt.body_digest = Some(format!(
         "{:x}",

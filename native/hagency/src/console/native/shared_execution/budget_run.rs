@@ -342,7 +342,7 @@ async fn work_loop(
     };
     let (b,p)=proof(io,r,sink,a).await?;
     let input=if cfg!(feature="shared-context") {
-        Some(guarded(cancel,a.until,super::budget_context_io::prepare(&b,r,p,&work,a.lease.authority.clone(),a.until)).await.map_err(|error| {
+        Some(guarded(cancel,a.until,super::budget_context_io::prepare(io,&b,r,p,&work,a.lease.authority.clone(),a.until)).await.map_err(|error| {
             tracing::warn!(stage = "shared_context_prepare", code = %error.code, "Shared Agent stopped before model call admission");
             error
         })?)
@@ -408,7 +408,7 @@ async fn work_loop(
         let Some(event)=event else {
             guarded(cancel,a.until,maybe_renew(io,r,sink,control,a)).await?;
             let b=io.bound().await?;
-            if let Some(receipt)=guarded(cancel,a.until,approvals.poll(&b,&work,&a.lease.authority,a.until,process,&mut capture)).await? {break receipt;}
+            if let Some(receipt)=guarded(cancel,a.until,approvals.poll(io,&b,&work,&a.lease.authority,a.until,process,&mut capture)).await? {break receipt;}
             continue;
         };
         let approval=event.approval().cloned();
@@ -428,7 +428,7 @@ async fn work_loop(
         }
         if let Some(request)=approval {
             let b=io.bound().await?;
-            guarded(cancel,a.until,approvals.register(&b,&work,&a.lease.authority,a.until,process,request)).await?;
+            guarded(cancel,a.until,approvals.register(io,&b,&work,&a.lease.authority,a.until,process,request)).await?;
         }
     };
     // Reply delivery uses the central durable Matrix transaction. Keep this same
@@ -453,13 +453,15 @@ async fn work_loop(
                         | "server_request_failed"
                         | "management_outcome_unknown"
                         | "allocation_ticket_expired"
+                        | "shared_encrypted_send_pending"
+                        | "shared_crypto_device_unavailable"
                 ) =>
             {
                 None
             }
             Err(error) => return Err(error),
         };
-        if matches!(status.as_deref(), Some("sent" | "blocked")) {
+        if matches!(status.as_deref(), Some("sent" | "blocked")) || work.encrypted && status.as_deref()==Some("unknown") {
             return Ok(());
         }
         guarded(cancel, a.until, async {
@@ -568,6 +570,8 @@ pub(super) async fn report_work(
     if digest(&saved)? != digest(receipt)? {
         return Err(invalid());
     }
+    let wire_receipt=super::e2ee::wire_receipt(io,&b,r,c,work,receipt).await?;
+    let receipt=&wire_receipt;
     let started = Instant::now();
     let reply: Timed<TicketReply> = b
         .request(
@@ -590,7 +594,7 @@ pub(super) async fn report_work(
         if digest(&old)? != digest(receipt)? {
             return Err(invalid());
         }
-        if t.reply_state.as_deref()==Some("sent") {super::context_io::observe_delivery(&b,r,&c.original_runtime_command,work).await?;}
+        if !work.encrypted && t.reply_state.as_deref()==Some("sent") {super::context_io::observe_delivery(&b,r,&c.original_runtime_command,work).await?;}
         return Ok(t.reply_state);
     }
     let until = io::window(
@@ -618,6 +622,6 @@ pub(super) async fn report_work(
     {
         return Err(invalid());
     }
-    if ack.value.reply_state.as_deref()==Some("sent") {super::context_io::observe_delivery(&b,r,&c.original_runtime_command,work).await?;}
+    if !work.encrypted && ack.value.reply_state.as_deref()==Some("sent") {super::context_io::observe_delivery(&b,r,&c.original_runtime_command,work).await?;}
     Ok(ack.value.reply_state)
 }

@@ -18,6 +18,7 @@ mod alerts;
 pub mod bootstrap;
 pub mod bot_commands;
 pub mod console;
+pub mod encrypted_approvals;
 pub(crate) mod file_service;
 pub(crate) mod fleet_views;
 pub mod inspect;

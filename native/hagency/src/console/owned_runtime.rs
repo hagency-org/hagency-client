@@ -1,6 +1,6 @@
 //! Explicit owner-started, chat-only Codex host. No legacy execution fallback.
 mod drain;
-mod e2ee;
+pub(in crate::console) mod e2ee;
 mod provider_custody;
 mod service;
 use super::lifecycle::{RetainedTask, TaskCustody};
@@ -1108,6 +1108,7 @@ async fn canceled(receiver: &mut watch::Receiver<bool>) {
     }
 }
 trait Transport {
+    fn supports_group_crypto(&self)->bool {false}
     fn approval_host(&self) -> Option<PinnedConsole> {
         None
     }
@@ -1122,6 +1123,7 @@ struct PinnedConsole {
     pin: DevicePin,
 }
 impl Transport for PinnedConsole {
+    fn supports_group_crypto(&self)->bool {true}
     fn approval_host(&self) -> Option<PinnedConsole> {
         Some(self.clone())
     }
@@ -1574,7 +1576,7 @@ async fn run_host(
                     provider.stop().await.map_err(|_|RuntimeError::Provider)?;checked?;
                     let mut ledger=local(Ledger::open_scoped(&path,&owner,&profile_id))?;
                     let mut ready=RuntimeStatus::new(&work.config.agent_id,if models_allowed{"online_chat_only"}else{"ledger_recovery_required"},if models_allowed{None}else{Some("ledger_recovery_required")}).with_capabilities(&work.config);ready.binding_id=Some(work.config.binding_id.clone());work.status.send_replace(ready);
-                    if work.config.owner_direct && models_allowed {e2ee::prepare(&transport,&reference,&work.config,&mut work.receiver).await;}
+                    if models_allowed && (work.config.owner_direct || transport.supports_group_crypto()) {e2ee::prepare(&transport,&reference,&work.config,&mut work.receiver).await;}
                     execution_loop_with_gate(&transport,&owner,&mut ledger,&work.config,&reference,&mut work.receiver,&work.status,models_allowed).await
                 }.await;
                 let mut final_status=RuntimeStatus::new(&work.config.agent_id,"stopped",failure_code(&result)).with_capabilities(&work.config);
@@ -1770,6 +1772,7 @@ async fn execution_loop_with_gate<T: Transport>(
             tokio::select! {biased;_=canceled(cancel)=>return Err(RuntimeError::Stopped),_=tokio::time::sleep(Duration::from_millis(250))=>{}}
             continue;
         }
+        if !config.owner_direct && console.supports_group_crypto() { e2ee::pump_candidates(console,lease,config,cancel).await?; }
         let events = match operation(
             console,
             cancel,

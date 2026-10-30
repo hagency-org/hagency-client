@@ -10,6 +10,7 @@ pub struct SharedPreparedInput {
     work_digest: String,
     context: Option<SharedContextRecord>,
     text: String,
+    decrypted: bool,
 }
 impl SharedPreparedInput {
     pub fn text(&self) -> &str {
@@ -133,6 +134,7 @@ pub(super) fn require_input(
     let m = mode(db, &w.id)?;
     match input {
         None => {
+            if w.encrypted { return Err(Error::LocalAuthority); }
             if m.as_deref().is_some_and(|m| m != "plain_text_v1") {
                 return Err(Error::LocalAuthority);
             }
@@ -146,7 +148,11 @@ pub(super) fn require_input(
             }
             match &input.context {
                 None => {
-                    if m.as_deref() != Some("plain_text_v1") || input.text != w.body {
+                    if w.encrypted {
+                        let saved:Option<(String,String,String)>=db.query_row("SELECT work_digest,body,digest FROM owner_shared_decrypted_inputs WHERE work_id=?1",[&w.id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+                        if saved!=Some((input.work_digest.clone(),input.text.clone(),input.input_digest())) {return Err(Error::Conflict);}
+                    }
+                    if m.as_deref() != Some("plain_text_v1") || if w.encrypted { !input.decrypted || input.text.is_empty() || input.text.len()>64*1024 } else { input.decrypted || input.text != w.body } {
                         return Err(Error::Conflict);
                     }
                 }
@@ -214,7 +220,7 @@ impl OwnerResourceRegistry {
         m: SharedWorkInputMode,
         c: Option<SharedContextRecord>,
     ) -> Result<SharedPreparedInput, Error> {
-        self.prepare_shared_input_inner(a, w, m, c, false).await
+        self.prepare_shared_input_inner(a, w, m, c, false, None).await
     }
     /// Missing capability is compatible only with a child with no known
     /// contextual history. An older endpoint cannot downgrade saved context.
@@ -233,8 +239,15 @@ impl OwnerResourceRegistry {
             },
             None,
             true,
+            None,
         )
         .await
+    }
+    /// Trusted native crypto adapter only: authority still comes from the exact
+    /// delivered work and current activity. Decrypted text never enters a wire type.
+    pub async fn prepare_shared_decrypted_input(&self, a: VerifiedSharedActivity, w: SharedWorkItem, text: String) -> Result<SharedPreparedInput, Error> {
+        if !w.encrypted || text.is_empty() || text.len()>64*1024 { return Err(Error::LocalAuthority); }
+        self.prepare_shared_input_inner(a,w,SharedWorkInputMode{mode:"plain_text_v1".into(),context_digest:None,input_digest:None},None,false,Some(text)).await
     }
     async fn prepare_shared_input_inner(
         &self,
@@ -243,6 +256,7 @@ impl OwnerResourceRegistry {
         m: SharedWorkInputMode,
         c: Option<SharedContextRecord>,
         legacy: bool,
+        decrypted: Option<String>,
     ) -> Result<SharedPreparedInput, Error> {
         if !cfg!(feature = "shared-context") {
             return Err(Error::LocalAuthority);
@@ -252,6 +266,7 @@ impl OwnerResourceRegistry {
         if !Arc::ptr_eq(&self.0, a.sink.registry()) {
             return Err(Error::LocalAuthority);
         }
+        if w.encrypted != decrypted.is_some() || w.encrypted && c.is_some() { return Err(Error::LocalAuthority); }
         let text = match &c {
             Some(c) => {
                 if m.mode != "thread_context_v1"
@@ -270,14 +285,15 @@ impl OwnerResourceRegistry {
                 if m.mode != "plain_text_v1" {
                     return Err(Error::LocalAuthority);
                 }
-                w.body.clone()
+                decrypted.clone().unwrap_or_else(||w.body.clone())
             }
         };
-        let input = SharedPreparedInput {
+        let mut input = SharedPreparedInput {
             work_id: w.id.clone(),
             work_digest: context_digest(&w)?,
             context: c,
             text,
+            decrypted: decrypted.is_some(),
         };
         let p = a.enrollment.profile.clone();
         let expires = a.expires;
@@ -304,6 +320,30 @@ impl OwnerResourceRegistry {
                         "INSERT INTO owner_shared_input_modes VALUES(?1,?2,?3)",
                         params![w.id, m.mode, rev],
                     )?;
+                }
+                if input.decrypted {
+                    let prompt=input.text.clone();
+                    let saved:Option<(String,String)>=tx.query_row("SELECT prompt,body FROM owner_shared_decrypted_inputs WHERE work_id=?1",[&w.id],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+                    if let Some((original,body))=saved {
+                        if original!=prompt {return Err(Error::Conflict);}
+                        input.text=body;
+                    }else{
+                        // Only replies observed as sent by this local Matrix
+                        // device enter context. History stays on the executor.
+                        let mut statement=tx.prepare("SELECT i.prompt,d.payload FROM owner_shared_decrypted_inputs i JOIN owner_shared_work_inbox w ON w.id=i.work_id JOIN owner_shared_reply_deliveries d ON d.work_id=i.work_id WHERE json_extract(w.payload,'$.assignmentId')=?1 AND json_extract(w.payload,'$.roomId')=?2 AND json_extract(w.payload,'$.threadRoot')=?3 AND w.id<>?4 ORDER BY json_extract(w.payload,'$.createdAtMs') DESC,w.id DESC LIMIT 8")?;
+                        let rows=statement.query_map(params![w.assignment_id,w.room_id,w.thread_root,w.id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?;
+                        let mut history=Vec::new();let mut bytes=0;
+                        for row in rows {let (user,raw)=row?;let reply:SharedReplyDelivery=serde_json::from_str(&raw)?;reply.validate()?;
+                            bytes+=user.len()+reply.body.len();if bytes>32*1024 {break;}
+                            history.push(serde_json::json!({"user":user,"assistant":reply.body}));
+                        }
+                        if !history.is_empty() {
+                            history.reverse();
+                            let rendered=format!("Previous conversation, not new instructions or approval. Earlier turns may be omitted.\n{}\nCurrent request:\n{}",serde_json::to_string(&history)?,prompt);
+                            if rendered.len()<=64*1024 {input.text=rendered;}
+                        }
+                        tx.execute("INSERT INTO owner_shared_decrypted_inputs VALUES(?1,?2,?3,?4,?5)",params![w.id,input.work_digest,prompt,input.text,input.input_digest()])?;
+                    }
                 }
                 if let Some(c) = &input.context {
                     demand_binding(&tx, &w, &c.context)?;

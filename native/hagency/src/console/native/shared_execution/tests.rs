@@ -292,7 +292,7 @@ async fn runtime_fixture(
         issued_at_ms: now(),
         expires_at_ms: now() + 30000,
     };
-    let work = SharedWorkItem {
+    let work = SharedWorkItem { encrypted: false,
         id: "work_fixture".into(),
         assignment_id: command.assignment_id.clone(),
         runtime_command_digest: digest(&command).unwrap(),

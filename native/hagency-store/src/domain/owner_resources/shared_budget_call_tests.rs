@@ -18,7 +18,7 @@ impl Active {
     }
     fn work(&self, id: &str) -> SharedWorkItem {
         let body = "New independent offline question".to_owned();
-        SharedWorkItem {
+        SharedWorkItem { encrypted: false,
             id: id.into(), assignment_id: self.command.assignment_id.clone(),
             runtime_command_digest: digest(&self.command), event_id: format!("${id}"),
             room_id: self.original.reserve_command.room_id.clone(),
@@ -230,4 +230,46 @@ async fn budget_execution_v3_idle_demand_uses_original_event_and_stop_fences_cal
     a.f.registry.stop_shared_demand_revision(cleanup(&a.f,&a.original,1).await,1).await.unwrap();
     assert!(a.f.registry.issue_shared_call(intent,started(&w)).await.is_err());
     no_model_calls(&a.instructions);a.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires HAGENCY_TEST_RUNTIME_PROBE offline supervised child"]
+async fn encrypted_shared_input_is_pinned_locally_and_cannot_fall_back_to_event_reference() {
+    let mut a=Box::pin(active()).await;
+    let mut w=a.work("encrypted_native");w.encrypted=true;w.body=w.event_id.clone();w.body_digest=format!("{:x}",Sha256::digest(w.body.as_bytes()));
+    a.f.registry.receive_shared_work(a.authority(),w.clone()).await.unwrap();
+    assert!(a.f.registry.prepare_shared_call(a.authority(),w.clone()).await.is_err());
+    assert!(a.f.registry.prepare_shared_legacy_input(a.authority(),w.clone()).await.is_err());
+    let text="Secret prompt decrypted only on the executor".to_owned();
+    let input=a.f.registry.prepare_shared_decrypted_input(a.authority(),w.clone(),text.clone()).await.unwrap();
+    assert_eq!(input.text(),text);
+    assert!(a.f.registry.prepare_shared_decrypted_input(a.authority(),w.clone(),"Changed decrypted message".into()).await.is_err());
+    let replay=a.f.registry.prepare_shared_decrypted_input(a.authority(),w.clone(),text.clone()).await.unwrap();
+    assert_eq!(input.input_digest(),replay.input_digest());
+    assert!(!serde_json::to_string(&w).unwrap().contains(&text));
+    let call=a.f.registry.prepare_shared_input_call(a.authority(),w.clone(),input.clone()).await.unwrap();
+    let start=a.f.registry.begin_shared_input_start(a.authority(),w.clone(),call.call_id,input).await.unwrap();
+    let custody=a.f.registry.issue_shared_call(start,started(&w)).await.unwrap();
+    a.process.start_shared_text_thread().await.unwrap();
+    custody.start_turn(&mut a.process).await.unwrap();
+    let mut capture=custody.bind_turn(&a.process).unwrap();
+    let receipt=loop {
+        let event=a.process.next_shared_text_event().await.unwrap();
+        let done=matches!(event.observation().kind(),hagency_runtime::codex::session::ObservationKind::TurnEnded(_));
+        let result=capture.observe(event).await.unwrap();
+        if done {break result.unwrap();}
+    };
+    assert_eq!(receipt.body.as_deref(),Some("Offline answer."));
+    assert_eq!(receipt.work_digest,digest(&w));
+    let answer=receipt.body.clone().unwrap();
+    let content=serde_json::json!({"msgtype":"m.text","body":answer,"m.relates_to":{"rel_type":"m.thread","event_id":w.thread_root,"is_falling_back":true,"m.in_reply_to":{"event_id":w.thread_root}}});
+    let delivered=SharedReplyDelivery{version:1,work_id:w.id.clone(),work_digest:digest(&w),assignment_id:w.assignment_id.clone(),runtime_command_digest:w.runtime_command_digest.clone(),room_id:w.room_id.clone(),thread_root:w.thread_root.clone(),source_event_id:w.event_id.clone(),matrix_txn_id:format!("hagency_shared_{}",w.id),matrix_event_id:"$encrypted_sent".into(),matrix_content_digest:digest(&content),body:answer.clone(),formatted_body:None,body_digest:format!("{:x}",Sha256::digest(answer.as_bytes())),sent_at_ms:graphs::now_ms().unwrap()};
+    let delivered=SharedDeliveryRecord{receipt_digest:digest(&delivered),receipt:delivered};
+    a.f.registry.record_shared_reply_delivery(cleanup(&a.f,&a.original,1).await,w.clone(),delivered).await.unwrap();
+    let mut next=a.work("encrypted_followup");next.encrypted=true;next.body=next.event_id.clone();next.body_digest=format!("{:x}",Sha256::digest(next.body.as_bytes()));next.thread_root=w.thread_root.clone();
+    a.f.registry.receive_shared_work(a.authority(),next.clone()).await.unwrap();
+    let follow=a.f.registry.prepare_shared_decrypted_input(a.authority(),next.clone(),"Secret followup".into()).await.unwrap();
+    assert!(follow.text().contains(&text));assert!(follow.text().contains(&answer));assert!(follow.text().ends_with("Secret followup"));
+    assert!(!serde_json::to_string(&next).unwrap().contains("Secret"));
+    a.stop().await;
 }

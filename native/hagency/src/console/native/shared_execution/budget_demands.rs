@@ -16,6 +16,7 @@ impl SharedExecutionTransport {
         Ok(SharedDemandPoll{next_after:reply.value.next_after,outcome})
     }
     pub async fn poll_budget_demand(&self,r:&OwnerResourceRegistry,after:Option<String>)->Result<SharedDemandPoll,NativeError>{
+        self.pump_crypto().await?;
         let b=self.io.bound().await?;budget_demand_io::require_pair(&b).await?;
         let reply:Timed<hagency_store::owner_resources::shared_execution::SharedBudgetDemandPoll>=b.request(BudgetDemandAction::Poll{after}.into(),false).await?;
         if let Some(id)=&reply.value.next_after{super::super::key(id)?;}

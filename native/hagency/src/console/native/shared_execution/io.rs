@@ -7,6 +7,7 @@ use std::sync::Weak;
 
 pub(in crate::console::native) struct ServerOperation(Box<Action>);
 pub(super) enum Action {
+    Crypto(super::e2ee::CryptoAction),
     ApprovalRegister {authority: SharedActivityRef, work: SharedWorkItem, id:String, request:Value, remaining_ms:u64},
     ApprovalTake {authority: SharedActivityRef,id:String,digest:String},
     #[cfg(feature="shared-budget-execution")]
@@ -46,6 +47,7 @@ pub(super) enum Action {
 impl ServerOperation {
     fn new(action: Action) -> Result<Self, NativeError> {
         match &action {
+            Action::Crypto(_) => {},
             Action::ApprovalRegister {authority,work,id,request,remaining_ms}=>{authority.validate().map_err(store)?;work.validate().map_err(store)?;super::super::key(id)?;if *remaining_ms==0 || *remaining_ms>120_000 || serde_json::to_vec(request).map_or(true,|v|v.len()>64*1024){return Err(invalid())}},
             Action::ApprovalTake {authority,id,digest}=>{authority.validate().map_err(store)?;super::super::key(id)?;hash(digest)?;},
             #[cfg(feature="shared-budget-execution")]
@@ -114,6 +116,7 @@ impl ServerOperation {
         }
         let read = matches!(&*self.0,Action::Demand(a) if matches!(&**a,super::demand_io::DemandAction::Control{..}));
         let (path, body) = match *self.0 {
+            Action::Crypto(v) => v.body(),
             Action::ApprovalRegister {authority,work,id,request,remaining_ms}=>("approvals/register".into(),json!({"authority":authority,"workId":work.id,"workDigest":digest(&work).map_err(|_|OwnerError{status:400,code:"invalid_shared_work".into()})?,"id":id,"request":request,"remainingMs":remaining_ms})),
             Action::ApprovalTake {authority,id,digest}=>("approvals/take".into(),json!({"authority":authority,"id":id,"digest":digest})),
             #[cfg(feature="shared-budget-execution")]
@@ -175,6 +178,13 @@ pub(super) struct Bound {
     namespace: Option<Arc<hagency_store::owner_resources::ResourceNamespace>>,
 }
 impl Io {
+    pub(super) fn crypto_directory(&self) -> Result<std::path::PathBuf, NativeError> {
+        let manager=self.manager.upgrade().ok_or_else(||failure(409,"shared_execution_closed"))?;
+        let root=manager.owner.0.host.console.0.server_login.state_directory().ok_or_else(||failure(409,"shared_crypto_storage_unavailable"))?.join("shared-matrix-devices");
+        hagency_store::private::directory(&root).map_err(store)?;
+        Ok(root)
+    }
+
     pub fn new(manager: &Arc<NativeManagement>) -> Self {
         Self {
             manager: Arc::downgrade(manager),

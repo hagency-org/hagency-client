@@ -407,6 +407,7 @@ async fn start(
     let login = &scope.console.0.server_login;
     checked_project(login, scope.cookie, &input, Some(scope)).await?;
     let discovery = scope.matrix(MatrixOperation::Discovery).await?.value;
+    if input.kind==Kind::AgentRoom && !discovery["capabilities"].as_array().is_some_and(|v|v.iter().any(|v|v=="shared-agent-e2ee-v1")) { return Err(error(409,"shared_encryption_unavailable")); }
     let owner = scope
         .binding
         .owner

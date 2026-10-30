@@ -22,6 +22,7 @@ use serde_json::{Value, json};
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ManagementCommand {
     SharedApprovals {room_id:Option<String>},
+    SharedApprovalGet {id:String},
     SharedApprovalDecide {id:String,digest:String,decision:String},
     Pools { after: Option<String>, capability: Option<String> },
     PoolAgents { after: Option<String>, pool_id: Option<String>, needs_my_action: bool },
@@ -219,7 +220,7 @@ impl ManagementCommand {
     }
     fn permission(&self) -> Permission {
         match self {
-            Self::SharedApprovals{..}=>Permission::ReadAgentWork,
+            Self::SharedApprovals{..}|Self::SharedApprovalGet{..}=>Permission::ReadAgentWork,
             Self::SharedApprovalDecide{..}=>Permission::DecideAgentRequests,
             Self::Session {} | Self::Connections { .. } | Self::Connection { .. } | Self::ConnectionHistory { .. } => {
                 Permission::ReadConnections
@@ -354,6 +355,7 @@ impl ServerOperation {
                 if room_id.as_ref().is_some_and(|s|s.len()>255||!s.starts_with('!')) {return Err(failure(400,"invalid_room"));}
                 (Method::POST,"shared-execution/approvals/query".into(),Some(json!({"roomId":room_id})))
             },
+            ManagementCommand::SharedApprovalGet{id}=>{key(id)?;(Method::POST,"shared-execution/approvals/get".into(),Some(json!({"id":id})))},
             ManagementCommand::SharedApprovalDecide{id,digest,decision}=>{
                 key(id)?;if digest.len()!=64 || !digest.bytes().all(|b|b.is_ascii_hexdigit()) || !matches!(decision.as_str(),"approve_once"|"approve_session"|"deny"){return Err(failure(400,"invalid_permission_decision"));}
                 (Method::POST,"shared-execution/approvals/decide".into(),Some(json!({"id":id,"digest":digest,"decision":decision})))

@@ -1,4 +1,4 @@
-//! The executor's own Matrix device for an encrypted owner-direct Room. The
+//! The executor's own Matrix device for encrypted personal and shared Rooms. The
 //! server routes only ciphertext and records receipts: this device decrypts the
 //! owner's request for the local turn and sends the encrypted answer itself.
 //! Decrypted text stays in memory, the local ledger and the provider session.
@@ -8,7 +8,9 @@ use matrix_sdk::{
     Client, SessionMeta, SessionTokens,
     authentication::matrix::MatrixSession,
     config::SyncSettings,
-    deserialized_responses::{DecryptedRoomEvent, TimelineEventKind},
+    deserialized_responses::{
+        DecryptedRoomEvent, TimelineEventKind, VerificationLevel, VerificationState,
+    },
     ruma::{
         OwnedEventId, OwnedRoomId, OwnedTransactionId, OwnedUserId,
         api::error::ErrorKind,
@@ -42,8 +44,9 @@ const PLAIN_BYTES: usize = 42 * 1024;
 static DEVICES: LazyLock<Mutex<HashMap<String, Arc<AgentDevice>>>> =
     LazyLock::new(Default::default);
 
-pub(super) struct AgentDevice {
+pub(in crate::console) struct AgentDevice {
     client: Client,
+    pub(in crate::console) approvals: crate::encrypted_approvals::Inbox,
     revoked: Arc<AtomicBool>,
     sync: tokio::task::AbortHandle,
 }
@@ -54,7 +57,7 @@ impl Drop for AgentDevice {
 }
 
 /// The Agent device must exist before the owner's client encrypts for it, so an
-/// owner-direct worker opens it at start. Best effort: plaintext Rooms never
+/// worker opens it at start. Best effort: plaintext Rooms never
 /// need it, and an encrypted request retries the grant itself.
 pub(super) async fn prepare<T: Transport>(
     transport: &T,
@@ -82,8 +85,37 @@ pub(super) async fn device<T: Transport>(
     config: &StartConfig,
     cancel: &mut watch::Receiver<bool>,
 ) -> Result<Arc<AgentDevice>, RuntimeError> {
+    // Use the account's private namespace, independent of provider HOME or
+    // per-binding lease epochs. All bindings share this agent's one device.
+    // The normal provider directory already lived here, preserving its store.
+    let (directory, identity) = if let Some(host) = transport.approval_host() {
+        let root = host
+            .console
+            .0
+            .server_login
+            .state_directory()
+            .ok_or(RuntimeError::Profile)?;
+        let p = &host.pin;
+        let directory = crate::console::owned_agents::journal_profile_directory(
+            &root, &p.origin, &p.issuer, &p.subject, &p.owner,
+        )
+        .map_err(|_| RuntimeError::Profile)?;
+        let identity = serde_json::to_string(p).map_err(|_| RuntimeError::Profile)?;
+        (directory, identity)
+    } else {
+        (
+            config
+                .profile
+                .home
+                .parent()
+                .ok_or(RuntimeError::Profile)?
+                .to_path_buf(),
+            lease.epoch.to_string(),
+        )
+    };
+    let key = format!("{}:{}:{identity}", directory.display(), config.agent_id);
     let mut devices = DEVICES.lock().await;
-    if let Some(device) = devices.get(&config.agent_id)
+    if let Some(device) = devices.get(&key)
         && !device.revoked.load(Ordering::Acquire)
     {
         return Ok(device.clone());
@@ -99,10 +131,69 @@ pub(super) async fn device<T: Transport>(
     else {
         return Err(RuntimeError::Transport);
     };
-    let directory = config.profile.home.parent().ok_or(RuntimeError::Profile)?;
-    let device = Arc::new(AgentDevice::open(grant, directory, &config.agent_id).await?);
-    devices.insert(config.agent_id.clone(), device.clone());
+    let device = Arc::new(AgentDevice::open(grant, &directory, &config.agent_id).await?);
+    devices.insert(key, device.clone());
     Ok(device)
+}
+
+/// Addressing is checked before the server creates a dispatch or a local call
+/// hold. Missing room keys leave the original candidate available for retry.
+pub(super) async fn pump_candidates<T: Transport>(
+    transport: &T,
+    lease: &LeaseRef,
+    config: &StartConfig,
+    cancel: &mut watch::Receiver<bool>,
+) -> Result<(), RuntimeError> {
+    let d = device(transport, lease, config, cancel).await?;
+    let Response::E2eeCandidates(value) = operation(
+        transport,
+        cancel,
+        Op::E2eeCandidates {
+            lease: lease.clone(),
+            binding_id: config.binding_id.clone(),
+        },
+    )
+    .await?
+    else {
+        return Err(RuntimeError::Transport);
+    };
+    #[derive(Deserialize)]
+    struct Candidate {
+        event_id: String,
+        room_id: String,
+        sender_mxid: String,
+    }
+    let events = value["events"]
+        .as_array()
+        .filter(|v| v.len() <= 16)
+        .ok_or(RuntimeError::Transport)?;
+    for raw in events {
+        let c: Candidate =
+            serde_json::from_value(raw.clone()).map_err(|_| RuntimeError::Transport)?;
+        let message = match d
+            .read_candidate(&c.room_id, &c.event_id, &c.sender_mxid)
+            .await
+        {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let (mentions, thread_root) = message
+            .map(|m| (m.mentions.into_iter().collect(), m.thread_root))
+            .unwrap_or_default();
+        operation(
+            transport,
+            cancel,
+            Op::E2eeConfirm {
+                lease: lease.clone(),
+                binding_id: config.binding_id.clone(),
+                event_id: c.event_id,
+                mentions,
+                thread_root,
+            },
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 fn private_directory(path: &Path) -> Result<(), RuntimeError> {
@@ -138,8 +229,39 @@ fn txn(kind: &str, dispatch: &str) -> OwnedTransactionId {
     format!("{kind}_{:x}", Sha256::digest(dispatch.as_bytes())).into()
 }
 
+pub(in crate::console) struct DecryptedRequest {
+    pub body: String,
+    pub mentions: std::collections::BTreeSet<String>,
+    pub thread_root: Option<String>,
+}
 impl AgentDevice {
-    async fn open(
+    pub(in crate::console) fn approval_client(&self) -> &Client { &self.client }
+    pub(in crate::console) fn is_revoked(&self) -> bool {
+        self.revoked.load(Ordering::Acquire)
+    }
+    pub(in crate::console) async fn read_candidate(
+        &self,
+        room: &str,
+        event: &str,
+        requester: &str,
+    ) -> Result<Option<DecryptedRequest>, RuntimeError> {
+        let room_id = OwnedRoomId::try_from(room).map_err(|_| RuntimeError::Request)?;
+        let event_id = OwnedEventId::try_from(event).map_err(|_| RuntimeError::Request)?;
+        let room = self
+            .client
+            .get_room(&room_id)
+            .ok_or(RuntimeError::Transport)?;
+        let event = room
+            .event(&event_id, None)
+            .await
+            .map_err(|_| RuntimeError::Transport)?;
+        match &event.kind {
+            TimelineEventKind::Decrypted(d) => Ok(request_message(d, requester)),
+            _ => Err(RuntimeError::Transport), // Keys can arrive later; retain the candidate.
+        }
+    }
+
+    pub(in crate::console) async fn open(
         grant: E2eeDeviceGrant,
         directory: &Path,
         agent: &str,
@@ -177,6 +299,7 @@ impl AgentDevice {
             .map_err(|_| RuntimeError::Profile)?;
         // The first sync uploads this device's identity and one-time keys, so
         // the owner's client starts sharing room keys with it.
+        let approvals = crate::encrypted_approvals::Inbox::attach(&client);
         client
             .sync_once(SyncSettings::default().timeout(Duration::ZERO))
             .await
@@ -185,6 +308,7 @@ impl AgentDevice {
         let sync = tokio::spawn(sync(client.clone(), revoked.clone())).abort_handle();
         Ok(Self {
             client,
+            approvals,
             revoked,
             sync,
         })
@@ -262,7 +386,7 @@ impl AgentDevice {
         }
     }
 
-    pub(super) async fn send_reply(
+    pub(in crate::console) async fn send_reply(
         &self,
         dispatch: &inbox::Dispatch,
         body: &str,
@@ -272,6 +396,18 @@ impl AgentDevice {
             .await
     }
 
+    pub(in crate::console) async fn send_shared_reply(
+        &self,
+        dispatch: &inbox::Dispatch,
+        body: &str,
+    ) -> Result<String, RuntimeError> {
+        self.send(
+            dispatch,
+            format!("hagency_shared_{}", dispatch.id).into(),
+            reply_content(dispatch, body)?,
+        )
+        .await
+    }
     /// Best effort, like the server's processing reaction for plaintext Rooms.
     pub(super) async fn mark_processing(&self, dispatch: &inbox::Dispatch) {
         let Ok(event) = OwnedEventId::try_from(dispatch.event_id.as_str()) else {
@@ -300,7 +436,7 @@ impl AgentDevice {
 }
 
 /// Same shape as the server's replies: top-level owner DMs stay flat.
-fn reply_content(
+pub(in crate::console) fn reply_content(
     dispatch: &inbox::Dispatch,
     body: &str,
 ) -> Result<RoomMessageEventContent, RuntimeError> {
@@ -324,8 +460,20 @@ fn reply_content(
 }
 
 fn request_text(decrypted: &DecryptedRoomEvent, requester: &str) -> Option<String> {
+    request_message(decrypted, requester).map(|m| m.body)
+}
+fn request_message(decrypted: &DecryptedRoomEvent, requester: &str) -> Option<DecryptedRequest> {
     // The Megolm session's Olm-authenticated sender, not just the envelope.
-    if decrypted.encryption_info.sender.as_str() != requester {
+    if decrypted.encryption_info.sender.as_str() != requester
+        || matches!(
+            decrypted.encryption_info.verification_state,
+            VerificationState::Unverified(
+                VerificationLevel::None(_)
+                    | VerificationLevel::MismatchedSender
+                    | VerificationLevel::VerificationViolation
+            )
+        )
+    {
         return None;
     }
     let Ok(AnyTimelineEvent::MessageLike(AnyMessageLikeEvent::RoomMessage(
@@ -339,10 +487,24 @@ fn request_text(decrypted: &DecryptedRoomEvent, requester: &str) -> Option<Strin
     {
         return None;
     }
+    let mentions = message
+        .content
+        .mentions
+        .as_ref()
+        .map(|m| m.user_ids.iter().map(ToString::to_string).collect())
+        .unwrap_or_default();
+    let thread_root = match &message.content.relates_to {
+        Some(Relation::Thread(t)) => Some(t.event_id.to_string()),
+        _ => None,
+    };
     let MessageType::Text(text) = message.content.msgtype else {
         return None;
     };
-    (!text.body.trim().is_empty() && text.body.len() <= 65_536).then_some(text.body)
+    (!text.body.trim().is_empty() && text.body.len() <= 65_536).then_some(DecryptedRequest {
+        body: text.body,
+        mentions,
+        thread_root,
+    })
 }
 
 async fn sync(client: Client, revoked: Arc<AtomicBool>) {
@@ -390,6 +552,47 @@ mod tests {
     }
 
     #[test]
+    fn encrypted_addressing_requires_authenticated_sender_and_original_text() {
+        use matrix_sdk::deserialized_responses::{
+            AlgorithmInfo, DeviceLinkProblem, EncryptionInfo,
+        };
+        let info = EncryptionInfo {
+            sender: "@owner:example.test".try_into().unwrap(),
+            sender_device: Some("OWNER".into()),
+            forwarder: None,
+            algorithm_info: AlgorithmInfo::MegolmV1AesSha2 {
+                curve25519_key: "key".into(),
+                sender_claimed_keys: Default::default(),
+                session_id: Some("session".into()),
+            },
+            verification_state: VerificationState::Unverified(VerificationLevel::UnsignedDevice),
+        };
+        let raw = serde_json::json!({"type":"m.room.message","event_id":"$event","room_id":"!room:example.test","sender":"@owner:example.test","origin_server_ts":1,"content":{"msgtype":"m.text","body":"Secret request","m.mentions":{"user_ids":["@agent:example.test"]},"m.relates_to":{"rel_type":"m.thread","event_id":"$root","m.in_reply_to":{"event_id":"$root"}}}});
+        let mut event = DecryptedRoomEvent {
+            event: serde_json::from_value(raw.clone()).unwrap(),
+            encryption_info: Arc::new(info),
+            unsigned_encryption_info: None,
+        };
+        let request = request_message(&event, "@owner:example.test").unwrap();
+        assert_eq!(request.thread_root.as_deref(), Some("$root"));
+        assert!(request.mentions.contains("@agent:example.test"));
+        assert!(request_message(&event, "@intruder:example.test").is_none());
+        Arc::make_mut(&mut event.encryption_info).verification_state =
+            VerificationState::Unverified(VerificationLevel::None(
+                DeviceLinkProblem::InsecureSource,
+            ));
+        assert!(request_message(&event, "@owner:example.test").is_none());
+        Arc::make_mut(&mut event.encryption_info).verification_state = VerificationState::Verified;
+        let mut edit = raw;
+        edit["content"]["m.relates_to"] =
+            serde_json::json!({"rel_type":"m.replace","event_id":"$original"});
+        edit["content"]["m.new_content"] =
+            serde_json::json!({"msgtype":"m.text","body":"replacement"});
+        event.event = serde_json::from_value(edit).unwrap();
+        assert!(request_message(&event, "@owner:example.test").is_none());
+    }
+
+    #[test]
     fn encrypted_replies_keep_the_server_reply_shape() {
         let flat = json(&reply_content(&dispatch("!dm:example.test"), "**done**").unwrap());
         assert_eq!(flat["msgtype"], "m.text");
@@ -403,6 +606,36 @@ mod tests {
             serde_json::json!({"rel_type":"m.thread","event_id":"$root",
                 "is_falling_back":true,"m.in_reply_to":{"event_id":"$root"}})
         );
+    }
+
+    #[test]
+    fn encrypted_reply_content_validates_as_local_thread_evidence() {
+        use hagency_store::owner_resources::shared_execution::SharedReplyDelivery;
+        for body in [
+            "**done**".to_owned(),
+            "答复".to_owned(),
+            "a".repeat(32 * 1024),
+        ] {
+            let content = json(&reply_content(&dispatch("$root"), &body).unwrap());
+            let receipt = SharedReplyDelivery {
+                version: 1,
+                work_id: "work_1".into(),
+                work_digest: "a".repeat(64),
+                assignment_id: "assignment_1".into(),
+                runtime_command_digest: "b".repeat(64),
+                room_id: "!room:example.test".into(),
+                thread_root: "$root".into(),
+                source_event_id: "$request".into(),
+                matrix_txn_id: "hagency_shared_work_1".into(),
+                matrix_event_id: "$reply".into(),
+                matrix_content_digest: hagency_core::canonical::digest(&content).unwrap(),
+                body_digest: format!("{:x}", Sha256::digest(body.as_bytes())),
+                body,
+                formatted_body: content["formatted_body"].as_str().map(str::to_owned),
+                sent_at_ms: 1,
+            };
+            receipt.validate().unwrap();
+        }
     }
 
     #[test]

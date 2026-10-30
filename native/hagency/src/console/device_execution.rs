@@ -338,6 +338,8 @@ pub enum DeviceOperation {
         execution_id: String,
         body: String,
     },
+    E2eeCandidates { lease: LeaseRef, binding_id: String },
+    E2eeConfirm { lease: LeaseRef, binding_id: String, event_id: String, mentions: Vec<String>, thread_root: Option<String> },
     E2eeDevice {
         lease: LeaseRef,
     },
@@ -361,6 +363,8 @@ pub enum DeviceResponse {
     Finished,
     ReplyQueued(ReplyReceipt),
     E2eeDevice(E2eeDeviceGrant),
+    E2eeCandidates(serde_json::Value),
+    E2eeConfirmed,
 }
 impl DeviceOperation {
     fn lease(&self) -> Option<&LeaseRef> {
@@ -375,6 +379,8 @@ impl DeviceOperation {
             | Self::AuthorizeTool { lease, .. }
             | Self::Finish { lease, .. }
             | Self::Reply { lease, .. }
+            | Self::E2eeCandidates { lease, .. }
+            | Self::E2eeConfirm { lease, .. }
             | Self::E2eeDevice { lease }
             | Self::EncryptedReply { lease, .. }
             | Self::ReconcileKnownReply { lease, .. } => Some(lease),
@@ -385,6 +391,8 @@ impl DeviceOperation {
             lease.validate()?;
         }
         let (path, body) = match self {
+            Self::E2eeCandidates {lease,binding_id} => { id(binding_id)?; ("e2ee-candidates",json!({"lease":lease,"bindingId":binding_id})) },
+            Self::E2eeConfirm {lease,binding_id,event_id,mentions,thread_root} => { id(binding_id)?;matrix(event_id,'$')?; ("e2ee-confirm",json!({"lease":lease,"bindingId":binding_id,"eventId":event_id,"mentions":mentions,"threadRoot":thread_root})) },
             Self::History {
                 agent_id,
                 cursor,
@@ -909,6 +917,8 @@ fn parse_response(
             )?;
             Ok(DeviceResponse::ReplyQueued(reply))
         }
+        DeviceOperation::E2eeCandidates { .. } => Ok(DeviceResponse::E2eeCandidates(value.clone())),
+        DeviceOperation::E2eeConfirm { .. } if value["confirmed"].is_boolean() => Ok(DeviceResponse::E2eeConfirmed),
         DeviceOperation::E2eeDevice { .. } => {
             let grant: E2eeDeviceGrant =
                 serde_json::from_value(value.clone()).map_err(|_| invalid())?;

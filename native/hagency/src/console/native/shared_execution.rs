@@ -1,6 +1,7 @@
 //! Explicitly enabled first shared text turn on a retained actual provider.
 //! Original central commands, local holds and process evidence remain distinct.
 mod context_io;
+mod e2ee;
 mod approvals;
 mod demand_io;
 mod demands;

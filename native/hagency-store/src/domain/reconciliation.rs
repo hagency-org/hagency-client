@@ -38,7 +38,7 @@ fn collect(db: &mut Connection, profile: &str) -> Result<ProfileLedgerAudit, Err
     let tx = db.transaction_with_behavior(TransactionBehavior::Deferred)?;
     let schema: i32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
     let application: i32 = tx.pragma_query_value(None, "application_id", |r| r.get(0))?;
-    if !matches!(schema, 71..=105) || application != 0x48414732 {
+    if !matches!(schema, 71..=106) || application != 0x48414732 {
         return Err(Error::Schema);
     }
     // Existing domain schema contains views. We never query them; every

@@ -12,6 +12,7 @@ async fn paired(b: &Bound) -> Result<bool, NativeError> {
         .any(|c| c == SHARED_CONTEXT_CAPABILITY))
 }
 pub(super) async fn prepare(
+    io: &Io,
     b: &Bound,
     r: &OwnerResourceRegistry,
     a: VerifiedSharedActivity,
@@ -19,6 +20,10 @@ pub(super) async fn prepare(
     authority: SharedActivityRef,
     until: Instant,
 ) -> Result<SharedPreparedInput, NativeError> {
+    if w.encrypted {
+        let text=super::e2ee::input(io,b,w).await?;
+        return r.prepare_shared_decrypted_input(a,w.clone(),text).await.map_err(store);
+    }
     if !paired(b).await? {
         return r
             .prepare_shared_legacy_input(a, w.clone())
