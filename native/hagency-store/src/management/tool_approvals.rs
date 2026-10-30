@@ -104,12 +104,59 @@ impl ToolGrantQuery {
 
 /// Descriptive rule metadata requires its own consented permission, beyond
 /// reading approval status. It never contains the raw request parameters.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolRuleDetails {
     pub description: String,
     pub project_id: String,
     pub owner_mxid: String,
+    /// Structured form of `description` for localized display. None when the
+    /// saved scope can no longer be re-derived exactly; show `description`.
+    #[serde(default)]
+    pub rule: Option<ToolRule>,
+}
+
+/// The facts a saved rule's English `description` states, as fields. They are
+/// derived again from the original request by the same pure function that
+/// derived the saved scope, and exposed only when the recomputed scope key and
+/// description equal the stored ones. They never include the workspace, the
+/// task or any other request parameter. Which fields are set depends on the
+/// grant's `kind`:
+/// - `exact_command`: `command`, `cwd`, and `permissions` when the command
+///   asked for extra sandbox permissions;
+/// - `network_host`: `host`, `protocol`;
+/// - `permission_profile`: `cwd`, `permissions`;
+/// - `exact_tool_call`: `tool`, `input`.
+/// The rule applies to the grant's `mode` (`task` or `always`) for this Agent
+/// and project; that scope is already on the grant itself.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolRule {
+    /// `codex`, `claude` or `octos`: the runtime whose request was approved.
+    pub runtime: String,
+    /// The Claude Code or Octos tool name. Codex requests have none; the
+    /// grant `kind` says what they ask for.
+    pub tool: Option<String>,
+    pub command: Option<String>,
+    pub cwd: Option<String>,
+    pub host: Option<String>,
+    /// `http`, `https`, `socks5Tcp` or `socks5Udp`.
+    pub protocol: Option<String>,
+    /// The exact tool input object of a Claude Code tool call.
+    pub input: Option<serde_json::Value>,
+    pub permissions: Option<ToolRulePermissions>,
+}
+
+/// Extra sandbox permissions a rule allows.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolRulePermissions {
+    /// `true` for network access to all destinations; null when not asked.
+    pub network: Option<bool>,
+    /// Paths the Agent may read, sorted.
+    pub read: Vec<String>,
+    /// Paths the Agent may write, sorted.
+    pub write: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,7 +166,7 @@ pub enum ToolGrantMode {
     Always,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolGrant {
     pub id: String,

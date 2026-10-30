@@ -4,7 +4,7 @@ use super::super::{APPROVAL_SELECT, approval_row, approval_tuple};
 use crate::management::{
     CommandReceipt, RevokeToolGrant, RevokedToolGrant, ToolApproval, ToolApprovalLookup,
     ToolApprovalPage, ToolApprovalQuery, ToolGrant, ToolGrantMode, ToolGrantPage, ToolGrantQuery,
-    ToolRuleDetails, ToolApprovalSubject, ToolApprovalSnapshot,
+    ToolRule, ToolRuleDetails, ToolRulePermissions, ToolApprovalSubject, ToolApprovalSnapshot,
 };
 
 const GRANT_SELECT: &str = "SELECT g.id,e.resource_id,e.id,json_extract(e.projection,'$.agentName'),g.scope_kind,g.mode,g.task_id,g.revoked,g.binding_generation,g.scope_key,g.context_key,EXISTS(SELECT 1 FROM current_approval_bindings current JOIN approval_bindings b ON b.engagement_id=current.engagement_id WHERE b.engagement_id=g.engagement_id AND b.incarnation=g.binding_generation) FROM approval_grants g JOIN engagements e ON e.id=g.engagement_id";
@@ -59,12 +59,12 @@ fn project_grant(db: &Connection, mut grant: StoredGrant) -> Result<ToolGrant, E
     // Requests reusing a grant carry the same scope and context. Check their
     // retained relationship before exposing the saved rule's human description.
     // Neither the raw request config nor the context itself leaves this method.
-    let detail: Option<(Option<String>, String)> = db.query_row(
-        "SELECT a.description,c.config FROM owner_approvals a JOIN approval_contexts c ON c.id=a.context_id WHERE a.grant_id=?1 AND a.scope_key=?2 AND a.scope_kind=?3 AND c.engagement_id=?4 ORDER BY a.id LIMIT 1",
+    let detail: Option<(Option<String>, String, String)> = db.query_row(
+        "SELECT a.description,c.config,a.config FROM owner_approvals a JOIN approval_contexts c ON c.id=a.context_id WHERE a.grant_id=?1 AND a.scope_key=?2 AND a.scope_kind=?3 AND c.engagement_id=?4 ORDER BY a.id LIMIT 1",
         params![grant.item.id, grant.scope_key, grant.kind_json, grant.item.engagement_id],
-        |row| Ok((row.get(0)?, row.get(1)?)),
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     ).optional()?;
-    if let Some((Some(description), encoded)) = detail {
+    if let Some((Some(description), encoded, request)) = detail {
         let context: Context = serde_json::from_str(&encoded)?;
         if context.binding.engagement != grant.item.engagement_id
             || context.binding.generation != grant.binding_generation
@@ -79,15 +79,135 @@ fn project_grant(db: &Connection, mut grant: StoredGrant) -> Result<ToolGrant, E
         }
         matrix_user(&context.binding.owner, &context.binding.server)?;
         identifier(&context.binding.project, 128)?;
+        let rule = saved_rule(&context, &request, &grant, &description)?;
         grant.item.details = Some(ToolRuleDetails {
             description,
             project_id: context.binding.project,
             owner_mxid: context.binding.owner,
+            rule,
         });
+    }
+    // The structured rule repeats the description's facts. A rule too large to
+    // ship beside a maximal description is omitted, never failing the read.
+    if serde_json::to_vec(&grant.item)?.len() > 80 * 1024
+        && let Some(details) = grant.item.details.as_mut()
+    {
+        details.rule = None;
     }
     grant.item.revision = canonical::digest(&serde_json::to_value(&grant.item)?)?;
     bounded(&grant.item, 80 * 1024)?;
     Ok(grant.item)
+}
+
+/// Re-derive a saved scope from its original request with the same pure
+/// function that derived it at admission. Structured fields are returned only
+/// when the recomputed key, kind and description equal the stored ones, so
+/// they state exactly what the description states and nothing that changed.
+fn saved_rule(
+    context: &Context,
+    request: &str,
+    grant: &StoredGrant,
+    description: &str,
+) -> Result<Option<ToolRule>, Error> {
+    let request: Request = serde_json::from_str(request)?;
+    let Some(derived) = policy::derive(HostRequest {
+        agent_id: &context.binding.engagement,
+        workspace: &context.workspace,
+        task_id: Some(&context.task),
+        may_write: context.may_write,
+        method: &request.method,
+        params: &request.params,
+        path_flavor: if context.windows {
+            PathFlavor::Windows
+        } else {
+            PathFlavor::Posix
+        },
+    }) else {
+        return Ok(None);
+    };
+    let scope = derived.scope;
+    if scope.key != grant.scope_key
+        || scope.description != description
+        || serde_json::to_value(scope.kind)? != Value::String(grant.item.kind.clone())
+    {
+        return Ok(None);
+    }
+    let value = &scope.value;
+    let text = |key: &str| value.get(key).and_then(Value::as_str).map(str::to_owned);
+    let runtime = match request.method.as_str() {
+        policy::CLAUDE_TOOL_METHOD => "claude",
+        policy::OCTOS_APPROVAL_METHOD => "octos",
+        _ => "codex",
+    };
+    let mut rule = ToolRule {
+        runtime: runtime.into(),
+        tool: None,
+        command: None,
+        cwd: None,
+        host: None,
+        protocol: None,
+        input: None,
+        permissions: None,
+    };
+    match scope.kind {
+        ScopeKind::ExactCommand => {
+            rule.command = text("command");
+            rule.cwd = text("cwd");
+            rule.permissions = value
+                .get("additionalPermissions")
+                .filter(|v| !v.is_null())
+                .map(rule_permissions);
+        }
+        ScopeKind::NetworkHost => {
+            rule.host = text("host");
+            rule.protocol = text("protocol");
+        }
+        ScopeKind::PermissionProfile => {
+            rule.cwd = text("cwd");
+            rule.permissions = value.get("permissions").map(rule_permissions);
+        }
+        ScopeKind::ExactToolCall => {
+            rule.tool = text("tool");
+            // The scope holds the canonical input text the description shows.
+            rule.input = value
+                .get("input")
+                .and_then(Value::as_str)
+                .map(serde_json::from_str)
+                .transpose()?;
+        }
+    }
+    Ok(Some(rule))
+}
+
+/// A normalized permission profile as the network flag and sorted path lists
+/// the description lists line by line.
+fn rule_permissions(profile: &Value) -> ToolRulePermissions {
+    let fs = &profile["fileSystem"];
+    let paths = |mode: &str| {
+        let mut paths: Vec<String> = fs[mode]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .chain(
+                fs["entries"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|entry| entry["access"] == mode)
+                    .filter_map(|entry| entry["path"]["path"].as_str()),
+            )
+            .map(str::to_owned)
+            .collect();
+        paths.sort();
+        paths.dedup();
+        paths
+    };
+    ToolRulePermissions {
+        network: profile["network"]["enabled"].as_bool(),
+        read: paths("read"),
+        write: paths("write"),
+    }
 }
 
 fn bounded(value: &impl Serialize, limit: usize) -> Result<(), Error> {

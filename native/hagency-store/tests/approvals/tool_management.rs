@@ -274,6 +274,120 @@ async fn management_tool_grants_recover_original_description_and_task_scope() {
 }
 
 #[tokio::test]
+async fn management_tool_grant_rules_state_the_description_as_fields() {
+    use hagency_core::execution::{CLAUDE_TOOL_METHOD, OCTOS_APPROVAL_METHOD};
+    let mut f = Fixture::new(true);
+    let only = |input: &mut HostApprovalRequest, keep: &[&str]| {
+        input
+            .params
+            .as_object_mut()
+            .unwrap()
+            .retain(|k, _| keep.contains(&k.as_str()));
+    };
+    let ids = ["threadId", "turnId", "itemId"];
+    // Codex: an exact command that also asks for sandbox permissions.
+    let mut command = f.input(0, 2700);
+    command.params["command"] = json!("cargo test");
+    command.params["cwd"] = json!("/work/a/crate");
+    command.params["additionalPermissions"] = json!({"network":{"enabled":true},
+        "fileSystem":{"read":["/data/b","/data/a"],"write":["/work/a/out"]}});
+    // Codex: one network host.
+    let mut network = f.input(0, 2701);
+    only(&mut network, &ids);
+    network.params["networkApprovalContext"] = json!({"host":"Crates.IO","protocol":"https"});
+    // Codex: a permission profile.
+    let mut profile = f.input(0, 2702);
+    profile.method = "item/permissions/requestApproval".into();
+    only(&mut profile, &["threadId", "turnId", "itemId", "cwd"]);
+    profile.params["permissions"] = json!({"fileSystem":{"read":["/opt/sdk"],
+        "entries":[{"access":"write","path":{"type":"path","path":"/work/a/cache"}}]}});
+    // Claude Code: one exact tool call.
+    let mut claude = f.input(0, 2703);
+    claude.method = CLAUDE_TOOL_METHOD.into();
+    only(&mut claude, &ids);
+    claude.params["toolName"] = json!("Bash");
+    claude.params["toolUseId"] = json!("toolu_private");
+    claude.params["input"] = json!({"description":"Run tests","command":"npm test"});
+    // Octos: a typed shell command.
+    let mut octos = f.input(0, 2704);
+    octos.method = OCTOS_APPROVAL_METHOD.into();
+    only(&mut octos, &ids);
+    for (key, value) in [("toolName", "shell"), ("octosTurnId", "octos_turn_private"), ("title", "Run checks"),
+        ("body", "body_private"), ("command", "make check"), ("cwd", "/work/a")] {
+        octos.params[key] = json!(value);
+    }
+    let mut approvals = Vec::new();
+    for input in [command, network, profile, claude, octos] {
+        let a = f.db.request_owner_approval(&f.caps[0], &input, 1010).unwrap();
+        assert!(a.reusable_scope, "{}", input.method);
+        f.choose(&a.id, ApprovalChoice::Always);
+        approvals.push(a.id);
+    }
+    let sql = f.sql();
+    let Fixture { root: _root, db, agents, .. } = f;
+    let store = DomainStore::start(db, 16).unwrap();
+    let ctx = context();
+    let manager = session(&store, &ctx);
+    let rules = || async {
+        manager
+            .tool_grants(&ctx, query(&agents[0]))
+            .await
+            .unwrap()
+            .grants
+            .into_iter()
+            .map(|g| {
+                let details = g.details.unwrap();
+                (g.kind, details.description, serde_json::to_value(details.rule).unwrap())
+            })
+            .collect::<Vec<_>>()
+    };
+    let rule = |runtime: &str, fields: Value| {
+        let mut rule = json!({"runtime":runtime,"tool":null,"command":null,"cwd":null,"host":null,
+            "protocol":null,"input":null,"permissions":null});
+        for (key, value) in fields.as_object().unwrap() {
+            rule[key] = value.clone();
+        }
+        rule
+    };
+    let expected = [
+        ("exact_command", rule("codex", json!({"command":"cargo test","cwd":"/work/a/crate",
+            "permissions":{"network":true,"read":["/data/a","/data/b"],"write":["/work/a/out"]}}))),
+        ("network_host", rule("codex", json!({"host":"crates.io","protocol":"https"}))),
+        ("permission_profile", rule("codex", json!({"cwd":"/work/a",
+            "permissions":{"network":null,"read":["/opt/sdk"],"write":["/work/a/cache"]}}))),
+        ("exact_tool_call", rule("claude", json!({"tool":"Bash",
+            "input":{"command":"npm test","description":"Run tests"}}))),
+        ("exact_command", rule("octos", json!({"command":"make check","cwd":"/work/a"}))),
+    ];
+    let found = rules().await;
+    assert_eq!(found.len(), expected.len());
+    for (kind, rule) in &expected {
+        assert!(
+            found.iter().any(|(k, _, r)| k == kind && r == rule),
+            "missing {kind} {rule} in {found:?}"
+        );
+    }
+    // The fields restate the description; nothing else from the request.
+    let encoded = serde_json::to_string(&found).unwrap();
+    for private in ["thread_a", "turn_a", "item_27", "toolu_private", "octos_turn_private", "body_private"] {
+        assert!(!encoded.contains(private), "{private}");
+    }
+    // A stored description that no longer matches its request keeps the
+    // English text but loses the structured fields.
+    sql.execute(
+        "UPDATE owner_approvals SET description=description||' (edited)' WHERE id=?1",
+        [&approvals[1]],
+    )
+    .unwrap();
+    let drifted = rules().await;
+    let network = drifted.iter().find(|(k, _, _)| k == "network_host").unwrap();
+    assert!(network.1.ends_with(" (edited)"));
+    assert!(network.2.is_null());
+    assert_eq!(drifted.iter().filter(|(_, _, r)| !r.is_null()).count(), 4);
+    store.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn management_tool_permissions_and_current_host_are_separate() {
     let mut f = Fixture::new(true);
     let request = f.admit(0, 2200);

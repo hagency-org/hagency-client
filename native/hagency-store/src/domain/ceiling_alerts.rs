@@ -686,6 +686,15 @@ pub const ALERT_STATUSES: [&str; 5] =
     ["open", "acknowledged", "assigned", "resolved", "suppressed"];
 /// `lib/alert-store.js:5` parity.
 pub const ALERT_SEVERITIES: [&str; 3] = ["info", "warning", "critical"];
+/// Display kind of an `agent_ceiling_overrun` row, the only alert the native
+/// sweep raises: a resource's drawn tokens passed its declared ceiling.
+pub const ALERT_KIND_CEILING_OVERRUN: &str = "ceiling_overrun";
+/// Display kind of any other row (only transferred history can hold one).
+/// Its English text is the only description; it carries no parameters.
+pub const ALERT_KIND_OTHER: &str = "other";
+/// Every display kind a resource alert projection can carry. A client maps
+/// each to localized text; an unknown future kind must fall back to `other`.
+pub const ALERT_KINDS: [&str; 2] = [ALERT_KIND_CEILING_OVERRUN, ALERT_KIND_OTHER];
 /// `TRANSITIONS`, `lib/alert-store.js:8-14`: open→{acknowledged, assigned,
 /// resolved, suppressed}; acknowledged→{assigned, resolved}; assigned→
 /// {resolved}; suppressed→{open, assigned}; resolved terminal.

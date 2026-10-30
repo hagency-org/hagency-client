@@ -729,7 +729,7 @@ mod approval_bindings;
 mod execution_policy;
 pub use execution_policy::{ExecutionPolicyListQuery, AgentExecutionPolicyPage, ExecutionPolicyQuery, ExecutionPolicyValue, PolicyApplication, AgentExecutionPolicy, EditExecutionPolicy};
 mod tool_approvals;
-pub use tool_approvals::{ToolApprovalQuery, ToolApprovalLookup, ToolApproval, ToolApprovalSubject, ToolApprovalSnapshot, ToolApprovalPage, ToolGrantQuery, ToolGrantMode, ToolRuleDetails, ToolGrant, ToolGrantPage, RevokeToolGrant, RevokedToolGrant};
+pub use tool_approvals::{ToolApprovalQuery, ToolApprovalLookup, ToolApproval, ToolApprovalSubject, ToolApprovalSnapshot, ToolApprovalPage, ToolGrantQuery, ToolGrantMode, ToolRuleDetails, ToolRule, ToolRulePermissions, ToolGrant, ToolGrantPage, RevokeToolGrant, RevokedToolGrant};
 pub use approval_bindings::{ResourceApprovalBinding, ResourceApprovalBindingPage, ResourceApprovalBindingQuery, RetireResourceApprovalBinding, RetiredResourceApprovalBinding};
 pub use alerts::{ResourceAlert, ResourceAlertPage, ResourceAlertQuery, ResourceAlertDetail, ResourceAlertDetailQuery, ResourceAlertNote, TriageResourceAlert};
 mod resource_templates;

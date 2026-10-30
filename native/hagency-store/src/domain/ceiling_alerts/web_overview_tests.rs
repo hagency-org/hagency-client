@@ -48,6 +48,13 @@ fn web_alert_scope_counts_filters_pagination_and_revocation() {
             .unwrap()
             .contains("private-provider-detail")
     );
+    // No readable figures: the display kind falls back instead of guessing.
+    assert!(
+        first
+            .alerts
+            .iter()
+            .all(|a| a.kind == crate::ALERT_KIND_OTHER && a.params.is_empty())
+    );
     let second = db
         .management_web_alerts(
             Some(&profile),

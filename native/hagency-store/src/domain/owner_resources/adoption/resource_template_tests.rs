@@ -399,6 +399,78 @@ async fn template_exact_grants_account_switch_bounded_pages_and_legacy_refusal()
 }
 
 #[tokio::test]
+async fn template_cancel_races_on_original_receipt_without_replaying_or_mutating_the_change() {
+    let f = fixture().await;
+    let b = resource_name_tests::active(&f).await;
+    let c = context(&f, 1);
+    let s = session(&b, &c);
+    let names = |s: &Session| {
+        let (s, c, id) = (s.clone(), c.clone(), f.resource.id());
+        async move {
+            s.resource_templates(&c, id, None)
+                .await
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|t| t.name)
+                .collect::<Vec<_>>()
+        }
+    };
+    // Withdrawn before apply: nothing is written, and the command never applies.
+    let original = command(&s, &c, &f, "cancel_before_apply", "create", "helper").await;
+    assert!(s.cancel_resource_template(&c, original.clone()).await.unwrap().is_none());
+    assert!(matches!(
+        s.apply_resource_template(&c, original.clone()).await,
+        Err(Error::ManagementChangeCancelled)
+    ));
+    assert!(s.cancel_resource_template(&c, original.clone()).await.unwrap().is_none());
+    let mut conflicting = original.clone();
+    conflicting.change.name = "forged".into();
+    assert!(matches!(
+        s.cancel_resource_template(&c, conflicting).await,
+        Err(Error::Conflict)
+    ));
+    assert!(names(&s).await.is_empty());
+    assert_eq!(counts(&f).await, (0, 1));
+    // Withdrawn after apply: the applied effect is recovered, never contradicted.
+    let committed = command(&s, &c, &f, "cancel_after_apply", "create", "helper").await;
+    let receipt = s.apply_resource_template(&c, committed.clone()).await.unwrap();
+    assert_eq!(
+        s.cancel_resource_template(&c, committed.clone()).await.unwrap(),
+        Some(receipt.clone())
+    );
+    assert_eq!(s.apply_resource_template(&c, committed).await.unwrap(), receipt);
+    assert_eq!(names(&s).await, ["helper"]);
+    // Independent sessions still arbitrate through the canonical receipt.
+    let other = session(&b, &c);
+    let racing = command(&s, &c, &f, "race_cancel_apply", "update", "renamed").await;
+    let (cancelled, applied) = tokio::join!(
+        s.cancel_resource_template(&c, racing.clone()),
+        other.apply_resource_template(&c, racing.clone())
+    );
+    match (cancelled.unwrap(), applied) {
+        (None, Err(Error::ManagementChangeCancelled)) => assert_eq!(names(&s).await, ["helper"]),
+        (Some(result), Ok(applied)) => {
+            assert_eq!(result, applied);
+            assert_eq!(names(&s).await, ["renamed"]);
+        }
+        unexpected => panic!("inconsistent cancellation race: {unexpected:?}"),
+    }
+    assert_eq!(counts(&f).await, (1, 3));
+    // Reading templates is not authority to withdraw a change.
+    let denied = Session::new_adopted(
+        b.clone(),
+        c.clone(),
+        [Permission::ReadResourceTemplates],
+        Instant::now() + Duration::from_secs(30),
+    )
+    .unwrap();
+    assert!(denied.cancel_resource_template(&c, original).await.is_err());
+    b.shutdown().await.unwrap();
+    f.registry.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn original_source_templates_are_not_silently_adopted() {
     let f = fixture().await;
     let db = Connection::open(f.source.join("domain.sqlite3")).unwrap();

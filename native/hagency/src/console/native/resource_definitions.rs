@@ -43,6 +43,7 @@ pub(super) fn known_failure(error: &NativeError) -> bool {
             "management_revision_conflict"
                 | "management_resource_in_use"
                 | "management_model_unqualified"
+                | "management_change_cancelled"
         )
 }
 fn decode(saved: &PendingIntent) -> Result<ResourceTemplateCommand, NativeError> {
@@ -282,6 +283,43 @@ impl NativeManagement {
             result,
             error,
         })
+    }
+    /// Withdraw a saved change the owner put off. The canonical receipt decides
+    /// a race with apply; the journal then records either the cancellation or
+    /// the already applied result, and the returned review shows which.
+    pub async fn cancel_saved_template(
+        &self,
+        command_id: String,
+    ) -> Result<PreparedResourceTemplate, NativeError> {
+        let _mutation = self.owner.0.management.mutations.lock().await;
+        let (saved, command) = self.saved_template(command_id.clone()).await?;
+        if saved.reply.is_some() {
+            return self.review_template_command(command_id).await;
+        }
+        let (context, session) = self.authorized().await?;
+        let original = session
+            .cancel_resource_template(&context, command.clone())
+            .await;
+        let original = self.finish(&context, original, true).await?;
+        let reply = match original {
+            Some(result) => {
+                validate_result(&command, &result)?;
+                IntentReply::Success(
+                    serde_json::to_value(result)
+                        .map_err(|_| failure(503, "management_saved_result_invalid"))?,
+                )
+            }
+            None => IntentReply::Failure {
+                status: 409,
+                code: "management_change_cancelled".into(),
+            },
+        };
+        let operation = command.operation().map_err(store_error)?;
+        let intent =
+            Intent::new(operation, command.command_id.clone(), &command).map_err(store_error)?;
+        let recorded = session.record_intent_reply(&context, intent, reply).await;
+        self.finish(&context, recorded, true).await?;
+        self.review_template_command(command_id).await
     }
     pub async fn apply_saved_template(
         &self,

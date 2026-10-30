@@ -287,4 +287,44 @@ impl Session {
             Ok(result)
         }
     }
+    /// Native original-ID cancellation of a saved template change. It shares
+    /// the apply receipt key, so whichever commits first owns the command: a
+    /// cancelled change can never be applied later, and an already applied
+    /// change is returned (`Some`) instead of being contradicted.
+    pub async fn cancel_resource_template(
+        &self,
+        context: &HostContext,
+        input: ResourceTemplateCommand,
+    ) -> Result<Option<ResourceTemplateResult>, Error> {
+        let _pending = self.scope.pending.try_acquire().map_err(|_| Error::Busy)?;
+        let _command = self.scope.commands.lock().await;
+        self.resource_template_access(context, Permission::ManageResourceTemplates)?;
+        input.validate()?;
+        #[cfg(not(feature = "resource-adoption"))]
+        {
+            Err(Error::LocalAuthority)
+        }
+        #[cfg(feature = "resource-adoption")]
+        {
+            let SessionStore::Adopted(store) = &self.store else {
+                return Err(Error::LocalAuthority);
+            };
+            let receipt = CommandReceipt::new(
+                context,
+                "resource.template",
+                &input.command_id,
+                &serde_json::json!({"profile":store.identity().0,"input":input}),
+            )?;
+            let result = store
+                .cancel_resource_template(
+                    &self.template_profile(context, Permission::ManageResourceTemplates, store)?,
+                    input,
+                    receipt,
+                )
+                .await?;
+            self.check(context, Permission::ManageResourceTemplates)
+                .map_err(|_| Error::OutcomeUnknown)?;
+            Ok(result)
+        }
+    }
 }
