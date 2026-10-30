@@ -18,6 +18,11 @@ struct PublicationFixtureState {
     revoked: bool,
     invalidate_at: Option<&'static str>,
     gate: Option<Arc<AtomicBool>>,
+    /// The server advertises `pool-grant-succession-v1`.
+    succession: bool,
+    /// The successor route answers with this audited pre-effect code.
+    successor_reject: Option<&'static str>,
+    successor_posts: usize,
 }
 type PublicationFixture = Arc<std::sync::Mutex<PublicationFixtureState>>;
 impl PublicationFixtureState {

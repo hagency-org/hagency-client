@@ -58,10 +58,24 @@ impl Record {
     }
     fn progress(&self, state: OwnerGrantState) -> OwnerGrantProgress {
         OwnerGrantProgress {
-            summary: self.original.summary(),
+            summary: self.summary(),
             state,
             closure: None,
+            succession_state: None,
         }
+    }
+    /// The original summary; a recorded successor shows what its receipt
+    /// carried rather than what the form estimated.
+    fn summary(&self) -> OwnerGrantSummary {
+        let mut summary = self.original.summary();
+        if let (Some(view), Some(bytes)) = (summary.succession.as_mut(), &self.receipt)
+            && let Ok(receipt) = serde_json::from_str::<NativeGrantReceipt>(bytes)
+            && let Some(link) = receipt.succession
+        {
+            view.carried_children = link.carried_children;
+            view.carried_retained_tokens = link.carried_retained_tokens;
+        }
+        summary
     }
     fn record(&mut self, receipt: &NativeGrantReceipt) -> Result<(), NativeError> {
         if !self.original.matches_receipt(receipt) {
@@ -134,7 +148,14 @@ impl History {
             if let Some(publication) = &record.publication {
                 super::key(&publication.command_id)?;
                 positive(publication.expected_contribution_revision)?;
-                if record.state != State::Recorded || !ids.insert(&publication.command_id) {
+                if let Some(revision) = publication.expected_predecessor_revision {
+                    positive(revision)?;
+                }
+                if record.state != State::Recorded
+                    || !ids.insert(&publication.command_id)
+                    || record.original.succession.is_some()
+                        != publication.expected_predecessor_revision.is_some()
+                {
                     return Err(history_error());
                 }
             }
@@ -200,6 +221,38 @@ impl History {
                         || (regrant && r.original.period.end_ms <= original.period.start_ms)))
         }) {
             return Err(failure(409, "owner_grant_original_intent_required"));
+        }
+        self.data.records.push(Record::new(original)?);
+        self.save()
+    }
+    /// Journal a successor of the contribution's recorded chain head. Every
+    /// other original of the contribution must be resolved: declined or
+    /// recorded. The native writer repeats the chain-head check.
+    fn insert_successor(&mut self, original: Original) -> Result<(), NativeError> {
+        original.validate(&self.data.identity)?;
+        let link = original.succession.as_ref().ok_or_else(history_error)?;
+        if self.data.records.len() >= MAX_RECORDS {
+            return Err(failure(409, "owner_grant_history_full"));
+        }
+        let contribution = &original.binding.contribution_id;
+        let predecessor = self
+            .data
+            .records
+            .iter()
+            .find(|r| r.original.intent_id == link.predecessor_intent_id)
+            .ok_or_else(history_error)?;
+        if predecessor.state != State::Recorded
+            || predecessor.original.selection.grant_id != link.predecessor_grant_id
+            || &predecessor.original.binding.contribution_id != contribution
+            || predecessor.original.admission != original.admission
+        {
+            return Err(history_error());
+        }
+        if self.data.records.iter().any(|r| {
+            &r.original.binding.contribution_id == contribution
+                && matches!(r.state, State::Review | State::Applying)
+        }) {
+            return Err(failure(409, "owner_grant_succession_pending"));
         }
         self.data.records.push(Record::new(original)?);
         self.save()

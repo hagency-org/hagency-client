@@ -67,7 +67,7 @@ impl OwnerGrantIntents {
         io.check().await
     }
 
-    async fn session_features(&self, io: &NativeIo<'_>) -> Result<Vec<Value>, NativeError> {
+    pub(super) async fn session_features(&self, io: &NativeIo<'_>) -> Result<Vec<Value>, NativeError> {
         let transport = AllocationTransport::new(self.manager.clone());
         let scope = transport.scope(io.permission).await?;
         let reply: Value = transport.request(&scope, Operation::Session, false).await?;
@@ -90,6 +90,17 @@ impl OwnerGrantIntents {
         Ok(features
             .iter()
             .any(|v| v.as_str() == Some("pool-monthly-regrant-v1")))
+    }
+    /// The server accepts v3 successors (`grants/{id}/successors`): an
+    /// amendment of this month's grant or a renewal for the next month.
+    pub(super) async fn supports_succession(
+        &self,
+        io: &NativeIo<'_>,
+    ) -> Result<bool, NativeError> {
+        let features = self.session_features(io).await?;
+        Ok(features
+            .iter()
+            .any(|v| v.as_str() == Some("pool-grant-succession-v1")))
     }
     pub(super) async fn supports_admission_receipts(
         &self,

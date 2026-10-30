@@ -19,6 +19,7 @@ mod admission;
 pub(super) mod reoffer;
 mod cancellation;
 pub use cancellation::{OwnerGrantCancellationReview, OwnerGrantCancellationResult};
+mod succession;
 mod publication;
 pub use publication::{OwnerGrantPublicationProgress, OwnerGrantPublicationReview, OwnerGrantPublicationResult, OwnerGrantPublicationState};
 use publication::PublicationIntent;
@@ -260,6 +261,19 @@ async fn recover_record(
             record.record(&receipt)?;
             let mut progress = record.progress(OwnerGrantState::Recorded);
             history.save()?;
+            if original_is_successor(&history.data.records[index].original) {
+                let state = registry
+                    .capacity_grant_succession(
+                        io.profile.clone(),
+                        io.identity.device.clone(),
+                        receipt.grant_id.clone(),
+                    )
+                    .await
+                    .map_err(storage)?
+                    .ok_or_else(history_error)?;
+                io.check().await?;
+                progress.succession_state = Some(OwnerGrantSuccessionState::from_native(&state.state)?);
+            }
             let closure = registry.capacity_grant_closure(io.profile.clone(),
                 io.identity.device.clone(), receipt).await.map_err(storage)?;
             io.check().await?;
@@ -284,6 +298,10 @@ async fn recover_record(
         Ok(record.progress(state))
     }
 
+
+fn original_is_successor(original: &Original) -> bool {
+    original.succession.is_some()
+}
 
 pub struct OwnerGrantIntents {
     manager: Arc<NativeManagement>,
@@ -434,6 +452,7 @@ impl OwnerGrantIntents {
             receipt_version,
             selection: Selection::from_native(consent.selection()),
             period: Period::from_native(consent.period()),
+            succession: None,
         };
         if !io.accepts(&original.binding, registry)
             || original.binding.executor_generation != io.device.generation()
@@ -532,6 +551,11 @@ impl OwnerGrantIntents {
             return Ok(OwnerGrantReviewResult::Progress(Box::new(progress)));
         }
         let original = history.data.records[index].original.clone();
+        if original.succession.is_some() {
+            return self
+                .review_existing_successor(&io, registry, enrollment, original)
+                .await;
+        }
         let consent = registry
             .prepare_capacity_grant(enrollment, original.selection.native(), io.deadline)
             .map_err(storage)?
@@ -583,6 +607,40 @@ impl OwnerGrantIntents {
         })))
     }
 
+    async fn review_existing_successor(
+        &self,
+        io: &NativeIo<'_>,
+        registry: &OwnerResourceRegistry,
+        enrollment: VerifiedManagementEnrollment,
+        original: Original,
+    ) -> Result<OwnerGrantReviewResult, NativeError> {
+        if !Box::pin(self.supports_succession(io)).await? {
+            return Err(failure(409, "management_grant_succession_required"));
+        }
+        let (consent, max_tokens) = self
+            .successor_consent(io, registry, enrollment, &original)
+            .await?;
+        if Binding::from_native(&consent.binding().map_err(storage)?) != original.binding
+            || Period::from_native(consent.period()) != original.period
+            || original.binding.executor_generation != io.device.generation()
+        {
+            return Err(failure(409, "owner_grant_original_review_expired"));
+        }
+        let admission = Box::pin(self.check_grant_admission(io, &original)).await?;
+        io.check().await?;
+        let (consent, mut context) = self.review_context(io, registry, consent).await?;
+        context.remaining_tokens = max_tokens;
+        Ok(OwnerGrantReviewResult::Review(Box::new(OwnerGrantReview {
+            manager: self.manager.clone(),
+            identity: io.identity.clone(),
+            original,
+            admission,
+            consent,
+            context,
+            regrant: false,
+        })))
+    }
+
     pub async fn confirm(
         &self,
         registry: &OwnerResourceRegistry,
@@ -629,6 +687,10 @@ impl OwnerGrantIntents {
         if review.regrant && !Box::pin(self.supports_monthly_regrant(&io)).await? {
             return Err(failure(409, "management_monthly_regrant_required"));
         }
+        let successor = review.original.succession.is_some();
+        if successor && !Box::pin(self.supports_succession(&io)).await? {
+            return Err(failure(409, "management_grant_succession_required"));
+        }
         history.data.records[index].state = State::Applying;
         history.save()?;
         io.check().await?;
@@ -642,11 +704,39 @@ impl OwnerGrantIntents {
             io.check().await?;
             return Err(failure(409, "owner_grant_review_changed"));
         }
+        // The successor writer reports a missing floor or headroom only from
+        // inside its rolled-back transaction: nothing was written.
+        if authorized
+            && successor
+            && matches!(
+                result,
+                Err(hagency_store::Error::InsufficientCapacity | hagency_store::Error::NoCeiling)
+            )
+        {
+            history.data.records[index].state = State::Review;
+            history.save()?;
+            io.check().await?;
+            return Err(failure(409, "owner_grant_capacity_unavailable"));
+        }
         if let Ok(receipt) = result {
             history.data.records[index].record(&receipt)?;
             history.save()?;
             if authorized && io.check().await.is_ok() {
-                return Ok(history.data.records[index].progress(OwnerGrantState::Recorded));
+                let mut progress = history.data.records[index].progress(OwnerGrantState::Recorded);
+                if successor {
+                    let state = registry
+                        .capacity_grant_succession(
+                            io.profile.clone(),
+                            io.identity.device.clone(),
+                            receipt.grant_id.clone(),
+                        )
+                        .await
+                        .map_err(|_| failure(409, "management_outcome_unknown"))?
+                        .ok_or_else(|| failure(409, "management_outcome_unknown"))?;
+                    progress.succession_state =
+                        Some(OwnerGrantSuccessionState::from_native(&state.state)?);
+                }
+                return Ok(progress);
             }
             return Err(failure(409, "management_outcome_unknown"));
         }

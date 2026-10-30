@@ -9,12 +9,89 @@ pub struct OwnerGrantChoices {
     pub allocated_tokens: u64,
 }
 
+/// Which successor of a published grant: next month's renewal or this
+/// month's amendment of the same pool's capacity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OwnerGrantSuccessionKind {
+    Renewal,
+    Amendment,
+}
+impl OwnerGrantSuccessionKind {
+    fn wire(self) -> &'static str {
+        match self {
+            Self::Renewal => SUCCESSION_RENEWAL,
+            Self::Amendment => SUCCESSION_AMENDMENT,
+        }
+    }
+}
+/// Native state of a successor record: pending until the server's acceptance
+/// is observed, then effective; rejected or (a never-started renewal)
+/// cancelled successors never held capacity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OwnerGrantSuccessionState {
+    Pending,
+    Effective,
+    Rejected,
+    Cancelled,
+}
+impl OwnerGrantSuccessionState {
+    fn from_native(state: &str) -> Result<Self, NativeError> {
+        Ok(match state {
+            "pending" => Self::Pending,
+            "effective" => Self::Effective,
+            "rejected" => Self::Rejected,
+            "cancelled" => Self::Cancelled,
+            _ => return Err(history_error()),
+        })
+    }
+}
+/// The predecessor a successor record names, with the hold it carries.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnerGrantSuccessionSummary {
+    pub kind: OwnerGrantSuccessionKind,
+    pub predecessor_grant_id: String,
+    pub predecessor_allocated_tokens: u64,
+    pub carried_children: u64,
+    pub carried_retained_tokens: u64,
+}
+/// Live Agents a successor carries and the hold its amount must cover.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnerGrantFloor {
+    pub children: u64,
+    pub retained_tokens: u64,
+}
+/// Read-only facts for the native successor form. Creates nothing.
+#[derive(Clone, Debug)]
+pub struct OwnerGrantSuccessionForm {
+    pub kind: OwnerGrantSuccessionKind,
+    pub contribution_id: String,
+    pub resource_id: String,
+    pub label: String,
+    /// `remaining_tokens` is the most the successor may hold (amendment: with
+    /// the predecessor's hold replaced; renewal: in the new month).
+    pub context: OwnerGrantReviewContext,
+    pub predecessor: OwnerGrantSummary,
+    pub floor: OwnerGrantFloor,
+    pub period_key: String,
+    pub period_start_ms: u64,
+    pub period_end_ms: u64,
+    /// Renewal window by native UTC clock; amendment: [now, period end).
+    pub window_opens_at_ms: u64,
+    pub window_closes_at_ms: u64,
+}
+
 /// Safe native confirmation summary; the proof and private identity stay in
 /// the opaque review handle. The period is the registry's frozen UTC month.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OwnerGrantSummary {
     pub intent_id: String,
+    /// The original grant id this intent reserves or reserved.
+    pub grant_id: String,
     pub owner_mxid: String,
     pub contribution_id: String,
     pub resource_id: String,
@@ -26,6 +103,8 @@ pub struct OwnerGrantSummary {
     pub period_key: String,
     pub period_start_ms: u64,
     pub period_end_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub succession: Option<OwnerGrantSuccessionSummary>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -44,6 +123,9 @@ pub struct OwnerGrantProgress {
     pub state: OwnerGrantState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub closure: Option<OwnerGrantClosure>,
+    /// Native state of a successor record; `None` for a root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub succession_state: Option<OwnerGrantSuccessionState>,
 }
 
 /// Descriptive canonical settlement; it grants no authority to reserve again.
@@ -221,6 +303,21 @@ impl Binding {
         }
     }
 }
+/// A successor intent's immutable link to the grant it succeeds, with the
+/// facts the owner reviewed. The receipt's own carried values are recorded by
+/// the writer; these are what the native form showed.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OriginalSuccession {
+    kind: OwnerGrantSuccessionKind,
+    predecessor_intent_id: String,
+    predecessor_grant_id: String,
+    predecessor_receipt_digest: String,
+    predecessor_grant_revision: u64,
+    predecessor_allocated_tokens: u64,
+    reviewed_children: u64,
+    reviewed_floor_tokens: u64,
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Original {
@@ -233,6 +330,9 @@ struct Original {
     receipt_version: u16,
     selection: Selection,
     period: Period,
+    // Present exactly on v3 successor intents; omitted otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    succession: Option<OriginalSuccession>,
 }
 fn legacy_receipt_version() -> u16 { 1 }
 fn is_legacy_receipt(version: &u16) -> bool { *version == 1 }
@@ -240,6 +340,7 @@ impl Original {
     fn summary(&self) -> OwnerGrantSummary {
         OwnerGrantSummary {
             intent_id: self.intent_id.clone(),
+            grant_id: self.selection.grant_id.clone(),
             owner_mxid: self.binding.owner_mxid.clone(),
             contribution_id: self.binding.contribution_id.clone(),
             resource_id: self.binding.resource_id.clone(),
@@ -251,12 +352,35 @@ impl Original {
             period_key: self.period.key.clone(),
             period_start_ms: self.period.start_ms,
             period_end_ms: self.period.end_ms,
+            succession: self.succession.as_ref().map(|s| OwnerGrantSuccessionSummary {
+                kind: s.kind,
+                predecessor_grant_id: s.predecessor_grant_id.clone(),
+                predecessor_allocated_tokens: s.predecessor_allocated_tokens,
+                carried_children: s.reviewed_children,
+                carried_retained_tokens: s.reviewed_floor_tokens,
+            }),
         }
     }
     fn validate(&self, identity: &Identity) -> Result<(), NativeError> {
-        if !matches!(self.receipt_version, 1 | 2)
-            || (self.receipt_version == 2 && self.admission.is_none()) {
+        if !matches!(self.receipt_version, 1 | 2 | 3)
+            || (self.receipt_version >= 2 && self.admission.is_none())
+            || (self.receipt_version == 3) != self.succession.is_some()
+        {
             return Err(history_error());
+        }
+        if let Some(s) = &self.succession {
+            super::key(&s.predecessor_intent_id)?;
+            super::key(&s.predecessor_grant_id)?;
+            hash(&s.predecessor_receipt_digest)?;
+            positive(s.predecessor_grant_revision)?;
+            positive(s.predecessor_allocated_tokens)?;
+            if s.predecessor_grant_id == self.selection.grant_id
+                || s.predecessor_intent_id == self.intent_id
+                || s.reviewed_children > hagency_core::JSON_SAFE_MAX
+                || s.reviewed_floor_tokens > hagency_core::JSON_SAFE_MAX
+            {
+                return Err(history_error());
+            }
         }
         if let Some(admission) = &self.admission {
             admission.validate()?;
@@ -302,14 +426,25 @@ impl Original {
     fn matches_receipt(&self, receipt: &NativeGrantReceipt) -> bool {
         let b = &self.binding;
         let s = &self.selection;
-        receipt.version == self.receipt_version
-            && receipt.admission_request_id.as_deref() == if self.receipt_version == 2 {
+        let succession = match (&self.succession, &receipt.succession) {
+            (None, None) => receipt.grant_revision == 1,
+            (Some(o), Some(r)) => {
+                receipt.grant_revision == o.predecessor_grant_revision.saturating_add(1)
+                    && r.kind == o.kind.wire()
+                    && r.predecessor_grant_id == o.predecessor_grant_id
+                    && r.predecessor_receipt_digest == o.predecessor_receipt_digest
+                    && receipt.supported_shape()
+            }
+            _ => false,
+        };
+        succession
+            && receipt.version == self.receipt_version
+            && receipt.admission_request_id.as_deref() == if self.receipt_version >= 2 {
                 self.admission.as_ref().map(|a| a.request_id.as_str())
             } else { None }
             && receipt.capability == "hagency.project_reservations.v1"
             && receipt.enrollment_id == b.enrollment_id
             && receipt.grant_id == s.grant_id
-            && receipt.grant_revision == 1
             && receipt.contribution_id == b.contribution_id
             && receipt.resource_id == b.resource_id
             && receipt.resource_revision == b.resource_revision

@@ -13,6 +13,9 @@ pub(in crate::console::native) enum Operation {
     ManagedRuntime(super::super::managed_runtime_transport::ServerOperation),
     Publish(Publication),
     RecoverPublication(String),
+    PublishSuccessor(SuccessorPublication),
+    RecoverSuccession(String),
+    Grant(String),
     Contribution(String),
     Poll {
         parent: bool,
@@ -52,7 +55,23 @@ impl ServerOperation {
                 key(&p.receipt.contribution_id)?;
                 positive(p.expected_contribution_revision)?;
             }
-            Operation::RecoverPublication(id) | Operation::Contribution(id) => key(id)?,
+            Operation::PublishSuccessor(p) => {
+                key(&p.command_id)?;
+                key(&p.receipt.contribution_id)?;
+                key(
+                    &p.receipt
+                        .succession
+                        .as_ref()
+                        .ok_or_else(super::invalid)?
+                        .predecessor_grant_id,
+                )?;
+                positive(p.expected_contribution_revision)?;
+                positive(p.expected_predecessor_revision)?;
+            }
+            Operation::RecoverPublication(id)
+            | Operation::RecoverSuccession(id)
+            | Operation::Grant(id)
+            | Operation::Contribution(id) => key(id)?,
             Operation::Poll { after, .. } => {
                 if let Some(id) = after {
                     key(id)?;
@@ -114,6 +133,27 @@ impl ServerOperation {
                 format!("allocation-commands/{id}/recover"),
                 Some(json!({"operation":"grant.publish"})),
             ),
+            Operation::PublishSuccessor(p) => (
+                reqwest::Method::POST,
+                format!(
+                    "grants/{}/successors",
+                    p.receipt
+                        .succession
+                        .as_ref()
+                        .map(|s| s.predecessor_grant_id.clone())
+                        .unwrap_or_default()
+                ),
+                Some(serde_json::to_value(p).map_err(|_| OwnerError {
+                    status: 400,
+                    code: "invalid_allocation_payload".into(),
+                })?),
+            ),
+            Operation::RecoverSuccession(id) => (
+                reqwest::Method::POST,
+                format!("allocation-commands/{id}/recover"),
+                Some(json!({"operation":"grant.succeed"})),
+            ),
+            Operation::Grant(id) => (reqwest::Method::GET, format!("grants/{id}"), None),
             Operation::Contribution(id) => {
                 (reqwest::Method::GET, format!("contributions/{id}"), None)
             }

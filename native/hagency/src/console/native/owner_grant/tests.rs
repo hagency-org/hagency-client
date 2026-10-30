@@ -19,6 +19,7 @@ include!("enrollment_tests.rs");
 include!("admission_guard_tests.rs");
 include!("publication_tests.rs");
 include!("publication_observation_tests.rs");
+include!("succession_tests.rs");
 #[cfg(feature = "resource-adoption")]
 include!("adoption_tests.rs");
 #[cfg(feature = "resource-adoption")]
@@ -153,12 +154,16 @@ async fn server() -> (
                     "/hagency/api/v1/sessions/current/renew" => json!({"validUntilMs":at+30000}),
                     "/hagency/api/v1/management/session" => {
                         let state = publications.lock().unwrap();
-                        json!({"features": if state.allocations_disabled { vec![] }
+                        let mut features = if state.allocations_disabled { vec![] }
                         else if state.admission_receipts && state.monthly_regrant {
                             vec!["admission-bound-grants-v2", "pool-monthly-regrant-v1"]
                         } else if state.admission_receipts {
                             vec!["admission-bound-grants-v2"]
-                        } else { vec!["project-reservations-v1"] }})
+                        } else { vec!["project-reservations-v1"] };
+                        if state.succession && !state.allocations_disabled {
+                            features.push("pool-grant-succession-v1");
+                        }
+                        json!({"features": features})
                     }
                     "/hagency/api/v1/management/contributions/fixture_contribution" => {
                         let mut state = publications.lock().unwrap();
@@ -175,6 +180,13 @@ async fn server() -> (
                     path if path.ends_with("/fixture_contribution/resume") || path.ends_with("/fixture_contribution/verify") || path.contains("/management/commands/") => {
                         let Some(value)=connection_fixture_reply(path,&body,&admission,&publications) else {return};
                         value
+                    }
+                    path if path.starts_with("/hagency/api/v1/management/grants/") => {
+                        let Some(result) = succession_fixture_reply(path, &body, &publications)
+                        else {
+                            return;
+                        };
+                        result
                     }
                     path if path.ends_with("/fixture_contribution/grants")
                         || path.contains("/allocation-commands/") =>

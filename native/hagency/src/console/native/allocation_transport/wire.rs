@@ -21,6 +21,22 @@ pub(in crate::console::native) struct Publication {
     pub expected_contribution_revision: u64,
     pub receipt: NativeGrantReceipt,
 }
+/// `grants/{predecessor}/successors` body: a v3 receipt with the exact
+/// contribution and predecessor revisions the owner reviewed.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(in crate::console::native) struct SuccessorPublication {
+    pub command_id: String,
+    pub expected_contribution_revision: u64,
+    pub expected_predecessor_revision: u64,
+    pub receipt: NativeGrantReceipt,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct GrantReply {
+    pub grant: ResourceGrantView,
+    pub observed_at_ms: u64,
+}
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Published {

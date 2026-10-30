@@ -115,7 +115,7 @@ impl AllocationTransport {
         self.check_scope(&scope, false).await?;
         Ok(())
     }
-    async fn require_publishable(
+    pub(super) async fn require_publishable(
         &self,
         scope: &Scope,
         registry: &OwnerResourceRegistry,
