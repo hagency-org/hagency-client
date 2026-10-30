@@ -251,10 +251,11 @@ mod tests {
     #[tokio::test]
     async fn encrypted_device_retirement_fence_rejects_before_authority_or_http_setup() {
         let root = tempfile::tempdir().unwrap();
-        let owner = crate::console::native::NativeOwner::open(
+        let owner = crate::console::native::NativeOwner::open_with_credentials(
             &root.path().join("state"),
             "http://127.0.0.1:9",
             "@owner:test",
+            crate::console::server_login::credential_tests::vault(),
         )
         .await
         .unwrap();

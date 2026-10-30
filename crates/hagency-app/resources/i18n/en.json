@@ -2753,5 +2753,10 @@
   "This Matrix link target is unsupported.": "This Matrix link target is unsupported.",
   "This encrypted message cannot be decrypted on this device.": "This encrypted message cannot be decrypted on this device.",
   "Agent information is unavailable for this account.": "Agent information is unavailable for this account.",
-  "The local service is not running for this account.": "The local service is not running for this account."
+  "The local service is not running for this account.": "The local service is not running for this account.",
+  "Signed out locally.": "Signed out locally.",
+  "Logout cancelled by user": "Logout cancelled by user",
+  "Local sign-out is durable. Local session cleanup failed; restart before signing in again. Any pending remote revocation will be retried.": "Local sign-out is durable. Local session cleanup failed; restart before signing in again. Any pending remote revocation will be retried.",
+  "Local session cleanup remains incomplete": "Local session cleanup remains incomplete",
+  "Signed out locally. Remote token revocation remains pending.": "Signed out locally. Remote token revocation remains pending."
 }

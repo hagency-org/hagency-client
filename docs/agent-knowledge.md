@@ -5919,3 +5919,12 @@ SDK 恢复 timeline 可包含同一事件多个句柄。保留原始 Vector 的�
 主整改验收/合并是PR21精确head48b33772、main merge cf7fbb63，而非旧PR18–20 head各自失败/未结束的CI。15实际current checks成功，四mobile+夜间维护skip非资格。真实remote8case/12sourcehash父复核与原失败均保留；主锁audit仍11匹配/失败，独立Octos47条为旧结果，不可泛称依赖全修。
 
 R19：完整引用盘点不是跨进程稳定快照；REQUEST_SENDER建立前调用GC只排除了本进程并发，另一实例仍能在盘点后创建DB。没有统一所有实际创建者参与的跨进程协议时，生产启动自动删除应暂停并明确deferred，不能用mtime采样、测试注入inventory或单独同进程锁宣称已证明新目录为孤儿。保留旧算法仅测试，并用实际第二进程SQLite/数据sentinel证明边界；自动空间回收与OS keys回收均不能假称完成。
+
+
+## Desktop credential migration review, 2026-10-30
+
+- Native credential construction is not qualification. Automated commands must explicitly set `HAGENCY_NATIVE_CREDENTIAL_IO=deny` and inject a fake Vault. Native is the production default; no backend error authorizes Mock/plaintext fallback. Linux Agent/server-login also requires Secret Service and user D-Bus.
+- SDK callback ownership follows the shared AuthCtx callback family, not only `ClientInner` weak identity: `notification_client` has a different Inner but shares callbacks/refresh coordination. Reserve finite snapshot custody before activation; hold the short latest lock across actual SDK token read and cell replacement, release it before pending/SESSION_IO/IO.
+- Migration journals preserve original source ID+digest and their own physical witness. Verify journal/candidate before rename; any error after actual rename is a committed/unknown durability result, never a precommit rollback signal.
+- Retained database identity uses the SDK's dedicated READONLY/no-create inspector, on the original owned worker; normal SqliteCryptoStore::open can create/migrate/checkpoint. Preserve LegacyDatabase ref/raw context/passphrase and verify actual owner/device before handoff.
+- Startup database deletion is deferred (R19): an inventory snapshot does not serialize other processes creating new stores. Old DB directories and OS keys may remain; mobile uses compile-time v1 compatibility and remains outside desktop remediation qualification.

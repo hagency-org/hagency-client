@@ -3,10 +3,7 @@ use anyhow::{bail, Result};
 use std::future::IntoFuture;
 use matrix_sdk::{
     config::RequestConfig,
-    ruma::{
-        api::client::uiaa::UserIdentifier,
-        UserId,
-    },
+    ruma::{api::client::uiaa::UserIdentifier, UserId},
     Client,
 };
 use url::Url;
@@ -93,15 +90,19 @@ pub struct LoginMethods {
 
 pub(crate) async fn require_hagency(client: &Client) -> Result<()> {
     hagency::server_admission::discover(client.homeserver().as_str())
-        .await.map_err(|e| anyhow::anyhow!("{}", crate::i18n::tr(e.message())))?;
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", crate::i18n::tr(e.message())))?;
     Ok(())
 }
 
 pub async fn login_methods(client: &Client) -> Result<LoginMethods> {
     require_hagency(client).await?;
     let metadata = tokio::time::timeout(
-        std::time::Duration::from_secs(10), client.oauth().server_metadata(),
-    ).await.map_err(|_| anyhow::anyhow!("Pasion sign-in is temporarily unavailable. Please retry."))??;
+        std::time::Duration::from_secs(10),
+        client.oauth().server_metadata(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("Pasion sign-in is temporarily unavailable. Please retry."))??;
     validate_oauth_metadata(&metadata)?;
     if metadata.issuer != client.homeserver().join("auth/")? {
         bail!("This server advertised an unexpected Pasion issuer");
@@ -153,7 +154,27 @@ fn validate_oauth_metadata(
 }
 
 /// Standard SDK OAuth: the SDK installs the Matrix device and alone refreshes it.
-pub(crate) async fn oauth_browser_login<F, Fut>(client: &Client, register: bool, open: F) -> Result<()>
+pub(crate) async fn oauth_browser_login<F, Fut>(
+    client: &Client,
+    register: bool,
+    open: F,
+) -> Result<()>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
+    oauth_browser_login_expected(client, register, None, open).await
+}
+
+pub(crate) async fn oauth_browser_login_expected<F, Fut>(
+    client: &Client,
+    register: bool,
+    expected: Option<(
+        matrix_sdk::ruma::OwnedUserId,
+        matrix_sdk::ruma::OwnedDeviceId,
+    )>,
+    open: F,
+) -> Result<()>
 where
     F: FnOnce(String) -> Fut,
     Fut: std::future::Future<Output = Result<()>>,
@@ -174,8 +195,14 @@ where
         bail!("This server advertised an unexpected Pasion issuer");
     }
     // Recheck at activation: registration may have been disabled since discovery.
-    if register && !oauth_metadata.prompt_values_supported.contains(&Prompt::Create) {
-        bail!("This server does not advertise browser account creation. Try password registration if available.");
+    if register
+        && !oauth_metadata
+            .prompt_values_supported
+            .contains(&Prompt::Create)
+    {
+        bail!(
+            "This server does not advertise browser account creation. Try password registration if available."
+        );
     }
     let (redirect, server) = LocalServerBuilder::new().spawn().await?;
     let metadata = ClientMetadata {
@@ -185,20 +212,24 @@ where
             vec![OAuthGrantType::AuthorizationCode {
                 redirect_uris: vec![Url::parse("http://127.0.0.1/")?],
             }],
-            Localized::new(
-                Url::parse(crate::project_links::HOMEPAGE_URL)?,
-                None,
-            ),
+            Localized::new(Url::parse(crate::project_links::HOMEPAGE_URL)?, None),
         )
     };
     let data = oauth
         .login(
             redirect,
-            client.device_id().map(ToOwned::to_owned),
+            expected
+                .as_ref()
+                .map(|(_, device)| device.clone())
+                .or_else(|| client.device_id().map(ToOwned::to_owned)),
             Some(Raw::new(&metadata)?.into()),
             None,
         )
-        .prompt(vec![if register { Prompt::Create } else { Prompt::from("login") }])
+        .prompt(vec![if register {
+            Prompt::Create
+        } else {
+            Prompt::from("login")
+        }])
         .build()
         .await?;
     if let Err(e) = open(data.url.to_string()).await {
@@ -219,6 +250,15 @@ where
         oauth.finish_login(query.into()).await?;
         let identity =
             tokio::time::timeout(std::time::Duration::from_secs(8), client.whoami()).await??;
+        if let Some((owner, device)) = expected.as_ref() {
+            if &identity.user_id != owner
+                || identity.device_id.as_deref() != Some(device.as_ref())
+                || client.user_id() != Some(owner)
+                || client.device_id() != Some(device.as_ref())
+            {
+                bail!("Pasion returned another Matrix account or device");
+            }
+        }
         if identity
             .device_id
             .as_deref()
@@ -607,18 +647,35 @@ mod tests {
             .homeserver_url(&server.url)
             .with_enable_share_history_on_invite(true)
             .request_config(RequestConfig::new().retry_limit(0))
-            .build().await.unwrap();
-        client.matrix_auth().login_username("fixture", "fixture").send().await.unwrap();
-        let room = client.create_room(
-            matrix_sdk::ruma::api::client::room::create_room::v3::Request::new(),
-        ).await.unwrap();
+            .build()
+            .await
+            .unwrap();
+        client
+            .matrix_auth()
+            .login_username("fixture", "fixture")
+            .send()
+            .await
+            .unwrap();
+        let room = client
+            .create_room(matrix_sdk::ruma::api::client::room::create_room::v3::Request::new())
+            .await
+            .unwrap();
         crate::utils::invite_room_member(&room, matrix_sdk::ruma::user_id!("@guest:localhost"))
-            .await.unwrap();
+            .await
+            .unwrap();
         let requests = server.requests.lock().unwrap();
-        assert!(requests.iter().any(|(route, body)|
-            route.starts_with("POST ") && route.contains("/invite ")
-                && body["user_id"] == "@guest:localhost"));
-        assert!(!requests.iter().any(|(route, _)| route.contains("/room_keys/")));
+        assert!(
+            requests
+                .iter()
+                .any(|(route, body)| route.starts_with("POST ")
+                    && route.contains("/invite ")
+                    && body["user_id"] == "@guest:localhost")
+        );
+        assert!(
+            !requests
+                .iter()
+                .any(|(route, _)| route.contains("/room_keys/"))
+        );
     }
 
     #[tokio::test]
@@ -626,7 +683,14 @@ mod tests {
         let server = Server::new();
         let error = login_methods(&server.client().await).await.unwrap_err();
         assert!(error.to_string().contains("hagency") || error.to_string().contains("Hagency"));
-        assert!(!server.requests.lock().unwrap().iter().any(|(route, _)| route.contains("/login ")));
+        assert!(
+            !server
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(route, _)| route.contains("/login "))
+        );
     }
 
     #[tokio::test]
@@ -830,10 +894,16 @@ mod tests {
         task.abort();
         assert!(task.await.unwrap_err().is_cancelled());
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        assert!(matrix_sdk::reqwest::Client::builder()
-            .no_proxy()
-            .build().unwrap()
-            .get(redirect).send().await.is_err());
+        assert!(
+            matrix_sdk::reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .unwrap()
+                .get(redirect)
+                .send()
+                .await
+                .is_err()
+        );
         assert!(
             !server
                 .requests

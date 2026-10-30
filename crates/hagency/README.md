@@ -15,3 +15,11 @@ CLI release workflow. Explicit probe binaries under `tests/fixtures` are test
 harnesses, not desktop product entry points.
 
 See [the desktop guide](../hagency-app/README.md) and [workspace guide](../../docs/workspace.md).
+
+Native Agent and standalone server-login persistence use the same explicit OS
+credential backend as the desktop. Linux therefore requires a working Secret
+Service and user D-Bus session; a headless/container environment without them
+fails explicitly. These library paths do not silently select files or Mock as
+an alternative backend. Real Linux service/container credential behavior remains
+unqualified in this remediation; automated fixtures use explicit isolated fake
+stores. See [credential storage and recovery](../hagency-app/docs/privacy.md).

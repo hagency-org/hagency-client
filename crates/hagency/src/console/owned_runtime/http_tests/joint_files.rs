@@ -287,13 +287,14 @@ async fn qualification() {
     let f = Fixture::start(root.clone(), port, "initial").await;
     let origin = f.info["origin"].as_str().unwrap().to_owned();
     assert_eq!(f.info["owner"], OWNER);
-    let native = NativeOwner::open_with_matrix(
+    let native = NativeOwner::open_with_matrix_and_credentials(
         &root.join("state"),
         &origin,
         OWNER,
         Arc::new(Source {
             origin: origin.clone(),
         }),
+        crate::console::server_login::credential_tests::vault(),
     )
     .await
     .unwrap();

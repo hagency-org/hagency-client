@@ -2753,5 +2753,10 @@
   "This Matrix link target is unsupported.": "暂不支持此 Matrix 链接目标。",
   "This encrypted message cannot be decrypted on this device.": "此设备无法解密这条消息。",
   "Agent information is unavailable for this account.": "当前账号的 Agent 信息不可用。",
-  "The local service is not running for this account.": "此账号的本地服务尚未运行。"
+  "The local service is not running for this account.": "此账号的本地服务尚未运行。",
+  "Signed out locally.": "已在本地退出。",
+  "Logout cancelled by user": "用户已取消退出",
+  "Local sign-out is durable. Local session cleanup failed; restart before signing in again. Any pending remote revocation will be retried.": "本地退出已持久保存，但本地会话清理失败。请重启后再登录；尚未完成的远端令牌撤销会继续重试。",
+  "Local session cleanup remains incomplete": "本地会话清理尚未完成",
+  "Signed out locally. Remote token revocation remains pending.": "已在本地退出，远端令牌撤销仍待完成。"
 }

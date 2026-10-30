@@ -267,9 +267,10 @@ pub(super) async fn switch(req: &mut Request, depot: &Depot, res: &mut Response)
         console.stop_owned_runtimes().await;
         console.stop_owner_provider().await;
         {
-            let records = login.revocations.lock().await;
+            let mut records = login.revocations.lock().await;
             login
-                .save_revocations(&records)
+                .save_revocations(&mut records)
+                .await
                 .map_err(|_| "local_state_unavailable")?;
         }
         login.flush_revocations().await;
@@ -338,7 +339,11 @@ mod tests {
     #[tokio::test]
     async fn profile_switch_preserves_identity_metadata_without_restoring_credentials() {
         let root = tempfile::tempdir().unwrap();
-        let login = ServerLogin::new(Some(root.path())).unwrap();
+        let login = ServerLogin::new_with_vault(
+            Some(root.path()),
+            crate::console::server_login::credential_tests::vault(),
+        )
+        .unwrap();
         let alice = binding("https://example.test/", "@alice:example.test", "alice-sub");
         let bob = binding("https://example.test/", "@bob:example.test", "bob-sub");
         let remote = binding("https://other.test/", "@alice:example.test", "alice-sub");
@@ -363,7 +368,11 @@ mod tests {
                 .len(),
             3
         );
-        let restarted = ServerLogin::new(Some(root.path())).unwrap();
+        let restarted = ServerLogin::new_with_vault(
+            Some(root.path()),
+            crate::console::server_login::credential_tests::vault(),
+        )
+        .unwrap();
         assert!(restarted.binding.lock().await.is_none());
         assert_eq!(
             restarted.profiles_status().await["profiles"]
@@ -391,7 +400,11 @@ mod tests {
             &serde_json::to_vec(&value).unwrap(),
         )
         .unwrap();
-        let login = ServerLogin::new(Some(root.path())).unwrap();
+        let login = ServerLogin::new_with_vault(
+            Some(root.path()),
+            crate::console::server_login::credential_tests::vault(),
+        )
+        .unwrap();
         let status = login.profiles_status().await;
         assert_eq!(status["activeProfileId"], id(&value).unwrap());
         assert_eq!(status["profiles"].as_array().unwrap().len(), 1);
@@ -400,7 +413,11 @@ mod tests {
     #[tokio::test]
     async fn switching_revokes_every_browser_authority_and_only_mints_local_bridge() {
         let root = tempfile::tempdir().unwrap();
-        let login = ServerLogin::new(Some(root.path())).unwrap();
+        let login = ServerLogin::new_with_vault(
+            Some(root.path()),
+            crate::console::server_login::credential_tests::vault(),
+        )
+        .unwrap();
         let authority = super::super::super::authority::Authority::new();
         let first = authority
             .exchange(&authority.issue_owner_ticket().unwrap())
@@ -448,7 +465,11 @@ mod tests {
     #[tokio::test]
     async fn profile_limit_refuses_new_binding_without_overwriting_active_owner() {
         let root = tempfile::tempdir().unwrap();
-        let login = ServerLogin::new(Some(root.path())).unwrap();
+        let login = ServerLogin::new_with_vault(
+            Some(root.path()),
+            crate::console::server_login::credential_tests::vault(),
+        )
+        .unwrap();
         let first = binding("https://example.test/", "@owner0:example.test", "sub0");
         login.save(first).await.unwrap();
         for n in 1..64 {

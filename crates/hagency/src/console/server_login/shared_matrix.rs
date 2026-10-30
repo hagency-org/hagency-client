@@ -152,7 +152,7 @@ impl ServerLogin {
                 session_done: false,
                 oauth_done: true,
             });
-            let _ = self.save_revocations(&pending);
+            let _ = self.save_revocations(&mut pending).await;
             drop(pending);
             self.flush_revocations().await;
         }
@@ -457,11 +457,12 @@ mod tests {
             calls: std::sync::atomic::AtomicUsize::new(0),
             refreshes: std::sync::atomic::AtomicUsize::new(0),
         });
-        let native = NativeOwner::open_with_matrix(
+        let native = NativeOwner::open_with_matrix_and_credentials(
             &root.path().join("state"),
             &origin,
             "@owner:test",
             source,
+            crate::console::server_login::credential_tests::vault(),
         )
         .await
         .unwrap();
@@ -555,11 +556,12 @@ mod tests {
             calls: std::sync::atomic::AtomicUsize::new(0),
             refreshes: std::sync::atomic::AtomicUsize::new(0),
         });
-        let native = NativeOwner::open_with_matrix(
+        let native = NativeOwner::open_with_matrix_and_credentials(
             &root.path().join("state"),
             &origin,
             "@owner:test",
             source.clone(),
+            crate::console::server_login::credential_tests::vault(),
         )
         .await
         .unwrap();
@@ -646,11 +648,12 @@ mod tests {
             calls: std::sync::atomic::AtomicUsize::new(0),
             refreshes: std::sync::atomic::AtomicUsize::new(0),
         });
-        let native = NativeOwner::open_with_matrix(
+        let native = NativeOwner::open_with_matrix_and_credentials(
             &root.path().join("state"),
             &origin,
             "@owner:test",
             source,
+            crate::console::server_login::credential_tests::vault(),
         )
         .await
         .unwrap();
@@ -717,11 +720,12 @@ mod tests {
             calls: std::sync::atomic::AtomicUsize::new(0),
             refreshes: std::sync::atomic::AtomicUsize::new(0),
         });
-        let native = NativeOwner::open_with_matrix(
+        let native = NativeOwner::open_with_matrix_and_credentials(
             &root.path().join("state"),
             &origin,
             "@owner:test",
             source,
+            crate::console::server_login::credential_tests::vault(),
         )
         .await
         .unwrap();
@@ -777,11 +781,12 @@ mod tests {
             calls: std::sync::atomic::AtomicUsize::new(0),
             refreshes: std::sync::atomic::AtomicUsize::new(0),
         });
-        let native = NativeOwner::open_with_matrix(
+        let native = NativeOwner::open_with_matrix_and_credentials(
             &root.path().join("state"),
             &origin,
             "@owner:test",
             source,
+            crate::console::server_login::credential_tests::vault(),
         )
         .await
         .unwrap();
@@ -842,11 +847,12 @@ mod tests {
             calls: std::sync::atomic::AtomicUsize::new(0),
             refreshes: std::sync::atomic::AtomicUsize::new(0),
         });
-        let native = NativeOwner::open_with_matrix(
+        let native = NativeOwner::open_with_matrix_and_credentials(
             &root.path().join("state"),
             &origin,
             "@owner:test",
             source,
+            crate::console::server_login::credential_tests::vault(),
         )
         .await
         .unwrap();
@@ -894,11 +900,12 @@ mod tests {
             calls: std::sync::atomic::AtomicUsize::new(0),
             refreshes: std::sync::atomic::AtomicUsize::new(0),
         });
-        let native = NativeOwner::open_with_matrix(
+        let native = NativeOwner::open_with_matrix_and_credentials(
             &root.path().join("state"),
             &origin,
             "@owner:test",
             source.clone(),
+            crate::console::server_login::credential_tests::vault(),
         )
         .await
         .unwrap();
@@ -939,11 +946,12 @@ mod tests {
             calls: std::sync::atomic::AtomicUsize::new(0),
             refreshes: std::sync::atomic::AtomicUsize::new(0),
         });
-        let native = NativeOwner::open_with_matrix(
+        let native = NativeOwner::open_with_matrix_and_credentials(
             &root.path().join("state"),
             &origin,
             "@owner:test",
             source.clone(),
+            crate::console::server_login::credential_tests::vault(),
         )
         .await
         .unwrap();
@@ -1015,11 +1023,12 @@ mod tests {
             calls: std::sync::atomic::AtomicUsize::new(0),
             refreshes: std::sync::atomic::AtomicUsize::new(0),
         });
-        let error = NativeOwner::open_with_matrix(
+        let error = NativeOwner::open_with_matrix_and_credentials(
             &root.path().join("state"),
             &origin,
             "@owner:test",
             source,
+            crate::console::server_login::credential_tests::vault(),
         )
         .await
         .err()
@@ -1047,11 +1056,12 @@ mod tests {
             calls: std::sync::atomic::AtomicUsize::new(0),
             refreshes: std::sync::atomic::AtomicUsize::new(0),
         });
-        let error = NativeOwner::open_with_matrix(
+        let error = NativeOwner::open_with_matrix_and_credentials(
             &root.path().join("state"),
             &origin,
             "@owner:test",
             source,
+            crate::console::server_login::credential_tests::vault(),
         )
         .await
         .err()
@@ -1082,11 +1092,12 @@ mod tests {
             calls: std::sync::atomic::AtomicUsize::new(0),
             refreshes: std::sync::atomic::AtomicUsize::new(0),
         });
-        let native = NativeOwner::open_with_matrix(
+        let native = NativeOwner::open_with_matrix_and_credentials(
             &root.path().join("state"),
             &origin,
             "@owner:test",
             source.clone(),
+            crate::console::server_login::credential_tests::vault(),
         )
         .await
         .unwrap();
@@ -1132,9 +1143,14 @@ mod tests {
     async fn retire_while_waiting_for_profile_lock_does_not_publish_sdk_binding() {
         let (origin, requests, task) = fixture("@owner:test", None).await;
         let root = tempfile::tempdir().unwrap();
-        let native = NativeOwner::open(&root.path().join("state"), &origin, "@owner:test")
-            .await
-            .unwrap();
+        let native = NativeOwner::open_with_credentials(
+            &root.path().join("state"),
+            &origin,
+            "@owner:test",
+            crate::console::server_login::credential_tests::vault(),
+        )
+        .await
+        .unwrap();
         let console = native.test_console().clone();
         let locked = console.0.server_login.profiles.lock().await;
         let runner = console.clone();
@@ -1212,11 +1228,12 @@ mod tests {
             "unsupported_hagency_issuer",
         ] {
             let root = tempfile::tempdir().unwrap();
-            let error = NativeOwner::open_with_matrix(
+            let error = NativeOwner::open_with_matrix_and_credentials(
                 &root.path().join("state"),
                 &origin,
                 "@owner:test",
                 Arc::new(FailingSource(code)),
+                crate::console::server_login::credential_tests::vault(),
             )
             .await
             .err()

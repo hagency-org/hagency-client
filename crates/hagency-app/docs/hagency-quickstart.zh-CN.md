@@ -18,6 +18,13 @@ Desktop。服务器关闭注册时，这个入口隐藏。
 登录页及 **Settings → Account** 可选择已保存账号。切换会停止当前主人的本地
 Agent 运行并清理活动权限；原账号的独立数据保留，不转让 Agent 所有权。
 
+桌面浏览器登录会先验证系统凭据能否写入并读回。请保持 macOS Keychain、
+Windows Credential Manager 或 Linux Secret Service 可用且已解锁。存储被锁定、
+拒绝或缺失时会停止登录或恢复；处理故障时请保留原资料与密钥。退出可能显示
+本地已完成、远端撤销仍待重试；原刷新迟到的结果仍进入旧作用域的撤销记录。
+iOS/Android 保留原来的 v1 私有文件秘密格式，不在本次桌面凭据修复范围内。
+详见[存储与恢复说明](privacy.zh-CN.md)。
+
 ## 创建 Project 与讨论 Room
 
 打开 **Projects → New Project**，也可以从侧栏 Projects 的 **⋯ → New project**

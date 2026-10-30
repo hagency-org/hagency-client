@@ -12,3 +12,9 @@
 `tests/fixtures` 中显式声明的 probe 二进制仅用于测试。
 
 使用说明见[桌面指南](../hagency-app/README.zh-CN.md)和[工作区指南](../../docs/workspace.md)。
+
+原生 Agent 与独立 server-login 持久化路径使用和桌面相同的显式系统凭据后端。
+Linux 因此需要可用的 Secret Service 与用户 D-Bus 会话；无此服务的无界面或
+容器环境会明确失败，不会静默改用文件或 Mock。上述是库路径，不表示恢复了
+无界面产品入口。本批尚未验证真实 Linux 服务/容器凭据行为，自动测试使用显式
+隔离假存储。详见[凭据存储与恢复](../hagency-app/docs/privacy.zh-CN.md)。

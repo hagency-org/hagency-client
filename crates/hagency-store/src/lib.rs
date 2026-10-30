@@ -12,6 +12,7 @@ pub use domain::joined_rooms::{JoinedRoom, JoinedRoomState, MAX_JOINED_ROOMS};
 pub use domain::owner_anchors::OwnerAnchor;
 mod domain_worker;
 pub mod private;
+pub mod credential_vault;
 pub mod task_context;
 pub use domain::PrivateApprovalCard;
 pub use domain::StaleMatrixSessionReceipt;

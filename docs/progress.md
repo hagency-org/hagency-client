@@ -15561,3 +15561,10 @@ SDK PR3已审查并合并a34339e，13项当前CI和六份新鲜artifact的50prof
 SDK PR4最终于2026-10-29T23:27:59Z合并为d325f930989d65044c52fcabcb2b7e66d533440a；实际审查head95de9a4e，target codex/mandatory-encrypted-send原basea343。父再次核对13/13当前SUCCESS/CLEAN，独立解析本head run40968952314六套raw profile共50个distinct非零命名测量，并比对60份原始文件SHA（24out+30log+6environment JSON）；reader8/8/7分别为Linux/macOS/Windows，公开Unix symlink例不计Windows执行。首次父审误把60raw均当.out的断言已纠正并记录，未把假设错误当数据失败。未把agent-spec feature限制造成的reader Skip记通过。
 
 R05相关复核新发现R19：启动完整inventory之后另一进程可创建新数据库，原prune没有统一跨进程创建/清理协议。已决定安全停止生产自动删除，明确deferred原因且不在启动探测Native；旧prune仅保留测试，真实多进程创建/原数据sentinel及旧算法负对照在实现验证中。自动空间回收未交付，数据/旧OS key可能继续占空间；不以mtime grace或采样宣称强互斥。
+
+
+## 2026-10-30 — R05 desktop credentials and R19 safe retention local freeze
+
+Managed branch `codex/quality-credentials` implements explicit OS key adapters, authenticated large-document envelopes, original-key migration/journals, per-grant SDK custody, retained DB identity, revoke-only late refresh handling, and startup DB deletion deferral. Explicit fake/deny validation: core 17/17; final App default-parallel credential selectors 32/32; original OAuth compatibility 1/1; App own lib/tests strict and core strict pass. Engine latest platform-selected focused 13 and earlier full 299+9 original ignored are recorded separately, not promoted to final current-source full qualification. Independent review found and closed capture ordering, retirement canonical selection, logout epoch and maintenance fairness edges.
+
+Local source is frozen for parent integration with actual merged main and independent Data target full/strict/lifecycle/current-head CI. Real OS credential prompts/services, production OAuth, mobile protection, complete OS-key GC and cross-process automatic DB deletion are not qualified. Detailed report: `dev-vibe/client-credential-storage-remediation-2026-10-30.zh.md`; original failed/partial logs remain in `.run/quality-credentials/`.

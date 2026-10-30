@@ -32,10 +32,15 @@ async fn native_owner_file_history_refreshes_ended_originals_without_restarting_
     let (origin, state, server) = server(false, 0).await;
     let temp = tempfile::tempdir().unwrap();
     let source = Arc::new(HistorySource::default());
-    let native =
-        NativeOwner::open_with_matrix(&temp.path().join("state"), &origin, OWNER, source.clone())
-            .await
-            .unwrap();
+    let native = NativeOwner::open_with_matrix_and_credentials(
+        &temp.path().join("state"),
+        &origin,
+        OWNER,
+        source.clone(),
+        crate::console::server_login::credential_tests::vault(),
+    )
+    .await
+    .unwrap();
     let device = native.test_console().authorized_device().await.unwrap();
     let (path, profile) = intent_location(native.test_console(), &device).unwrap();
     let ledger_path = path.with_file_name("agent-local.sqlite");
@@ -238,10 +243,15 @@ async fn native_owner_encrypted_file_history_reads_late_receipt_without_lease_or
     let (origin, state, server) = server(false, 0).await;
     let temp = tempfile::tempdir().unwrap();
     let source = Arc::new(HistorySource::default());
-    let native =
-        NativeOwner::open_with_matrix(&temp.path().join("state"), &origin, OWNER, source.clone())
-            .await
-            .unwrap();
+    let native = NativeOwner::open_with_matrix_and_credentials(
+        &temp.path().join("state"),
+        &origin,
+        OWNER,
+        source.clone(),
+        crate::console::server_login::credential_tests::vault(),
+    )
+    .await
+    .unwrap();
     let device = native.test_console().authorized_device().await.unwrap();
     let (path, profile) = intent_location(native.test_console(), &device).unwrap();
     let ledger_path = path.with_file_name("agent-local.sqlite");
@@ -413,10 +423,15 @@ async fn native_owner_encrypted_file_history_reads_late_receipt_without_lease_or
     state.lock().unwrap().file_lookup_deny = None;
     // Account loss retires the original owner. Reopen explicitly; never revive it.
     drop(native);
-    let native =
-        NativeOwner::open_with_matrix(&temp.path().join("state"), &origin, OWNER, source.clone())
-            .await
-            .unwrap();
+    let native = NativeOwner::open_with_matrix_and_credentials(
+        &temp.path().join("state"),
+        &origin,
+        OWNER,
+        source.clone(),
+        crate::console::server_login::credential_tests::vault(),
+    )
+    .await
+    .unwrap();
     let sent = native.execute(command()).await.unwrap();
     assert_eq!(sent["file"]["record"]["remote"]["state"], "sent");
     assert_eq!(

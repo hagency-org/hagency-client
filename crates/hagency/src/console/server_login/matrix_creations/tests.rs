@@ -147,7 +147,11 @@ async fn matrix_calls_use_only_current_oauth_grant_and_fail_closed_after_expiry(
         let body = r#"{"joined_rooms":["!room:example.test"]}"#;
         stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",body.len(),body).as_bytes()).await.unwrap();
     });
-    let login = ServerLogin::new(None).unwrap();
+    let login = ServerLogin::new_with_vault(
+        None,
+        crate::console::server_login::credential_tests::vault(),
+    )
+    .unwrap();
     let key = session_key("browser-cookie");
     let now = Instant::now();
     login.sessions.lock().await.insert(
@@ -258,7 +262,11 @@ async fn fixture(
             stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",body.len(),body).as_bytes()).await.unwrap();
         }
     });
-    let login = ServerLogin::new(None).unwrap();
+    let login = ServerLogin::new_with_vault(
+        None,
+        crate::console::server_login::credential_tests::vault(),
+    )
+    .unwrap();
     let now = Instant::now();
     login.sessions.lock().await.insert(
         session_key("cookie"),

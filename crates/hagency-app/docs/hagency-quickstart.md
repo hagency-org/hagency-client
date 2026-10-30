@@ -23,6 +23,15 @@ Switching accounts stops the current owner's local Agent runtime and clears its
 active permissions. The previous account's separate data remains; Agent ownership
 never transfers with a switch.
 
+Desktop browser sign-in first checks native credential write/readback. Keep
+Keychain (macOS), Credential Manager (Windows), or Secret Service (Linux)
+available and unlocked. A locked, denied or missing store stops sign-in or
+restore; retain the existing profile and original keys when resolving it.
+Logout may report local completion with remote revocation still pending; the
+original refresh result remains assigned to that old revoke-only scope.
+iOS/Android keep their previous v1 private-file secret format and are outside
+this desktop credential remediation. See [storage and recovery](privacy.md).
+
 ## Create a Project and discussion Rooms
 
 Open **Projects**, then **New Project** (or Projects **⋯ → New project**).
