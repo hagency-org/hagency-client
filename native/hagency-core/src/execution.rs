@@ -80,6 +80,12 @@ pub struct Scope {
     pub kind: ScopeKind,
     pub key: String,
     pub description: String,
+    /// The normalized facts the key and description were derived from (for
+    /// example `{"command","cwd","additionalPermissions"}`), for structured
+    /// display beside the description. Never authority and never a workspace.
+    /// Not serialized: the scope's wire and oracle shape stay unchanged.
+    #[serde(skip)]
+    pub value: Value,
 }
 /// Private host metadata. Deliberately not Debug or Serialize: descriptions may
 /// be projected into a private owner card; workspace is not a console DTO.
@@ -313,6 +319,7 @@ pub fn derive(request: HostRequest<'_>) -> Option<Authorization> {
             kind,
             key,
             description,
+            value,
         },
     })
 }

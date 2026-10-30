@@ -45,6 +45,37 @@ fn native_execution_vectors() {
     assert!(!normalize_policy(None, "codex").unwrap().yolo);
 }
 
+/// The structured facts behind a description are the normalized values the key
+/// was derived from, and they never change the scope's serialized shape.
+#[test]
+fn native_execution_scope_value_states_the_description_facts() {
+    let exact = scope(&base()).unwrap();
+    assert_eq!(
+        exact.scope.value,
+        json!({"command":"curl https://aapt.org/report","cwd":"/work/小白","additionalPermissions":null})
+    );
+    assert!(
+        serde_json::to_value(&exact.scope)
+            .unwrap()
+            .get("value")
+            .is_none()
+    );
+    let mut network = base();
+    network["params"] = json!({"networkApprovalContext":{"host":"Example.COM","protocol":"https"}});
+    assert_eq!(
+        scope(&network).unwrap().scope.value,
+        json!({"host":"example.com","protocol":"https"})
+    );
+    let claude = json!({"agentId":"agent-one","workspace":"/work/小白","taskId":"task-one","mayWrite":true,
+        "method":hagency_core::execution::CLAUDE_TOOL_METHOD,
+        "params":{"threadId":"session","turnId":"prompt","itemId":"request","toolName":"Bash",
+            "input":{"description":"Run tests","command":"npm test"}}});
+    assert_eq!(
+        scope(&claude).unwrap().scope.value,
+        json!({"tool":"Bash","input":"{\"command\":\"npm test\",\"description\":\"Run tests\"}"})
+    );
+}
+
 #[test]
 fn native_execution_context() {
     let original = base();
