@@ -206,7 +206,9 @@ mod tests {
                 if width >= 420.0 {
                     let hint = widget.label(&cx,ids!(history_hint));
                     let hint_rect = widget.view(&cx,ids!(history_hint_holder)).area().rect(&cx);
-                    let text = hint.borrow().unwrap().draw_text.draw_vars.area.rect(&cx);
+                    // A text area contains one instance per glyph; rect() only
+                    // measures the first letter. Check all visible glyphs.
+                    let text = hint.borrow().unwrap().draw_text.draw_vars.area.rect_union(&cx,false);
                     let center_y = button.pos.y + button.size.y * 0.5;
                     assert!((hint_rect.pos.y + hint_rect.size.y * 0.5 - center_y).abs() < 0.5,
                         "hint and button must share one vertical center: {hint_rect:?}, {button:?}");
