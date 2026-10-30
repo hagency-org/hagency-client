@@ -36,6 +36,24 @@ fn native_template_original_ids_restart_and_no_approval_side_effect() {
         String::from_utf8_lossy(&result.stderr)
     );
 }
+#[test]
+fn native_template_cancellation_withdraws_put_off_change_and_recovers_applied_effect() {
+    let result = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "console::native::resource_definitions::tests::native_template_cancellation_process_child",
+            "--exact",
+            "--nocapture",
+        ])
+        .env("HAGENCY_TEMPLATE_CANCEL_FIXTURE", "1")
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{} {}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
 #[tokio::test]
 async fn native_template_process_child() {
     if std::env::var("HAGENCY_TEMPLATE_FIXTURE").as_deref() != Ok("1") {
@@ -273,4 +291,220 @@ async fn native_template_process_child() {
     drop(inspect);
     read.retire();
     manager.retire();
+}
+#[tokio::test]
+async fn native_template_cancellation_process_child() {
+    if std::env::var("HAGENCY_TEMPLATE_CANCEL_FIXTURE").as_deref() != Ok("1") {
+        return;
+    }
+    let f = Fixture::new().await;
+    let (mut domain, _, resource) = f.domain();
+    domain
+        .put_seat(&hagency_core::project::Seat {
+            id: resource.seat_id.clone(),
+            declaration: None,
+        })
+        .unwrap();
+    drop(domain);
+    let (personal, _) = f.personal();
+    drop(personal);
+    let registry =
+        OwnerResourceRegistry::isolated_for_tests(&f.temp.path().join("canonical")).unwrap();
+    let mut request = SourceQuiescenceRequest::new(
+        &f.owner,
+        package(1),
+        registry.clone(),
+        Instant::now() + Duration::from_secs(50),
+        || true,
+    )
+    .unwrap();
+    request.lease_root =
+        Some(hagency_platform::legacy_writer::test_support::initialize_process_root().unwrap());
+    let work = f.owner.prepare_source_quiescence(request).await.unwrap();
+    let sources = work.close_and_drain().await.unwrap();
+    let provider = || {
+        VerifiedProviderAccount::new(
+            "codex",
+            "https://provider.test",
+            "synthetic-template-cancel",
+            Instant::now() + Duration::from_secs(30),
+        )
+        .unwrap()
+    };
+    let transfer = sources
+        .prepare_resource_adoption("template_cancel_original".into(), provider(), 700)
+        .await
+        .unwrap();
+    assert_eq!(transfer.advance(provider()).await.unwrap().phase, "active");
+    transfer.drain_journal().await.unwrap();
+    drop(transfer);
+    drop(sources);
+    drop(work);
+    let f = f
+        .restart_adopted(registry.clone(), "template_cancel_original".into())
+        .await;
+    let manager = f.owner.management(package(2)).await.unwrap();
+    template_cancellation(&manager, &resource.id()).await;
+    manager.retire();
+    f.owner.shutdown().await;
+    registry.shutdown().await.unwrap();
+}
+/// A change put off with 「稍后」 can be withdrawn. Mirrors the saved web
+/// catalogue cancellation: the canonical receipt decides a race with apply.
+async fn template_cancellation(manager: &NativeManagement, resource: &str) {
+    let page = manager
+        .resource_templates(resource.into(), None)
+        .await
+        .unwrap();
+    let role = page.roles[0].clone();
+    let create = |name: &str, expected_revision: String| TemplateCreateInput {
+        resource_id: resource.into(),
+        expected_revision,
+        name: name.into(),
+        role: role.clone(),
+        enabled: true,
+    };
+    let revision = || async {
+        manager
+            .resource_templates(resource.into(), None)
+            .await
+            .unwrap()
+            .revision
+    };
+    let names = || async {
+        manager
+            .resource_templates(resource.into(), None)
+            .await
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|t| t.name)
+            .collect::<Vec<_>>()
+    };
+    let saved = |id: String| async move {
+        let rows = manager.saved_commands().await.unwrap();
+        decode(rows.iter().find(|s| s.command_id == id).unwrap()).unwrap()
+    };
+
+    // Withdrawn before apply: no definition, and it can never be applied.
+    let original = manager
+        .prepare_template_create(create("withdrawn_helper", page.revision.clone()))
+        .await
+        .unwrap();
+    let cancelled = manager
+        .cancel_saved_template(original.command_id.clone())
+        .await
+        .unwrap();
+    assert_eq!(cancelled.command_id, original.command_id);
+    assert_eq!(
+        cancelled.error.as_deref(),
+        Some("management_change_cancelled")
+    );
+    assert!(cancelled.result.is_none());
+    assert_eq!(
+        manager
+            .apply_saved_template(original.command_id.clone())
+            .await
+            .unwrap_err()
+            .code,
+        "management_change_cancelled"
+    );
+    assert_eq!(
+        manager
+            .cancel_saved_template(original.command_id.clone())
+            .await
+            .unwrap()
+            .error,
+        cancelled.error
+    );
+    assert!(names().await.is_empty());
+    manager
+        .acknowledge_command(original.command_id.clone())
+        .await
+        .unwrap();
+    assert!(
+        manager
+            .saved_commands()
+            .await
+            .unwrap()
+            .iter()
+            .all(|s| s.command_id != original.command_id)
+    );
+
+    // Applied, journal reply lost: withdrawing recovers the applied effect.
+    let applied = manager
+        .prepare_template_create(create("kept_helper", revision().await))
+        .await
+        .unwrap();
+    let command = saved(applied.command_id.clone()).await;
+    let (context, session) = manager.authorized().await.unwrap();
+    let effect = session
+        .apply_resource_template(&context, command)
+        .await
+        .unwrap();
+    assert!(
+        manager
+            .review_template_command(applied.command_id.clone())
+            .await
+            .unwrap()
+            .result
+            .is_none()
+    );
+    let recovered = manager
+        .cancel_saved_template(applied.command_id.clone())
+        .await
+        .unwrap();
+    assert_eq!(recovered.result, Some(effect.clone()));
+    assert!(recovered.error.is_none());
+    assert_eq!(
+        manager
+            .apply_saved_template(applied.command_id.clone())
+            .await
+            .unwrap(),
+        effect
+    );
+    assert_eq!(
+        manager
+            .cancel_saved_template(applied.command_id.clone())
+            .await
+            .unwrap()
+            .result,
+        recovered.result
+    );
+    manager
+        .acknowledge_command(applied.command_id)
+        .await
+        .unwrap();
+
+    // Withdrawal committed, journal reply lost: apply stays refused.
+    let lost = manager
+        .prepare_template_create(create("lost_helper", revision().await))
+        .await
+        .unwrap();
+    let command = saved(lost.command_id.clone()).await;
+    assert!(
+        session
+            .cancel_resource_template(&context, command)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        manager
+            .apply_saved_template(lost.command_id.clone())
+            .await
+            .unwrap_err()
+            .code,
+        "management_change_cancelled"
+    );
+    assert_eq!(
+        manager
+            .cancel_saved_template(lost.command_id)
+            .await
+            .unwrap()
+            .error
+            .as_deref(),
+        Some("management_change_cancelled")
+    );
+    assert_eq!(names().await, ["kept_helper"]);
 }

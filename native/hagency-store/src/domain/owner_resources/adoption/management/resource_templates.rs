@@ -47,6 +47,20 @@ fn revision(resource: &Resource, rows: &[Definition]) -> Result<String, Error> {
         ))?)
     ))
 }
+// The original canonical receipt is either the applied result or a
+// cancellation marker. Both permanently consume the same command/digest key.
+fn outcome(
+    db: &Connection,
+    receipt: &CommandReceipt,
+) -> Result<Option<Option<ResourceTemplateResult>>, Error> {
+    let Some(value) = receipt.lookup::<serde_json::Value>(db)? else {
+        return Ok(None);
+    };
+    if value == json!({"cancelled":true}) {
+        return Ok(Some(None));
+    }
+    Ok(Some(Some(serde_json::from_value(value)?)))
+}
 fn roles(resource: &Resource) -> Vec<String> {
     if !resource.provisionable() || resource.ceiling.as_ref().and_then(|v| v.tokens).is_none() {
         return vec![];
@@ -207,7 +221,8 @@ impl AdoptedManagementStore {
             let tx=db.db.transaction_with_behavior(TransactionBehavior::Immediate)?;
             backing.check(&authority)?;authorize_resource(&tx,&authority,&input.resource_id)?;
             // Original result precedes CAS, existence, and current eligibility.
-            if let Some(result)=receipt.lookup(&tx)? {backing.check(&authority)?;return Ok(result)}
+            // A recorded cancellation permanently refuses this command.
+            if let Some(result)=outcome(&tx,&receipt)? {backing.check(&authority)?;return result.ok_or(Error::ManagementChangeCancelled)}
             let resource=read_resource(&tx,&input.resource_id)?;let rows=definitions(&tx,&input.resource_id)?;
             if revision(&resource,&rows)?!=input.expected_revision {return Err(Error::Conflict)}
             let old=rows.iter().find(|r|r.id==input.definition_id);
@@ -240,6 +255,51 @@ impl AdoptedManagementStore {
             let result=ResourceTemplateResult{command_id:input.command_id,resource_id:input.resource_id,definition_id:input.definition_id,deleted,revision:revision(&resource,&definitions(&tx,&resource.id())?)?};
             receipt.record(&tx,&result)?;backing.check(&authority)?;tx.commit()?;Ok(result)
         }).await?;
+        self.check(profile).map_err(|_| Error::OutcomeUnknown)?;
+        Ok(result)
+    }
+    /// Withdraw a saved change before it is applied. This races the apply
+    /// writer on the exact same receipt key inside one immediate transaction:
+    /// once the marker is stored, even a lost intent-journal reply cannot let
+    /// the change apply. A change already applied is returned unchanged.
+    /// The profile only has to remain associated with the resource, so a
+    /// change left behind by a later retirement can still be withdrawn.
+    pub(crate) async fn cancel_resource_template(
+        &self,
+        profile: &ProfileAuthority,
+        input: ResourceTemplateCommand,
+        receipt: CommandReceipt,
+    ) -> Result<Option<ResourceTemplateResult>, Error> {
+        input.validate()?;
+        self.check(profile)?;
+        let backing = self.clone();
+        let authority = profile.clone();
+        let result = self
+            .registry
+            .0
+            .store
+            .call(64 * 1024, move |db| {
+                backing.check(&authority)?;
+                let tx = db.db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let associated: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM owner_resource_grants WHERE profile=?1 AND resource_id=?2)",
+                    params![authority.digest, input.resource_id],
+                    |r| r.get(0),
+                )?;
+                if !associated {
+                    return Err(Error::LocalAuthority);
+                }
+                if let Some(original) = outcome(&tx, &receipt)? {
+                    backing.check(&authority)?;
+                    tx.commit()?;
+                    return Ok(original);
+                }
+                receipt.record(&tx, &json!({"cancelled":true}))?;
+                backing.check(&authority)?;
+                tx.commit()?;
+                Ok(None)
+            })
+            .await?;
         self.check(profile).map_err(|_| Error::OutcomeUnknown)?;
         Ok(result)
     }
