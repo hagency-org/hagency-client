@@ -27,13 +27,13 @@ impl AllocationTransport {
             .authorize(&scope.context, Permission::PublishGrants)
             .map_err(storage)?;
         let grant = self.original_grant(&scope, registry, grant_id).await?;
+        // Exact lookup: a replied publication is kept history, not a pending
+        // saved command, so it is not in the bounded pending read.
         let saved = scope
             .session
-            .pending_intents(&scope.context)
+            .intent(&scope.context, command_id.to_owned())
             .await
-            .map_err(storage)?
-            .into_iter()
-            .find(|intent| intent.command_id == command_id);
+            .map_err(storage)?;
         self.check_scope(&scope, false).await?;
         let Some(saved) = saved else {
             return Ok(PublicationObservation::Unconfirmed);
@@ -142,15 +142,14 @@ impl AllocationTransport {
         command_id: &str,
     ) -> Result<bool, NativeError> {
         let scope = self.scope(Permission::PublishGrants).await?;
-        let intents = scope
+        let saved = scope
             .session
-            .pending_intents(&scope.context)
+            .intent(&scope.context, command_id.to_owned())
             .await
             .map_err(storage)?;
         self.check_scope(&scope, false).await?;
-        Ok(intents.iter().any(|intent| {
-            intent.command_id == command_id
-                && intent.operation == IntentOperation::PublishGrant
+        Ok(saved.is_some_and(|intent| {
+            intent.operation == IntentOperation::PublishGrant
                 && matches!(intent.reply, Some(IntentReply::Failure { .. }))
         }))
     }
@@ -187,11 +186,10 @@ impl AllocationTransport {
         let scope = self.scope(Permission::PublishGrants).await?;
         let saved = scope
             .session
-            .pending_intents(&scope.context)
+            .intent(&scope.context, command_id.clone())
             .await
             .map_err(storage)?
-            .into_iter()
-            .find(|p| p.command_id == command_id && p.operation == IntentOperation::PublishGrant)
+            .filter(|p| p.operation == IntentOperation::PublishGrant)
             .ok_or_else(|| failure(404, "management_saved_command_not_found"))?;
         let input: Publication = wire::decode(saved.input)?;
         if input.command_id != command_id {

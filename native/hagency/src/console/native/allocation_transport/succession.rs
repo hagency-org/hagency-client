@@ -76,13 +76,13 @@ impl AllocationTransport {
             .map_err(storage)?;
         let grant = self.original_grant(&scope, registry, grant_id).await?;
         predecessor(&grant)?;
+        // Exact lookup: a replied publication is kept history, not a pending
+        // saved command, so it is not in the bounded pending read.
         let saved = scope
             .session
-            .pending_intents(&scope.context)
+            .intent(&scope.context, command_id.to_owned())
             .await
-            .map_err(storage)?
-            .into_iter()
-            .find(|intent| intent.command_id == command_id);
+            .map_err(storage)?;
         self.check_scope(&scope, false).await?;
         let Some(saved) = saved else {
             return Ok(PublicationObservation::Unconfirmed);
@@ -133,15 +133,14 @@ impl AllocationTransport {
         command_id: &str,
     ) -> Result<bool, NativeError> {
         let scope = self.scope(Permission::PublishGrants).await?;
-        let intents = scope
+        let saved = scope
             .session
-            .pending_intents(&scope.context)
+            .intent(&scope.context, command_id.to_owned())
             .await
             .map_err(storage)?;
         self.check_scope(&scope, false).await?;
-        Ok(intents.iter().any(|intent| {
-            intent.command_id == command_id
-                && intent.operation == IntentOperation::PublishGrantSuccessor
+        Ok(saved.is_some_and(|intent| {
+            intent.operation == IntentOperation::PublishGrantSuccessor
                 && matches!(intent.reply, Some(IntentReply::Failure { .. }))
         }))
     }

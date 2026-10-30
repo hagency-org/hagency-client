@@ -272,6 +272,8 @@ pub(crate) enum JournalAction {
     Prepare(Intent),
     Reply(Intent, IntentReply),
     Read,
+    /// One saved command by its exact ID, including kept publication history.
+    Lookup(String),
     RequireUnusedGrantPublication(String),
     Acknowledge(String),
 }
@@ -301,6 +303,7 @@ impl JournalCommand {
             }
             // Eight pending records, each with its own input and bounded reply.
             JournalAction::Read => (8 * (MAX_INTENT_INPUT + 64 * 1024 + 4096)) as u32,
+            JournalAction::Lookup(_) => (MAX_INTENT_INPUT + 64 * 1024 + 4096) as u32,
             _ => 84 * 1024,
         }
     }
@@ -374,12 +377,35 @@ impl Session {
         .await?;
         Ok(())
     }
+    /// Outstanding saved commands: every unacknowledged intent except replied
+    /// grant publications, which are kept history (see `publication_history`).
     pub async fn pending_intents(
         &self,
         context: &HostContext,
     ) -> Result<Vec<PendingIntent>, Error> {
         self.journal(context, JournalAction::Read, Permission::ReadIntents, false)
             .await
+    }
+    /// The saved command with this exact ID, if this actor still journals it
+    /// and the caller holds its operation's permission. Unlike
+    /// `pending_intents` it also finds a replied grant publication, so a
+    /// publication is observed, recovered or replayed by its own command ID.
+    /// An acknowledged (scrubbed) command is never returned.
+    pub async fn intent(
+        &self,
+        context: &HostContext,
+        command_id: String,
+    ) -> Result<Option<PendingIntent>, Error> {
+        identifier(&command_id, 128)?;
+        Ok(self
+            .journal(
+                context,
+                JournalAction::Lookup(command_id),
+                Permission::ReadIntents,
+                false,
+            )
+            .await?
+            .pop())
     }
     /// Descriptive absence proof only. Scrubbed/acknowledged prior grant
     /// custody cannot establish which grant it belonged to, so fails closed.
@@ -415,6 +441,18 @@ impl Session {
     }
 }
 
+/// The two grant publication operations. Their replied rows are permanent
+/// publication history, not outstanding work: they can never be acknowledged
+/// (an acknowledged or scrubbed publication makes every later publication
+/// fail closed in `require_unused_publication`), so they must not consume the
+/// eight-intent outstanding bound or the generic pending read. A pending
+/// (unanswered) publication still counts and is still listed.
+fn publication_history() -> Result<(String, String), Error> {
+    Ok((
+        serde_json::to_string(&IntentOperation::PublishGrant)?,
+        serde_json::to_string(&IntentOperation::PublishGrantSuccessor)?,
+    ))
+}
 type Stored = (String, String, Option<String>, Option<String>, String);
 fn stored(db: &Connection, actor: &str, id: &str) -> Result<Option<Stored>, Error> {
     Ok(db.query_row(&format!("SELECT operation,digest,CASE WHEN length(CAST(input AS BLOB))<={INPUT_LIMIT_SQL} THEN input END,CASE WHEN length(CAST(reply AS BLOB))<=65536 THEN reply END,state FROM management_intents WHERE actor_scope=?1 AND command_id=?2"),
@@ -447,8 +485,7 @@ fn require_unused_publication(db: &Connection, actor: &str, grant_id: &str) -> R
     if scrubbed {
         return Err(Error::Conflict);
     }
-    // Successor publications are bounded by the 2048-grant ledger instead of
-    // the original eight root publications.
+    // Successor publications are bounded by the 2048-grant ledger.
     let mut query = db.prepare(
         "SELECT input FROM management_intents WHERE actor_scope=?1 AND operation=?2 LIMIT 2049",
     )?;
@@ -462,12 +499,14 @@ fn require_unused_publication(db: &Connection, actor: &str, grant_id: &str) -> R
             return Err(Error::Conflict);
         }
     }
+    // Root publications are bounded by the same 2048-grant ledger. Every row
+    // is scanned: a grant ID is never published twice.
     let mut query = db.prepare(
-        "SELECT input FROM management_intents WHERE actor_scope=?1 AND operation=?2 LIMIT 9",
+        "SELECT input FROM management_intents WHERE actor_scope=?1 AND operation=?2 LIMIT 2049",
     )?;
     let inputs = query.query_map(params![actor, operation], |r| r.get::<_, String>(0))?;
     for (index, old) in inputs.enumerate() {
-        if index >= 8 {
+        if index >= 2048 {
             return Err(Error::Capacity);
         }
         let old: Value = serde_json::from_str(&old?)?;
@@ -491,9 +530,9 @@ pub(crate) fn execute_intent(
         JournalAction::Prepare(intent) | JournalAction::Reply(intent, _) => {
             intent.operation.permission()
         }
-        JournalAction::Read | JournalAction::RequireUnusedGrantPublication(_) => {
-            Permission::ReadIntents
-        }
+        JournalAction::Read
+        | JournalAction::Lookup(_)
+        | JournalAction::RequireUnusedGrantPublication(_) => Permission::ReadIntents,
         JournalAction::Acknowledge(_) => Permission::AcknowledgeIntents,
     };
     command.check(permission)?;
@@ -537,7 +576,9 @@ pub(crate) fn execute_intent(
                 if prior {
                     return Err(Error::Conflict);
                 }
-                let count: i64 = tx.query_row("SELECT COUNT(*) FROM management_intents WHERE actor_scope=?1 AND state<>'acknowledged'", [&actor], |r|r.get(0))?;
+                // Outstanding work only: kept publication history is excluded.
+                let (root, successor) = publication_history()?;
+                let count: i64 = tx.query_row("SELECT COUNT(*) FROM management_intents WHERE actor_scope=?1 AND state<>'acknowledged' AND NOT (state='replied' AND operation IN (?2,?3))", params![actor, root, successor], |r|r.get(0))?;
                 let total: i64 =
                     tx.query_row("SELECT COUNT(*) FROM management_intents", [], |r| r.get(0))?;
                 if count >= 8 || total >= 100_000 {
@@ -595,8 +636,9 @@ pub(crate) fn execute_intent(
             tx.execute("UPDATE management_intents SET state='replied',reply=?3 WHERE actor_scope=?1 AND command_id=?2", params![actor,intent.command_id,encoded])?;
         }
         JournalAction::Read => {
-            let mut stmt = tx.prepare(&format!("SELECT command_id,operation,digest,CASE WHEN length(CAST(input AS BLOB))<={INPUT_LIMIT_SQL} THEN input END,CASE WHEN length(CAST(reply AS BLOB))<=65536 THEN reply END,state FROM management_intents WHERE actor_scope=?1 AND state<>'acknowledged' ORDER BY command_id LIMIT 9"))?;
-            let found = stmt.query_map([&actor], |r| {
+            let (root, successor) = publication_history()?;
+            let mut stmt = tx.prepare(&format!("SELECT command_id,operation,digest,CASE WHEN length(CAST(input AS BLOB))<={INPUT_LIMIT_SQL} THEN input END,CASE WHEN length(CAST(reply AS BLOB))<=65536 THEN reply END,state FROM management_intents WHERE actor_scope=?1 AND state<>'acknowledged' AND NOT (state='replied' AND operation IN (?2,?3)) ORDER BY command_id LIMIT 9"))?;
+            let found = stmt.query_map(params![actor, root, successor], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
                     (r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?),
@@ -620,6 +662,20 @@ pub(crate) fn execute_intent(
             }
             if rows.len() > 8 {
                 return Err(Error::Capacity);
+            }
+        }
+        JournalAction::Lookup(id) => {
+            // The same visibility as the pending read, for one exact ID: never
+            // an acknowledged command, never one outside the caller's grants.
+            if let Some(row) = stored(&tx, &actor, id)?.filter(|row| row.4 != "acknowledged") {
+                let value = pending(id.clone(), &row)?;
+                if command
+                    .authority
+                    .authorize(&command.context, value.operation.permission())
+                    .is_ok()
+                {
+                    rows.push(value);
+                }
             }
         }
         JournalAction::RequireUnusedGrantPublication(grant_id) => {

@@ -695,6 +695,22 @@ fn native_allocation_transport_closed_wire_matches_canonical_fixtures() {
     assert!(wire::decode::<AllocationCommand>(unsafe_number).is_err());
 }
 
+/// An answered publication is kept history: it leaves the saved-command list
+/// (and the eight-command bound) but is still found by its own command ID.
+async fn publication_intent(f: &Fixture, id: &str) -> hagency_store::management::PendingIntent {
+    assert!(
+        !f.transport
+            .manager
+            .saved_commands()
+            .await
+            .unwrap()
+            .iter()
+            .any(|saved| saved.command_id == id)
+    );
+    let scope = f.transport.scope(Permission::ReadIntents).await.unwrap();
+    scope.session.intent(&scope.context, id.into()).await.unwrap().unwrap()
+}
+
 #[tokio::test]
 async fn native_allocation_transport_publication_reply_loss_recovers_original_journal() {
     let mut f = Fixture::new().await;
@@ -734,9 +750,8 @@ async fn native_allocation_transport_publication_reply_loss_recovers_original_jo
     assert_eq!(original.id, "grant_fixture");
     assert_eq!(f.state.lock().unwrap().publication_writes, 1);
     assert_eq!(original.receipt.allocated_tokens, 700);
-    let saved_reply = f.transport.manager.saved_commands().await.unwrap()[0]
-        .reply
-        .clone();
+    let saved_reply = publication_intent(&f, "publish_once").await.reply;
+    assert!(saved_reply.is_some());
     f.state.lock().unwrap().revoked_grant = true;
     let latest = f
         .transport
@@ -745,10 +760,7 @@ async fn native_allocation_transport_publication_reply_loss_recovers_original_jo
         .unwrap();
     assert_eq!(latest.state, "revoked");
     assert_eq!(latest.revision, 2);
-    assert_eq!(
-        f.transport.manager.saved_commands().await.unwrap()[0].reply,
-        saved_reply
-    );
+    assert_eq!(publication_intent(&f, "publish_once").await.reply, saved_reply);
     assert_eq!(f.state.lock().unwrap().publication_writes, 1);
     assert!(
         f.transport
@@ -778,9 +790,9 @@ async fn native_allocation_transport_definite_rejection_allows_corrected_publica
             .code,
         "management_revision_changed"
     );
-    let saved = f.transport.manager.saved_commands().await.unwrap();
+    let saved = publication_intent(&f, "stale_cas").await;
     assert!(
-        matches!(&saved[0].reply, Some(hagency_store::management::IntentReply::Failure { code, .. }) if code=="management_revision_changed")
+        matches!(&saved.reply, Some(hagency_store::management::IntentReply::Failure { code, .. }) if code=="management_revision_changed")
     );
     f.transport
         .manager
@@ -820,9 +832,9 @@ async fn native_allocation_transport_first_preflight_mismatch_can_be_acknowledge
         .unwrap();
     assert_eq!(error.code, "allocation_enrollment_changed");
     assert_eq!(f.state.lock().unwrap().publication_writes, 0);
-    let saved = f.transport.manager.saved_commands().await.unwrap();
+    let saved = publication_intent(&f, "stale_enrollment").await;
     assert!(
-        matches!(&saved[0].reply, Some(hagency_store::management::IntentReply::Failure { code, .. }) if code=="allocation_enrollment_changed")
+        matches!(&saved.reply, Some(hagency_store::management::IntentReply::Failure { code, .. }) if code=="allocation_enrollment_changed")
     );
     f.transport
         .manager

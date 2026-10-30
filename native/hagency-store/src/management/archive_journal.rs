@@ -669,6 +669,23 @@ impl ArchiveJournalSession {
         self.journal(context, JournalAction::Read, Permission::ReadIntents, false)
             .await
     }
+    /// One saved command by its exact ID, as `Session::intent`.
+    pub async fn intent(
+        &self,
+        context: &HostContext,
+        command_id: String,
+    ) -> Result<Option<PendingIntent>, Error> {
+        identifier(&command_id, 128)?;
+        Ok(self
+            .journal(
+                context,
+                JournalAction::Lookup(command_id),
+                Permission::ReadIntents,
+                false,
+            )
+            .await?
+            .pop())
+    }
     /// Descriptive absence proof only. Scrubbed/acknowledged prior grant
     /// custody cannot establish which grant it belonged to, so fails closed.
     pub async fn require_unused_grant_publication(
