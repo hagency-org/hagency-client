@@ -2753,5 +2753,8 @@
   "This Matrix link target is unsupported.": "This Matrix link target is unsupported.",
   "This encrypted message cannot be decrypted on this device.": "This encrypted message cannot be decrypted on this device.",
   "Agent information is unavailable for this account.": "Agent information is unavailable for this account.",
-  "The local service is not running for this account.": "The local service is not running for this account."
+  "The local service is not running for this account.": "The local service is not running for this account.",
+  "Encryption protects new messages and cannot be turned off. Earlier messages stay unencrypted.": "Encryption protects new messages and cannot be turned off. Earlier messages stay unencrypted.",
+  "Enable encryption": "Enable encryption",
+  "Confirm and enable encryption": "Confirm and enable encryption"
 }

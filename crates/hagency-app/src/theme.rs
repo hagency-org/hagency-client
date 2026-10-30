@@ -638,6 +638,7 @@ pub(crate) mod tests {
             let mut bottom = f32::NEG_INFINITY;
             for row in &text.rows {
                 for glyph in &row.glyphs {
+                    assert_ne!(glyph.id, 0, "the fixture must render real glyphs, not missing-character boxes");
                     let mut outline = None;
                     if let Some(bounds) = glyph.font.glyph_outline_bounds_in_ems(glyph.id, &mut outline) {
                         if bounds.size.width <= 0.0 || bounds.size.height <= 0.0 {continue;}
