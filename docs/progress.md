@@ -15551,6 +15551,31 @@ PR #1 is merged by chrislearn as 6e81c157d660d1d0eaa5c0190bf8930b5bf06a17; the m
   guard/i18n2755entries2025sites0missing pass. Current-head hosted checks still
   required; system URL delivery and real-account E2EE remain unqualified.
 
+
+## 2026-10-30：统一整改与原生链接合并
+
+PR21 当前 head48b33772 完整包含 PR20 的25beaf6e。父独立复核源码、精确本地824/0/2、严格Clippy、链接lifecycle8/8，并重新核对当前 head15项实际CI全部SUCCESS、5项声明条件skip。该完整候选于2026-10-29T23:03:32Z合并为cf7fbb63b45c751d7f7efc0369963de3839435b5；PR18–20因祖先关系自动标记merged，不把旧head失败/取消/未完成当通过。PR17用户tutorial分支未合并或修改。
+
+当前48b Linux workflow40958705871/job123745783208的8组真实传输raw证据已独立重算，12source hashes全部对应精确提交，production validator无错误；最大Rust堆3506028B、采样RSS33034240B。证据在quality-matrix-links工作树.run/quality-matrix-navigation/parent-pr21-48b-raw-heap-validation.json。依旧仅remote transport窗，不是整个App/TLS/SQLite资格。执行报告顶部清单已按此实际交付更新，历史各轮保留。
+
+SDK PR3已审查并合并a34339e，13项当前CI和六份新鲜artifact的50profile独立复核通过。SDK PR4 head95de9a4e新增SQLite真正只读的一致WAL身份检查及固定有限PBKDF2导入策略，父独立8reader+15encryption通过，当前CI仍运行；agent-spec1.4不支持Cargo features，reader真实Skip保留，外部exact-feature测试单独执行，不把Skip计通过。R05客户端和R07 SDK资源控制仍实施/复核中。
+
+
+SDK PR4最终于2026-10-29T23:27:59Z合并为d325f930989d65044c52fcabcb2b7e66d533440a；实际审查head95de9a4e，target codex/mandatory-encrypted-send原basea343。父再次核对13/13当前SUCCESS/CLEAN，独立解析本head run40968952314六套raw profile共50个distinct非零命名测量，并比对60份原始文件SHA（24out+30log+6environment JSON）；reader8/8/7分别为Linux/macOS/Windows，公开Unix symlink例不计Windows执行。首次父审误把60raw均当.out的断言已纠正并记录，未把假设错误当数据失败。未把agent-spec feature限制造成的reader Skip记通过。
+
+R05相关复核新发现R19：启动完整inventory之后另一进程可创建新数据库，原prune没有统一跨进程创建/清理协议。已决定安全停止生产自动删除，明确deferred原因且不在启动探测Native；旧prune仅保留测试，真实多进程创建/原数据sentinel及旧算法负对照在实现验证中。自动空间回收未交付，数据/旧OS key可能继续占空间；不以mtime grace或采样宣称强互斥。
+
+
+## 2026-10-30 — R05 desktop credentials and R19 safe retention local freeze
+
+Managed branch `codex/quality-credentials` implements explicit OS key adapters, authenticated large-document envelopes, original-key migration/journals, per-grant SDK custody, retained DB identity, revoke-only late refresh handling, and startup DB deletion deferral. Explicit fake/deny validation: core 17/17; final App default-parallel credential selectors 32/32; original OAuth compatibility 1/1; App own lib/tests strict and core strict pass. Engine latest platform-selected focused 13 and earlier full 299+9 original ignored are recorded separately, not promoted to final current-source full qualification. Independent review found and closed capture ordering, retirement canonical selection, logout epoch and maintenance fairness edges.
+
+Local source is frozen for parent integration with actual merged main and independent Data target full/strict/lifecycle/current-head CI. Real OS credential prompts/services, production OAuth, mobile protection, complete OS-key GC and cross-process automatic DB deletion are not qualified. Detailed report: `dev-vibe/client-credential-storage-remediation-2026-10-30.zh.md`; original failed/partial logs remain in `.run/quality-credentials/`.
+
+
+## 2026-10-30 — R05 parent integrated qualification
+
+Integrated main cf7 + SDK95 credentials source has exact-CI App857/0/2 and own all-target strict; final explicit-Fake console130/0/6 and Engine CI-package all-target strict pass. Original all-target commands with4 then2 console failures remain failed records. Root causes were native backend not injected in older integration fixtures, obsolete512-byte small-secret reader, and concurrent atomic replacement observation; final async fixture reads under original Document lock and retries onlyConflict within original5s bound, preserving real HTTP/restart/AEAD assertions. R05 lifecycle5/5 includes81 exact paths and actual17/32/13/3 cases, no skip/uncertain; interrupted prior lifecycle unqualified. No real OS credential IO, paid models, production OAuth or mobile qualification. Current-head hosted whole-engine/platform checks remain required before merge; detailed original/final evidence is in the credential remediation report and `.run/quality-credentials-integration/`.
 2026-10-30 — Tutorial UI / Room encryption review: #26 carries glyph-ink centering; #27 adds project Room creation encryption and explicit irreversible enable from Room settings. Local Room branch: app 822 passed / 2 existing ignored, engine 290 passed / 9 existing qualification ignores, strict app+engine Clippy passed, SDK joined-room 45 passed. Exact-head dispatched App CI and Rust CI passed; full App Build dispatch additionally exposed pre-existing mobile packager/process-custody gaps (tracked separately). Retargeted #27 to main so normal PR-scoped checks run; no mobile success is claimed. Independent-client native acceptance and tutorial retake are continuing on the dependent security branch.
 
 2026-10-30 — Tutorial v3 native follow-up: Client PR31 adds an actual overlay-order regression for hidden invitation consent and actual dialog-button geometry regressions (old36px face/23px icon center fails; corrected padding passes). Composed App829 passed/2 existing ignored, strict Clippy/native build passed before the final translated history hint; that text-only follow-up also passes strict Clippy/build, i18n2804/2069/missing0 and both style guards. Independent native project/Room normal invite cancel/accept pass. Actual Room creation and settings upgrade produce Megolm state; wire events remain plaintext before enabling and encrypted afterwards. Two-user encrypted attachment download matches the original278-byte SHA256. First recovery and interrupted original-key continuation pass on a Palpo signature-fix candidate. New-device identity restore passes, but historical restore revealed Palpo all-key backup envelope/session loss (issue607/PR610), so history recovery remains unqualified pending its actual retest. Native findings, failures and limits are recorded in dev-vibe/tutorial-v3/validation.zh.txt. Final multi-device/security capture and hosted CI remain in progress; no mobile/full Matrix compliance claim.

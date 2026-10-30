@@ -5912,4 +5912,26 @@ SDK 恢复 timeline 可包含同一事件多个句柄。保留原始 Vector 的�
   permission to enter the management factory. Explicit Home/Projects remain
   separate authorized factory paths.
 
+
+## 2026-10-30：SQLite身份观察与当前质量验收
+
+普通SqliteCryptoStore::open/open_with_config会初始化、迁移及checkpoint，不能用于证明旧数据库原样身份。SDK PR4的专用同步reader使用READONLY/NO_CREATE和同一read transaction尊重有效WAL，仅返回user/device；SQLite必要SHM协调不保证sidecar字节不变。immutable会忽略有效WAL，不可替代。原StoreCipher PBKDF2 rounds来自认证前封装数据，输入文件小不等于计算成本有限；新reader在原默认200k兼容基础上固定拒绝超过1m轮，旧import默认语义保留。reader必须在真实owned worker完整执行，observer取消不代表SQLite/密钥归属结束。SDK PR4已在head95de的13项CI及六套新鲜50测量复核后合并为d325f930；客户端保留95de已审祖先pin即可。
+
+主整改验收/合并是PR21精确head48b33772、main merge cf7fbb63，而非旧PR18–20 head各自失败/未结束的CI。15实际current checks成功，四mobile+夜间维护skip非资格。真实remote8case/12sourcehash父复核与原失败均保留；主锁audit仍11匹配/失败，独立Octos47条为旧结果，不可泛称依赖全修。
+
+R19：完整引用盘点不是跨进程稳定快照；REQUEST_SENDER建立前调用GC只排除了本进程并发，另一实例仍能在盘点后创建DB。没有统一所有实际创建者参与的跨进程协议时，生产启动自动删除应暂停并明确deferred，不能用mtime采样、测试注入inventory或单独同进程锁宣称已证明新目录为孤儿。保留旧算法仅测试，并用实际第二进程SQLite/数据sentinel证明边界；自动空间回收与OS keys回收均不能假称完成。
+
+
+## Desktop credential migration review, 2026-10-30
+
+- Native credential construction is not qualification. Automated commands must explicitly set `HAGENCY_NATIVE_CREDENTIAL_IO=deny` and inject a fake Vault. Native is the production default; no backend error authorizes Mock/plaintext fallback. Linux Agent/server-login also requires Secret Service and user D-Bus.
+- SDK callback ownership follows the shared AuthCtx callback family, not only `ClientInner` weak identity: `notification_client` has a different Inner but shares callbacks/refresh coordination. Reserve finite snapshot custody before activation; hold the short latest lock across actual SDK token read and cell replacement, release it before pending/SESSION_IO/IO.
+- Migration journals preserve original source ID+digest and their own physical witness. Verify journal/candidate before rename; any error after actual rename is a committed/unknown durability result, never a precommit rollback signal.
+- Retained database identity uses the SDK's dedicated READONLY/no-create inspector, on the original owned worker; normal SqliteCryptoStore::open can create/migrate/checkpoint. Preserve LegacyDatabase ref/raw context/passphrase and verify actual owner/device before handoff.
+- Startup database deletion is deferred (R19): an inventory snapshot does not serialize other processes creating new stores. Old DB directories and OS keys may remain; mobile uses compile-time v1 compatibility and remains outside desktop remediation qualification.
+
+
+## 2026-10-30 — R05 parent integrated qualification
+
+Integrated main cf7 + SDK95 credentials source has exact-CI App857/0/2 and own all-target strict; final explicit-Fake console130/0/6 and Engine CI-package all-target strict pass. Original all-target commands with4 then2 console failures remain failed records. Root causes were native backend not injected in older integration fixtures, obsolete512-byte small-secret reader, and concurrent atomic replacement observation; final async fixture reads under original Document lock and retries onlyConflict within original5s bound, preserving real HTTP/restart/AEAD assertions. R05 lifecycle5/5 includes81 exact paths and actual17/32/13/3 cases, no skip/uncertain; interrupted prior lifecycle unqualified. No real OS credential IO, paid models, production OAuth or mobile qualification. Current-head hosted whole-engine/platform checks remain required before merge; detailed original/final evidence is in the credential remediation report and `.run/quality-credentials-integration/`.
 - **Tutorial native recovery, 2026-10-30:** Device trust, restored identity secrets and restored historical Megolm sessions are separate observations. A successful SDK recover can still log a failed one-shot backup download. Verify old history on a fresh independent SQLite store with original key-holding clients offline, and inspect the actual backup wire envelope. Palpo25b duplicated valid signatures with500 (PR606); its all-key download also omitted rooms[room].sessions[session] and lost same-room sessions (PR610). Retain these distinct failures rather than labelling metadata Ready as historical recovery. Dialog-local vertical padding can defeat a globally centered fixed-height control; test actual dialog instances as well as the base theme.

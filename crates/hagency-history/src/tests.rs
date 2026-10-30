@@ -69,6 +69,41 @@ fn encrypted_payloads_tokens_and_coverage_survive_reopen() -> Result<()> {
 }
 
 #[test]
+fn long_account_device_room_path_preserves_encrypted_history() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let parent = dir
+        .path()
+        .join(format!("account_{}", "a".repeat(64)))
+        .join("persistent_state")
+        .join("history-search-v1")
+        .join("d".repeat(64))
+        .join("nested-profile".repeat(8));
+    std::fs::create_dir_all(&parent)?;
+    let path = parent.join(format!("{}.sqlite3", "e".repeat(64)));
+    assert!(path.as_os_str().len() > 300);
+    let mut index = Index::open(&path, &[7; 32], "original/account/device/room")?;
+    index.insert_batch(
+        &[event("$long-path", "original encrypted history", 1)],
+        None,
+    )?;
+    drop(index);
+    let bytes = std::fs::read(&path)?;
+    assert!(
+        !bytes
+            .windows(26)
+            .any(|b| b == b"original encrypted history")
+    );
+    assert!(Index::open(&path, &[8; 32], "original/account/device/room").is_err());
+    assert!(Index::open(&path, &[7; 32], "other/account/device/room").is_err());
+    let index = Index::open(&path, &[7; 32], "original/account/device/room")?;
+    assert_eq!(
+        index.search("encrypted", 0, None, None, || false)?[0].id,
+        "$long-path"
+    );
+    Ok(())
+}
+
+#[test]
 fn edits_redactions_locked_upgrades_and_overlap_are_durable() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("search.sqlite");

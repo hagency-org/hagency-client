@@ -2802,5 +2802,10 @@
   "the sender withheld this message from you.": "发送者未向你提供此消息的密钥。",
   "This device needs historical room keys. Verify it with another trusted device or restore your recovery key.": "此设备需要历史房间密钥。请通过其他可信设备验证，或使用恢复密钥恢复。",
   "Unable to decrypt: {reason}": "无法解密：{reason}",
-  "Unable to decrypt this message.": "无法解密此消息。"
+  "Unable to decrypt this message.": "无法解密此消息。",
+  "Signed out locally.": "已在本地退出。",
+  "Logout cancelled by user": "用户已取消退出",
+  "Local sign-out is durable. Local session cleanup failed; restart before signing in again. Any pending remote revocation will be retried.": "本地退出已持久保存，但本地会话清理失败。请重启后再登录；尚未完成的远端令牌撤销会继续重试。",
+  "Local session cleanup remains incomplete": "本地会话清理尚未完成",
+  "Signed out locally. Remote token revocation remains pending.": "已在本地退出，远端令牌撤销仍待完成。"
 }

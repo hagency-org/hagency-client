@@ -28,6 +28,9 @@ on:
         required: true
 permissions:
   contents: read
+env:
+  HAGENCY_NATIVE_CREDENTIAL_IO: deny
+
 jobs:
   probe:
     runs-on: windows-2025

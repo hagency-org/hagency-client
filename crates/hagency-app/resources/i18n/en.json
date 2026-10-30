@@ -2802,5 +2802,10 @@
   "the sender withheld this message from you.": "the sender withheld this message from you.",
   "This device needs historical room keys. Verify it with another trusted device or restore your recovery key.": "This device needs historical room keys. Verify it with another trusted device or restore your recovery key.",
   "Unable to decrypt: {reason}": "Unable to decrypt: {reason}",
-  "Unable to decrypt this message.": "Unable to decrypt this message."
+  "Unable to decrypt this message.": "Unable to decrypt this message.",
+  "Signed out locally.": "Signed out locally.",
+  "Logout cancelled by user": "Logout cancelled by user",
+  "Local sign-out is durable. Local session cleanup failed; restart before signing in again. Any pending remote revocation will be retried.": "Local sign-out is durable. Local session cleanup failed; restart before signing in again. Any pending remote revocation will be retried.",
+  "Local session cleanup remains incomplete": "Local session cleanup remains incomplete",
+  "Signed out locally. Remote token revocation remains pending.": "Signed out locally. Remote token revocation remains pending."
 }

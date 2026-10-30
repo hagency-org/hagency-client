@@ -17,6 +17,39 @@ workspaces, usage ledgers and recovery state are also stored locally and scoped
 to the authenticated account. Switching accounts stops the previous account's
 local Agent runtime; it does not erase that account's stored data.
 
+On macOS, Windows and Linux, small original database/Agent secrets and wrapping
+keys use Keychain, Credential Manager and Secret Service respectively. Large
+session, OAuth and revoke-only documents use authenticated encrypted envelopes
+in private files. Native availability and write/readback verification precede
+new desktop browser authorization. Missing or inaccessible native keys stop
+restore; they do not authorize a new passphrase for an existing encrypted DB.
+Legacy migration preserves its original key and replaces plaintext only after
+native verification and encrypted publication. Unknown file or commit outcomes
+remain blocked for recovery. Keep the application profile and its native
+credentials together when planning recovery; copying the profile alone does not
+establish cross-host key recovery.
+
+Account switching retains a previous grant's late refresh outcome in its own
+scope. Explicit logout first commits a revoke-only intent; it can complete
+locally while remote access/refresh revocation is pending. A late original
+refresh is added to that old grant's revocation record. A remote timeout remains
+unknown. Synchronous SDK save callbacks still perform synchronous local file IO;
+remote rotation and local durability cannot be one atomic transaction. Old grant
+keys may remain in the native store until a complete reference inventory proves
+them unreferenced; no native-store enumeration or blanket deletion is performed.
+Startup deletion of old database directories is deferred until database writers
+and cleanup share a cross-process protocol; existing stores can continue to use
+disk space. Matrix logout with an expired access token and an unconfirmed refresh
+token may stay pending indefinitely: retry attempts do not prove that the remote
+session has ended.
+
+These credential changes target desktop. iOS/Android retain v1 private-file
+secret storage without this native wrapping and reject versioned desktop files
+rather than downgrade them. The automated migration tests use explicit isolated
+fake stores and real private files; they do not qualify real OS credential
+prompts, unlock/deny behavior or mobile devices. Drafts, caches and Agent
+workspaces continue to follow their existing storage rules.
+
 `HAGENCY_APP_DATA_DIR` selects an absolute application data directory.
 `HAGENCY_DESKTOP_DATA_DIR`, `RINX_DATA_DIR` and `ROBRIX_DATA_DIR` remain accepted
 aliases. Clearing the event cache reloads Room events from the server; it does

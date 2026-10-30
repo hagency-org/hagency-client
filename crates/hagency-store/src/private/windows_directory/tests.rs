@@ -129,6 +129,11 @@ fn native_windows_directory_rejects_identity_and_flush() {
 fn native_windows_directory_production_profile_flags() {
     assert!(supported_profile(7, 0x20));
     assert!(supported_profile(7, 0x20020));
+    // Hosted Windows 2022 can expose a portable D volume (0x60020).
+    // It must not gain credential durability authority from being NTFS alone.
+    let portable = windows_sys::Wdk::System::SystemServices::FILE_PORTABLE_DEVICE;
+    assert_eq!(portable, 0x40000);
+    assert!(!supported_profile(7, 0x20020 | portable));
     for device in [0, 1, 6, 8, u32::MAX] {
         assert!(!supported_profile(device, 0x20));
     }

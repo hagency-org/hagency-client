@@ -127,14 +127,14 @@ debug-assertions = false
 # Preserve mdurl percent primitives while replacing its obsolete IDNA dependency.
 mdurl = { path = "vendor/mdurl" }
 # Maintain the SDK changes in the fork branch; pin its reviewed revision.
-matrix-sdk = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "c4051424fe9ac2bea56e5e00c900d6c87294c0b7" }
-matrix-sdk-base = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "c4051424fe9ac2bea56e5e00c900d6c87294c0b7" }
-matrix-sdk-common = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "c4051424fe9ac2bea56e5e00c900d6c87294c0b7" }
-matrix-sdk-crypto = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "c4051424fe9ac2bea56e5e00c900d6c87294c0b7" }
-matrix-sdk-indexeddb = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "c4051424fe9ac2bea56e5e00c900d6c87294c0b7" }
-matrix-sdk-sqlite = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "c4051424fe9ac2bea56e5e00c900d6c87294c0b7" }
-matrix-sdk-store-encryption = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "c4051424fe9ac2bea56e5e00c900d6c87294c0b7" }
-matrix-sdk-ui = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "c4051424fe9ac2bea56e5e00c900d6c87294c0b7" }
+matrix-sdk = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "a3181338524893fe7b4191fbb8fbf182415d3c32" }
+matrix-sdk-base = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "a3181338524893fe7b4191fbb8fbf182415d3c32" }
+matrix-sdk-common = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "a3181338524893fe7b4191fbb8fbf182415d3c32" }
+matrix-sdk-crypto = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "a3181338524893fe7b4191fbb8fbf182415d3c32" }
+matrix-sdk-indexeddb = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "a3181338524893fe7b4191fbb8fbf182415d3c32" }
+matrix-sdk-sqlite = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "a3181338524893fe7b4191fbb8fbf182415d3c32" }
+matrix-sdk-store-encryption = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "a3181338524893fe7b4191fbb8fbf182415d3c32" }
+matrix-sdk-ui = { git = "https://github.com/chrislearn/matrix-rust-sdk.git", rev = "a3181338524893fe7b4191fbb8fbf182415d3c32" }
 # Octos' existing OpenHarmony ioctl ABI correction for rustyline's nix 0.29.
 nix = { git = "https://github.com/octos-org/octos.git", rev = "deb433e9a452c03d8fe7f4f6a26b42785c47ced7" }
 # Pending additive App Hub contract release; see crates/octosense-app-contract/RINX-PATCH.md.

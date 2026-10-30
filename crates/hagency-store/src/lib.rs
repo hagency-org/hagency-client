@@ -10,6 +10,7 @@ mod domain;
 pub use domain::DOMAIN_SCHEMA_VERSION;
 pub use domain::joined_rooms::{JoinedRoom, JoinedRoomState, MAX_JOINED_ROOMS};
 pub use domain::owner_anchors::OwnerAnchor;
+pub mod credential_vault;
 mod domain_worker;
 pub mod private;
 pub mod task_context;

@@ -162,9 +162,15 @@ async fn fixture() -> (String, Arc<StdMutex<State>>, tokio::task::JoinHandle<()>
     (origin, state, server)
 }
 async fn open(root: &Path, base: &str) -> NativeOwner {
-    let native = NativeOwner::open_with_matrix(root, base, "@owner:test", Arc::new(Source))
-        .await
-        .unwrap();
+    let native = NativeOwner::open_with_matrix_and_credentials(
+        root,
+        base,
+        "@owner:test",
+        Arc::new(Source),
+        crate::console::server_login::credential_tests::vault(),
+    )
+    .await
+    .unwrap();
     let tasks = std::mem::take(&mut *native.0.configuration_tasks.lock().unwrap());
     for task in tasks {
         task.abort();
@@ -226,11 +232,12 @@ async fn worker_tcp_loss_reopen_retries_original_never_reapplies_and_old_server_
 async fn configuration_heartbeat_remains_online_while_local_dispatch_lock_is_busy() {
     let (base, state, server) = fixture().await;
     let root = tempfile::tempdir().unwrap();
-    let a = NativeOwner::open_with_matrix(
+    let a = NativeOwner::open_with_matrix_and_credentials(
         &root.path().join("state"),
         &base,
         "@owner:test",
         Arc::new(Source),
+        crate::console::server_login::credential_tests::vault(),
     )
     .await
     .unwrap();

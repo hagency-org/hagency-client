@@ -1,5 +1,5 @@
 //! Account/device-bound encrypted history storage. Only call from blocking workers.
-use std::{io::Read, path::PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Result, anyhow, ensure};
 use hagency_history::{Event, Index};
@@ -30,11 +30,7 @@ pub(crate) fn open(client: &Client, room: &RoomId) -> Result<Index> {
     let device = client
         .device_id()
         .ok_or_else(|| anyhow!("No device identity"))?;
-    let file = std::fs::File::open(crate::persistence::session_file_path(user))?;
-    let mut bytes = Zeroizing::new(Vec::new());
-    file.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
-    ensure!(bytes.len() <= 1024 * 1024, "Session file too large");
-    let mut session: crate::persistence::FullSessionPersisted = serde_json::from_slice(&bytes)?;
+    let mut session = crate::persistence::credential_state::load_unlocked(&crate::persistence::session_file_path(user))?;
     ensure!(
         session.user_session.meta().user_id == user
             && session.user_session.meta().device_id == device,

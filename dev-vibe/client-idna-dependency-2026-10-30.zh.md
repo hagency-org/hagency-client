@@ -2,8 +2,10 @@
 
 本批只修主 `Cargo.lock` 中 `mdurl 0.3.1 → idna 0.3.0` 这一路径。
 基线是 `361d4e34ae5be9cb530b6418d023c50fba02c1ee`；实现位于隔离的
-`codex/quality-dependencies` 分支。本地实现和验证完成，尚未推送或创建 PR，
-也未取得本批 hosted CI 结果。依据是已接受的
+`codex/quality-dependencies` 分支。后续已整合到当前完整验收 head `48b33772`，
+随 [PR21](https://github.com/hagency-org/hagency-client/pull/21) 合并为 `cf7fbb63`；
+该 head 的 15 项实际 hosted 检查全部成功，条件跳过项不计资格。
+下文保留各轮当时的失败和验证记录。依据是已接受的
 [REQ-CLIENT-QUALITY-REMEDIATION](../knowledge/requirements/req-client-quality-remediation.md)
 和[本批任务合同](../specs/task-client-idna-dependency.spec.md)。
 

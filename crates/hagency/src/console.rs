@@ -25,7 +25,7 @@ mod project_board;
 mod project_sides;
 mod resource_configuration;
 mod resources;
-mod server_login;
+pub(crate) mod server_login;
 mod setup;
 mod side_budget;
 mod side_lifecycle;
@@ -82,8 +82,18 @@ pub struct Console(Arc<Inner>);
 impl Console {
     /// In-process SDK facade. It neither loads pages nor starts a listener.
     pub fn for_sdk_with_state(state_dir: Option<&Path>) -> Result<Self, Error> {
+        Self::for_sdk_with_state_and_credentials(
+            state_dir,
+            hagency_store::credential_vault::Vault::native(),
+        )
+    }
+    /// Explicit credential backend injection; native IO remains lazy and owned.
+    pub fn for_sdk_with_state_and_credentials(
+        state_dir: Option<&Path>,
+        vault: hagency_store::credential_vault::Vault,
+    ) -> Result<Self, Error> {
         let console = Self(Arc::new(Inner {
-            server_login: server_login::ServerLogin::new(state_dir)?,
+            server_login: server_login::ServerLogin::new_with_vault(state_dir, vault)?,
             owned_runtime: owned_runtime::OwnedRuntime::default(),
             owner_provider: owner_provider::OwnerProvider::default(),
             native_owner: std::sync::OnceLock::new(),
@@ -102,12 +112,15 @@ impl Console {
         }
         Ok(console)
     }
-    pub(crate) fn native_with_state(state: &Path) -> Result<Self, Error> {
+    pub(crate) fn native_with_state_and_credentials(
+        state: &Path,
+        vault: hagency_store::credential_vault::Vault,
+    ) -> Result<Self, Error> {
         let console = Self(Arc::new(Inner {
             authority: Authority::new(),
             requests: Arc::new(Semaphore::new(8)),
             graphs: None,
-            server_login: server_login::ServerLogin::new(Some(state))?,
+            server_login: server_login::ServerLogin::new_with_vault(Some(state), vault)?,
             owned_runtime: owned_runtime::OwnedRuntime::default(),
             owner_provider: owner_provider::OwnerProvider::default(),
             native_owner: std::sync::OnceLock::new(),

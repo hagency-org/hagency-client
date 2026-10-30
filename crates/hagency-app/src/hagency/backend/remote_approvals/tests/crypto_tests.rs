@@ -8,15 +8,110 @@ use hagency_agent_local::{
     audit::Phase,
 };
 use matrix_sdk::{
-    test_utils::mocks::MatrixMockServer,
-    ruma::{device_id, event_id, room_id, user_id},
+    test_utils::mocks::{MatrixMockServer, encryption::PendingToDeviceMessages},
+    ruma::{
+        MilliSecondsSinceUnixEpoch, UserId,
+        api::client::to_device::send_event_to_device::v3::Messages, device_id, event_id,
+        events::secret::request::ToDeviceSecretRequestEventContent, room_id,
+        to_device::DeviceIdOrAllDevices, user_id,
+    },
 };
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 use wiremock::{
-    Mock, ResponseTemplate,
+    Mock, MockGuard, ResponseTemplate,
     matchers::{method, path_regex},
 };
+#[derive(serde::Deserialize)]
+struct ToDeviceParameters {
+    messages: Messages,
+}
+
+// Keep the SDK queue semantics, but only capture approval key shares. Its generic
+// helper assumes explicit device IDs and panics on valid secret-request `*` traffic.
+async fn capture_encrypted_to_device_traffic(
+    server: &MatrixMockServer,
+    sender: &UserId,
+    queue: Arc<Mutex<PendingToDeviceMessages>>,
+) -> MockGuard {
+    let sender = sender.to_owned();
+    Mock::given(method("PUT"))
+        .and(path_regex(
+            r"^/_matrix/client/[^/]+/sendToDevice/m\.room\.encrypted/[^/]+$",
+        ))
+        .respond_with(move |request: &wiremock::Request| {
+            let parameters: ToDeviceParameters = request.body_json().unwrap();
+            let mut queue = queue.lock().unwrap();
+            for (user, devices) in parameters.messages {
+                for (device, content) in devices {
+                    let DeviceIdOrAllDevices::DeviceId(device) = device else {
+                        panic!("encrypted approval key shares must name an explicit device");
+                    };
+                    let event = json!({
+                        "origin_server_ts": MilliSecondsSinceUnixEpoch::now(),
+                        "sender": sender,
+                        "type": "m.room.encrypted",
+                        "content": content,
+                    });
+                    queue
+                        .entry(user.clone())
+                        .or_default()
+                        .entry(device)
+                        .or_default()
+                        .push(serde_json::from_value(event).unwrap());
+                }
+            }
+            ResponseTemplate::new(200).set_body_json(json!({}))
+        })
+        .mount_as_scoped(server.server())
+        .await
+}
+
+fn is_own_secret_request(body: &[u8], owner: &UserId) -> bool {
+    let Ok(parameters) = serde_json::from_slice::<ToDeviceParameters>(body) else {
+        return false;
+    };
+    !parameters.messages.is_empty()
+        && parameters.messages.iter().all(|(user, devices)| {
+            user == owner
+                && !devices.is_empty()
+                && devices.values().all(|content| {
+                    serde_json::from_str::<ToDeviceSecretRequestEventContent>(content.json().get())
+                        .is_ok_and(|request| {
+                            matches!(request.action.action(), "request" | "request_cancellation")
+                        })
+                })
+        })
+}
+
+#[test]
+fn approval_crypto_secret_request_mock_accepts_only_valid_own_protocol_messages() {
+    let owner = user_id!("@alice:test");
+    let mut body = json!({"messages": {"@alice:test": {"*": {
+        "action": "request", "name": "m.cross_signing.master",
+        "requesting_device_id": "REMOTE", "request_id": "request"
+    }}}});
+    assert!(is_own_secret_request(
+        &serde_json::to_vec(&body).unwrap(),
+        owner
+    ));
+    body["messages"]["@alice:test"]["*"]["action"] = json!("unknown");
+    assert!(!is_own_secret_request(
+        &serde_json::to_vec(&body).unwrap(),
+        owner
+    ));
+    body["messages"]["@alice:test"]["*"]["action"] = json!("request");
+    assert!(!is_own_secret_request(
+        &serde_json::to_vec(&body).unwrap(),
+        user_id!("@other:test")
+    ));
+    assert!(!is_own_secret_request(
+        br#"{"messages":{"@alice:test":{"*":{}}}}"#,
+        owner
+    ));
+    assert!(!is_own_secret_request(br#"{"messages":{}}"#, owner));
+}
+
 fn now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -109,6 +204,17 @@ async fn actual_sdk_private_publication_and_cross_signed_remote_verdict_reach_or
     server.mock_crypto_endpoints_preset().await;
     let owner = user_id!("@alice:test");
     let room_id = room_id!("!private:test");
+    // Crypto setup also requests cross-signing secrets from our other devices.
+    // The SDK preset has no sendToDevice fallback: acknowledge only valid own
+    // secret requests here, never enqueue them as encrypted approval key shares.
+    Mock::given(method("PUT"))
+        .and(path_regex(
+            r"^/_matrix/client/[^/]+/sendToDevice/m\.secret\.request/[^/]+$",
+        ))
+        .and(move |request: &wiremock::Request| is_own_secret_request(&request.body, owner))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .mount(server.server())
+        .await;
     let host = server
         .client_builder_for_crypto_end_to_end(owner, device_id!("HOST"))
         .build()
@@ -207,9 +313,7 @@ async fn actual_sdk_private_publication_and_cross_signed_remote_verdict_reach_or
         .reserve_remote_approval(owner.as_str(), &request, now)
         .unwrap();
     let queue = Arc::new(Mutex::new(Default::default()));
-    let capture_host = server
-        .capture_put_to_device_traffic(owner, queue.clone())
-        .await;
+    let capture_host = capture_encrypted_to_device_traffic(&server, owner, queue.clone()).await;
     let (request_rx, request_mock) = server
         .mock_room_send()
         .ok_with_capture(event_id!("$request"), owner);
@@ -279,9 +383,7 @@ async fn actual_sdk_private_publication_and_cross_signed_remote_verdict_reach_or
     *room_state.lock().unwrap() = state();
     drop(capture_host);
     queue.lock().unwrap().clear();
-    let capture_unsigned = server
-        .capture_put_to_device_traffic(owner, queue.clone())
-        .await;
+    let capture_unsigned = capture_encrypted_to_device_traffic(&server, owner, queue.clone()).await;
     let member=Raw::from_json(serde_json::value::to_raw_value(&json!({"type":"m.room.member","state_key":owner,"sender":owner,"event_id":"$member","origin_server_ts":1,"content":{"membership":"join"}})).unwrap());
     server
         .mock_get_members()
@@ -330,9 +432,7 @@ async fn actual_sdk_private_publication_and_cross_signed_remote_verdict_reach_or
     );
     drop(capture_unsigned);
     queue.lock().unwrap().clear();
-    let _capture_remote = server
-        .capture_put_to_device_traffic(owner, queue.clone())
-        .await;
+    let _capture_remote = capture_encrypted_to_device_traffic(&server, owner, queue.clone()).await;
     *event_response.lock().unwrap() = serde_json::from_str(encrypted_request.json().get()).unwrap();
     let history = json!({"chunk":[serde_json::from_str::<Value>(encrypted_request.json().get()).unwrap()],"end":"older"});
     Mock::given(method("GET"))

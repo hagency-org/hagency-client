@@ -213,11 +213,12 @@ impl Fixture {
         state.lock().unwrap().restore_scope = true;
         let temp = tempfile::tempdir().unwrap();
         let source = Arc::new(RemoteSource::default());
-        let native = NativeOwner::open_with_matrix(
+        let native = NativeOwner::open_with_matrix_and_credentials(
             &temp.path().join("state"),
             &origin,
             OWNER,
             source.clone(),
+            crate::console::server_login::credential_tests::vault(),
         )
         .await
         .unwrap();

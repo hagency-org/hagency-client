@@ -15,6 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  HAGENCY_NATIVE_CREDENTIAL_IO: deny
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
@@ -50,6 +51,7 @@ jobs:
       - name: Clippy desktop, mini app core, tests and examples
         run: cargo clippy --no-deps --locked -p hagency-app -p rinx-miniapp-core --features hagency-app/agent_chat,hagency-app/octosense-module,hagency-app/macos-sparkle --all-targets -- -D warnings
       - run: cargo test --locked -p robius-share --lib
+      - run: cargo test --locked -p hagency-history
       - run: cargo test --locked --manifest-path ../miniapp-core/Cargo.toml
       - run: cargo test --locked --manifest-path ../miniapp-catalog/Cargo.toml
       - run: cargo test --locked --manifest-path ../system-apps/Cargo.toml

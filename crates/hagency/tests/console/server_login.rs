@@ -918,10 +918,10 @@ async fn native_server_login_background_refresh_logout_and_issuer_pin() {
         "previously obtained snapshots must stop on local logout"
     );
     assert_eq!(fake.state.lock().unwrap().revocations, 2);
-    let pending: Value = serde_json::from_slice(
-        &std::fs::read(f.root.path().join("state/server-login-revocations.json")).unwrap(),
-    )
-    .unwrap();
+    let pending = f
+        .credentials
+        .revocations(&f.root.path().join("state/server-login-revocations.json"))
+        .await;
     assert_eq!(pending, json!([]));
     assert_eq!(
         get("/console/api/project-sides", &cookie)
@@ -1035,8 +1035,7 @@ async fn native_server_login_offline_logout_retries_after_restart_without_restor
     assert!(device.bearer().is_err());
     assert!(f.console.authorized_device().await.is_err());
     let path = f.root.path().join("state/server-login-revocations.json");
-    let pending: Value =
-        serde_json::from_slice(&hagency_store::private::read_secret(&path).unwrap()).unwrap();
+    let pending = f.credentials.revocations(&path).await;
     assert_eq!(pending.as_array().unwrap().len(), 1);
     assert_eq!(pending[0]["hint"], "refresh_token");
     let mut observation = get("/console/server-login", &cookie).send(&service).await;
@@ -1045,17 +1044,18 @@ async fn native_server_login_offline_logout_retries_after_restart_without_restor
     assert!(!status.to_string().contains("secret"));
     f.console.retire();
     fake.state.lock().unwrap().revoke_unavailable = false;
-    let restarted =
-        hagency::console::Console::for_sdk_with_state(Some(&f.root.path().join("state"))).unwrap();
+    let restarted = hagency::console::Console::for_sdk_with_state_and_credentials(
+        Some(&f.root.path().join("state")),
+        f.credentials.vault(),
+    )
+    .unwrap();
     assert!(
         restarted.authorized_device().await.is_err(),
         "a persisted revoke record must never become login authority"
     );
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
-            let pending: Value =
-                serde_json::from_slice(&hagency_store::private::read_secret(&path).unwrap())
-                    .unwrap();
+            let pending = f.credentials.revocations(&path).await;
             if pending == json!([]) {
                 break;
             }
@@ -2599,10 +2599,12 @@ async fn native_in_process_facade_pins_matrix_account_without_exposing_credentia
 
     use hagency::native_owner::{Command, NativeOwner};
     let root = tempfile::tempdir().unwrap();
-    let native = NativeOwner::open(
+    let credentials = CredentialFixture::default();
+    let native = NativeOwner::open_with_credentials(
         &root.path().join("native"),
         &fake.origin,
         "@owner:example.test",
+        credentials.vault(),
     )
     .await
     .unwrap();
@@ -2678,10 +2680,11 @@ async fn native_in_process_facade_pins_matrix_account_without_exposing_credentia
     native.shutdown().await;
     assert!(native.execute(Command::Agents).await.is_err());
     drop(native);
-    let restored = NativeOwner::open(
+    let restored = NativeOwner::open_with_credentials(
         &root.path().join("native"),
         &fake.origin,
         "@owner:example.test",
+        credentials.vault(),
     )
     .await
     .unwrap();
