@@ -67,9 +67,6 @@ mod embedded_content {
                     visible: false
                     home_screen := HomeScreen {}
                 }
-                join_leave_modal := Modal {
-                    content := JoinLeaveRoomModal {}
-                }
                 login_screen_view := View {
                     visible: true
                     login_screen := LoginScreen {}
@@ -87,6 +84,11 @@ mod embedded_content {
                     moments_modal := Modal {can_dismiss: false content := MomentsPanel {}}
                     room_history_modal := Modal {can_dismiss: false content := RoomHistoryPanel {}}
                     room_settings_modal := Modal {can_dismiss:false content := RoomSettingsPanel {}}
+                }
+
+                // Membership consent must paint above management workspace pages.
+                join_leave_modal := Modal {
+                    content := JoinLeaveRoomModal {}
                 }
 
                 image_viewer_modal := Modal {
@@ -2674,6 +2676,51 @@ mod back_navigation_tests {
         assert!(back(&mut cx, &mut app), "Back must close the open modal");
         assert!(!modal.is_open());
         assert!(!back(&mut cx, &mut app), "With the modal closed, Back goes to the host");
+    }
+
+    #[test]
+    fn membership_confirmation_paints_above_an_open_workspace_page() {
+        use makepad_widgets::makepad_draw::cx_draw::CxDraw;
+        let mut cx = Cx::new(Box::new(|_, _| {}));
+        let mut app = embedded_app(&mut cx);
+        cx.global::<crate::shared::workspace_pages::WorkspacePageBounds>().0 =
+            Some(Rect { pos: dvec2(440.0, 0.0), size: dvec2(840.0, 800.0) });
+        let workspace = app.ui.modal(&cx, ids!(space_management_modal));
+        workspace.open(&mut cx);
+        let details = crate::room::BasicRoomDetails::RoomId(
+            crate::utils::RoomNameId::empty(matrix_sdk::ruma::owned_room_id!("!invite:example.org"))
+        );
+        let actions = cx.capture_actions(|cx| cx.action(JoinLeaveRoomModalAction::Open {
+            kind: JoinLeaveModalKind::JoinRoom { details, is_space: true }, show_tip: true,
+        }));
+        app.handle_actions(&mut cx, &actions);
+        let consent = app.ui.modal(&cx, ids!(join_leave_modal));
+        assert!(consent.is_open());
+        cx.redraw_all();
+        let pass = DrawPass::new(&mut cx);
+        pass.set_size(&mut cx, dvec2(1280.0, 800.0));
+        let mut list = DrawList2d::new(&mut cx);
+        let overlay = Overlay { draw_list: DrawList::new(&mut cx) };
+        let event = DrawEvent::default();
+        let mut draw = CxDraw::new(&mut cx, &event);
+        let mut cx2d = Cx2d::new(&mut draw);
+        cx2d.begin_pass(&pass, None);
+        list.begin_always(&mut cx2d);
+        overlay.begin(&mut cx2d);
+        cx2d.begin_root_turtle(dvec2(1280.0, 800.0), Layout::flow_overlay());
+        app.ui.draw_walk_all(&mut cx2d, &mut Scope::with_data(&mut app.app_state), Walk::fill());
+        cx2d.end_pass_sized_turtle();
+        overlay.end(&mut cx2d);
+        list.end(&mut cx2d);
+        cx2d.end_pass(&pass);
+        drop(cx2d);
+        drop(draw);
+        let consent_area = consent.widget(&cx, ids!(content)).area();
+        let page_area = workspace.widget(&cx, ids!(content)).area();
+        let consent_order = cx.draw_lists[consent_area.draw_list_id().expect("consent must be drawn")].overlay_order;
+        let page_order = cx.draw_lists[page_area.draw_list_id().expect("page must be drawn")].overlay_order;
+        assert!(consent_order > page_order, "membership consent must paint above the management page");
+        assert!(consent_area.rect(&cx).size.y > 0.0);
     }
 
     #[test]
