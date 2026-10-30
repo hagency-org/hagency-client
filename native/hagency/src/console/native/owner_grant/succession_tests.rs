@@ -249,3 +249,68 @@ async fn native_succession_needs_the_server_feature_and_a_published_head() {
         .is_ok());
     f.stop().await;
 }
+
+#[tokio::test]
+async fn native_history_ignores_a_cancelled_renewal_for_next_months_regrant() {
+    let mut f = Fixture::new().await;
+    f.publications.lock().unwrap().admission_receipts = true;
+    f.recorded().await;
+    let mut history = f.history().await;
+    // The root covered January. Its February renewal was recorded, then
+    // revoked before it started; native closure cancelled it, so
+    // `void_successors` lists it. These rules read originals and states only.
+    let jan = Period { key: "2000-01".into(), start_ms: 946_684_800_000, end_ms: 949_363_200_000 };
+    let feb = Period { key: "2000-02".into(), start_ms: 949_363_200_000, end_ms: 951_868_800_000 };
+    let record = &mut history.data.records[0];
+    record.original.period = jan;
+    record.original_digest = digest(&record.original).unwrap();
+    let root = record.original.clone();
+    let february = |id: &str| Original {
+        intent_id: format!("{id}_intent"),
+        selection: Selection {
+            command_id: format!("{id}_command"),
+            grant_id: format!("{id}_grant"),
+            ..root.selection.clone()
+        },
+        period: feb.clone(),
+        ..root.clone()
+    };
+    history
+        .insert_successor(Original {
+            receipt_version: 3,
+            succession: Some(OriginalSuccession {
+                kind: OwnerGrantSuccessionKind::Renewal,
+                predecessor_intent_id: root.intent_id.clone(),
+                predecessor_grant_id: root.selection.grant_id.clone(),
+                predecessor_receipt_digest: "0".repeat(64),
+                predecessor_grant_revision: 1,
+                predecessor_allocated_tokens: root.selection.allocated_tokens,
+                reviewed_children: 0,
+                reviewed_floor_tokens: 0,
+            }),
+            ..february("renewal")
+        })
+        .unwrap();
+    history.data.records[1].state = State::Recorded;
+    let contribution = root.binding.contribution_id.clone();
+    let admission = root.admission.clone().unwrap().request_id;
+    let void = ["renewal_grant".to_string()];
+    let code = |r: Result<(), NativeError>| r.err().unwrap().code;
+    assert!(!history.admission_month_ended(&contribution, &admission, feb.start_ms, &[]));
+    assert!(history.admission_month_ended(&contribution, &admission, feb.start_ms, &void));
+    let prior = [root.selection.grant_id.clone(), "renewal_grant".into()];
+    assert_eq!(
+        code(history.insert_after(february("next"), &prior, true, &[])),
+        "owner_grant_original_intent_required"
+    );
+    history.insert_after(february("next"), &prior, true, &void).unwrap();
+    // Once recorded, February's grant is the month's one grant on this admission.
+    history.data.records[2].state = State::Recorded;
+    assert!(!history.admission_month_ended(&contribution, &admission, feb.start_ms + 1, &void));
+    let prior = [root.selection.grant_id.clone(), "renewal_grant".into(), "next_grant".into()];
+    assert_eq!(
+        code(history.insert_after(february("twice"), &prior, true, &void)),
+        "owner_grant_original_intent_required"
+    );
+    f.stop().await;
+}

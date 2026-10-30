@@ -566,6 +566,51 @@ fn in_window(head: &NativeGrantReceipt) -> u64 {
 async fn at<T: Send + 'static>(f: &Chain, read: impl FnOnce(&Connection) -> Result<T, Error> + Send + 'static) -> T {
     f.registry.0.store.call(4096, move |db| read(&db.db)).await.unwrap()
 }
+/// The server revoked the never-started renewal `r` and asked for its
+/// closure: the parent close cancels it and it retains nothing.
+async fn cancel(f: &Chain, r: &NativeGrantReceipt) {
+    let close = GrantClosureCommand {
+        version: 1,
+        command_id: format!("{}_close", r.grant_id),
+        operation: "grant.close".into(),
+        grant_id: r.grant_id.clone(),
+        grant_receipt_digest: canonical::digest(&serde_json::to_value(r).unwrap()).unwrap(),
+        previous_settlement_digest: None,
+        reason: "owner_withdrawal".into(),
+        requested_at_ms: graphs::now_ms().unwrap(),
+    };
+    let digest = canonical::digest(&serde_json::to_value(&close).unwrap()).unwrap();
+    let settled = f
+        .registry
+        .apply_parent_settlement(VerifiedParentDelivery::new(enrollment(f), close, digest, true, Instant::now() + Duration::from_secs(20)).unwrap())
+        .await
+        .unwrap();
+    assert_eq!((settled.state.as_str(), settled.retained_tokens), ("closed", 0));
+    let state = f.registry.capacity_grant_succession(f.profile.clone(), "chain_device".into(), r.grant_id.clone()).await.unwrap().unwrap();
+    assert_eq!(state.state, "cancelled");
+}
+/// A Phase 1a grant of a new month on the chain's admission, prepared and
+/// written at native time `now`.
+async fn regrant_at(f: &Chain, id: &str, tokens: u64, now: u64) -> Result<NativeGrantReceipt, Error> {
+    let consent = f
+        .registry
+        .prepare_capacity_grant_at(enrollment(f), selection(id, tokens, &[MANAGER], month(now).unwrap().2), Instant::now() + Duration::from_secs(30), now)?
+        .require_regrant_after_period_end()?;
+    f.registry
+        .0
+        .store
+        .call(32 * 1024, move |db| db.owner_capacity_grant_with_clock(consent, || Ok(now)))
+        .await
+}
+/// The earlier grants that a new month on the chain's admission follows.
+async fn prior(f: &Chain, now: u64) -> Result<Vec<String>, Error> {
+    let profile = f.profile.clone();
+    at(f, move |db| {
+        let period = OwnerGrantPeriod::at(now)?;
+        Ok(regrant::prior_periods_ended(db, &profile, "chain_device", "chain_contribution", "chain_admission", Some("chain_enrollment"), &period, now))
+    })
+    .await
+}
 
 #[tokio::test]
 async fn a_renewal_needs_its_window_and_fits_after_a_full_month() {
@@ -647,26 +692,7 @@ async fn a_cancelled_renewal_frees_the_slot_for_cancel_amend_renew() {
     let end = f.root.period_end_ms;
     let r = renew_at(&f, &f.root, "chain_renewal", 500, in_window(&f.root)).await.unwrap();
     confirm(&f, "chain_renewal").await;
-    // The server revoked the never-started renewal and asked for its closure.
-    let close = GrantClosureCommand {
-        version: 1,
-        command_id: "chain_close_renewal".into(),
-        operation: "grant.close".into(),
-        grant_id: r.grant_id.clone(),
-        grant_receipt_digest: canonical::digest(&serde_json::to_value(&r).unwrap()).unwrap(),
-        previous_settlement_digest: None,
-        reason: "owner_withdrawal".into(),
-        requested_at_ms: graphs::now_ms().unwrap(),
-    };
-    let digest = canonical::digest(&serde_json::to_value(&close).unwrap()).unwrap();
-    let settled = f
-        .registry
-        .apply_parent_settlement(VerifiedParentDelivery::new(enrollment(&f), close, digest, true, Instant::now() + Duration::from_secs(20)).unwrap())
-        .await
-        .unwrap();
-    assert_eq!((settled.state.as_str(), settled.retained_tokens), ("closed", 0));
-    let state = f.registry.capacity_grant_succession(f.profile.clone(), "chain_device".into(), r.grant_id.clone()).await.unwrap().unwrap();
-    assert_eq!(state.state, "cancelled");
+    cancel(&f, &r).await;
     assert_eq!(commitments(&f, end).await["chain_renewal"], 0);
     let until = at(&f, move |db| succession::chain_until(db, "chain_root", end - 1)).await;
     assert_eq!(until, f.root.period_end_ms.min(f.root.delegation_expires_at_ms));
@@ -675,6 +701,32 @@ async fn a_cancelled_renewal_frees_the_slot_for_cancel_amend_renew() {
     confirm(&f, "chain_amend").await;
     let amended = f.registry.recover_capacity_grant(f.profile.clone(), "chain_device".into(), "chain_amend".into()).await.unwrap().unwrap();
     renew_at(&f, &amended, "chain_renewal_2", 800, in_window(&amended)).await.unwrap();
+    f.registry.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_cancelled_renewal_does_not_block_next_months_regrant() {
+    let f = chain(1000, 1000).await;
+    let end = f.root.period_end_ms;
+    let r = renew_at(&f, &f.root, "chain_renewal", 1000, in_window(&f.root)).await.unwrap();
+    confirm(&f, "chain_renewal").await;
+    // While scheduled, the renewal is next month's grant on this admission.
+    assert!(matches!(prior(&f, end).await, Err(Error::Conflict)));
+    assert!(matches!(regrant_at(&f, "blocked", 600, end).await, Err(Error::OwnerGrantReviewChanged)));
+    assert_eq!(remaining(&f, end).await, Some(0));
+    cancel(&f, &r).await;
+    // After the boundary the cancelled renewal is history and holds nothing:
+    // a Phase 1a grant on the same admission takes next month instead.
+    assert_eq!(prior(&f, end).await.unwrap(), ["chain_renewal", "chain_root"]);
+    assert_eq!(remaining(&f, end).await, Some(1000));
+    let next = regrant_at(&f, "chain_next", 600, end).await.unwrap();
+    assert_eq!((next.version, next.period_key.as_str()), (2, r.period_key.as_str()));
+    assert_eq!((next.admission_request_id, next.succession), (f.root.admission_request_id.clone(), None));
+    assert_eq!(remaining(&f, end).await, Some(400));
+    // One grant per admission per month: a second one is refused with room left.
+    assert!(matches!(prior(&f, end + 1).await, Err(Error::Conflict)));
+    assert!(matches!(regrant_at(&f, "chain_twice", 100, end + 1).await, Err(Error::OwnerGrantReviewChanged)));
+    assert_eq!(remaining(&f, end + 1).await, Some(400));
     f.registry.shutdown().await.unwrap();
 }
 
