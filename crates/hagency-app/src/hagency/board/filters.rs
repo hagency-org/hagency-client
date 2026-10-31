@@ -248,7 +248,22 @@ impl ProjectBoard {
             let visible = self.snapshot.as_ref().map_or(0, |s| {
                 s.lanes[..lane].iter().filter(|l| !l.archived).count()
             });
-            self.scroll_x = visible as f64 * 292.0;
+            let left = visible as f64 * 292.0;
+            let viewport = self.view.view(cx, ids!(board_scroll)).area().rect(cx);
+            let column = self.view.view(cx, column_path(lane)).area().rect(cx);
+            if viewport.size.x > 0.0 && column.size.x > 0.0 {
+                // Keep a visible destination in place. Only reveal the clipped edge;
+                // aligning every new card to the left makes columns jump after Add.
+                if column.pos.x < viewport.pos.x {
+                    self.scroll_x = left;
+                } else if column.pos.x + column.size.x > viewport.pos.x + viewport.size.x {
+                    self.scroll_x = (left + column.size.x - viewport.size.x).max(0.0);
+                } else {
+                    return;
+                }
+            } else {
+                self.scroll_x = left;
+            }
             self.view
                 .view(cx, ids!(board_scroll))
                 .set_scroll_pos(cx, dvec2(self.scroll_x, 0.0));

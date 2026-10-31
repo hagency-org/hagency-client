@@ -181,7 +181,7 @@ impl Landing {
         self.drag.position() * (1.0 - t) + self.target * t
     }
 }
-#[derive(Script, ScriptHook, Widget)]
+#[derive(Script, ScriptHook, Widget, Animator)]
 pub struct ProjectBoard {
     #[source]
     source: ScriptObjectRef,
@@ -189,6 +189,10 @@ pub struct ProjectBoard {
     view: View,
     #[live]
     draw_dialog_bg: DrawColor,
+    #[apply_default]
+    animator: Animator,
+    #[live]
+    notification_slide: f32,
     #[rust]
     dialog_draw_list: Option<DrawList2d>,
     #[rust]

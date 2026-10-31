@@ -124,6 +124,14 @@ makepad_widgets::script_mod! {
     mod.widgets.ProjectBoard = #(ProjectBoard::register_widget(vm)) {
         skip_widget_tree_search: true
         draw_dialog_bg +: {color:#0008}
+        notification_slide: 1.0
+        animator: Animator {
+            notifications: {
+                default: @hide
+                show: AnimatorState {redraw:true from:{all:Forward{duration:0.18}} apply:{notification_slide:0.0}}
+                hide: AnimatorState {redraw:true from:{all:Snap} apply:{notification_slide:1.0}}
+            }
+        }
         width: Fill height: Fill flow: Down spacing: 8
         toolbar := View {width: Fill height: Fit flow: Down spacing: 6
             toolbar_row := View {width:Fill height:Fit flow:Right spacing:6 align:Align{y:0.5}
@@ -170,23 +178,6 @@ makepad_widgets::script_mod! {
         }
         notice := Text {visible: false draw_text.color: mod.widgets.RINX_MUTED}
         retry := Action {visible: false text: #(crate::i18n::tr("Retry original save")) i18n_text: "Retry original save"}
-        notifications_panel := RoundedView {visible:false width:Fill height:270 flow:Down padding:12 spacing:8
-            draw_bg +: {color:mod.widgets.RINX_SURFACE border_color:mod.widgets.RINX_BORDER border_size:1.0 border_radius:10.0}
-            View {width:Fill height:30 spacing:10 align:Align{y:0.5}
-                Small {width:Fill text:#(crate::i18n::tr("Project notifications · assignments, comments and changes")) i18n_text:"Project notifications · assignments, comments and changes"}
-                notifications_read := Action {text:#(crate::i18n::tr("Mark all read")) i18n_text:"Mark all read"}
-                notifications_close := Action {text:#(crate::i18n::tr("Close")) i18n_text:"Close"}
-            }
-            notifications_list := PortalList {width:Fill height:Fill capture_overload:false
-                Item := View {width:Fill height:76 flow:Down spacing:3 padding:Inset{right:16 bottom:8}
-                    open := RinxGhostButton {width:Fill height:30 padding:0 align:Align{x:0.0 y:0.5}}
-                    detail := Small {max_lines:2 text_overflow:Ellipsis}
-                }
-                Filler := View {width:Fill height:12}
-                Empty := Small {width:Fill height:40 text:#(crate::i18n::tr("No notifications yet")) i18n_text:"No notifications yet"}
-            }
-            notifications_older := Action {visible:false text:#(crate::i18n::tr("Older notifications")) i18n_text:"Older notifications"}
-        }
         workspace := View {width: Fill height: Fill spacing: 14
             board_scroll := ScrollXView {width: Fill height: Fill flow: Right spacing: 12
                 todo := Column {}
@@ -206,6 +197,25 @@ makepad_widgets::script_mod! {
         }
         // Kept out of normal layout; the board draws it in a pass-wide modal overlay.
         inspector_host := View {visible:false
+        notifications_panel := RoundedView {visible:false width:420 height:Fill flow:Down padding:20 spacing:12
+            draw_bg +: {color:mod.widgets.RINX_SURFACE border_color:mod.widgets.RINX_BORDER border_size:1.0 border_radius:10.0}
+            View {width:Fill height:Fit spacing:10 align:Align{y:0.5}
+                Text {width:Fill flow:Flow.Right{wrap:true} text:#(crate::i18n::tr("Project notifications · assignments, comments and changes")) i18n_text:"Project notifications · assignments, comments and changes"}
+                notifications_close := RinxIconButton {width:32 height:32 draw_icon.svg:ICON_CLOSE}
+            }
+            View {width:Fill height:32
+                notifications_read := Action {text:#(crate::i18n::tr("Mark all read")) i18n_text:"Mark all read"}
+            }
+            notifications_list := PortalList {width:Fill height:Fill capture_overload:false
+                Item := View {width:Fill height:76 flow:Down spacing:3 padding:Inset{right:16 bottom:8}
+                    open := RinxGhostButton {width:Fill height:30 padding:0 align:Align{x:0.0 y:0.5}}
+                    detail := Small {max_lines:2 text_overflow:Ellipsis}
+                }
+                Filler := View {width:Fill height:12}
+                Empty := Small {width:Fill height:40 text:#(crate::i18n::tr("No notifications yet")) i18n_text:"No notifications yet"}
+            }
+            notifications_older := Action {visible:false text:#(crate::i18n::tr("Older notifications")) i18n_text:"Older notifications"}
+        }
             column_settings := RoundedView {visible:false width:760 height:620 padding:20 flow:Down spacing:14
                 draw_bg +: {color:mod.widgets.RINX_SURFACE border_radius:12.0 border_size:1.0 border_color:mod.widgets.RINX_BORDER}
                 View {width:Fill height:40 spacing:10 align:Align{y:0.5}

@@ -1665,6 +1665,76 @@ fn confirmed_quick_card_reveals_its_actual_loaded_row_without_mutating_task_orde
 }
 
 #[test]
+fn quick_creation_keeps_the_clicked_column_after_reordering_and_from_both_entries() {
+    let (mut cx, mut board) = panel();
+    populate(&mut board);
+    let lanes = &mut board.snapshot.as_mut().unwrap().lanes;
+    lanes.swap(0, 2);
+    lanes[1].state = "custom_lane".into();
+    for index in 0..board.column_count() {
+        for entry in [ids!(add).as_slice(), ids!(quick_add)] {
+            let state = board.column_state(index);
+            let column = board.view.view(&cx, column_path(index));
+            let actions = cx.capture_actions(|cx| cx.widget_action(
+                column.button(cx, entry).widget_uid(), ButtonAction::Clicked(KeyModifiers::default())));
+            board.handle_quick_create(&mut cx, &actions);
+            assert_eq!(board.quick_create_state.as_deref(), Some(state.as_str()));
+            column.text_input(&cx, ids!(quick_title)).set_text(&mut cx, "Column-specific card");
+            let actions = cx.capture_actions(|cx| cx.widget_action(
+                column.button(cx, ids!(quick_save)).widget_uid(), ButtonAction::Clicked(KeyModifiers::default())));
+            board.handle_quick_create(&mut cx, &actions);
+            assert!(matches!(&board.pending, Some(BoardAction::Create {input}) if input.state == state));
+            board.apply_saved(&mut cx, &Saved {
+                identity: board.identity.clone(), project: board.project.clone(), epoch: board.epoch,
+                request: board.save_request, result: Ok(json!({"task":task_value("new", &state)})),
+            });
+            assert!(board.pending.is_none());
+            assert_eq!(board.created_card.as_ref().unwrap().state, state);
+        }
+    }
+}
+
+#[test]
+fn creating_in_a_visible_column_preserves_horizontal_position() {
+    let (mut cx, mut board) = panel(); populate(&mut board);
+    draw(&mut cx, &mut board, 1100.0, 800.0);
+    let before = board.view.view(&cx, ids!(in_progress)).area().rect(&cx);
+    board.created_card = Some(task("task_in_progress", "in_progress"));
+    board.created_reveal_pending = true;
+    board.reveal_created_card(&mut cx);
+    draw(&mut cx, &mut board, 1100.0, 800.0);
+    assert_eq!(board.scroll_x, 0.0);
+    assert_eq!(board.view.view(&cx, ids!(in_progress)).area().rect(&cx).pos.x, before.pos.x);
+}
+
+#[test]
+fn notifications_draw_at_the_right_edge_without_resizing_the_board_and_close_restores_focus() {
+    let (mut cx, mut board) = panel(); populate(&mut board);
+    for width in [310.0, 840.0, 1300.0] {
+        draw(&mut cx, &mut board, width, 800.0);
+        let before = board.view.view(&cx, ids!(todo)).area().rect(&cx);
+        let original = board.view.view(&cx, ids!(in_progress)).button(&cx, ids!(quick_add)).area();
+        cx.set_key_focus(original);
+        cx.action(0usize); cx.handle_actions();
+        board.open_notifications(&mut cx);
+        board.animator_cut(&mut cx, ids!(notifications.show));
+        draw(&mut cx, &mut board, width, 800.0);
+        let drawer = board.view.view(&cx, ids!(notifications_panel)).area().rect(&cx);
+        assert!((drawer.pos.x + drawer.size.x - width).abs() < 1.0, "{drawer:?}");
+        assert!((drawer.size.x - width.min(420.0)).abs() < 1.0);
+        assert_eq!(drawer.size.y, 800.0);
+        assert_eq!(board.view.view(&cx, ids!(todo)).area().rect(&cx), before);
+        assert!(board.modal_visible(&cx));
+        // Platform dispatch owns Escape cancellation; a direct handler call has no press owner.
+        board.close_notifications(&mut cx);
+        cx.action(0usize); cx.handle_actions();
+        assert!(!board.modal_visible(&cx));
+        assert!(cx.has_key_focus(original));
+        assert!(board.dialog_cancel_scope.is_none());
+    }
+}
+
+#[test]
 fn column_limit_help_wraps_within_the_settings_panel() {
     let (mut cx, mut board) = panel(); populate(&mut board);
     let actions = cx.capture_actions(|cx| cx.widget_action(board.view.button(cx, ids!(manage_columns)).widget_uid(), ButtonAction::Clicked(KeyModifiers::default())));

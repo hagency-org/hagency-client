@@ -234,9 +234,7 @@ impl ProjectBoard {
             .button(cx, ids!(notifications_button))
             .clicked(actions)
         {
-            self.view
-                .view(cx, ids!(notifications_panel))
-                .set_visible(cx, true);
+            self.open_notifications(cx);
             self.view
                 .portal_list(cx, ids!(notifications_list))
                 .set_first_id_and_scroll(0, 0.0);
@@ -248,9 +246,7 @@ impl ProjectBoard {
             .button(cx, ids!(notifications_close))
             .clicked(actions)
         {
-            self.view
-                .view(cx, ids!(notifications_panel))
-                .set_visible(cx, false);
+            self.close_notifications(cx);
         }
         if self
             .view
@@ -334,9 +330,7 @@ impl ProjectBoard {
                                 },
                             },
                         );
-                        self.view
-                            .view(cx, ids!(notifications_panel))
-                            .set_visible(cx, false);
+                        self.close_notifications(cx);
                     }
                 }
                 if let Some((id, download)) =

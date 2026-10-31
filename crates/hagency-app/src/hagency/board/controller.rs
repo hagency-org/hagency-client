@@ -142,6 +142,7 @@ impl ProjectBoard {
         }
         if context_changed || active != self.active {
             if !active {
+                self.close_notifications(cx);
                 self.hide_inspector(cx);
             }
             self.active = active;

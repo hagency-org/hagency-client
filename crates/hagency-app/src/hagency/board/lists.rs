@@ -67,7 +67,7 @@ impl ProjectBoard {
         ) {
             self.column_drag = None;
         }
-        if self.view.view(cx, ids!(inspector)).visible()
+        if self.modal_visible(cx)
             || self.columns_draft.is_some()
             || self.pending.is_some()
             || self.dirty

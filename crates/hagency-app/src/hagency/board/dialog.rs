@@ -81,8 +81,25 @@ pub(crate) fn route_task_dialog_input(
 
 impl ProjectBoard {
     pub(super) fn modal_visible(&self, cx: &Cx) -> bool {
-        self.view.view(cx, ids!(inspector)).visible() || self.view.view(cx, ids!(column_settings)).visible()
+        self.view.view(cx, ids!(inspector)).visible() || self.view.view(cx, ids!(column_settings)).visible() || self.view.view(cx, ids!(notifications_panel)).visible()
     }
+    pub(super) fn open_notifications(&mut self, cx: &mut Cx) {
+        self.cancel_drag(cx);
+        self.column_drag = None;
+        self.view.view(cx, ids!(notifications_panel)).set_visible(cx, true);
+        self.animator_cut(cx, ids!(notifications.hide));
+        self.animator_play(cx, ids!(notifications.show));
+        self.begin_dialog_scope(cx);
+        self.redraw_dialog(cx);
+    }
+
+    pub(super) fn close_notifications(&mut self, cx: &mut Cx) {
+        self.view.view(cx, ids!(notifications_panel)).set_visible(cx, false);
+        self.animator_cut(cx, ids!(notifications.hide));
+        self.end_dialog_scope(cx);
+        self.redraw_dialog(cx);
+    }
+
     pub(super) fn open_column_settings(&mut self, cx: &mut Cx) {
         self.view.view(cx, ids!(column_settings)).set_visible(cx, true);
         self.begin_dialog_scope(cx);
@@ -114,6 +131,12 @@ impl ProjectBoard {
 
     pub(super) fn hide_inspector(&mut self, cx: &mut Cx) {
         self.view.view(cx, ids!(inspector)).set_visible(cx, false);
+        self.end_dialog_scope(cx);
+        self.close_calendar(cx);
+        self.redraw_dialog(cx);
+    }
+
+    fn end_dialog_scope(&mut self, cx: &mut Cx) {
         if let Some(scope) = self.dialog_cancel_scope.take() {
             cx.end_cancel_scope(scope);
             cx.set_key_focus(self.dialog_return_focus);
@@ -123,8 +146,6 @@ impl ProjectBoard {
         if cx.global::<TaskDialogOwner>().0 == Some(self.widget_uid()) {
             cx.global::<TaskDialogOwner>().0 = None;
         }
-        self.close_calendar(cx);
-        self.redraw_dialog(cx);
     }
 
     fn redraw_dialog(&mut self, cx: &mut Cx) {
@@ -198,8 +219,12 @@ impl ProjectBoard {
         event: &Event,
         scope: &mut Scope,
     ) {
+        if self.animator_handle_event(cx, event).must_redraw() {
+            self.redraw_dialog(cx);
+        }
+        let notifications = self.view.view(cx, ids!(notifications_panel)).visible();
         let columns = self.view.view(cx, ids!(column_settings)).visible();
-        let inspector = self.view.view(cx, if columns { ids!(column_settings) } else { ids!(inspector) });
+        let inspector = self.view.view(cx, if notifications { ids!(notifications_panel) } else if columns { ids!(column_settings) } else { ids!(inspector) });
         if !inspector.visible() {
             self.view.handle_event(cx, event, scope);
             return;
@@ -216,7 +241,9 @@ impl ProjectBoard {
                     .as_ref()
                     .is_some_and(|s| cx.owns_cancel(s))
             {
-                if self.calendar_month.is_some() {
+                if notifications {
+                    self.close_notifications(cx);
+                } else if self.calendar_month.is_some() {
                     self.close_calendar(cx);
                 } else {
                     if columns { self.request_close_columns(cx); } else { self.request_close_inspector(cx); }
@@ -231,13 +258,16 @@ impl ProjectBoard {
                 .is_some_and(|s| cx.owns_cancel(s))
             && event.back_pressed()
         {
-            if columns { self.request_close_columns(cx); } else { self.request_close_inspector(cx); }
+            if notifications { self.close_notifications(cx); } else if columns { self.request_close_columns(cx); } else { self.request_close_inspector(cx); }
             return;
         }
         inspector.handle_event(cx, event, scope);
         // Claim the full scrim after children, without dismissing or forwarding
         // a background click. Close/Escape use the same draft-protection path.
-        let _ = event.hits(cx, self.draw_dialog_bg.area());
+        match event.hits(cx, self.draw_dialog_bg.area()) {
+            Hit::FingerUp(up) if notifications && up.was_tap() && !inspector.area().rect(cx).contains(up.abs) => self.close_notifications(cx),
+            _ => (),
+        }
     }
 
     pub(super) fn draw_task_dialog(&mut self, cx: &mut Cx2d, scope: &mut Scope) {
@@ -252,20 +282,27 @@ impl ProjectBoard {
             size,
         });
         cx.begin_root_turtle(size, Layout::flow_overlay());
+        let notifications = self.view.view(cx, ids!(notifications_panel)).visible();
         let columns = self.view.view(cx, ids!(column_settings)).visible();
-        let inspector = self.view.view(cx, if columns { ids!(column_settings) } else { ids!(inspector) });
+        let inspector = self.view.view(cx, if notifications { ids!(notifications_panel) } else if columns { ids!(column_settings) } else { ids!(inspector) });
         if inspector.visible() {
             if self.dialog_cancel_scope.is_none() {
                 self.begin_dialog_scope(cx);
             }
             self.draw_dialog_bg.draw_abs(cx, bounds);
             let margin = if bounds.size.x < 600.0 { 12.0 } else { 32.0 };
-            let width = (bounds.size.x - margin * 2.0).clamp(1.0, 760.0);
-            let height = (bounds.size.y - margin * 2.0).clamp(1.0, if columns { 680.0 } else { 900.0 });
-            let walk = Walk::abs_rect(Rect {
-                pos: bounds.pos + (bounds.size - dvec2(width, height)) * 0.5,
-                size: dvec2(width, height),
-            });
+            let rect = if notifications {
+                let width = bounds.size.x.clamp(1.0, 420.0);
+                Rect {
+                    pos: bounds.pos + dvec2(bounds.size.x - width + width * f64::from(self.notification_slide), 0.0),
+                    size: dvec2(width, bounds.size.y),
+                }
+            } else {
+                let width = (bounds.size.x - margin * 2.0).clamp(1.0, 760.0);
+                let height = (bounds.size.y - margin * 2.0).clamp(1.0, if columns { 680.0 } else { 900.0 });
+                Rect {pos: bounds.pos + (bounds.size - dvec2(width, height)) * 0.5, size: dvec2(width, height)}
+            };
+            let walk = Walk::abs_rect(rect);
             while let Some(step) = inspector.draw_walk(cx, scope, walk).step() {
                 if !self.draw_collaboration(cx, scope, &step) {
                     self.draw_extension_list(cx, scope, &step);
@@ -274,7 +311,8 @@ impl ProjectBoard {
             if self.dialog_focus_pending {
                 self.dialog_focus_pending = false;
                 cx.set_key_focus(inspector.area());
-                if columns { self.view.text_input(cx, ids!(column_name)).take_key_focus(cx); }
+                if notifications { let area = self.view.button(cx, ids!(notifications_close)).area(); cx.set_key_focus(area); }
+                else if columns { self.view.text_input(cx, ids!(column_name)).take_key_focus(cx); }
                 else if self.creating { self.view.text_input(cx, ids!(title)).take_key_focus(cx); }
             }
             cx.block_scrolling_except_within(inspector.area());
