@@ -2807,5 +2807,8 @@
   "Logout cancelled by user": "Logout cancelled by user",
   "Local sign-out is durable. Local session cleanup failed; restart before signing in again. Any pending remote revocation will be retried.": "Local sign-out is durable. Local session cleanup failed; restart before signing in again. Any pending remote revocation will be retried.",
   "Local session cleanup remains incomplete": "Local session cleanup remains incomplete",
-  "Signed out locally. Remote token revocation remains pending.": "Signed out locally. Remote token revocation remains pending."
+  "Signed out locally. Remote token revocation remains pending.": "Signed out locally. Remote token revocation remains pending.",
+  "Configured; restore this device": "Configured; restore this device",
+  "Identity keys available on this device": "Identity keys available on this device",
+  "Connected": "Connected"
 }

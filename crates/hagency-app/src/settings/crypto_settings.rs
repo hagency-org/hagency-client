@@ -230,10 +230,20 @@ impl CryptoSettings {
                     crate::i18n::tr("Not verified")
                 },
                 crate::i18n::tr("Key recovery"),
-                if s.pending {crate::i18n::tr("Setup not confirmed")} else if s.default_key.is_some() { yes } else { no },
+                if s.pending {
+                    crate::i18n::tr("Setup not confirmed")
+                } else if s.default_key.is_some() {
+                    if s.private_keys {
+                        crate::i18n::tr("Identity keys available on this device")
+                    } else {
+                        crate::i18n::tr("Configured; restore this device")
+                    }
+                } else {
+                    no
+                },
                 crate::i18n::tr("Room key backup"),
                 if s.backup_connected {
-                    yes
+                    crate::i18n::tr("Connected")
                 } else if s.backup {
                     crate::i18n::tr("Restore required")
                 } else {
@@ -319,6 +329,64 @@ pub(crate) fn clear_session() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn recovery_status_distinguishes_account_setup_device_keys_and_backup_connection() {
+        const NAME: &str = "settings::crypto_settings::tests::recovery_status_distinguishes_account_setup_device_keys_and_backup_connection";
+        if std::env::var("HAGENCY_CRYPTO_UI_TEST").as_deref() != Ok(NAME) {
+            let profile = tempfile::tempdir().unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", NAME, "--nocapture", "--test-threads=1"])
+                .env("HAGENCY_CRYPTO_UI_TEST", NAME)
+                .env("HAGENCY_APP_DATA_DIR", profile.path())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let mut cx = Cx::new(Box::new(|_, _| {}));
+        let mut panel = cx.with_vm(|vm| {
+            makepad_widgets::script_mod(vm);
+            crate::app::register_widgets(vm);
+            let value = script_eval!(vm,{mod.widgets.CryptoSettings{}});
+            CryptoSettings::script_from_value(vm, value)
+        });
+        panel.state = Some(Snapshot {
+            identity: true,
+            verified: true,
+            default_key: Some("existing-account-key".into()),
+            backup: true,
+            ..Default::default()
+        });
+        panel.sync(&mut cx);
+        let status = panel.view.label(&cx, ids!(status)).text();
+        assert!(
+            status.contains(crate::i18n::tr("Configured; restore this device")),
+            "account setup and device verification do not establish local private keys: {status}"
+        );
+        assert!(status.contains(crate::i18n::tr("Restore required")));
+        assert!(!panel.view.button(&cx, ids!(setup)).visible());
+        assert!(panel.view.widget(&cx, ids!(restore_section)).visible());
+
+        panel.state.as_mut().unwrap().private_keys = true;
+        panel.sync(&mut cx);
+        let status = panel.view.label(&cx, ids!(status)).text();
+        assert!(status.contains(crate::i18n::tr("Identity keys available on this device")));
+        assert!(
+            status.contains(crate::i18n::tr("Restore required")),
+            "identity keys alone do not establish a backup connection"
+        );
+
+        panel.state.as_mut().unwrap().backup_connected = true;
+        panel.sync(&mut cx);
+        let status = panel.view.label(&cx, ids!(status)).text();
+        assert!(status.contains(crate::i18n::tr("Connected")));
+        assert!(!status.contains(crate::i18n::tr("Restore required")));
+    }
     #[test]
     fn recovery_controls_require_a_saved_key_and_reject_stale_results() {
         const NAME: &str = "settings::crypto_settings::tests::recovery_controls_require_a_saved_key_and_reject_stale_results";
