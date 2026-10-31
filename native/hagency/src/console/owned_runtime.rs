@@ -498,12 +498,11 @@ struct Binding {
 fn validate_event_context(
     event: &inbox::Dispatch,
     config: &StartConfig,
-    owner: &str,
+    _owner: &str,
 ) -> Result<(), RuntimeError> {
     if event.binding_id != config.binding_id
         || event.agent_id != config.agent_id
         || (event.thread_root == event.room_id && !config.owner_direct)
-        || (config.owner_direct && event.requester_mxid != owner)
         || !(event.thread_root.starts_with('$') || event.thread_root == event.room_id)
     {
         return Err(RuntimeError::Transport);
@@ -1772,7 +1771,7 @@ async fn execution_loop_with_gate<T: Transport>(
             tokio::select! {biased;_=canceled(cancel)=>return Err(RuntimeError::Stopped),_=tokio::time::sleep(Duration::from_millis(250))=>{}}
             continue;
         }
-        if !config.owner_direct && console.supports_group_crypto() { e2ee::pump_candidates(console,lease,config,cancel).await?; }
+        if console.supports_group_crypto() { e2ee::pump_candidates(console,lease,config,cancel).await?; }
         let events = match operation(
             console,
             cancel,
@@ -2913,7 +2912,7 @@ mod tests {
         assert!(runtime.entries.lock().await.is_empty());
     }
     #[test]
-    fn stable_room_context_requires_trusted_owner_direct_binding_and_its_owner() {
+    fn stable_room_context_requires_trusted_binding_and_isolates_each_member() {
         let temp = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let mut configuration = config(temp.path());
         let mut first = event();
@@ -2938,7 +2937,8 @@ mod tests {
             next.scope().context_key(OWNER).unwrap()
         );
         next.requester_mxid = "@foreign:test".into();
-        assert!(validate_event_context(&next, &configuration, OWNER).is_err());
+        validate_event_context(&next, &configuration, OWNER).unwrap();
+        assert_ne!(first.scope().context_key(OWNER).unwrap(),next.scope().context_key(OWNER).unwrap());
         next.requester_mxid = OWNER.into();
         next.thread_root = "!another-room:test".into();
         assert!(validate_event_context(&next, &configuration, OWNER).is_err());

@@ -126,7 +126,9 @@ impl VerifiedSharedActivity {
         // verified that sender's fresh membership and mention before issuing it.
         if w.assignment_id != c.assignment_id
             || w.runtime_command_digest != self.sink.command_digest()
-            || w.room_id != c.reserve_command.room_id
+            || (w.room_id != c.reserve_command.room_id
+                && (c.reserve_command.pool_grant.is_none() || w.room_binding.is_none()))
+            || (w.room_id == c.reserve_command.room_id && w.room_binding.is_some())
         {
             return Err(Error::LocalAuthority);
         }

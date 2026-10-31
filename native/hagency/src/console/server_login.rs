@@ -1491,6 +1491,7 @@ pub(super) enum OwnerOperation {
         command: String,
     },
     Agents,
+    RoomAgents,
     Devices,
     Agent {
         agent: String,
@@ -1675,6 +1676,7 @@ impl OwnerOperation {
                 (Method::GET, format!("commands/{operation}/{command}"), None)
             }
             Self::Agents => (Method::GET, "agents".into(), None),
+            Self::RoomAgents => (Method::GET, "room-agents".into(), None),
             Self::Projects => (Method::GET, "projects".into(), None),
             Self::ScopeState { project, room } => (
                 Method::GET,

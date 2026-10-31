@@ -60,3 +60,15 @@ fn shared_wire_rejects_changed_work_and_oversized_escaped_receipt() {
     unknown["authority"] = json!(true);
     assert!(serde_json::from_value::<SharedWorkItem>(unknown).is_err());
 }
+
+#[test]
+fn shared_room_receipt_is_bound_to_exact_assignment_room_and_generation() {
+    let fixture: serde_json::Value=serde_json::from_str(include_str!("management-shared-work-v1.json")).unwrap();
+    let mut work:SharedWorkItem=serde_json::from_value(fixture["work"].clone()).unwrap();
+    work.room_binding=Some(SharedRoomBinding{id:"srb_team".into(),generation:1,assignment_id:work.assignment_id.clone(),room_id:work.room_id.clone(),space_id:"!space:example.test".into()});
+    work.validate().unwrap();
+    let valid=work.clone();
+    work.room_binding.as_mut().unwrap().room_id="!other:example.test".into();assert!(work.validate().is_err());
+    work=valid.clone();work.room_binding.as_mut().unwrap().assignment_id="another_agent".into();assert!(work.validate().is_err());
+    work=valid;work.room_binding.as_mut().unwrap().generation=0;assert!(work.validate().is_err());
+}

@@ -22,11 +22,8 @@ pub(super) enum CryptoAction {
         assignment: String,
         event: String,
         addressed: bool,
+        mentioned: bool,
         thread: Option<String>,
-    },
-    Thread {
-        assignment: String,
-        thread: String,
     },
     Send {
         work: String,
@@ -43,14 +40,11 @@ impl CryptoAction {
                 assignment,
                 event,
                 addressed,
+                mentioned,
                 thread,
             } => (
                 "crypto/confirm".into(),
-                json!({"assignmentId":assignment,"eventId":event,"addressed":addressed,"threadRoot":thread}),
-            ),
-            Self::Thread { assignment, thread } => (
-                "crypto/thread".into(),
-                json!({"assignmentId":assignment,"threadRoot":thread}),
+                json!({"assignmentId":assignment,"eventId":event,"addressed":addressed,"mentioned":mentioned,"threadRoot":thread}),
             ),
             Self::Send { work } => ("crypto/send".into(), json!({"workId":work})),
         }
@@ -174,7 +168,7 @@ impl SharedExecutionTransport {
                     false,
                 )
                 .await?;
-            if reply.value.scopes.len() > 16
+            if reply.value.scopes.len() > 256
                 || reply
                     .value
                     .next_after
@@ -197,30 +191,19 @@ impl SharedExecutionTransport {
                         Ok(message) => message,
                         Err(_) => continue, // Missing keys retain the original event for retry.
                     };
-                    let mut addressed = message.as_ref().is_some_and(|m| {
-                        m.mentions.contains(&scope.puppet_mxid)
-                            || scope.direct && event.sender_mxid == scope.manager_mxid
-                    });
+                    let mentioned = message.as_ref().is_some_and(|m| m.mentions.contains(&scope.puppet_mxid));
+                    // The server uses fresh membership to decide whether this
+                    // owner's original conversation is still one-to-one.
+                    let addressed = message.is_some() && (mentioned
+                        || scope.direct && event.sender_mxid == scope.manager_mxid);
                     let thread = message.as_ref().and_then(|m| m.thread_root.clone());
-                    if !addressed && let Some(thread) = &thread {
-                        let known: Timed<Value> = b
-                            .request(
-                                CryptoAction::Thread {
-                                    assignment: scope.assignment_id.clone(),
-                                    thread: thread.clone(),
-                                }
-                                .into(),
-                                false,
-                            )
-                            .await?;
-                        addressed = known.value.get("known").and_then(Value::as_bool) == Some(true);
-                    }
                     let _: Timed<Value> = b
                         .request(
                             CryptoAction::Confirm {
                                 assignment: scope.assignment_id.clone(),
                                 event: event.event_id,
                                 addressed,
+                                mentioned,
                                 thread,
                             }
                             .into(),

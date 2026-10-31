@@ -18,7 +18,8 @@ impl Active {
     }
     fn work(&self, id: &str) -> SharedWorkItem {
         let body = "New independent offline question".to_owned();
-        SharedWorkItem { encrypted: false,
+        SharedWorkItem {
+            room_binding: None, encrypted: false,
             id: id.into(), assignment_id: self.command.assignment_id.clone(),
             runtime_command_digest: digest(&self.command), event_id: format!("${id}"),
             room_id: self.original.reserve_command.room_id.clone(),

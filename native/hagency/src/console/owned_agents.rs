@@ -688,6 +688,12 @@ async fn call(req: &mut Request, depot: &Depot) -> Result<Value, OwnerError> {
         .filter(|s| !s.is_empty())
         .collect();
     let method = req.method().clone();
+    if parts.as_slice()==["room-candidates"] {
+        if method!=Method::GET || req.uri().query().is_some(){return Err(error(400,"invalid_arguments"));}
+        let reply=api(req,depot,OwnerOperation::RoomAgents).await?;
+        recheck(depot).map_err(|_|error(401,"sign_in_required"))?;
+        return public(&reply.value,"agents");
+    }
     if parts.as_slice() == ["devices"] {
         if method != Method::GET || req.uri().query().is_some() {
             return Err(error(400, "invalid_arguments"));

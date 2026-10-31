@@ -392,7 +392,8 @@ async fn run_actual_capture_bound(mode: &str, mismatch: bool, shorter_wall: bool
     };
     let body = "Offline project question".to_owned();
     use sha2::{Digest, Sha256};
-    let work = SharedWorkItem { encrypted: false,
+    let work = SharedWorkItem {
+        room_binding: None, encrypted: false,
         id: "shared_work".into(),
         assignment_id: c.assignment_id.clone(),
         runtime_command_digest: digest(&c),

@@ -409,6 +409,7 @@ pub enum Command {
         room_id: Option<String>,
     },
     Agents,
+    RoomAgents,
     Bindings {
         agent_id: String,
     },
@@ -657,6 +658,7 @@ fn request(command: Command) -> Result<(&'static str, String, Option<Value>), Na
             return Err(failure(500, "native_operation_requires_direct_dispatch"));
         }
         Command::Agents => ("GET", format!("{root}/owned-agents")),
+        Command::RoomAgents => ("GET", format!("{root}/owned-agents/room-candidates")),
         Command::CreateAgent { input } => {
             body = Some(input);
             ("POST", format!("{root}/owned-agents"))

@@ -112,10 +112,6 @@ fn validate(state: &Value, owner: &str, agent: &str, puppet: &str) -> Result<(),
         let membership = event["content"]["membership"]
             .as_str()
             .ok_or_else(|| error(409, "owner_direct_room_identity_mismatch"))?;
-        if matches!(membership, "join" | "invite" | "knock") && member != owner && member != puppet
-        {
-            return Err(error(409, "owner_direct_room_identity_mismatch"));
-        }
         owner_joined |= member == owner && membership == "join";
         puppet_present |= member == puppet && matches!(membership, "join" | "invite");
     }
@@ -476,7 +472,7 @@ mod tests {
         assert!(validate(&foreign, "@owner:test", "a", "@puppet:test").is_err());
         let mut extra = state();
         extra.as_array_mut().unwrap().push(json!({"type":"m.room.member","state_key":"@other:test","content":{"membership":"join"}}));
-        assert!(validate(&extra, "@owner:test", "a", "@puppet:test").is_err());
+        assert!(validate(&extra, "@owner:test", "a", "@puppet:test").is_ok());
         let mut unknown = state();
         unknown
             .as_array_mut()
