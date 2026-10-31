@@ -186,7 +186,15 @@ async fn execute(
     .await;
     let reply = match status {
         Ok(reply) => reply,
-        Err(e) if e.status == 404 => api(req, depot, operation(&record)?).await?,
+        Err(e) if e.status == 404 => match operation(&record)? {
+            OwnerOperation::Bind { agent, project, room, command } => {
+                current(req, depot).map_err(|_| error(401, "sign_in_required"))?;
+                console(depot).map_err(|_| unavailable())?.0.server_login
+                    .bind_agent_room(cookie(req).map_err(|_| error(401, "sign_in_required"))?,
+                        agent, project, room, command).await?
+            }
+            operation => api(req, depot, operation).await?,
+        },
         Err(e) => return Err(e),
     };
     recheck(depot).map_err(|_| error(401, "sign_in_required"))?;

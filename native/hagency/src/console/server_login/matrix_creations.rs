@@ -91,6 +91,7 @@ pub(in crate::console) enum MatrixOperation {
     Discovery,
     JoinedRooms,
     State(String),
+    InviteService { room: String, owner: String, discovery: Value },
     Child(String, String, Value),
     Parent(String, String, Value),
 }
@@ -186,6 +187,11 @@ impl MatrixOperation {
                 )
             }
             Self::Discovery => (Method::GET, "/hagency/api/v1/discovery".into(), None),
+            Self::InviteService { room, owner, discovery } => (
+                Method::POST,
+                format!("/_matrix/client/v3/rooms/{}/invite", segment(&room)?),
+                Some(json!({"user_id": service_identity(&discovery, &owner)?})),
+            ),
             Self::JoinedRooms => (Method::GET, "/_matrix/client/v3/joined_rooms".into(), None),
             Self::State(room) => (
                 Method::GET,
@@ -437,7 +443,7 @@ fn save(path: &Path, records: &[Command]) -> Result<(), OwnerError> {
     hagency_store::private::replace(path, &bytes)
         .map_err(|_| error(503, "local_creation_journal_unavailable"))
 }
-fn service_identity(discovery: &Value, owner: &str) -> Result<String, OwnerError> {
+pub(super) fn service_identity(discovery: &Value, owner: &str) -> Result<String, OwnerError> {
     let server = owner
         .split_once(':')
         .filter(|(local, server)| local.starts_with('@') && !server.is_empty())
@@ -708,7 +714,7 @@ async fn resume(req: &mut Request, depot: &mut Depot, res: &mut Response) {
 #[cfg(test)]
 mod tests;
 
-fn same_reply_identity(a: &OwnerReply, b: &OwnerReply) -> bool {
+pub(super) fn same_reply_identity(a: &OwnerReply, b: &OwnerReply) -> bool {
     a.origin == b.origin && a.owner == b.owner && a.issuer == b.issuer && a.subject == b.subject
 }
 fn candidate_ids(value: &Value, cursor: Option<&str>) -> Result<Vec<String>, OwnerError> {

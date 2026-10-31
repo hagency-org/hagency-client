@@ -18,6 +18,7 @@ pub(super) mod matrix_creations;
 mod profiles;
 mod sdk_resume;
 mod shared_matrix;
+mod room_binding;
 pub(super) fn matrix_creation_router() -> Router {
     matrix_creations::router()
 }

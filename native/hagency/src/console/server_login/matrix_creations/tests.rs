@@ -206,11 +206,17 @@ pub(super) async fn fixture_with_hook(
     steps: Vec<(&'static str, Value, Option<Value>)>,
     hook: impl Fn(&str) + Send + 'static,
 ) -> (ServerLogin, tokio::task::JoinHandle<()>) {
+    fixture_with_status_and_hook(steps.into_iter().map(|(path, value, body)| (path, 200, value, body)).collect(), hook).await
+}
+async fn fixture_with_status_and_hook(
+    steps: Vec<(&'static str, u16, Value, Option<Value>)>,
+    hook: impl Fn(&str) + Send + 'static,
+) -> (ServerLogin, tokio::task::JoinHandle<()>) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}/", socket.local_addr().unwrap());
     let task = tokio::spawn(async move {
-        for (expected, response, expected_body) in steps {
+        for (expected, status, response, expected_body) in steps {
             let (mut stream, _) = socket.accept().await.unwrap();
             let mut wire = vec![];
             let header_end;
@@ -262,7 +268,7 @@ pub(super) async fn fixture_with_hook(
             }
             hook(expected);
             let body = response.to_string();
-            stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",body.len(),body).as_bytes()).await.unwrap();
+            stream.write_all(format!("HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",body.len(),body).as_bytes()).await.unwrap();
         }
     });
     let login = ServerLogin::new(None).unwrap();
@@ -403,4 +409,36 @@ fn space_candidates_filter_real_membership_metadata_and_bound_pagination() {
             .is_none()
     );
     assert!(candidate_space("!s:test", &json!({}), owner, &projects).is_err());
+}
+
+#[tokio::test]
+async fn binding_repairs_missing_service_invitation_with_user_credentials_and_original_key() {
+    let body = json!({"projectId":"prj_1","roomId":"!room:example.test","idempotencyKey":"original"});
+    for member in [None, Some("invite"), Some("join")] {
+        let mut state = json!([
+            {"type":"m.room.member","state_key":"@owner:example.test","content":{"membership":"join"}},
+            {"type":"m.room.power_levels","state_key":"","content":{"users":{"@owner:example.test":100},"invite":0}}
+        ]);
+        if let Some(member) = member { state.as_array_mut().unwrap().push(json!({"type":"m.room.member","state_key":"@_hagency_service:example.test","content":{"membership":member}})); }
+        let mut steps = vec![
+            ("POST /hagency/api/v1/agents/agt_1/bindings", 401, json!({"code":"service_invitation_denied"}), Some(body.clone())),
+            ("GET /hagency/api/v1/discovery", 200, json!({"serverName":"example.test","serviceMxid":"@_hagency_service:example.test"}), None),
+            ("GET /_matrix/client/v3/rooms/!room:example.test/state", 200, state, None),
+        ];
+        if member.is_none() {steps.push(("POST /_matrix/client/v3/rooms/!room:example.test/invite", 200, json!({}), Some(json!({"user_id":"@_hagency_service:example.test"}))));}
+        steps.push(("POST /hagency/api/v1/agents/agt_1/bindings", 200, json!({"commandState":"pending"}), Some(body.clone())));
+        let (login, task) = fixture_with_status_and_hook(steps, |_|{}).await;
+        let reply = login.bind_agent_room("cookie", "agt_1".into(), "prj_1".into(), "!room:example.test".into(), "original".into()).await.unwrap();
+        assert_eq!(reply.value["commandState"], "pending");
+        tokio::time::timeout(Duration::from_secs(5), task).await.unwrap().unwrap();
+    }
+}
+#[tokio::test]
+async fn binding_does_not_invite_on_owner_policy_denial_or_uncertain_response() {
+    for (status, code) in [(401,"agent_creation_denied"),(401,"room_membership_required"),(503,"server_unavailable")] {
+        let (login, task) = fixture_with_status_and_hook(vec![("POST /hagency/api/v1/agents/agt_1/bindings",status,json!({"code":code}),Some(json!({"projectId":"prj_1","roomId":"!room:example.test","idempotencyKey":"original"})))], |_|{}).await;
+        let error = login.bind_agent_room("cookie", "agt_1".into(), "prj_1".into(), "!room:example.test".into(), "original".into()).await.err().expect("expected refusal");
+        assert_eq!(error.code,code);
+        tokio::time::timeout(Duration::from_secs(5),task).await.unwrap().unwrap();
+    }
 }
