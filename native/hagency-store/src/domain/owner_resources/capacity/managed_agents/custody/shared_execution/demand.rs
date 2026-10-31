@@ -4,6 +4,7 @@ use super::*;
 mod guard;
 pub(super) mod journal;
 mod promotion;
+mod recovery;
 mod stop;
 mod submission;
 mod types;

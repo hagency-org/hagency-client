@@ -570,7 +570,7 @@ pub(super) async fn report_work(
     if digest(&saved)? != digest(receipt)? {
         return Err(invalid());
     }
-    let wire_receipt=super::e2ee::wire_receipt(io,&b,r,c,work,receipt).await?;
+    let wire_receipt=super::e2ee::wire_receipt(io,&b,r,&c.original_runtime_command,work,receipt).await?;
     let receipt=&wire_receipt;
     let started = Instant::now();
     let reply: Timed<TicketReply> = b

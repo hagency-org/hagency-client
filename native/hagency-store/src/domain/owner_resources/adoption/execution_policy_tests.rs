@@ -51,6 +51,7 @@ async fn selection(
             engagement_id: row.engagement_id.clone(),
         },
         EditExecutionPolicy {
+            web_search: None,
             command_id: "policy_fixture".into(),
             resource_id: row.resource_id.clone(),
             engagement_id: row.engagement_id.clone(),

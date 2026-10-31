@@ -121,6 +121,8 @@ async fn publication_form_reads_budget_without_grants_or_publication() {
         assert_eq!(form.context.resource_revision, f.revision);
         assert_eq!(form.context.remaining_tokens, Some(1000));
         assert_eq!(form.context.resource_total_tokens, Some(1000));
+        assert!(form.context.shared_account_total_tokens.is_none(), "a pool maximum is not an account limit");
+        assert!(form.context.capacity_blocker.is_none());
         assert_eq!(form.context.server_origin, f.origin);
     }
     assert!(f.history().await.data.records.is_empty());

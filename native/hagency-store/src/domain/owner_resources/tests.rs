@@ -308,7 +308,7 @@ async fn oversized_or_unpublishable_owner_grant_rolls_back_before_holding_capaci
             .await
             .unwrap()
             .budget
-            .seat
+            .pool
             .remaining
             .map(u64::from),
         Some(1000)
@@ -317,7 +317,7 @@ async fn oversized_or_unpublishable_owner_grant_rolls_back_before_holding_capaci
 }
 
 #[tokio::test]
-async fn profiles_and_models_share_one_parent_budget_under_concurrent_grants() {
+async fn profiles_and_models_use_their_own_pool_limits_under_concurrent_grants() {
     let temp = tempfile::tempdir().unwrap();
     let registry = OwnerResourceRegistry::open_root(&temp.path().join("owner")).unwrap();
     let a = authority('a');
@@ -349,7 +349,7 @@ async fn profiles_and_models_share_one_parent_budget_under_concurrent_grants() {
         grant(&registry, &a, &ra.resource_id, "grant_a", 700),
         grant(&registry, &b, &rb.resource_id, "grant_b", 700)
     );
-    assert_ne!(ga.is_ok(), gb.is_ok());
+    assert!(ga.is_ok() && gb.is_ok());
     let total = registry
         .0
         .store
@@ -362,7 +362,7 @@ async fn profiles_and_models_share_one_parent_budget_under_concurrent_grants() {
         })
         .await
         .unwrap();
-    assert_eq!(total, 700);
+    assert_eq!(total, 1400);
     for (p, id) in [(&a, &ra.resource_id), (&b, &rb.resource_id)] {
         assert_eq!(
             registry
@@ -370,7 +370,7 @@ async fn profiles_and_models_share_one_parent_budget_under_concurrent_grants() {
                 .await
                 .unwrap()
                 .budget
-                .seat
+                .pool
                 .remaining
                 .map(u64::from),
             Some(300)
@@ -410,7 +410,8 @@ async fn child_conservation_restart_receipts_and_release_tombstone() {
         .resource(&a, resource.resource_id.clone())
         .await
         .unwrap();
-    assert_eq!(report.budget.seat.remaining.map(u64::from), Some(300));
+    assert_eq!(report.budget.seat.remaining, None);
+    assert_eq!(report.budget.pool.remaining.map(u64::from), Some(300));
     assert_eq!(report.usage.reserved, 700);
     registry.shutdown().await.unwrap();
     drop(registry);
@@ -644,7 +645,8 @@ async fn two_profiles_share_account_and_private_access_requires_consumed_owner_c
         .resource(&b, first.resource_id.clone())
         .await
         .unwrap();
-    assert_eq!(seen.budget.seat.remaining.map(u64::from), Some(1000));
+    assert_eq!(seen.budget.seat.remaining, None);
+    assert_eq!(seen.budget.pool.remaining.map(u64::from), Some(1000));
     let counts = registry
         .0
         .store
@@ -752,7 +754,7 @@ fn second_process_owner_registry_lock_child() {
                         .await
                         .unwrap()
                         .budget
-                        .seat
+                        .pool
                         .remaining
                         .map(u64::from),
                     Some(300)
@@ -813,7 +815,7 @@ async fn separate_process_cannot_create_an_independent_writer_for_shared_owner_r
             .await
             .unwrap()
             .budget
-            .seat
+            .pool
             .remaining
             .map(u64::from),
         Some(300)
@@ -836,7 +838,7 @@ async fn separate_process_cannot_create_an_independent_writer_for_shared_owner_r
 }
 
 #[tokio::test]
-async fn original_legacy_holds_count_in_shared_account_and_survive_owner_registry_restart() {
+async fn original_legacy_holds_survive_restart_without_an_implicit_shared_cap() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("owner");
     let registry = OwnerResourceRegistry::open_root(&root).unwrap();
@@ -870,11 +872,11 @@ async fn original_legacy_holds_count_in_shared_account_and_survive_owner_registr
         .await
         .unwrap();
     assert!(
-        grant(&registry, &a, &original.resource_id, "too_much", 301)
+        grant(&registry, &a, &original.resource_id, "too_much", 1001)
             .await
             .is_err()
     );
-    grant(&registry, &a, &original.resource_id, "remaining", 300)
+    grant(&registry, &a, &original.resource_id, "remaining", 1000)
         .await
         .unwrap();
     assert_eq!(
@@ -883,7 +885,7 @@ async fn original_legacy_holds_count_in_shared_account_and_survive_owner_registr
             .await
             .unwrap()
             .budget
-            .seat
+            .pool
             .remaining
             .map(u64::from),
         Some(0)
@@ -897,7 +899,7 @@ async fn original_legacy_holds_count_in_shared_account_and_survive_owner_registr
             .await
             .unwrap()
             .budget
-            .seat
+            .pool
             .remaining
             .map(u64::from),
         Some(0)

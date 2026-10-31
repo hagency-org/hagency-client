@@ -1,26 +1,23 @@
 //! Private owner settings, captured only when a new owner start is journaled.
 //! No model, Matrix body, server response or script can write these settings.
 use super::{Connection, SharedRuntimeCommand};
-use std::{io::Read, path::Path};
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Settings {
-    version: u16,
-    live_web_agent_ids: Vec<String>,
-}
+#[cfg(test)]
+use crate::domain::exec_policy::shared_web::legacy_allows as allows;
 pub(super) fn owner_live_web(db: &Connection, original: &SharedRuntimeCommand) -> bool {
-    let Some(root) = db.path().and_then(|p| Path::new(p).parent()) else { return false; };
-    let Ok(file) = crate::private::open(&root.join("owner-shared-tools.json"), false) else { return false; };
-    let mut bytes = Vec::new();
-    if file.take(16 * 1024 + 1).read_to_end(&mut bytes).is_err() { return false; }
-    allows(&bytes, &original.reserve_command.proposed_agent_id)
-}
-fn allows(bytes: &[u8], agent: &str) -> bool {
-    if bytes.len() > 16 * 1024 { return false; }
-    serde_json::from_slice::<Settings>(bytes).is_ok_and(|s| s.version == 1
-        && s.live_web_agent_ids.len() <= 128
-        && s.live_web_agent_ids.iter().all(|id| !id.is_empty() && id.len() <= 128 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
-        && s.live_web_agent_ids.iter().any(|id| id == agent))
+    use rusqlite::OptionalExtension;
+    // The UI's explicit on/off setting wins over the legacy file, including an
+    // explicit off. Resolve the immutable reservation, not just a display name.
+    let saved = db.query_row(
+        "SELECT id,profile FROM owner_managed_agents WHERE agent_id=?1 AND original_command_id=?2 AND state='reserved' AND permanent_fence=0",
+        rusqlite::params![original.reserve_command.proposed_agent_id, original.reserve_command.command_id],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    ).optional();
+    match saved {
+        Ok(Some((child, profile))) => return crate::domain::exec_policy::shared_web::read(db, &child, &profile, &original.reserve_command.proposed_agent_id).is_ok_and(|s| s.enabled),
+        Ok(None) => {},
+        Err(_) => return false,
+    }
+    crate::domain::exec_policy::shared_web::legacy_enabled(db, &original.reserve_command.proposed_agent_id)
 }
 #[cfg(test)]
 mod tests {
@@ -42,10 +39,18 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let db = Connection::open(root.path().join("domain.sqlite3")).unwrap();
         assert!(!owner_live_web(&db, &original));
+        db.execute_batch("CREATE TABLE owner_managed_agents(id TEXT,profile TEXT,agent_id TEXT,original_command_id TEXT,state TEXT,permanent_fence INTEGER)").unwrap();
         let path = root.path().join("owner-shared-tools.json");
         let bytes = serde_json::to_vec(&serde_json::json!({"version":1,"liveWebAgentIds":[original.reserve_command.proposed_agent_id]})).unwrap();
         crate::private::write_new(&path, &bytes).unwrap();
         assert!(owner_live_web(&db, &original));
+        db.execute_batch("CREATE TABLE owner_web_catalog_settings(profile TEXT,kind TEXT,entity TEXT,value TEXT,PRIMARY KEY(profile,kind,entity))").unwrap();
+        db.execute("INSERT INTO owner_managed_agents VALUES('child','profile',?1,?2,'reserved',0)", rusqlite::params![original.reserve_command.proposed_agent_id, original.reserve_command.command_id]).unwrap();
+        crate::domain::exec_policy::shared_web::write(&db, "child", "profile", &original.reserve_command.proposed_agent_id, false).unwrap();
+        assert!(!owner_live_web(&db, &original));
+        crate::domain::exec_policy::shared_web::write(&db, "child", "profile", &original.reserve_command.proposed_agent_id, true).unwrap();
+        assert!(owner_live_web(&db, &original));
+        db.execute("DELETE FROM owner_web_catalog_settings", []).unwrap();
         let other = tempfile::tempdir().unwrap();
         let other_db = Connection::open(other.path().join("domain.sqlite3")).unwrap();
         assert!(!owner_live_web(&other_db, &original));

@@ -14,6 +14,7 @@ use std::{
 /// through `resource_ceiling::effective_ceiling` (or `catalog_entry`), or add
 /// the file here with the reason a raw read is right.
 const RAW_READS: &[(&str, usize, &str)] = &[
+    ("hagency/src/console/native/owner_grant/types.rs", 1, "read-only reason derived from the effective budget snapshot"),
     (
         "hagency-core/src/allocation.rs",
         2,

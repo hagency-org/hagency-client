@@ -14,6 +14,7 @@ pub(super) struct State {
     lose_start: bool,
     lose_stop: bool,
     invalid_binding: bool,
+    lose_binding: bool,
     stop_inputs: Vec<Value>,
     stop_results: BTreeMap<String, u64>,
     generic_starts: usize,
@@ -183,6 +184,9 @@ pub(super) fn management(
         }
         s.shared.demands.binding = Some(binding.clone());
         s.shared.demands.status = "bound".into();
+        if std::mem::take(&mut s.shared.demands.lose_binding) {
+            return Some(Some(json!({"fixtureStatus":409,"error":"fixture_binding_reply_lost"})));
+        }
         return Some(Some(
             json!({"demand":{"offer":o,"demandDigest":o.digest().unwrap(),"binding":binding},"observedAtMs":at}),
         ));
@@ -292,6 +296,58 @@ pub(super) fn count_methods(f: &Fixture, method: &str) -> usize {
         .lines()
         .filter(|v| *v == method)
         .count()
+}
+
+#[cfg(feature = "shared-context")]
+#[tokio::test]
+#[ignore = "requires explicitly built offline supervised probe"]
+async fn native_demand_recovered_promotion_unblocks_next_encrypted_message() {
+    let (f, t, _) = Box::pin(fixture_budget(1000)).await;
+    let (t, sent) = t.with_crypto_fixture(Some("Private request after interrupted delivery".into()));
+    offer(&f, 1);
+    {
+        let mut s = f.state.lock().unwrap();
+        s.shared.demands.lose_binding = true;
+        let w = s.shared.work.as_mut().unwrap();
+        w.encrypted = true;
+        w.body = w.event_id.clone();
+        w.body_digest = format!("{:x}", Sha256::digest(w.body.as_bytes()));
+    }
+    t.poll_demand_fixture(&f.registry, None, Some(launch(&f, "text-usage"))).await.unwrap().outcome.unwrap();
+    wait_attempt(&f).await;
+    assert_eq!(rows(&f, "owner_shared_demand_bindings"), 0);
+    assert_eq!(rows(&f, "owner_managed_calls"), 0);
+    assert_eq!(count_methods(&f, "turn/start"), 0);
+    let binding = f.state.lock().unwrap().shared.demands.binding.clone().unwrap();
+    // A forged event cannot release queue position or authorize another turn.
+    f.state.lock().unwrap().shared.demands.binding.as_mut().unwrap().event_id = "$foreign:test".into();
+    assert!(t.resume_next_demand(&f.registry, None).await.unwrap().unwrap().outcome.is_err());
+    assert_eq!(rows(&f, "owner_shared_demand_bindings"), 0);
+    f.state.lock().unwrap().shared.demands.binding = Some(binding);
+    for _ in 0..2 {
+        assert!(matches!(t.resume_next_demand(&f.registry, None).await.unwrap().unwrap().outcome.unwrap(), SharedDemandProgress::Historical { status, .. } if status == "bound"));
+    }
+    assert_eq!(rows(&f, "owner_shared_demand_bindings"), 1);
+    assert_eq!(rows(&f, "owner_shared_work_inbox"), 0, "history must not admit old work");
+    assert_eq!(rows(&f, "owner_managed_calls"), 0);
+    assert!(sent.lock().unwrap().is_empty());
+    offer(&f, 2);
+    {
+        let mut s = f.state.lock().unwrap();
+        let w = s.shared.work.as_mut().unwrap();
+        w.body = w.event_id.clone();
+        w.body_digest = format!("{:x}", Sha256::digest(w.body.as_bytes()));
+    }
+    let progress = t.poll_demand_fixture(&f.registry, None, Some(launch(&f, "text-usage"))).await.unwrap().outcome.unwrap();
+    assert!(matches!(progress, SharedDemandProgress::Execution { progress: SharedExecutionProgress::Running { .. }, .. }));
+    wait_attempt(&f).await;
+    assert_eq!(count_methods(&f, "turn/start"), 1);
+    assert_eq!(rows(&f, "owner_managed_calls"), 1);
+    assert_eq!(rows(&f, "owner_shared_demand_bindings"), 2);
+    assert_eq!(rows(&f, "owner_managed_budget_deltas"), 0);
+    assert_eq!(sent.lock().unwrap().len(), 1);
+    assert_eq!(f.state.lock().unwrap().shared.demands.generic_starts, 0);
+    f.stop().await;
 }
 #[tokio::test]
 #[ignore = "requires explicitly built offline supervised probe"]

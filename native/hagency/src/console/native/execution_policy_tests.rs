@@ -34,6 +34,7 @@ async fn selected(
 ) -> EditExecutionPolicy {
     let row = m.agent_execution_policy(query).await.unwrap();
     EditExecutionPolicy {
+        web_search: None,
         command_id: id.into(),
         resource_id: row.resource_id,
         engagement_id: row.engagement_id,

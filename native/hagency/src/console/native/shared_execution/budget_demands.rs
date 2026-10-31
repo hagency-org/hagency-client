@@ -40,6 +40,9 @@ impl SharedExecutionTransport {
         let original=r.shared_original_selection(b.scope.profile.clone(),s.offer.assignment_id.clone()).await.map_err(store)?.ok_or_else(||failure(409,"shared_demand_original_missing"))?;
         io::binding(&b.scope,&original,false)?;
         if !matches!(s.state.as_str(),"offered"|"start_committed") {
+            if s.state == "bound" {
+                r.recover_shared_demand_binding(b.cleanup(r,&original).await?,s.offer.clone(),s.binding.clone().ok_or_else(invalid)?).await.map_err(store)?;
+            }
             if matches!(s.state.as_str(),"expired"|"cancelled"|"head_changed") {
                 r.retain_shared_budget_demand_terminal(offer_proof(&b,r,&original,&s,observed).await?,original.clone()).await.map_err(store)?;
             }

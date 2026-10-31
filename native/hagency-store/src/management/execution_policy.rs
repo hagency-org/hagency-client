@@ -55,6 +55,9 @@ pub enum PolicyApplication {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentExecutionPolicy {
+    /// Hosted search is independent from command/file permissions. Shared Agents only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_search: Option<bool>,
     /// Present only for shared pool Agents. No saved policy means chat-only.
     #[serde(default, skip_serializing_if="Option::is_none")]
     pub shared_mode: Option<String>,
@@ -72,6 +75,10 @@ pub struct AgentExecutionPolicy {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EditExecutionPolicy {
+    /// When present, edit only hosted search and preserve the current tool mode.
+    /// Omission preserves the original command encoding and behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_search: Option<bool>,
     pub command_id: String,
     pub resource_id: String,
     pub engagement_id: String,

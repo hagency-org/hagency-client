@@ -481,6 +481,42 @@ async fn derived_unknown_and_late_overrun_block_new_capacity_and_survive_old_set
     f.registry.shutdown().await.unwrap();
 }
 
+#[tokio::test]
+async fn automatic_account_quota_does_not_couple_pools_or_erase_unknown_usage() {
+    let f = fixture().await;
+    let original = f.registry.resource(&f.profile, f.resource.clone()).await.unwrap();
+    let child = reserve(&f, agent(&f, "first", 150)).await.agent_reservation_id.unwrap();
+    let resource_id = f.resource.clone();
+    f.registry.0.store.call(4096, move |db| {
+        let resource = read_resource(&db.db, &resource_id)?;
+        // Reproduce the old enrollment's inferred provider-wide quota.
+        db.db.execute("UPDATE seats SET config=json_set(config,'$.declaration',json(?2)) WHERE id=?1",
+            params![resource.seat_id, r#"{"quotaTokens":1000,"period":"monthly"}"#])?;
+        db.db.execute("INSERT INTO owner_managed_calls(id,child_id,execution_id,immutable_digest,assignment_generation,state,reserved_tokens,known_consumed_tokens,usage_complete) VALUES('unsettled_original',?1,'execution',?2,1,'unknown',120,30,0)", params![child,"a".repeat(64)])?;
+        Ok(())
+    }).await.unwrap();
+    let other = f.registry.prepare_enrollment(f.profile.clone(), "terra_pool".into(), provider(),
+        "gpt-6.1-terra".into(), Some("high".into()), 2000, Instant::now()+Duration::from_secs(30))
+        .unwrap().approve().await.unwrap();
+    let pool = f.registry.resource(&f.profile, other.resource_id.clone()).await.unwrap();
+    assert_eq!(pool.budget.seat.quota, None);
+    assert_eq!(pool.budget.remaining_tokens.map(u64::from), Some(2000));
+    let published = grant(&f.registry, &f.profile, &other.resource_id, "terra_capacity", 1500).await.unwrap();
+    assert_eq!(published.allocated_tokens, 1500);
+    assert!(grant(&f.registry, &f.profile, &other.resource_id, "above_pool_maximum", 600).await.is_err());
+    let unchanged = f.registry.resource(&f.profile, f.resource.clone()).await.unwrap();
+    assert_eq!(unchanged.revision, original.revision);
+    assert!(unchanged.budget.remaining_tokens.is_none(), "this pool's own unknown usage still blocks it");
+    let saved = f.registry.recover_capacity_grant(f.profile.clone(), f.grant.executor_device_id.clone(), f.grant.grant_id.clone()).await.unwrap().unwrap();
+    assert_eq!(serde_json::to_value(saved).unwrap(), serde_json::to_value(&f.grant).unwrap());
+    f.registry.0.store.call(4096, |db| {
+        assert!(db.db.query_row("SELECT state='unknown' AND reserved_tokens=120 AND known_consumed_tokens=30 AND usage_complete=0 FROM owner_managed_calls WHERE id='unsettled_original'", [], |r| r.get::<_,bool>(0))?);
+        assert!(db.db.query_row("SELECT EXISTS(SELECT 1 FROM seats WHERE json_extract(config,'$.declaration.quotaTokens')=1000)", [], |r| r.get::<_,bool>(0))?, "original stored declaration is not rewritten");
+        Ok(())
+    }).await.unwrap();
+    f.registry.shutdown().await.unwrap();
+}
+
 pub(super) fn remove_schema(db: &Connection) {
     db.execute_batch("DROP TABLE IF EXISTS owner_web_catalog_settings; DROP TABLE IF EXISTS owner_operator_graph_recipients; DROP TABLE IF EXISTS owner_operator_graph_outbox; DROP TABLE IF EXISTS owner_operator_graph_commands; DROP TABLE IF EXISTS owner_operator_graphs; DROP TABLE IF EXISTS owner_operator_graph_archive_chunks; DROP TABLE IF EXISTS owner_operator_graph_archives; DROP TABLE IF EXISTS owned_dispatch_execution_policies;DROP TABLE IF EXISTS approval_binding_incarnations;DROP TRIGGER IF EXISTS owner_resource_provenance_immutable;DROP TRIGGER IF EXISTS owner_resource_provenance_retained;DROP TABLE IF EXISTS owner_resource_provenance;DROP TABLE IF EXISTS owner_namespace_enrollments;DROP TABLE IF EXISTS owner_resource_namespaces;DROP TABLE IF EXISTS management_account_profiles;DROP TABLE IF EXISTS owner_shared_budget_demand_decisions;DROP TABLE IF EXISTS owner_shared_budget_work_refusals;DROP TABLE IF EXISTS owner_shared_budget_start_intents;DROP TABLE IF EXISTS owner_managed_budget_deltas;DROP TABLE IF EXISTS owner_managed_budget_commands;DROP TABLE IF EXISTS owner_operator_task_transfer_comments;DROP TABLE IF EXISTS owner_operator_task_transfer_tasks;DROP TABLE IF EXISTS owner_shared_context_call_pins;DROP TABLE IF EXISTS owner_shared_reply_deliveries;DROP TABLE IF EXISTS owner_shared_contexts;DROP TABLE IF EXISTS owner_shared_input_modes;DROP TABLE IF EXISTS owner_shared_stop_receipts;DROP TABLE IF EXISTS owner_shared_stop_intents;DROP TABLE IF EXISTS owner_shared_demand_bindings;DROP TABLE IF EXISTS owner_shared_demand_decisions;DROP TABLE IF EXISTS owner_shared_demands;DROP TABLE IF EXISTS owner_shared_demand_controls;DROP TABLE IF EXISTS owner_operator_task_comments;DROP TABLE IF EXISTS owner_operator_tasks;DROP TABLE IF EXISTS owner_operator_task_histories;DROP TABLE IF EXISTS owner_resource_display_names;DROP TABLE IF EXISTS owner_shared_start_intents;DROP TABLE IF EXISTS owner_shared_successor_fences;DROP TABLE IF EXISTS owner_shared_successor_call_pins;DROP TABLE IF EXISTS owner_shared_successor_observations;DROP TABLE IF EXISTS owner_shared_successor_attempts;DROP TABLE IF EXISTS owner_shared_activity_renewals;DROP TABLE IF EXISTS owner_shared_work_observations;DROP TABLE IF EXISTS owner_shared_work_events;DROP TABLE IF EXISTS owner_shared_work_inbox;DROP TABLE IF EXISTS owner_shared_process_observations;DROP TABLE IF EXISTS owner_shared_runtime_lifetimes;DROP TRIGGER IF EXISTS owner_metadata_excludes_shared;DROP TABLE IF EXISTS owner_managed_runtime_observations;DROP TABLE IF EXISTS owner_managed_runtime_stops;DROP TABLE IF EXISTS owner_managed_runtime_lifetimes;DROP TABLE IF EXISTS owner_resource_adoptions;DROP TABLE IF EXISTS owner_managed_fences;DROP TABLE IF EXISTS owner_managed_observations;DROP TABLE IF EXISTS owner_managed_call_pins;DROP TABLE IF EXISTS owner_managed_assignment_pins;DROP TABLE owner_managed_calls;DROP TABLE owner_managed_effects;DROP TABLE owner_managed_agents;DROP TABLE owner_project_authorities;").unwrap();
 }

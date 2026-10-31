@@ -6,6 +6,9 @@ mod budget_attempts;
 #[cfg(feature="shared-context")]
 #[path="context_tests.rs"]
 mod contexts;
+#[cfg(feature="shared-context")]
+#[path="encrypted_execution_tests.rs"]
+mod encrypted;
 #[cfg(feature = "shared-successors")]
 #[path = "attempt_tests.rs"]
 mod attempts;
@@ -70,6 +73,10 @@ pub(crate) fn idle_boundary_delay(path: &str, s: &State) -> Option<Duration> {
         .then(|| Duration::from_millis(31_500 - elapsed))
 }
 pub(crate) fn management(path: &str, body: &Value, s: &mut super::State) -> Option<Value> {
+    if path.ends_with("/crypto/send") {
+        assert_eq!(body["workId"], s.shared.work.as_ref().unwrap().id);
+        return Some(json!({"observedAtMs":now()}));
+    }
     #[cfg(feature="shared-budget-execution")]
     if path.contains("/budget-attempts/") || path.contains("/budget-demands/") || path.ends_with("/budget-work/budget_demand_work/demand") || path.ends_with("/refuse-unissued") {return budget_attempts::management(path,body,s);}
     #[cfg(feature="shared-budget-execution")]

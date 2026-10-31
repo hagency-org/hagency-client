@@ -529,7 +529,7 @@ async fn shared_agent_execution_policy_is_per_agent_and_retains_original_reserva
         assert_eq!(original.shared_mode.as_deref(),Some("chat"));
         let page=db.management_execution_policies(&ExecutionPolicyListQuery{resource_id:a.resource_id.clone(),after:String::new()},|_|Ok(()))?;
         assert_eq!(page.agents.len(),2);
-        let input=EditExecutionPolicy{command_id:"shared_yolo".into(),resource_id:a.resource_id.clone(),engagement_id:a.proposed_agent_id.clone(),expected_revision:original.revision.clone(),execution_policy:ExecutionPolicyValue{yolo:true}};
+        let input=EditExecutionPolicy{web_search:None,command_id:"shared_yolo".into(),resource_id:a.resource_id.clone(),engagement_id:a.proposed_agent_id.clone(),expected_revision:original.revision.clone(),execution_policy:ExecutionPolicyValue{yolo:true}};
         let ctx=HostContext::new(owner,1,"a".repeat(64),1,"policy_device".into(),1)?;
         let receipt=||CommandReceipt::new(&ctx,"edit_execution_policy",&input.command_id,&input);
         assert!(db.management_edit_execution_policy(&input,receipt()?,|_|Err(Error::LocalAuthority)).is_err());
@@ -548,4 +548,58 @@ async fn shared_agent_execution_policy_is_per_agent_and_retains_original_reserva
         Ok(())
     }).await.unwrap();
     f.registry.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn shared_agent_execution_policy_web_switch_is_independent_durable_and_owner_scoped() {
+    use crate::management::*;
+    let f = pool_fixture().await;
+    let a = pool_command(&f, "web_a", 100);
+    let b = pool_command(&f, "web_b", 100);
+    pool_reserve(&f, a.clone()).await;
+    pool_reserve(&f, b.clone()).await;
+    let query = ExecutionPolicyQuery { resource_id: a.resource_id.clone(), engagement_id: a.proposed_agent_id.clone() };
+    let query_again = query.clone();
+    let root = f._temp.path().join("owner");
+    // Existing opt-ins survive; an explicit UI disable must override this file.
+    crate::private::write_new(&root.join("owner-shared-tools.json"), &serde_json::to_vec(&json!({"version":1,"liveWebAgentIds":[a.proposed_agent_id]})).unwrap()).unwrap();
+    let owner = f.profile.account.clone();
+    let (input, enabled) = f.registry.0.store.call(64 * 1024, move |db| {
+        let ctx = HostContext::new(owner, 1, "a".repeat(64), 1, "web_device".into(), 1)?;
+        let original = db.management_execution_policy(&query, |_| Ok(()))?;
+        assert_eq!(original.web_search, Some(true));
+        assert_eq!(original.shared_mode.as_deref(), Some("chat"));
+        let off = EditExecutionPolicy { web_search: Some(false), command_id: "web_off".into(), resource_id: query.resource_id.clone(), engagement_id: query.engagement_id.clone(), expected_revision: original.revision, execution_policy: original.execution_policy };
+        let receipt = |input: &EditExecutionPolicy| CommandReceipt::new(&ctx, "execution_policy.edit", &input.command_id, input);
+        assert!(db.management_edit_execution_policy(&off, receipt(&off)?, |_| Err(Error::LocalAuthority)).is_err());
+        let disabled = db.management_edit_execution_policy(&off, receipt(&off)?, |_| Ok(()))?;
+        assert_eq!(disabled.web_search, Some(false));
+        assert_eq!(disabled.shared_mode.as_deref(), Some("chat"));
+        let mut on = off.clone(); on.command_id = "web_on".into(); on.web_search = Some(true);
+        assert!(matches!(db.management_edit_execution_policy(&on, receipt(&on)?, |_| Ok(())), Err(Error::Conflict)));
+        on.expected_revision = disabled.revision.clone();
+        let mut mixed = on.clone(); mixed.command_id = "mixed".into(); mixed.execution_policy.yolo = true;
+        assert!(db.management_edit_execution_policy(&mixed, receipt(&mixed)?, |_| Ok(())).is_err());
+        let enabled = db.management_edit_execution_policy(&on, receipt(&on)?, |_| Ok(()))?;
+        assert_eq!(enabled.web_search, Some(true));
+        assert_eq!(enabled.shared_mode.as_deref(), Some("chat"));
+        assert_eq!(db.management_edit_execution_policy(&off, receipt(&off)?, |_| Ok(()))?, disabled);
+        assert_eq!(db.management_execution_policy(&query, |_| Ok(()))?, enabled);
+        let other = db.management_execution_policy(&ExecutionPolicyQuery { resource_id: b.resource_id, engagement_id: b.proposed_agent_id }, |_| Ok(()))?;
+        assert_eq!(other.web_search, Some(false));
+        assert_eq!(db.db.query_row("SELECT count(*) FROM owner_shared_tool_policies", [], |r| r.get::<_,u64>(0))?, 0);
+        let raw: String = db.db.query_row("SELECT original_command FROM owner_managed_agents WHERE agent_id=?1", [&a.proposed_agent_id], |r| r.get(0))?;
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&raw)?, serde_json::to_value(a)?);
+        Ok((on, enabled))
+    }).await.unwrap();
+    f.registry.shutdown().await.unwrap();
+    let reopened = OwnerResourceRegistry::open_root(&root).unwrap();
+    reopened.0.store.call(16 * 1024, move |db| {
+        assert_eq!(db.management_execution_policy(&query_again, |_| Ok(()))?, enabled);
+        let ctx = HostContext::new("@owner:example.test".into(), 1, "a".repeat(64), 1, "foreign".into(), 1)?;
+        let receipt = CommandReceipt::new(&ctx, "execution_policy.edit", &input.command_id, &input)?;
+        assert!(db.management_edit_execution_policy(&input, receipt, |_| Err(Error::LocalAuthority)).is_err());
+        Ok(())
+    }).await.unwrap();
+    reopened.shutdown().await.unwrap();
 }

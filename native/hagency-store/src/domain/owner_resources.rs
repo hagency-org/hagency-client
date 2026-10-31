@@ -589,9 +589,8 @@ impl DomainRepository {
                     .clone()
                     .unwrap_or_else(|| format!("seat_owner_{}", proof.digest));
                 require_adopted_seat_ready(&tx, &seat_id)?;
-                let seat: Seat = serde_json::from_value(
-                    json!({"id":seat_id,"declaration":{"quotaTokens":monthly_tokens,"period":"monthly"}}),
-                )?;
+                // The owner chose this pool's maximum, not a provider-wide cap.
+                let seat = Seat { id: seat_id.clone(), declaration: None };
                 let stored: Option<String> = tx
                     .query_row("SELECT config FROM seats WHERE id=?1", [&seat_id], |r| {
                         r.get(0)
@@ -601,9 +600,7 @@ impl DomainRepository {
                     if mapping.is_none() {
                         return Err(Error::Quarantined);
                     }
-                    if serde_json::from_str::<serde_json::Value>(&old)?
-                        != serde_json::to_value(&seat)?
-                    {
+                    if serde_json::from_str::<Seat>(&old)?.id != seat_id {
                         return Err(Error::Conflict);
                     }
                 } else {

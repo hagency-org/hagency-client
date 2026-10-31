@@ -314,7 +314,7 @@ async fn verify_namespace_edit_contract(
     assert_eq!(error.code,"management_outcome_unknown");
     let edited=registry.resource(authority,resource_id.into()).await.unwrap();
     assert_ne!(edited.revision,original.revision);assert_eq!(edited.reasoning.as_deref(),Some("medium"));
-    assert_eq!(edited.budget.pool.ceiling.map(u64::from),Some(450));assert_eq!(edited.budget.seat.quota.map(u64::from),Some(1000));
+    assert_eq!(edited.budget.pool.ceiling.map(u64::from),Some(450));assert_eq!(edited.budget.seat.quota,None);
     db.execute_batch("DROP TRIGGER reject_native_edit_reply").unwrap();drop(db);
     let methods=std::fs::read_to_string(namespace.join("namespace-provider-methods")).unwrap();
     *manager.owner.0.account_logins.executable.lock().unwrap()=Some(root.join("does-not-exist"));
@@ -345,5 +345,5 @@ async fn verify_namespace_edit_contract(
     let current=registry.resource(authority,resource_id.into()).await.unwrap();
     assert_eq!(recovered["data"]["revision"],current.revision);
     assert_eq!(current.budget.pool.ceiling.map(u64::from),Some(400));
-    assert_eq!(current.budget.seat.quota.map(u64::from),Some(1000));
+    assert_eq!(current.budget.seat.quota,None);
 }

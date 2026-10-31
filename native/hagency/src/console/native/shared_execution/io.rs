@@ -170,6 +170,8 @@ pub(super) struct Io {
     manager: Weak<NativeManagement>,
     host_gate: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
     namespace: Option<Arc<hagency_store::owner_resources::ResourceNamespace>>,
+    #[cfg(test)]
+    pub(super) crypto_fixture: Option<Arc<super::e2ee::CryptoFixture>>,
 }
 pub(super) struct Bound {
     permission: Permission,
@@ -191,6 +193,8 @@ impl Io {
             permission: Permission::ExecuteManagedAgents,
             host_gate: None,
             namespace: None,
+            #[cfg(test)]
+            crypto_fixture: None,
         }
     }
     #[cfg(feature = "shared-intake")]

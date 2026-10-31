@@ -241,6 +241,10 @@ pub(super) async fn input(io: &Io, b: &Bound, w: &SharedWorkItem) -> Result<Stri
     if !w.encrypted {
         return Err(invalid());
     }
+    #[cfg(test)]
+    if let Some(fixture) = &io.crypto_fixture {
+        return fixture.input.clone().ok_or_else(|| failure(503, "shared_room_keys_pending"));
+    }
     let d = device(io, b, &w.assignment_id).await?;
     let m = d
         .read_candidate(&w.room_id, &w.event_id, &w.requester_mxid)
@@ -270,6 +274,35 @@ fn dispatch(w: &SharedWorkItem) -> Dispatch {
         outcome: None,
     }
 }
+
+async fn send_reply(io: &Io, b: &Bound, w: &SharedWorkItem, body: &str) -> Result<String, NativeError> {
+    #[cfg(test)]
+    if let Some(fixture) = &io.crypto_fixture {
+        fixture.sent.lock().unwrap().push((w.id.clone(), body.into()));
+        return Ok(format!("$encrypted_reply_{}:test", w.id));
+    }
+    device(io, b, &w.assignment_id).await?
+        .send_shared_reply(&dispatch(w), body).await
+        .map_err(|_| failure(503, "shared_encrypted_send_pending"))
+}
+
+// Only the Matrix I/O boundary is substituted in supervised-process tests.
+// Input pins, authority checks, durable delivery projection and replay stay real.
+#[cfg(test)]
+pub(super) struct CryptoFixture {
+    input: Option<String>,
+    sent: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+}
+#[cfg(test)]
+impl SharedExecutionTransport {
+    pub(in crate::console::native) fn with_crypto_fixture(
+        mut self, input: Option<String>,
+    ) -> (Self, Arc<std::sync::Mutex<Vec<(String, String)>>>) {
+        let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+        self.io.crypto_fixture = Some(Arc::new(CryptoFixture {input, sent: sent.clone()}));
+        (self, sent)
+    }
+}
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Sent {
@@ -281,12 +314,11 @@ struct Sent {
 /// The ledger retains the original full receipt locally. Its wire projection
 /// replaces only the answer with a closed Matrix delivery receipt and hashes
 /// that projection separately; retries never confuse the two digests.
-#[cfg(feature = "shared-budget-execution")]
 pub(super) async fn wire_receipt(
     io: &Io,
     b: &Bound,
     registry: &OwnerResourceRegistry,
-    command: &SharedBudgetAttemptCommand,
+    command: &SharedRuntimeCommand,
     w: &SharedWorkItem,
     r: &SharedWorkReceipt,
 ) -> Result<SharedWorkReceipt, NativeError> {
@@ -307,12 +339,7 @@ pub(super) async fn wire_receipt(
                 .await;
             let event = match authorized {
                 Ok(_) => {
-                    let d = device(io, b, &w.assignment_id).await?;
-                    Some(
-                        d.send_shared_reply(&dispatch(w), body)
-                            .await
-                            .map_err(|_| failure(503, "shared_encrypted_send_pending"))?,
-                    )
+                    Some(send_reply(io, b, w, body).await?)
                 }
                 // The model already ran. Preserve usage even when permission to
                 // publish was revoked; do not claim an uncertain send never ran.
@@ -363,7 +390,7 @@ pub(super) async fn wire_receipt(
         };
         registry
             .record_shared_reply_delivery(
-                b.cleanup(registry, &command.original_runtime_command)
+                b.cleanup(registry, command)
                     .await?,
                 w.clone(),
                 record,

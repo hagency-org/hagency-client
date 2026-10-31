@@ -86,8 +86,8 @@ pub(super) fn account_budget(db: &Connection, child: &str, binding: &Binding) ->
         .pool
         .ceiling
         .is_none_or(|n| budget.pool.committed > n)
-        || budget.seat.quota.is_none_or(|n| budget.seat.committed > n)
-        || budget.seat.status != allocation::SeatStatus::Declared
+        || budget.seat.quota.is_some_and(|n| budget.seat.committed > n)
+        || budget.seat.status == allocation::SeatStatus::PeriodMismatch
         || budget.pool.period.as_deref() != Some("monthly")
     {
         return Err(Error::Capacity);

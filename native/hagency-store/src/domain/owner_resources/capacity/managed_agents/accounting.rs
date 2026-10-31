@@ -367,9 +367,10 @@ pub(in crate::domain) fn unsettled_resource_except(
     resource: &Resource,
     chain: &std::collections::BTreeSet<String>,
 ) -> Result<bool, Error> {
-    let mut q=db.prepare("SELECT id FROM owner_capacity_grants WHERE accounting_mode=?1 AND (preset_id=?2 OR seat_id=?3)")?;
+    let shared = crate::domain::account_ceiling::shared(db, &resource.seat_id)?;
+    let mut q=db.prepare("SELECT id FROM owner_capacity_grants WHERE accounting_mode=?1 AND (preset_id=?2 OR (?4 AND seat_id=?3))")?;
     let rows = q
-        .query_map(params![MANAGED, resource.preset_id, resource.seat_id], |r| {
+        .query_map(params![MANAGED, resource.preset_id, resource.seat_id, shared], |r| {
             r.get::<_, String>(0)
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -405,9 +406,10 @@ pub(in crate::domain) fn unsettled_resource(
     db: &Connection,
     resource: &Resource,
 ) -> Result<bool, Error> {
-    let mut q=db.prepare("SELECT id FROM owner_capacity_grants WHERE accounting_mode=?1 AND (preset_id=?2 OR seat_id=?3)")?;
+    let shared = crate::domain::account_ceiling::shared(db, &resource.seat_id)?;
+    let mut q=db.prepare("SELECT id FROM owner_capacity_grants WHERE accounting_mode=?1 AND (preset_id=?2 OR (?4 AND seat_id=?3))")?;
     let rows = q.query_map(
-        params![MANAGED, resource.preset_id, resource.seat_id],
+        params![MANAGED, resource.preset_id, resource.seat_id, shared],
         |r| r.get::<_, String>(0),
     )?;
     for row in rows {

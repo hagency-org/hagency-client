@@ -294,7 +294,9 @@ async fn work_loop(
         .await?;
         if let Some(w) = reply.value.work {
             w.validate().map_err(store)?;
-            if w.encrypted { return Err(failure(409,"shared_encrypted_budget_runtime_required")); }
+            if w.encrypted && !cfg!(feature = "shared-context") {
+                return Err(failure(409, "shared_encrypted_context_required"));
+            }
             if cfg!(feature = "shared-intake") {
                 super::demands::bind_work(&b, r, sink.command(), &w, verified, a.until).await?;
                 let (_, fresh) = proof(io, r, sink, a).await?;
@@ -326,7 +328,7 @@ async fn work_loop(
     };
     let (b,p)=proof(io,r,sink,a).await?;
     let input=if cfg!(feature="shared-context") {
-        Some(guarded(cancel,a.until,super::context_io::prepare(&b,r,p,&work,a.lease.authority.clone(),a.until)).await?)
+        Some(guarded(cancel,a.until,super::context_io::prepare(io,&b,r,p,&work,a.lease.authority.clone(),a.until)).await?)
     }else{None};
     let (_,p)=proof(io,r,sink,a).await?;
     let call=if let Some(input)=&input {r.prepare_shared_input_call(p,work.clone(),input.clone()).await} else {r.prepare_shared_call(p,work.clone()).await}.map_err(store)?;
@@ -526,6 +528,8 @@ pub(super) async fn report_work(
     if digest(&saved)? != digest(receipt)? {
         return Err(invalid());
     }
+    let wire_receipt = super::e2ee::wire_receipt(io, &b, r, c, work, receipt).await?;
+    let receipt = &wire_receipt;
     let started = Instant::now();
     let reply: Timed<TicketReply> = b
         .request(
@@ -548,7 +552,7 @@ pub(super) async fn report_work(
         if digest(&old)? != digest(receipt)? {
             return Err(invalid());
         }
-        if t.reply_state.as_deref()==Some("sent") {super::context_io::observe_delivery(&b,r,c,work).await?;}
+        if !work.encrypted && t.reply_state.as_deref()==Some("sent") {super::context_io::observe_delivery(&b,r,c,work).await?;}
         return Ok(t.reply_state);
     }
     let until = io::window(
@@ -576,6 +580,6 @@ pub(super) async fn report_work(
     {
         return Err(invalid());
     }
-    if ack.value.reply_state.as_deref()==Some("sent") {super::context_io::observe_delivery(&b,r,c,work).await?;}
+    if !work.encrypted && ack.value.reply_state.as_deref()==Some("sent") {super::context_io::observe_delivery(&b,r,c,work).await?;}
     Ok(ack.value.reply_state)
 }

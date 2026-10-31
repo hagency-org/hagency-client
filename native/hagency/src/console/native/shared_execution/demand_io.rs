@@ -43,6 +43,9 @@ impl Status {
         {
             return Err(invalid());
         }
+        if self.state == "bound" {
+            self.binding.as_ref().ok_or_else(invalid)?.validate_offer(&self.offer).map_err(store)?;
+        }
         Ok(())
     }
 }

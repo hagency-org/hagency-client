@@ -151,7 +151,7 @@ pub(super) async fn predecessor() -> (Fixture, SharedExecutionTransport, SharedR
     .unwrap();
     (f, t, c)
 }
-async fn prepare_lost_start(f: &Fixture, t: &SharedExecutionTransport, c: &SharedRuntimeCommand) {
+pub(super) async fn prepare_lost_start(f: &Fixture, t: &SharedExecutionTransport, c: &SharedRuntimeCommand) {
     f.state.lock().unwrap().shared.attempts.lose_start_reply = true;
     assert!(
         t.start_successor(&f.registry, c.clone(), None)
@@ -179,7 +179,7 @@ async fn prepare_lost_start(f: &Fixture, t: &SharedExecutionTransport, c: &Share
     work.execution_id = "successor_execution".into();
     work.runtime_command_digest = digest(&attempt).unwrap();
 }
-async fn wait_stopped(f: &Fixture) {
+pub(super) async fn wait_stopped(f: &Fixture) {
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             if f.state

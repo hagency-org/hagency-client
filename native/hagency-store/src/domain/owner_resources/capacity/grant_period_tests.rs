@@ -114,7 +114,7 @@ impl Fixture {
             .await
             .unwrap()
             .budget
-            .seat
+            .pool
             .remaining
             .map(u64::from)
             .unwrap()
@@ -141,7 +141,7 @@ impl Fixture {
                 let resource = read_resource(&db.db, &resource)?;
                 Ok(
                     super::super::super::budget_at(&db.db, &resource, None, false, at)?
-                        .seat
+                        .pool
                         .remaining
                         .map(u64::from),
                 )
@@ -700,7 +700,7 @@ async fn resource_return_expiry_keeps_exact_receipt_and_no_duplicate_capacity() 
                 .await
                 .unwrap()
                 .budget
-                .seat
+                .pool
                 .remaining
                 .map(u64::from),
             Some(1000)

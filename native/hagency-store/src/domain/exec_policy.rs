@@ -15,6 +15,7 @@
 //!   is TS's default `{ yolo: false }` (backend-v2.js:10867 reads
 //!   `agent.executionPolicy?.yolo === true`).
 mod management;
+pub(crate) mod shared_web;
 mod workspaces;
 use super::DomainRepository;
 use crate::Error;

@@ -71,7 +71,7 @@ async fn remaining(registry: &OwnerResourceRegistry, a: &ProfileAuthority, resou
         .await
         .unwrap()
         .budget
-        .seat
+        .pool
         .remaining
         .map(u64::from)
         .unwrap()
@@ -679,12 +679,12 @@ async fn parent_close_cannot_release_an_independent_legacy_hold_on_same_provider
     let g = grant(&registry, &a, &resource.resource_id, "parent", 300)
         .await
         .unwrap();
-    assert_eq!(remaining(&registry, &a, &resource.resource_id).await, 0);
+    assert_eq!(remaining(&registry, &a, &resource.resource_id).await, 700);
     let p = close(&registry, &a, &g, closure(&g, "close", None)).await;
     assert_eq!(p.retained_tokens, 0);
-    assert_eq!(remaining(&registry, &a, &resource.resource_id).await, 300);
+    assert_eq!(remaining(&registry, &a, &resource.resource_id).await, 1000);
     assert!(
-        grant(&registry, &a, &resource.resource_id, "overbook", 301)
+        grant(&registry, &a, &resource.resource_id, "overbook", 1001)
             .await
             .is_err()
     );

@@ -613,7 +613,7 @@ async fn local_edit_queued_retirement_and_permission_checks_prevent_writes() {
 }
 
 #[tokio::test]
-async fn local_edit_limit_changes_never_raise_the_shared_account_quota() {
+async fn local_edit_limit_changes_keep_the_explicit_shared_declaration() {
     let f = fixture().await;
     let backing = resource_name_tests::active(&f).await;
     let ctx = context(&f);

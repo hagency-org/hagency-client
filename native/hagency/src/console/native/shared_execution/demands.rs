@@ -166,6 +166,13 @@ impl SharedExecutionTransport {
             .ok_or_else(|| failure(409, "shared_demand_original_missing"))?;
         io::binding(&b.scope, target.original(), false)?;
         if !matches!(s.state.as_str(), "offered" | "start_committed") {
+            if s.state == "bound" {
+                r.recover_shared_demand_binding(
+                    b.cleanup(r, target.original()).await?,
+                    s.offer.clone(),
+                    s.binding.clone().ok_or_else(invalid)?,
+                ).await.map_err(store)?;
+            }
             // Terminal history never becomes fresh launch authority. A central
             // cancellation restricts the original Run revision locally too.
             if s.state == "cancelled" {

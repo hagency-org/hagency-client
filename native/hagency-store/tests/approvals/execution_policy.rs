@@ -36,6 +36,7 @@ fn query(agent: &str) -> ExecutionPolicyQuery {
 }
 fn edit(current: &AgentExecutionPolicy, id: &str, yolo: bool) -> EditExecutionPolicy {
     EditExecutionPolicy {
+        web_search: None,
         command_id: id.into(),
         resource_id: current.resource_id.clone(),
         engagement_id: current.engagement_id.clone(),

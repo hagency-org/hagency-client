@@ -2,6 +2,7 @@
 pub mod owner_resources;
 mod reconciliation;
 pub(crate) mod resource_ceiling;
+pub(crate) mod account_ceiling;
 mod resource_detail;
 use crate::{Error, database};
 use hagency_core::{
@@ -1039,17 +1040,7 @@ fn budget_with_options(
     at: u64,
     succession: Option<&std::collections::BTreeSet<String>>,
 ) -> Result<Budget, Error> {
-    let declaration: Option<String> = db
-        .query_row(
-            "SELECT config FROM seats WHERE id=?1",
-            [&resource.seat_id],
-            |r| r.get(0),
-        )
-        .optional()?;
-    let declaration = declaration
-        .map(|s| serde_json::from_str::<Seat>(&s))
-        .transpose()?
-        .and_then(|s| s.declaration);
+    let declaration = account_ceiling::declaration(db, &resource.seat_id)?;
     // Aggregate in SQLite, not by cloning or scanning the whole lifetime store in Rust.
     // SQLite SUM fails rather than wrapping; Tokens also enforces JSON-safe precision.
     // ADR-186 §A4: an engagement holds its granted amount when one is set.

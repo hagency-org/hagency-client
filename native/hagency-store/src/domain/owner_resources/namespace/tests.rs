@@ -159,7 +159,7 @@ async fn current_codex_models_enroll_and_recover_without_rewriting_old_resources
 }
 
 #[tokio::test]
-async fn two_namespaces_share_one_physical_quota_and_keep_distinct_launches() {
+async fn two_namespaces_share_login_but_use_owner_chosen_pool_limits() {
     let temp = tempfile::tempdir().unwrap();
     let r = OwnerResourceRegistry::open_root(&temp.path().join("owner")).unwrap();
     let p = authority('a');
@@ -215,34 +215,16 @@ async fn two_namespaces_share_one_physical_quota_and_keep_distinct_launches() {
     grant(&r, &p, &first.resource_id, "first_capacity", 600)
         .await
         .unwrap();
-    assert!(
-        grant(&r, &p, &second.resource_id, "second_capacity", 500)
-            .await
-            .is_err()
-    );
-    grant(&r, &p, &second.resource_id, "remaining_capacity", 400)
-        .await
-        .unwrap();
-    assert_eq!(
-        r.resource(&p, first.resource_id.clone())
-            .await
-            .unwrap()
-            .budget
-            .seat
-            .remaining
-            .map(u64::from),
-        Some(0)
-    );
+    grant(&r, &p, &second.resource_id, "second_capacity", 500).await.unwrap();
+    assert!(grant(&r, &p, &second.resource_id, "over_pool", 501).await.is_err());
+    let first_budget = r.resource(&p, first.resource_id.clone()).await.unwrap().budget;
+    assert_eq!(first_budget.seat.quota, None);
+    assert_eq!(first_budget.pool.remaining.map(u64::from), Some(400));
     let mut altered = input(b, "different_ceiling");
     altered.monthly_tokens = 2000;
-    assert!(
-        consent(&r, &p, altered, "same-quota")
-            .await
-            .approve()
-            .await
-            .is_err()
-    );
-    assert_eq!(counts(&r).await, vec![2, 1, 2, 2, 2, 2]);
+    altered.model = "gpt-6.1-terra".into();
+    let third = consent(&r, &p, altered, "same-quota").await.approve().await.unwrap();
+    assert_eq!(r.resource(&p, third.resource_id).await.unwrap().budget.remaining_tokens.map(u64::from), Some(2000));
     r.shutdown().await.unwrap();
 }
 #[tokio::test]

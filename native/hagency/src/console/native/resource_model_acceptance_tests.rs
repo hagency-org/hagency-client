@@ -52,7 +52,7 @@ async fn native_ready_model_child(){
     let copy=||serde_json::from_value::<EditLocalResource>(serde_json::to_value(&input).unwrap()).unwrap();
     assert!(matches!(m.review_local_resource_edit(&input).await.unwrap(),LocalResourceEditReview::Editable(_)));
     let applied=m.edit_local_resource(copy(),until()).await.unwrap();let changed=m.resource_detail(ResourceDetailQuery{id:id.clone()}).await.unwrap();
-    assert_eq!(changed.resource.reasoning.as_deref(),Some("medium"));assert_eq!(changed.resource.budget.seat.quota.map(u64::from),Some(700));
+    assert_eq!(changed.resource.reasoning.as_deref(),Some("medium"));assert_eq!(changed.resource.budget.seat.quota,None);
     std::fs::write(namespace.join("fixture-withheld"),"").unwrap();
     let unavailable=EditLocalResource{command_id:"ready_model_withheld".into(),resource_id:id.clone(),expected_revision:applied.revision.clone(),profile:hagency_store::ProfileChange::Select{model:"gpt-5.6-sol".into(),reasoning:Some("high".into())},ceiling:hagency_store::CeilingChange::Preserve{},execution_policy:None,expected_ceiling_sequence:None};
     assert_eq!(m.edit_local_resource(unavailable,until()).await.unwrap_err().code,"provider_model_changed");assert_eq!(m.resource_detail(ResourceDetailQuery{id:id.clone()}).await.unwrap().resource.revision,applied.revision);
@@ -114,7 +114,7 @@ async fn native_ceiling_amendment_child(){
     assert_eq!(std::fs::read_to_string(namespace.join("fixture-methods")).unwrap(),calls,"an amendment never queries the provider");
     let detail=m.resource_detail(ResourceDetailQuery{id:id.clone()}).await.unwrap();
     assert_eq!(detail.resource.revision,revision);assert_eq!(detail.ceiling.and_then(|c|c.tokens).map(u64::from),Some(900));
-    assert_eq!(detail.ceiling_amendment.sequence,1);assert_eq!(detail.resource.budget.seat.quota.map(u64::from),Some(700));
+    assert_eq!(detail.ceiling_amendment.sequence,1);assert_eq!(detail.resource.budget.seat.quota,None);
     // The original command recovers its recorded result and writes nothing.
     assert!(matches!(m.review_local_resource_edit(&input).await.unwrap(),LocalResourceEditReview::Recorded(_)));
     assert_eq!(m.edit_local_resource(copy(),until()).await.unwrap().ceiling_amendment,applied.ceiling_amendment);

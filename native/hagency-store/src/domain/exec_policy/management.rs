@@ -26,6 +26,7 @@ fn snapshot(db: &Connection, query: &ExecutionPolicyQuery) -> Result<AgentExecut
         &resource.framework,
     )?;
     let mut result = AgentExecutionPolicy {
+        web_search: None,
         shared_mode: None,
         resource_id: query.resource_id.clone(),
         engagement_id: query.engagement_id.clone(),
@@ -142,7 +143,16 @@ impl DomainRepository {
             Some(&serde_json::to_value(input.execution_policy)?),
             &current.framework,
         )?;
-        if current.shared_mode.is_some() {
+        if let Some(enabled) = input.web_search {
+            if current.shared_mode.is_none() || input.execution_policy != current.execution_policy {
+                return Err(Error::LocalAuthority);
+            }
+            let (child, profile): (String, String) = tx.query_row(
+                "SELECT id,profile FROM owner_managed_agents WHERE agent_id=?1 AND json_extract(original_command,'$.resourceId')=?2 AND state='reserved' AND permanent_fence=0",
+                params![input.engagement_id, input.resource_id], |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            super::shared_web::write(&tx, &child, &profile, &input.engagement_id, enabled)?;
+        } else if current.shared_mode.is_some() {
             tx.execute("INSERT INTO owner_shared_tool_policies(child_id,yolo,revision) SELECT id,?3,1 FROM owner_managed_agents WHERE agent_id=?1 AND json_extract(original_command,'$.resourceId')=?2 AND state='reserved' AND permanent_fence=0 ON CONFLICT(child_id) DO UPDATE SET yolo=excluded.yolo,revision=revision+1",params![input.engagement_id,input.resource_id,policy.yolo])?;
         } else {
             write_policy(&tx, &input.engagement_id, policy.yolo, crate::domain::graphs::now_ms()?)?;
@@ -156,17 +166,23 @@ impl DomainRepository {
 }
 
 fn shared_snapshot(db: &Connection, query: &ExecutionPolicyQuery) -> Result<AgentExecutionPolicy, Error> {
+    let (child, profile): (String, String) = db.query_row(
+        "SELECT id,profile FROM owner_managed_agents WHERE agent_id=?1 AND json_extract(original_command,'$.resourceId')=?2 AND state='reserved' AND permanent_fence=0",
+        params![query.engagement_id, query.resource_id], |row| Ok((row.get(0)?, row.get(1)?)),
+    ).optional()?.ok_or(Error::NotFound)?;
+    let web = super::shared_web::read(db, &child, &profile, &query.engagement_id)?;
     let (raw,saved): (String,Option<String>) = db.query_row("SELECT a.original_command,CASE WHEN p.child_id IS NULL THEN NULL ELSE json_object('yolo',p.yolo,'revision',p.revision) END FROM owner_managed_agents a LEFT JOIN owner_shared_tool_policies p ON p.child_id=a.id WHERE a.agent_id=?1 AND json_extract(a.original_command,'$.resourceId')=?2 AND a.state='reserved' AND a.permanent_fence=0",params![query.engagement_id,query.resource_id],|r|Ok((r.get(0)?,r.get(1)?))).optional()?.ok_or(Error::NotFound)?;
     let command: Value=serde_json::from_str(&raw)?;
     let saved: Option<Value>=saved.as_deref().map(serde_json::from_str).transpose()?;
     let yolo=saved.as_ref().is_some_and(|s|s["yolo"]==1);
     let mut result=AgentExecutionPolicy {
+        web_search: Some(web.enabled),
         shared_mode:Some(if saved.is_none(){"chat"}else if yolo{"yolo"}else{"standard"}.into()),
         resource_id:query.resource_id.clone(),engagement_id:query.engagement_id.clone(),
         agent:command["definition"]["name"].as_str().ok_or(Error::LocalAuthority)?.into(),
         project_id:String::new(),project_name:None,framework:"codex".into(),
         execution_policy:ExecutionPolicyValue{yolo},applies_to:PolicyApplication::NextDispatch,revision:String::new(),
     };
-    result.revision=hagency_core::canonical::digest(&json!({"policy":result,"saved":saved}))?;
+    result.revision=hagency_core::canonical::digest(&json!({"policy":result,"saved":saved,"webRevision":web.revision}))?;
     Ok(result)
 }

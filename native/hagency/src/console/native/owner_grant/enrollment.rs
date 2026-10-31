@@ -235,6 +235,7 @@ impl OwnerGrantIntents {
                 remaining_tokens: resource.budget.remaining_tokens.map(u64::from),
                 resource_total_tokens: resource.budget.pool.ceiling.map(u64::from),
                 shared_account_total_tokens: resource.budget.seat.quota.map(u64::from),
+                capacity_blocker: capacity_blocker(&resource.budget),
                 observed_at_ms: now_ms()?,
             },
         })

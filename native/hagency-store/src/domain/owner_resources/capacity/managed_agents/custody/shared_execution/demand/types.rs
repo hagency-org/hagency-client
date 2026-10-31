@@ -88,12 +88,31 @@ pub struct SharedDemandBinding {
     pub work_digest: String,
 }
 impl SharedDemandBinding {
+    pub fn validate_offer(&self, offer: &SharedDemandOffer) -> Result<(), Error> {
+        offer.validate()?;
+        identifier(&self.runtime_command_id, 128)?;
+        identifier(&self.work_id, 128)?;
+        hash(&self.runtime_command_digest)?;
+        hash(&self.work_digest)?;
+        if self.version != 1
+            || self.demand_id != offer.demand_id
+            || self.demand_digest != offer.digest()?
+            || self.control_revision != offer.control_revision
+            || self.assignment_id != offer.assignment_id
+            || self.event_id != offer.event_id
+            || self.received_at_ms != offer.received_at_ms
+            || serde_json::to_vec(self)?.len() + serde_json::to_vec(offer)?.len() > 16384
+        {
+            return Err(Error::Conflict);
+        }
+        Ok(())
+    }
     pub fn validate_for(
         &self,
         offer: &SharedDemandOffer,
         work: &SharedWorkItem,
     ) -> Result<(), Error> {
-        offer.validate()?;
+        self.validate_offer(offer)?;
         work.validate()?;
         identifier(&self.runtime_command_id, 128)?;
         hash(&self.runtime_command_digest)?;

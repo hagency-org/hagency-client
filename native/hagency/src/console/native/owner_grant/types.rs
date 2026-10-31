@@ -151,7 +151,29 @@ pub struct OwnerGrantReviewContext {
     pub remaining_tokens: Option<u64>,
     pub resource_total_tokens: Option<u64>,
     pub shared_account_total_tokens: Option<u64>,
+    /// Read-only reason from the same budget snapshot, never permission to publish.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capacity_blocker: Option<String>,
     pub observed_at_ms: u64,
+}
+
+fn capacity_blocker(budget: &hagency_core::allocation::Budget) -> Option<String> {
+    let code = if budget.pool.ceiling.is_none() {
+        "pool_limit_missing"
+    } else if budget.pool.remaining.is_none() {
+        "usage_unsettled"
+    } else if budget.seat.status == hagency_core::allocation::SeatStatus::PeriodMismatch {
+        "account_period_mismatch"
+    } else if budget.seat.remaining.is_some_and(|n| u64::from(n) == 0) {
+        "account_limit_reached"
+    } else if budget.pool.remaining.is_some_and(|n| u64::from(n) == 0) {
+        "pool_limit_reached"
+    } else if budget.remaining_tokens.is_none() {
+        "capacity_unknown"
+    } else {
+        return None;
+    };
+    Some(code.into())
 }
 
 /// Read-only facts for a native publication form. Opening the form creates no
