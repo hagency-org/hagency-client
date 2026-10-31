@@ -5940,3 +5940,5 @@ Integrated main cf7 + SDK95 credentials source has exact-CI App857/0/2 and own a
 
 - ApprovalRows uses logical PortalList positions for scrolling and bounded stable widget keys for exact account/Agent/binding/Room/proposal/digest targets. Preserve the visible anchor and painted-target checks across inserts; an empty viewport has exactly one Empty item. Identical successful polls must leave the draw cache untouched.
 - Approval entry responsive script updates must use mod.turtle.Align/Inset, since script_apply_eval has its own scope. Expanded-only tests miss this failure; exercise repeated narrow/wide transitions with actual loaded icon resources and final area rectangles (raw draw_icon.rect_pos precedes alignment).
+
+- Tokio JoinHandle.abort only requests cancellation. A queued-observer cancellation fixture must join queued tasks to observe their Cancel guards before releasing occupied workers; aborting active tasks first can legitimately admit still-live queued jobs. Keep original HTTP-count assertions and worker/queue limits.
