@@ -633,14 +633,20 @@ script_mod! {
     }
     mod.widgets.ApprovalInboxRows = #(approval_discovery::ApprovalRows::register_widget(vm)) {
         ..mod.widgets.PortalList
+        selectable:false keep_invisible:false
     }
     mod.widgets.GlobalApprovalInbox = #(approval_discovery::GlobalApprovalInbox::register_widget(vm)) {
         width: Fill height: Fit flow: Down
-        open_approval_inbox := RinxGhostButton {width:Fill height:36 text:#(crate::i18n::tr("Approvals")) i18n_text:"Approvals"
-            draw_icon.svg:crate_resource("self://resources/icons/bell.svg") icon_walk:Walk{width:18 height:18} spacing:8}
+        open_approval_inbox := RinxGhostButton {width:Fill height:40 align:Align{x:0 y:0.5} padding:Inset{left:12 right:8}
+            text:#(crate::i18n::tr("Approvals")) i18n_text:"Approvals"
+            draw_icon.svg:crate_resource("self://resources/icons/bell.svg") icon_walk:Walk{width:18 height:18} spacing:10}
         inbox_popup := Modal {
             content := SmallModal {width:580 height:560 flow:Down spacing:10
-                ModalTitle {text:#(crate::i18n::tr("Pending approvals")) i18n_text:"Pending approvals"}
+                inbox_header := View {width:Fill height:32 flow:Right spacing:6 align:Align{y:0.5}
+                    ModalTitle {width:Fill margin:0 align:Align{x:0 y:0.5} text:#(crate::i18n::tr("Pending approvals")) i18n_text:"Pending approvals"}
+                    inbox_refresh := RinxIconButton {width:32 height:32 draw_icon.svg:crate_resource("self://resources/icons/article_refresh.svg")}
+                    inbox_close := RinxIconButton {width:32 height:32 draw_icon.svg:ICON_CLOSE}
+                }
                 inbox_status := RinxLabel {width:Fill height:Fit max_lines:3 flow:Flow.Right{wrap:true}}
                 inbox_rows := mod.widgets.ApprovalInboxRows {width:Fill height:Fill
                     Approval := View {width:Fill height:102 flow:Down padding:8 spacing:6
@@ -649,11 +655,9 @@ script_mod! {
                     }
                     Empty := RinxLabel {width:Fill height:50 text:#(crate::i18n::tr("No pending approvals on this device.")) i18n_text:"No pending approvals on this device."}
                 }
-                View {width:Fill height:Fit flow:Flow.Right{wrap:true} spacing:6
+                inbox_pagination := View {visible:false width:Fill height:Fit flow:Right spacing:6 align:Align{x:1 y:0.5}
                     inbox_previous := RinxGhostButton {height:32 text:#(crate::i18n::tr("Previous page")) i18n_text:"Previous page"}
                     inbox_next := RinxGhostButton {height:32 text:#(crate::i18n::tr("Next page")) i18n_text:"Next page"}
-                    inbox_refresh := RinxGhostButton {height:32 text:#(crate::i18n::tr("Refresh")) i18n_text:"Refresh"}
-                    inbox_close := RinxGhostButton {height:32 text:#(crate::i18n::tr("Close")) i18n_text:"Close"}
                 }
             }
         }

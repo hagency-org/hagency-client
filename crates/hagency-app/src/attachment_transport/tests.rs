@@ -368,14 +368,26 @@ async fn four_original_downloads_and_sixteen_metadata_queue_cancel_without_new_h
             .await
             .is_err()
     );
+    // Tokio abort requests cancellation; joining confirms that the runtime has
+    // dropped the future and its Cancel guard. Retire queued observers before
+    // freeing the four occupied workers, or a still-live queued job can
+    // start HTTP while cancellation of the earlier active jobs is processed.
+    let queued = jobs.split_off(4);
+    for job in &queued {
+        job.abort();
+    }
+    for job in queued {
+        assert!(matches!(job.await, Err(error) if error.is_cancelled()));
+    }
+    assert_eq!(active.load(Ordering::Acquire), 4);
     for job in &jobs {
         job.abort();
     }
-    *release.0.lock().unwrap() = true;
-    release.1.notify_all();
     for job in jobs {
         let _ = job.await;
     }
+    *release.0.lock().unwrap() = true;
+    release.1.notify_all();
     fixture.settle().await;
     assert_eq!(
         active.load(Ordering::Acquire),
