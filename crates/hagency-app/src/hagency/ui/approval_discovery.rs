@@ -337,8 +337,8 @@ impl Widget for GlobalApprovalInbox {
         if compact!=self.compact {
             self.compact=compact;
             let mut button=self.view.button(cx,ids!(open_approval_inbox));
-            if compact {script_apply_eval!(cx,button,{align:Align{x:0.5 y:0.5} padding:0 spacing:4});}
-            else {script_apply_eval!(cx,button,{align:Align{x:0 y:0.5} padding:Inset{left:12 right:8} spacing:10});}
+            if compact {script_apply_eval!(cx,button,{align:mod.turtle.Align{x:0.5 y:0.5} padding:0 spacing:4});}
+            else {script_apply_eval!(cx,button,{align:mod.turtle.Align{x:0 y:0.5} padding:mod.turtle.Inset{left:12 right:8} spacing:10});}
             self.render(cx);
         }
         self.view.draw_walk(cx,scope,walk)
@@ -372,13 +372,46 @@ mod tests {
         inbox.accept(cx,&done);
     }
     fn draw(cx:&mut Cx,inbox:&mut GlobalApprovalInbox,width:f64,height:f64) {
+        draw_with_sidebar_width(cx,inbox,width,height,250.0);
+    }
+    fn draw_with_sidebar_width(cx:&mut Cx,inbox:&mut GlobalApprovalInbox,width:f64,height:f64,sidebar_width:f64) {
         cx.redraw_all();let pass=DrawPass::new(cx);pass.set_size(cx,dvec2(width,height));
         let mut list=DrawList2d::new(cx);let overlay=Overlay {draw_list:DrawList::new(cx)};
         let event=DrawEvent::default();let mut draw=CxDraw::new(cx,&event);let mut cx2d=Cx2d::new(&mut draw);
         cx2d.begin_pass(&pass,None);list.begin_always(&mut cx2d);overlay.begin(&mut cx2d);
         cx2d.begin_root_turtle(dvec2(width,height),Layout::flow_overlay());
-        inbox.draw_walk_all(&mut cx2d,&mut Scope::empty(),Walk::fixed(250.0,36.0));
+        inbox.draw_walk_all(&mut cx2d,&mut Scope::empty(),Walk::fixed(sidebar_width,40.0));
         overlay.end(&mut cx2d);cx2d.end_pass_sized_turtle();list.end(&mut cx2d);cx2d.end_pass(&pass);
+    }
+    #[test]
+    fn collapsed_inbox_entry_centers_and_restores_its_layout_without_script_errors() {
+        let (mut cx,mut inbox)=widget();inbox.identity="account".into();
+        finish(&mut cx,&mut inbox,json!({"approvals":[],"total":0,"nextCursor":null}));
+        for resource in cx.script_data.resources.resources.borrow_mut().iter_mut() {
+            let path=resource.abs_path.replace("/draw/../../widgets/","/widgets/");
+            if let Ok(bytes)=std::fs::read(path) {
+                resource.data=makepad_widgets::makepad_platform::script::res::CxScriptResourceData::Loaded(bytes.into());
+            }
+        }
+        for width in [70.0,250.0,70.0,250.0] {
+            cx.with_vm(|vm|vm.bx.captured_errors=Some(Vec::new()));
+            draw_with_sidebar_width(&mut cx,&mut inbox,1100.0,760.0,width);
+            let errors=cx.with_vm(|vm|vm.take_errors());
+            assert!(errors.is_empty(),"sidebar width {width}: {errors:?}");
+            let entry=inbox.view.button(&cx,ids!(open_approval_inbox));
+            let bounds=entry.area().rect(&cx);
+            let button=entry.borrow().unwrap();
+            let icon=button.draw_icon.area().rect(&cx);
+            assert!(icon.size.x>0.0,"the declared icon must actually draw");
+            let icon_offset=icon.pos.x-bounds.pos.x;
+            drop(button);
+            if width<120.0 {
+                assert!(icon_offset>15.0,"collapsed icon group must be centered: {icon_offset}");
+                assert_eq!(entry.text(),"0");
+            } else {
+                assert!((icon_offset-12.0).abs()<1.0,"expanded icon left padding: {icon_offset}");
+            }
+        }
     }
     #[test]
     fn discovery_page_is_bounded_and_rejects_malformed_targets() {
