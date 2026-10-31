@@ -398,4 +398,16 @@ mod tests {
             ));
         }
     }
+    #[test]
+    fn room_approval_scope_excludes_sibling_rooms_and_legacy_agent_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let room = root.join("rooms/room_one");
+        let sibling = root.join("rooms/room_two");
+        std::fs::create_dir_all(&room).unwrap();
+        std::fs::create_dir_all(&sibling).unwrap();
+        for (path, allowed) in [(room.join("new.txt"), true), (sibling.join("new.txt"), false), (root.join("legacy.txt"), false)] {
+            assert_eq!(within_workspace("item/permissions/requestApproval", &json!({"permissions":{"fileSystem":{"write":[path]}}}), &room), allowed);
+        }
+    }
 }

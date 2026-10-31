@@ -95,6 +95,21 @@ impl<R, W, E> SessionDriver<R, W, E> {
     pub fn settings(&self) -> &Settings {
         &self.settings
     }
+    /// Shared execution chooses a room only after work admission. Keep model,
+    /// permissions and activity custody fixed; cwd also drives turn sandbox
+    /// roots and the host's approval scope. Never change an active thread.
+    pub(crate) fn bind_shared_workspace(&mut self, directory: std::path::PathBuf) -> Result<(), Error> {
+        if self.phase() != Phase::Ready || self.wire.is_warm_idle() || self.settings.task_mcp.is_some() {
+            return Err(Error::State);
+        }
+        let root = std::path::Path::new(self.settings.cwd());
+        if directory == root || !directory.starts_with(root)
+            || directory.canonicalize().ok().as_ref() != Some(&directory) {
+            return Err(Error::Scope);
+        }
+        self.settings.cwd = Settings::new(directory, self.settings.model.clone(), self.settings.effort.clone())?.cwd;
+        Ok(())
+    }
     /// The acknowledgement budget for a startup RPC (`initialize`,
     /// `thread/start`, `thread/resume`). TS 1:1, and **unconditional**: TS
     /// applies `acknowledgementTimeoutMs` (`?? 60_000`) to these three waits

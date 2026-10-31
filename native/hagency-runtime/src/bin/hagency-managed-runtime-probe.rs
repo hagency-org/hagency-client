@@ -33,6 +33,10 @@ fn main() -> io::Result<()> {
         if method == "initialized" {
             continue;
         }
+        if mode.starts_with("text-workspace") && matches!(method, "thread/start" | "turn/start") {
+            let name = if method == "thread/start" { "thread-request.json" } else { "turn-request.json" };
+            fs::write(root.join(name), serde_json::to_vec(&v["params"])?)?;
+        }
         if (mode == "delay" && method == "account/rateLimits/read")
             || (mode == "delay-config" && method == "config/read")
         {
@@ -99,6 +103,21 @@ fn main() -> io::Result<()> {
                 quota += 1;
                 json!({"accountId":if mode=="changed-account"&&quota>1 {"fixture_changed"}else{"fixture_account"},"rateLimits":{}})
             }
+            "thread/start" if mode.starts_with("text-workspace") => {
+                let sandbox = match mode.as_ref() {
+                    "text-workspace-standard" => json!({"type":"workspaceWrite","writableRoots":[v["params"]["cwd"]],"networkAccess":false}),
+                    "text-workspace-yolo" => json!({"type":"dangerFullAccess"}),
+                    _ => json!({"type":"readOnly","networkAccess":false}),
+                };
+                json!({"thread":{"id":"text-thread","cwd":v["params"]["cwd"],"status":{"type":"idle"},"turns":[]},"cwd":v["params"]["cwd"],"model":v["params"]["model"],"modelProvider":"openai","approvalPolicy":v["params"]["approvalPolicy"],"approvalsReviewer":"user","sandbox":sandbox})
+            }
+            "turn/start" if mode.starts_with("text-workspace") => {
+                let thread: Value = serde_json::from_slice(&fs::read(root.join("thread-request.json"))?)?;
+                if v["params"]["cwd"] != thread["cwd"] {
+                    return Err(io::Error::other("room workspace changed within turn"));
+                }
+                json!({"turn":{"id":"text-turn","items":[],"status":"inProgress"}})
+            }
             "thread/start" if mode.starts_with("text") => {
                 if v["params"]["sandbox"] != "read-only"
                     || v["params"]["approvalPolicy"] != "on-request"
@@ -137,7 +156,15 @@ fn main() -> io::Result<()> {
                     println!("{}", json!({"method":method,"params":params}));
                 }
             }
-            let answer = if mode == "text-context" {
+            if mode == "text-context-workspace" {
+                let cwd = Path::new(v["params"]["cwd"].as_str().ok_or_else(|| io::Error::other("missing cwd"))?);
+                let marker = cwd.join("room-turn-count");
+                let previous = fs::read_to_string(&marker).unwrap_or_default().parse::<u64>().unwrap_or(0);
+                fs::write(marker, (previous + 1).to_string())?;
+                let mut paths = fs::OpenOptions::new().create(true).append(true).open(root.join("room-paths"))?;
+                writeln!(paths, "{}", serde_json::to_string(cwd)?)?;
+            }
+            let answer = if mode.starts_with("text-context") {
                 let input = v["params"]["input"][0]["text"]
                     .as_str()
                     .ok_or_else(|| io::Error::other("context input missing"))?;
@@ -174,7 +201,7 @@ fn main() -> io::Result<()> {
             };
             if matches!(
                 &*mode,
-                "text-usage" | "text-long" | "text-overflow" | "text-stream" | "text-escaped" | "text-items" | "text-renew" | "text-overrun" | "text-context"
+                "text-usage" | "text-long" | "text-overflow" | "text-stream" | "text-escaped" | "text-items" | "text-renew" | "text-overrun" | "text-context" | "text-context-workspace"
             ) {
                 let usage = if mode == "text-overrun" {
                     json!({"totalTokens":4813,"inputTokens":4713,"cachedInputTokens":0,"cacheWriteInputTokens":0,"outputTokens":100,"reasoningOutputTokens":0})

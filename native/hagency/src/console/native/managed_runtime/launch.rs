@@ -332,15 +332,21 @@ impl PreparedLaunch {
         self.web_search = true;
         Ok(self)
     }
-    pub(in crate::console::native) fn with_agent_tools(mut self, agent: &str, mode: Option<&str>) -> Result<Self, NativeError> {
-        let Some(mode)=mode else {return Ok(self)};
-        if !matches!(mode,"standard"|"yolo") || !self.discovery_pending || self.text_model.is_none() || agent.is_empty() || agent.len()>128 || !agent.bytes().all(|b|b.is_ascii_alphanumeric() || b==b'_' || b==b'-') {return Err(failure(409,"shared_tool_policy_unavailable"));}
-        // The credential home stays outside the per-Agent writable workspace.
+    pub(in crate::console::native) fn with_agent_workspace(mut self, agent: &str) -> Result<Self, NativeError> {
+        if agent.is_empty() || agent.len()>128 || !agent.bytes().all(|b|b.is_ascii_alphanumeric() || b==b'_' || b==b'-') {return Err(failure(409,"shared_tool_workspace_unavailable"));}
+        // Process startup uses the Agent root; the admitted work selects a room
+        // below it before thread/start. Credentials stay outside both directories.
         let workspaces=self.launch.directory.join("workspaces");
         hagency_store::private::directory(&workspaces).map_err(|_|failure(409,"shared_tool_workspace_unavailable"))?;
         let directory=workspaces.join(agent);
         hagency_store::private::directory(&directory).map_err(|_|failure(409,"shared_tool_workspace_unavailable"))?;
         if directory.canonicalize().ok().as_ref()!=Some(&directory) {return Err(failure(409,"shared_tool_workspace_unavailable"));}
+        self.launch.directory=directory;
+        Ok(self)
+    }
+    pub(in crate::console::native) fn with_agent_tools(mut self, agent: &str, mode: Option<&str>) -> Result<Self, NativeError> {
+        let Some(mode)=mode else {return self.with_agent_workspace(agent)};
+        if !matches!(mode,"standard"|"yolo") || !self.discovery_pending || self.text_model.is_none() {return Err(failure(409,"shared_tool_policy_unavailable"));}
         let path=self.launch.directory.join(hagency_runtime::owned::SHARED_TOOLS_INSTRUCTIONS_FILE);
         let bytes=hagency_runtime::owned::SHARED_TOOLS_INSTRUCTIONS.as_bytes();
         if !path.try_exists().map_err(|_|failure(409,"shared_tool_policy_unavailable"))? {hagency_store::private::write_new(&path,bytes).map_err(|_|failure(409,"shared_tool_policy_unavailable"))?;}
@@ -349,7 +355,7 @@ impl PreparedLaunch {
         if content!=bytes {return Err(failure(409,"shared_tool_policy_unavailable"));}
         self.launch.arguments.extend(["-c".into(),"features.shell_tool=true".into(),"-c".into(),"features.unified_exec=true".into(),"-c".into(),"features.code_mode_host=true".into(),"-c".into(),format!("model_instructions_file={}",serde_json::to_string(&path).map_err(|_|failure(409,"shared_tool_policy_unavailable"))?).into()]);
         self.launch.environment.insert("PATH".into(),"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin".into());
-        self.launch.directory=directory;self.instructions=path;self.tool_mode=Some(mode.into());Ok(self)
+        self.instructions=path;self.tool_mode=Some(mode.into());self.with_agent_workspace(agent)
     }
     pub(in crate::console::native) fn instructions(&self) -> &Path {
         &self.instructions
@@ -461,6 +467,9 @@ mod selected_provider_test {
         assert_eq!(first.launch.directory, root.join("workspaces/agent_one"));
         assert_eq!(second.launch.directory, root.join("workspaces/agent_two"));
         assert_eq!(launch("agent_one", "standard").unwrap().launch.directory, first.launch.directory);
+        let readonly = PreparedLaunch::fixture("/unused".into(), root.clone(), "unused")
+            .with_agent_tools("agent_one", None).unwrap();
+        assert_eq!(readonly.launch.directory, first.launch.directory);
         hagency_store::private::directory(&first.launch.directory).unwrap();
         assert_eq!(std::fs::read(&credential).unwrap(), b"unchanged");
         assert!(launch("../escape", "standard").is_err());

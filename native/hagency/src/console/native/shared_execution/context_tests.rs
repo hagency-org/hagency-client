@@ -166,6 +166,31 @@ fn offer(f: &Fixture, n: u64, thread: &str, body: &str) {
 }
 #[tokio::test]
 #[ignore = "requires explicit offline context probe"]
+async fn native_shared_context_room_workspaces_follow_actual_work_and_survive_successor_processes() {
+    let (f, t, command) = demands::fixture_budget(2000).await;
+    let mut expected = Vec::new();
+    let room = command.reserve_command.room_id.as_str();
+    for (n, thread) in [(1, "$one"), (2, "$two"), (3, "$three")] {
+        offer(&f, n, thread, "Offline workspace request");
+        let prepared = launch(&f, "text-context-workspace");
+        let root = f._root.path().join("shared-probe").canonicalize().unwrap();
+        expected.push(root.join("workspaces").join(&command.reserve_command.proposed_agent_id)
+            .join("rooms").join(format!("room_{}", hash_text(room))));
+        t.poll_demand_fixture(&f.registry, None, Some(prepared)).await.unwrap();
+        demands::wait_attempt(&f).await;
+    }
+    let paths = std::fs::read_to_string(f._root.path().join("shared-probe/room-paths")).unwrap();
+    let paths: Vec<std::path::PathBuf> = paths.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+    assert_eq!(paths, expected);
+    assert_eq!(paths[0], paths[1]); // Threads share their room's files.
+    assert_eq!(paths[0], paths[2]); // A later process reopens the same room.
+    assert_eq!(std::fs::read_to_string(paths[0].join("room-turn-count")).unwrap(), "3");
+    assert_eq!(rows(&f, "owner_shared_context_call_pins"), 3);
+    f.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires explicit offline context probe"]
 async fn native_shared_context_actual_successive_turns_remember_only_same_thread() {
     let (f, t, _) = demands::fixture_budget(2000).await;
     for (n, thread, body) in [

@@ -364,6 +364,7 @@ impl SharedExecutionTransport {
                 &root, &b.scope.device, r, &b.scope.profile, &resource, true,
             ).await?
         };
+        let launch = launch.with_agent_workspace(&c.reserve_command.proposed_agent_id)?;
         let process_io=self.io.with_namespace(launch.namespace());
         let io = process_io.clone();
         let command = c.clone();

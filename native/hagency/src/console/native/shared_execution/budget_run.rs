@@ -364,7 +364,7 @@ async fn work_loop(
         io.check(&sink.command().original_runtime_command).await?;
         issued.check().map_err(store)?;
         process
-            .start_shared_text_thread()
+            .start_shared_text_thread_for_room(&work.room_id)
             .await
             .map_err(|_| failure(409, "shared_execution_thread_unknown"))?;
         io.check(&sink.command().original_runtime_command).await?;

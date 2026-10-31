@@ -341,6 +341,53 @@ fn text_fixture() -> (tempfile::TempDir, OwnedSession, std::path::PathBuf) {
 }
 
 #[tokio::test]
+async fn shared_room_workspace_binds_thread_turn_and_approval_scope_without_changing_permissions() {
+    use hagency_runtime::owned::{SHARED_TEXT_INSTRUCTIONS, SHARED_TOOLS_INSTRUCTIONS};
+    use sha2::{Digest, Sha256};
+    for (mode, tools) in [(None, None), (Some("standard"), Some(false)), (Some("yolo"), Some(true))] {
+        let probe_mode = format!("text-workspace-{}", mode.unwrap_or("readonly"));
+        let (t, mut process) = fixture_policy(&probe_mode, |_| {}, tools);
+        let root = t.path().canonicalize().unwrap();
+        let instructions = root.join("room-instructions.md");
+        std::fs::write(&instructions, if tools.is_some() { SHARED_TOOLS_INSTRUCTIONS } else { SHARED_TEXT_INSTRUCTIONS }).unwrap();
+        let mut c = config(&instructions);
+        if tools.is_some() {
+            for key in ["shell_tool", "unified_exec", "code_mode_host"] { c["features"][key] = true.into(); }
+        }
+        std::fs::write(root.join("config.json"), serde_json::to_vec(&c).unwrap()).unwrap();
+        process.initialize().await.unwrap();
+        process.qualify_shared_tools(&instructions, false, mode).await.unwrap();
+        assert!(process.start_shared_text_thread_for_room("!unadmitted:server").await.is_err());
+        assert!(!root.join("rooms").exists());
+        let now = std::time::Instant::now();
+        process.install_shared_text_activity(1, now + Duration::from_secs(5), now + Duration::from_secs(10)).unwrap();
+        let room = "!actual-work-room:server:19443";
+        let expected = root.join("rooms").join(format!("room_{:x}", Sha256::digest(room.as_bytes())));
+        process.start_shared_text_thread_for_room(room).await.unwrap();
+        // This accessor is also what host approval checks use.
+        assert_eq!(process.shared_workspace(), expected);
+        process.start_shared_text_turn("Offline room request".into()).await.unwrap();
+        loop {
+            let event = process.next_shared_text_event().await.unwrap();
+            if matches!(event.observation().kind(), hagency_runtime::codex::session::ObservationKind::TurnEnded(_)) { break; }
+        }
+        let thread: Value = serde_json::from_slice(&std::fs::read(root.join("thread-request.json")).unwrap()).unwrap();
+        let turn: Value = serde_json::from_slice(&std::fs::read(root.join("turn-request.json")).unwrap()).unwrap();
+        assert_eq!(thread["cwd"], json!(expected));
+        assert_eq!(turn["cwd"], json!(expected));
+        assert_eq!(turn["approvalPolicy"], if tools == Some(true) { "never" } else { "on-request" });
+        match tools {
+            None => assert_eq!(turn["sandboxPolicy"], json!({"type":"readOnly","networkAccess":false})),
+            Some(false) => assert_eq!(turn["sandboxPolicy"], json!({"type":"workspaceWrite","writableRoots":[expected],"networkAccess":false})),
+            Some(true) => assert_eq!(turn["sandboxPolicy"], json!({"type":"dangerFullAccess"})),
+        }
+        assert!(process.start_shared_text_thread_for_room("!other:server").await.is_err());
+        assert_eq!(process.shared_workspace(), expected);
+        assert_eq!(process.stop_shared_text_observation().state(), ManagedProcessState::Stopped);
+    }
+}
+
+#[tokio::test]
 async fn shared_live_web_qualification_is_explicit_and_keeps_other_tools_disabled() {
     use hagency_runtime::owned::{SHARED_WEB_INSTRUCTIONS, shared_text_policy};
     for bad in [None, Some("shell_tool"), Some("hooks"), Some("future_tool"), Some("mcp")] {

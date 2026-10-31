@@ -368,6 +368,24 @@ impl OwnedSession {
         let result = operation.runner.session.start_thread().await;
         operation.finish(result)
     }
+    /// Bind the actual admitted Matrix room, never the reservation's initial
+    /// room or a model-supplied path. A shared process still owns only one turn.
+    pub async fn start_shared_text_thread_for_room(
+        &mut self,
+        room: &str,
+    ) -> Result<String, session::Error> {
+        self.text_source.begin_thread()?;
+        self.managed_source.retire();
+        let operation = Operation::new(self)?;
+        let result = async {
+            let directory = super::room_workspace::open(
+                Path::new(operation.runner.session.settings().cwd()), room,
+            )?;
+            operation.runner.session.bind_shared_workspace(directory)?;
+            operation.runner.session.start_thread().await
+        }.await;
+        operation.finish(result)
+    }
     pub async fn start_shared_text_turn(
         &mut self,
         input: String,
