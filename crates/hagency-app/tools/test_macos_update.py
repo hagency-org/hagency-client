@@ -30,7 +30,7 @@ class ReleaseVerification(unittest.TestCase):
         self.version, self.team = "0.7.0", "TESTTEAM01"
         for name in updates.expected_assets():
             (self.root / name).write_bytes(b"installer/checksum fixture")
-        for arch in ("arm64", "amd64"):
+        for arch in ("arm64",):
             dmg = self.root / f"hagency-macos-{arch}.dmg"
             signature = self.sign_file(dmg)
             (self.root / (dmg.name + ".sig")).write_text(signature + "\n")
@@ -54,8 +54,10 @@ class ReleaseVerification(unittest.TestCase):
     def verify(self):
         updates.verify_complete(self.root, self.version, self.public, self.team)
 
-    def test_complete_dual_architecture_feed_is_crypto_verified(self):
+    def test_complete_arm64_release_without_intel_assets_is_crypto_verified(self):
         self.verify()
+        self.assertEqual(len(updates.expected_assets()), 18)
+        self.assertFalse(any('macos-amd64' in name or 'macos-update-amd64' in name for name in updates.expected_assets()))
         feed = updates.ET.parse(self.root / "appcast-macos-arm64.xml")
         self.assertEqual(feed.findtext("./channel/item/description"), "Notes <>& 中文")
 
@@ -90,7 +92,12 @@ class ReleaseVerification(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.verify()
         extra.unlink()
-        (self.root / "hagency-macos-amd64.dmg.sig").unlink()
+        intel = self.root / "hagency-macos-amd64.dmg"
+        intel.write_bytes(b"obsolete Intel installer")
+        with self.assertRaises(ValueError):
+            self.verify()
+        intel.unlink()
+        (self.root / "hagency-macos-arm64.dmg.sig").unlink()
         with self.assertRaises(ValueError):
             self.verify()
 
@@ -103,7 +110,8 @@ class ReleaseVerification(unittest.TestCase):
             return stream
         with patch.object(updates.urllib.request, "urlopen", side_effect=response) as request:
             updates.verify_remote(self.root, self.version, self.public, self.team)
-            self.assertEqual(request.call_count, 4)
+            self.assertEqual(request.call_count, 2)
+            self.assertFalse(any('amd64' in call.args[0] for call in request.call_args_list))
         def stale(url, timeout):
             stream = response(url, timeout)
             stream.seek(0, 2)

@@ -8,7 +8,7 @@ EXTENSIONS = {'linux': ('.deb', '.AppImage'), 'macos': ('.dmg',), 'windows': ('.
 
 
 def collect(dist, output, platform, arch):
-    if platform not in EXTENSIONS or arch not in ('amd64', 'arm64'):
+    if platform not in EXTENSIONS or arch not in ('amd64', 'arm64') or (platform == 'macos' and arch != 'arm64'):
         raise ValueError('Unsupported installer platform or architecture')
     installers = []
     for extension in EXTENSIONS[platform]:

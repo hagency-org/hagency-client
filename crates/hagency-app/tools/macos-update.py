@@ -22,6 +22,7 @@ import xml.etree.ElementTree as ET
 NS = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 RELEASES = "https://github.com/hagency-org/hagency-client/releases"
 OPENSSL = os.environ.get("HAGENCY_OPENSSL", "openssl")
+MACOS_RELEASE_ARCHES = ("arm64",)
 
 
 def require(condition, message):
@@ -101,7 +102,7 @@ def inspect_bundle(bundle, version, arch, public_key, team):
 def sign(root, version, arch, public_key, team, sdk, notes):
     require(sys.platform == "darwin", "Signing requires a native macOS release runner")
     version_check(version)
-    require(arch in ("arm64", "amd64") and re.fullmatch(r"[A-Z0-9]{10}", team), "Invalid signing architecture/team")
+    require(arch in MACOS_RELEASE_ARCHES and re.fullmatch(r"[A-Z0-9]{10}", team), "Invalid signing architecture/team")
     dmg = root / f"hagency-macos-{arch}.dmg"
     require(dmg.is_file() and not dmg.is_symlink(), "Final DMG is missing")
     subprocess.run(["codesign", "--verify", "--strict", "-R=" + f'anchor apple generic and certificate leaf[subject.OU] = "{team}"', str(dmg)], check=True)
@@ -170,23 +171,23 @@ def verify_arch(root, version, arch, public_key, team):
 
 def expected_assets():
     installers = {"hagency-windows-amd64.exe"}
-    installers |= {f"hagency-macos-{arch}.dmg" for arch in ("arm64", "amd64")}
+    installers |= {f"hagency-macos-{arch}.dmg" for arch in MACOS_RELEASE_ARCHES}
     installers |= {f"hagency-linux-{arch}{ext}" for arch in ("arm64", "amd64") for ext in (".deb", ".AppImage")}
-    sums = {f"SHA256SUMS-{target}.txt" for target in ("windows-amd64", "macos-arm64", "macos-amd64", "linux-arm64", "linux-amd64")}
+    sums = {f"SHA256SUMS-{target}.txt" for target in ("windows-amd64", "macos-arm64", "linux-arm64", "linux-amd64")}
     windows = {"windows-update.json", "windows-update.json.sig", "hagency-windows-amd64.exe.sig"}
-    mac = {name for arch in ("arm64", "amd64") for name in (f"appcast-macos-{arch}.xml", f"macos-update-{arch}.json", f"macos-update-{arch}.json.sig", f"hagency-macos-{arch}.dmg.sig")}
+    mac = {name for arch in MACOS_RELEASE_ARCHES for name in (f"appcast-macos-{arch}.xml", f"macos-update-{arch}.json", f"macos-update-{arch}.json.sig", f"hagency-macos-{arch}.dmg.sig")}
     return installers | sums | windows | mac | {"SHA256SUMS.txt"}
 
 
 def verify_complete(root, version, public_key, team):
     require({path.name for path in root.iterdir()} == expected_assets(), "Release assets are missing or unexpected")
     require(all(path.is_file() and not path.is_symlink() for path in root.iterdir()), "Release assets must be regular files")
-    for arch in ("arm64", "amd64"):
+    for arch in MACOS_RELEASE_ARCHES:
         verify_arch(root, version, arch, public_key, team)
 
 
 def verify_remote(root, version, public_key, team):
-    for arch in ("arm64", "amd64"):
+    for arch in MACOS_RELEASE_ARCHES:
         record = verify_arch(root, version, arch, public_key, team)
         feed = f"appcast-macos-{arch}.xml"
         with urllib.request.urlopen(f"{RELEASES}/latest/download/{feed}", timeout=60) as response:
@@ -207,7 +208,7 @@ def main():
     parser.add_argument("command", choices=["sign", "verify", "verify-remote"])
     parser.add_argument("--root", type=Path, default=Path("release-assets"))
     parser.add_argument("--version", required=True)
-    parser.add_argument("--arch", choices=["arm64", "amd64"])
+    parser.add_argument("--arch", choices=MACOS_RELEASE_ARCHES)
     parser.add_argument("--notes", type=Path, default=Path("packaging/release-notes.md"))
     args = parser.parse_args()
     public_key, team = os.environ["HAGENCY_SPARKLE_PUBLIC_KEY"], os.environ["HAGENCY_SPARKLE_TEAM_ID"]

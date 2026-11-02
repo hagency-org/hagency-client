@@ -67,12 +67,14 @@ dependencies. `.github/workflows/typos.yml` checks spelling on pushes and pull
 requests, including documentation-only changes, using the pinned version and
 repository `typos.toml`. Run `typos --config typos.toml` locally with that version.
 The desktop `v*` installer workflow is the sole product release path.
-Desktop and the engine workspace are currently 0.6.0.
+Desktop and the engine workspace are currently 0.6.2.
 To publish, run `app-release.yml` on `main` with `publish=true`, or push the
-matching `v0.6.0` tag. All five platform jobs must test and build successfully;
-only then does the workflow verify seven installers and their checksums and publish
+matching `v0.6.2` tag. All four platform jobs must test and build successfully;
+only then does the workflow verify six installers and their checksums and publish
 the complete GitHub Release as Latest. Manual runs with `publish=false` only upload
 CI artifacts. Published releases cannot be overwritten by a rerun.
+Starting with 0.6.2, macOS installers are Apple Silicon arm64 only. Linux retains
+amd64/arm64 DEB and AppImage packages, and Windows retains the amd64 installer.
 The outstanding dependency assessment remains in
 [`dev-vibe/desktop/release-0.5.0`](../dev-vibe/desktop/release-0.5.0/assessment.zh.md).
 

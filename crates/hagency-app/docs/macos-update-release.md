@@ -21,7 +21,7 @@ organization scope made available to this repository):
 | Secret | APPLE_TEAM_ID | expected signing team |
 | Secret | HAGENCY_SPARKLE_PRIVATE_KEY | exported Sparkle private seed |
 
-Windows signing settings remain required for the existing complete seven-installer
+Windows signing settings remain required for the complete six-installer
 release. Its updater key format is independent; do not reuse it as a Sparkle key.
 
 The pinned SDK's generate_keys tool supports a named account such as
@@ -45,8 +45,8 @@ would not establish that a certificate/key/notarization credential is valid.
 
 ## Source and artifact gates
 
-1. Cargo stable x.y.z, tag, bundle build/display versions and both appcasts agree.
-   Intel and ARM builds use their executable architecture, including Rosetta.
+1. Cargo stable x.y.z, tag, bundle build/display versions and the ARM appcast agree.
+   Starting with 0.6.2, published macOS installers and update feeds are arm64 only.
 2. Download/check the fixed Sparkle2.10.0 archive with its pinned SHA256. The
    temporary packaging manifest enables the feature and copies the framework and
    license. Restore both source files on failure or completion.
@@ -60,11 +60,11 @@ would not establish that a certificate/key/notarization credential is valid.
 5. Verify raw Ed25519 DMG and metadata signatures independently with OpenSSL.
    The signed metadata binds actual version/architecture/digest to the exact feed.
    Refuse modified archives/receipts, mutable/foreign URLs, missing or extra files.
-6. Require all24 stable assets. Upload to a draft, download back and compare every
+6. Require all18 stable assets. Upload to a draft, download back and compare every
    filename/digest before publishing/latest. Refuse an already published release;
    no published installer is overwritten.
 7. After publication check anonymous latest redirects, feed Content-Type/cache
-   bytes and final immutable DMG bytes for both architectures. Transient public
+   bytes and final immutable ARM DMG bytes. Transient public
    access is retried three times; failure leaves qualification red. This is not a
    rollback mechanism, and no real public-feed result is claimed by local mocks.
 
@@ -79,8 +79,9 @@ Record each result with the exact release/source, OS, executable architecture,
 paths, old/new process/version/hash and preserved profile/runtime evidence.
 Leave missing hardware and unavailable credentials explicitly unverified.
 
-- Apple Silicon current macOS and macOS12; Intel current macOS and macOS12;
-  Rosetta amd64-to-amd64. The local ad-hoc ARM prototype does not cover these.
+- Apple Silicon current macOS and macOS12. The local ad-hoc ARM prototype does not
+  cover these signed-update qualifications. Intel/Rosetta installer updates are no
+  longer part of the release matrix starting with 0.6.2.
 - Two genuinely different signed N/N+1 builds; complete runtime/fonts/resources,
   persistent login and drafts, with no unknown Agent execution replay.
 - Real authenticated Matrix-account task/approval completion and retirement,

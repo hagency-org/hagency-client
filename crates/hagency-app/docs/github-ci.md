@@ -11,23 +11,23 @@ Desktop and the owner engine now live in the hagency-client workspace.
 The `hagency` dependency resolves to `../hagency`; the repository root Cargo.lock
 is the single dependency lock. Engine and UI changes are validated together.
 Keep `--locked` in verification and packaging. Current workflows live at the
-repository root as `desktop-main.yml`, `desktop-builds.yml` and `desktop-release.yml`.
+repository root as `app-main.yml`, `app-builds.yml` and `app-release.yml`.
 
 ## Checks and artifacts
 
-`main.yml` retains the application/unit/portable crate and resource checks.
-`builds.yml` now checks native Linux amd64/arm64, macOS Intel/Apple Silicon, and
+`app-main.yml` retains the application/unit/portable crate and resource checks.
+`app-builds.yml` checks native Linux amd64/arm64, macOS Intel/Apple Silicon, and
 Windows amd64 on main/PR. Mobile compilation remains manual-only. Build summary
 output is informational; protect main using the actual build/test jobs.
 
-`release.yml` runs on `v*` tags or manual dispatch using Rust 1.98.0 and pinned
+`app-release.yml` runs on `v*` tags or manual dispatch using Rust 1.98.0 and pinned
 cargo-packager 0.10.1 / robius-packaging-commands 0.4.1. Each platform runs library
 tests, then packages the app with its existing resource and Octos runtime hooks:
 
 | Platform | Architecture | Artifact |
 |---|---|---|
 | Linux (Ubuntu 22.04 baseline) | amd64, arm64 | DEB and AppImage |
-| macOS | Intel amd64, Apple Silicon arm64 | DMG |
+| macOS | Apple Silicon arm64 | DMG |
 | Windows | amd64 | NSIS EXE installer |
 
 Manual runs upload Actions artifacts only by default (14-day retention).
@@ -35,11 +35,13 @@ An explicit `publish=true` dispatch builds and verifies every installer first,
 then creates the version tag at that exact source SHA and publishes the release.
 This uses GITHUB_TOKEN and does not trigger a duplicate tag build. Tagged runs require
 the tag to match the package version, and publish a GitHub Release
-only when all five platform jobs pass. Seven installers are verified against
+only when all four platform jobs pass. Six installers are verified against
 per-platform checksums and a combined SHA256SUMS.txt. A rerun refuses to overwrite
 an already published release. Assets are uploaded to a draft first; the workflow
 then publishes it after the complete upload succeeds.
 The standard GITHUB_TOKEN suffices; RINX_RELEASE is no longer required.
+Starting with 0.6.2, Intel macOS installers and their update feeds are no longer
+produced. Native Intel compilation and application tests remain separate CI checks.
 
 ## Signing
 

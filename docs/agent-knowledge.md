@@ -5960,3 +5960,6 @@ Integrated main cf7 + SDK95 credentials source has exact-CI App857/0/2 and own a
 
 
 - **Packaging child Python, 2026-11-02:** cargo-packager's beforeEachPackageCommand can run a Python without tomllib even after the outer Actions version-stamping shell successfully imported it. Production hooks must not assume that outer interpreter. Reuse existing Cargo JSON metadata and resolve the library target of the matching manifest; do not add a TOML fallback that silently guesses a resource namespace. The no-TOML import regression fails on the initial 0.6.2 hook and passes after the fix; actual system Python3.9 import/namespace probe also passes. Original Linux ARM64 packaging failure and canceled old-source pipeline remain failed/canceled records.
+
+
+- **Release policy, 2026-11-03:** From0.6.2, official macOS packages/feeds are Apple Silicon arm64 only, by explicit user request. Linux amd64/arm64 DEB+AppImage and Windows amd64 NSIS remain: four installer jobs/six installers,11unsigned assets or18signed-update assets. Keep native Intel compile/test checks separate from distribution. Historical dual-architecture releases/failed observations remain immutable; freeze a new source when changing the release matrix.

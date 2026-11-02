@@ -69,10 +69,6 @@ jobs:
             platform: macos
             arch: arm64
             formats: dmg
-          - runner: macos-15-intel
-            platform: macos
-            arch: amd64
-            formats: dmg
           - runner: windows-2022
             platform: windows
             arch: amd64
@@ -273,7 +269,7 @@ jobs:
           set -euo pipefail
           cd release-assets
           cat SHA256SUMS-*.txt > SHA256SUMS.txt
-          test "$(wc -l < SHA256SUMS.txt)" -eq 7
+          test "$(wc -l < SHA256SUMS.txt)" -eq 6
           sha256sum --check SHA256SUMS.txt
           version=$(python3 -c 'import tomllib; print(tomllib.load(open("../crates/hagency-app/Cargo.toml", "rb"))["package"]["version"])')
           if [[ "$version" != *-* ]]; then
@@ -286,7 +282,7 @@ jobs:
             # shellcheck disable=SC2016
             printf 'Hagency Client installers built from `%s`.\n\n' "$SOURCE_SHA"
             # shellcheck disable=SC2016
-            printf 'Linux: amd64/arm64 DEB and AppImage. macOS: Intel/Apple Silicon DMG. Windows: amd64 NSIS installer.\n\nVerify downloads against `SHA256SUMS.txt`.\n\n'
+            printf 'Linux: amd64/arm64 DEB and AppImage. macOS: Apple Silicon arm64 DMG. Windows: amd64 NSIS installer.\n\nVerify downloads against `SHA256SUMS.txt`.\n\n'
             if [[ "$MACOS_SIGNED" == true ]]; then
               printf 'macOS packages are Developer ID signed and notarized.\n'
             else

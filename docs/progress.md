@@ -15639,3 +15639,10 @@ Candidate73f735701 / run41463685131 again lost the macOS Engine job before any t
 ## 2026-11-03 — Restore the original Engine matrix after failed Intel experiment
 
 Intel Engine candidate357b785a2 / run41467014503 produced four actual failures: two shared-Matrix owner management start observations timed out at the original1s bound, original home/copy custody failed its15s settle bound, and Claude backpressure returnedTimeout instead ofCapacity. Preserve the complete log at ignored.run/release-0.6.2-r3/mac-engine-original-failure.log; cause remains unconfirmed, not labeled passing or fixed. Canceled incomplete pipeline and restored Engine workflow byte-for-byte from73f735701: original native ARM macOS matrix/whole-job budget/test commands/selectors/assertions/deadlines. The alternative Intel runner experiment is withdrawn; no Intel Engine integration qualification is claimed. Intel packaging still has native App tests/build. Rebuild final candidate separately under ignored.run/release-0.6.2-r4; public0.6.2tag/release still not created.
+
+
+## 2026-11-03 — Stop publishing Intel macOS installers
+
+User explicitly removed macOS amd64 packaging from future releases, including the unpublished0.6.2. Release matrix now has four targets/six installers; unsigned promotion expects11assets and signed-update verification18assets. Collector rejects macOS amd64 before output, complete verification rejects unexpected Intel packages, remote checks require only the ARM feed/DMG. Existing native Intel compilation/tests and the original three-platform Engine gates remain. Old-source41478120359 passed3Engine/4Installer jobs but Intel packaging remained incomplete; preserve r4 receipts, cancel the obsolete run and rebuild from the new frozen source under ignored.run/release-0.6.2-r5. No task-writer provisioned.
+
+Validation: actionlint for app-release.yml and git diff --check pass; installer collection tests3/3 and macOS signed-feed tests7/7 pass, including the real pinned Sparkle signer format check. Fixtures do not establish Developer ID/notarization or public update qualification.

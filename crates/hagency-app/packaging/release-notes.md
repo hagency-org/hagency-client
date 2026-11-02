@@ -1,5 +1,8 @@
 ## Changes in 0.6.2
 
+macOS installers are now Apple Silicon arm64 only; Intel macOS packages and
+update feeds are no longer published.
+
 This is an unsigned, manual-installation release, following the 0.6.1 distribution method.
 macOS Developer ID signing/notarization, Windows code signing and signed automatic-update feeds are not included. macOS Gatekeeper and Windows SmartScreen may warn or block installation.
 

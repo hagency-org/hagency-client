@@ -30,3 +30,11 @@ Engine 三平台矩阵继续覆盖 Linux、macOS、Windows，将 macOS15 的 Eng
 候选357b785a2 / run41467014503 的 Intel macOS Engine 完整套件实际失败，不计通过：hagency lib301pass/2fail/9ignore（cookie_rotation_preserves_inflight_management_reply、slow_management_does_not_block_renewal_and_late_logout_discards_reply，均未在原一秒内观察到管理请求启动）；hagency-matrix lib279pass/1fail（native_provisioning_inline_home_custody，原十五秒工作收尾 watchdog 触发）；claude_session2pass/1fail（backpressure_and_capacity 得到Timeout而非Capacity）。未确证具体原因，不能仅凭资源架构推断它们为代码正确或平台抖动。
 
 停止这次替代 runner 实验，原样恢复已使用的 Engine macOS ARM矩阵及原任务预算；不调整任何测试命令、断言、单项期限或跳过选择器。保留 Intel 实验为失败的补充结果，不声称 Intel Engine 集成验收通过。Intel安装包仍需原生Intel完整App库测试/构建，最终发布依赖原有三平台Engine与五平台安装包流水线的真实结果。新源与产物用独立 .run/release-0.6.2-r4/；旧源日志、取消和失败均保留。
+
+## 用户调整发布范围：停止 macOS amd64 打包（2026-11-03）
+
+用户明确要求以后不再打包 macOS amd64。当前未发布0.6.2同步采用新范围：Linux amd64/arm64两种格式、macOS arm64 DMG、Windows amd64 EXE，共四平台六安装包；未签名发行共11附件（六安装包、四平台清单、总清单）。移除 release 工作流的 Intel 安装包矩阵，调整总清单数量、资源收集器、Sparkle完整资产/远端校验和发布说明。普通 Intel 编译/测试保留，Engine原三平台命令/断言/预算不变。
+
+旧源81eeb2dd2的run41478120359最终已实际通过三个Engine与四个Installer，Intel Installer仍在打包；未创建tag/Release。完整状态、六个已核验安装包（每包139个源码资源逐字节一致）保留在.run/release-0.6.2-r4；未完成的旧源流水线将取消，不视为全通过，不把其产物混入新源。修改后从新冻结源重新构建四平台，并在全部实际成功及六包完整校验后公开。新源证据使用独立.run/release-0.6.2-r5。
+
+Validation: actionlint for app-release.yml and git diff --check pass; installer collection tests3/3 and macOS signed-feed tests7/7 pass, including the real pinned Sparkle signer format check. Fixtures do not establish Developer ID/notarization or public update qualification.
