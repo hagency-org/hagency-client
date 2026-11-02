@@ -3,7 +3,9 @@
 pub(crate) mod external;
 pub(super) mod speech;
 use super::{
-    Console, body, console, cookie, current, owned_agents::ledger_path, recheck,
+    Console, body, console, cookie, current,
+    owned_agents::ledger_path,
+    recheck,
     server_login::{OwnerError, OwnerOperation},
 };
 use salvo::prelude::*;

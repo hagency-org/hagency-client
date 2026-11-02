@@ -1,15 +1,13 @@
-## Changes in 0.6.1
+## Changes in 0.6.2
 
-This is an unsigned, manual-installation release, following the 0.6.0 distribution method.
+This is an unsigned, manual-installation release, following the 0.6.1 distribution method.
 macOS Developer ID signing/notarization, Windows code signing and signed automatic-update feeds are not included. macOS Gatekeeper and Windows SmartScreen may warn or block installation.
 
 The source-bound real Codex sandbox and two-Agent release qualification records remain placeholders. The strict signed-release publication gate is not satisfied; this release does not claim those qualifications. Existing focused/native observations do not replace these missing records.
 
-- Improve Project and Room navigation, Matrix links and threaded conversations.
-- Add Room encryption controls and key recovery, and distinguish account recovery setup from keys actually available on this device.
-- Improve Project Boards, card creation, task details and the notification drawer.
-- Refine Agent configuration, encrypted owner tasks, file transfers and approval discovery.
-- Harden desktop credential storage, media networking and bounded background work.
+- Restore missing desktop icons and images by packaging resources under the correct Rust crate namespace. Packaging now refuses missing or changed source resources before creating an installer.
+- Distinguish Hagency owner/device authorization checks from local Codex sign-in. Server connection failures, unexpected responses and permission denials are no longer all reported as expired authorization; genuine authorization checks remain enforced.
+- Clarify the account-check messages in English and Simplified Chinese.
 
 Projects, Matrix chat and locally executed Agents are available in this release.
 
@@ -20,7 +18,7 @@ Projects, Matrix chat and locally executed Agents are available in this release.
 - Use the Hagency desktop branding and icons.
 - Maintain the cross-platform Hagency app and its local owner engine together in [hagency-org/hagency-client](https://github.com/hagency-org/hagency-client), with a single root Cargo.lock and no sibling source checkout.
 
-The client version is 0.6.1, following consolidation of the native app and the local engine.
+The client version is 0.6.2, following consolidation of the native app and the local engine.
 Existing installations may need to install this version manually.
 
 Current source supports encrypted owner-private-chat tasks, Codex programming,

@@ -776,9 +776,18 @@ async fn native_server_login_pkce_device_authorization_and_revocation() {
         (401, "sign_in_required", "owner_authorization_required"),
     ] {
         fake.state.lock().unwrap().management_failure = Some((status, remote_code.into()));
-        let mut response = get("/console/api/owner-provider", &cookie).send(&service).await;
-        assert_eq!(response.status_code, Some(StatusCode::from_u16(status).unwrap()), "{remote_code}");
-        assert_eq!(response.take_json::<Value>().await.unwrap()["code"], expected);
+        let mut response = get("/console/api/owner-provider", &cookie)
+            .send(&service)
+            .await;
+        assert_eq!(
+            response.status_code,
+            Some(StatusCode::from_u16(status).unwrap()),
+            "{remote_code}"
+        );
+        assert_eq!(
+            response.take_json::<Value>().await.unwrap()["code"],
+            expected
+        );
     }
     fake.state.lock().unwrap().management_failure = None;
     let binding: Value =
