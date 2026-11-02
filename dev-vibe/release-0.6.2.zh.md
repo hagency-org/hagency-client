@@ -24,3 +24,9 @@
 修复 Python 后的新候选73f735701 / run41463685131，macOS Engine 再次因“not acquired by Runner”未执行即取消；原注释存于 .run/release-0.6.2-r2/mac-engine-cancellation.json。加上前一候选的两次同类失败，ARM Engine runner 获取已累计三次失败，阻断整个依赖链。终止未完成的旧候选，不计通过。
 
 Engine 三平台矩阵继续覆盖 Linux、macOS、Windows，将 macOS15 的 Engine runner 固定到官方 macos-15-intel，以绕开反复不可分配的 ARM 池；全套命令、选择器、断言和单项超时不变。Intel macOS 的整体冷编译/测试 job 预算同 Windows 设为90分钟，Linux仍60分钟。五组安装包任务未改变：Apple Silicon 继续在原生 ARM runner 完整 App 测试和打包，Intel 继续原生 Intel 测试和打包。最终候选与证据使用独立 .run/release-0.6.2-r3/。
+
+## Intel Engine runner 实验失败，恢复原有矩阵
+
+候选357b785a2 / run41467014503 的 Intel macOS Engine 完整套件实际失败，不计通过：hagency lib301pass/2fail/9ignore（cookie_rotation_preserves_inflight_management_reply、slow_management_does_not_block_renewal_and_late_logout_discards_reply，均未在原一秒内观察到管理请求启动）；hagency-matrix lib279pass/1fail（native_provisioning_inline_home_custody，原十五秒工作收尾 watchdog 触发）；claude_session2pass/1fail（backpressure_and_capacity 得到Timeout而非Capacity）。未确证具体原因，不能仅凭资源架构推断它们为代码正确或平台抖动。
+
+停止这次替代 runner 实验，原样恢复已使用的 Engine macOS ARM矩阵及原任务预算；不调整任何测试命令、断言、单项期限或跳过选择器。保留 Intel 实验为失败的补充结果，不声称 Intel Engine 集成验收通过。Intel安装包仍需原生Intel完整App库测试/构建，最终发布依赖原有三平台Engine与五平台安装包流水线的真实结果。新源与产物用独立 .run/release-0.6.2-r4/；旧源日志、取消和失败均保留。

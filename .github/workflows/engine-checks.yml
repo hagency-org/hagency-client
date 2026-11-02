@@ -14,17 +14,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15-intel, windows-2025]
+        os: [ubuntu-24.04, macos-15, windows-2025]
     runs-on: ${{ matrix.os }}
     # All three desktop platforms are release targets and each verdict is fatal.
-    # Hosted ARM macOS repeatedly failed runner acquisition before any test.
-    # Use native Intel macOS here; installer jobs still test/package both native
-    # macOS architectures. Cold Intel/Windows compilation has a job-wide budget;
-    # every individual test/process/storage deadline remains unchanged.
     # At 082edde2 Windows spent ~14 min in build/inventory and ~42 min in
     # the original full suite, before release compilation. Budget the whole
     # Windows job; SDK/test deadlines and fatal test verdicts stay unchanged.
-    timeout-minutes: ${{ (matrix.os == 'windows-2025' || matrix.os == 'macos-15-intel') && 90 || 60 }}
+    timeout-minutes: ${{ matrix.os == 'windows-2025' && 90 || 60 }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.98.0
