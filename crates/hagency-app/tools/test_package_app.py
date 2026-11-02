@@ -1,4 +1,5 @@
 """Regression checks for resource collection with an external Cargo target."""
+import builtins
 import importlib.util
 import json
 import os
@@ -31,6 +32,19 @@ class ResourcePaths(unittest.TestCase):
         extension = package.ROOT / "resources/android/java" / Path(*config["identifier"].split(".")) / "MakepadAppExtension.java"
         self.assertIn(f'package {config["identifier"]};', extension.read_text(encoding="utf-8"))
 
+    def test_hook_imports_without_a_toml_library(self):
+        # cargo-packager's child shell can select Python 3.10 even when the
+        # outer Actions shell uses a newer Python. No third-party parser exists.
+        original_import = builtins.__import__
+        def without_toml(name, *args, **kwargs):
+            if name in ("tomllib", "tomli", "toml"):
+                raise ModuleNotFoundError("No TOML library on the packaging interpreter")
+            return original_import(name, *args, **kwargs)
+        probe_spec = importlib.util.spec_from_file_location("portable_package_hook", Path(package.__file__))
+        probe = importlib.util.module_from_spec(probe_spec)
+        with patch("builtins.__import__", side_effect=without_toml):
+            probe_spec.loader.exec_module(probe)
+
     def collect(self, triple, damaged=None):
         with tempfile.TemporaryDirectory() as temporary:
             target = Path(temporary) / "external-cargo-target"
@@ -57,7 +71,10 @@ class ResourcePaths(unittest.TestCase):
 
             with patch.dict(os.environ, {}, clear=True), \
                     patch.object(package, "ROOT", root), \
-                    patch.object(package.subprocess, "check_output", return_value=json.dumps({"target_directory": str(target)})), \
+                    patch.object(package.subprocess, "check_output", return_value=json.dumps({"target_directory": str(target), "packages": [
+                        {"manifest_path": str(root / "other/Cargo.toml"), "targets": [{"kind": ["lib"], "name": "wrong_library"}]},
+                        {"manifest_path": str(root / "Cargo.toml"), "targets": [{"kind": ["bin"], "name": "hagency"}, {"kind": ["lib"], "name": "hagency_app"}]}
+                    ]})), \
                     patch.object(package.subprocess, "run", side_effect=prepare) as run:
                 if triple:
                     os.environ["CARGO_BUILD_TARGET"] = triple

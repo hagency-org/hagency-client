@@ -4,14 +4,23 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def prepare_app_resources(binary_name):
-    manifest = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
-    namespace = manifest.get("lib", {}).get("name", manifest["package"]["name"].replace("-", "_"))
+def app_resource_namespace(metadata):
+    # Use Cargo's resolved library target, including any explicit lib.name.
+    # The packager's child shell may select Python 3.10 without tomllib.
+    manifest = (ROOT / "Cargo.toml").resolve()
+    packages = [p for p in metadata["packages"]
+                if Path(p["manifest_path"]).resolve() == manifest]
+    libraries = [t for p in packages for t in p["targets"] if "lib" in t["kind"]]
+    if len(packages) != 1 or len(libraries) != 1:
+        raise RuntimeError("Cannot resolve the app library resource namespace")
+    return libraries[0]["name"]
+
+
+def prepare_app_resources(binary_name, namespace):
     source = ROOT / "resources"
     collected = ROOT / "dist/resources" / binary_name / "resources"
     # robius-packaging-commands 0.4.1 collects the app under its executable
@@ -51,7 +60,7 @@ def main():
         "--force-makepad", "--binary-name", "hagency",
         "--path-to-binary", str(binary), "--add-deb-dep", "geoclue-2.0",
     ], cwd=ROOT, check=True)
-    prepare_app_resources("hagency")
+    prepare_app_resources("hagency", app_resource_namespace(metadata))
     subprocess.run([sys.executable, str(ROOT / "tools/package-octos.py"), "desktop"],
                    cwd=ROOT, check=True)
 
