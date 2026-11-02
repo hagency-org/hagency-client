@@ -15607,3 +15607,8 @@ Integrated main cf7 + SDK95 credentials source has exact-CI App857/0/2 and own a
 ## 2026-11-02 — Client 0.6.1 release preparation
 
 User explicitly selected the same unsigned/manual installation distribution as0.6.0, with missing signing and real-host qualification limitations in public notes. Prepared isolated codex/release-0.6.1 from merged main091931f21. Root/App/bundle/21local lock package versions agree; no dependency change. Placeholder qualification stays placeholder and its release preflight remains refused; unsigned publication will use only successfully built installers with independent digest/readback verification. No task-writer is provisioned. See dev-vibe/release-0.6.1.zh.md and ignored.run/release-0.6.1/.
+
+
+## 2026-11-02 — Client 0.6.1 published
+
+Public release431322200 completed2026-11-02T10:26:47Z, draft=false/prerelease=false/latestv0.6.1. Tag and installer source51f8eadf6956571a1e25426f94715b4afda4bab1; run41390501008 has3engine+5installer successes and2declared condition skips. Seven original installers/five original checksum files/one combined checksum: all13server-side digests and sizes match local files, both draft/public checksum readbacks match, all7anonymous latest download entrypoints return200. BothDMG CRCs and LinuxDEB0.6.1/architectures pass; no installation/launch qualification. Canceled redundant tag-triggered strict pipeline41428469625, never counted it passing. Operator's unsigned/manual and missing real-host qualification limits remain in public notes. Only documentation follows the frozen source tag. See dev-vibe/release-0.6.1.zh.md and ignored.run/release-0.6.1/.
