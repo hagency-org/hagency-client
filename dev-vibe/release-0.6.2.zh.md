@@ -18,3 +18,9 @@
 初始源码 a9e0f7419 的 release run41440210562 已完成三平台 Engine（macOS 获得 runner 后完整测试和 release build 均成功）。Linux ARM64 客户端测试通过后，beforeEachPackageCommand 的 Python 在 `import tomllib` 处报 ModuleNotFoundError；该解释器与先前外层检查所用环境不同。本轮资源修复引入的这个依赖遗漏已在真实打包中被发现，未创建公开0.6.2 Release；剩余旧源任务已取消，不计通过。
 
 新增“不提供任何 TOML 库仍能导入生产 hook”的回归在旧代码失败，修复后6/6通过。现在使用原有 cargo metadata JSON 中匹配当前 manifest 的 library target 名称，既保留显式 lib.name，也不再要求 Python3.11或第三方解析器。匹配其他 workspace 包、资源缺失和字节改写的拒绝仍受测试约束。本机系统Python3.9实际导入 hook并解析真实 Cargo metadata 得到hagency_app成功。新源码将重新推送 main、冻结并重跑发布构建；旧/新源产物和结果不得混用。
+
+## 反复 runner 容量失败后的 CI 调整
+
+修复 Python 后的新候选73f735701 / run41463685131，macOS Engine 再次因“not acquired by Runner”未执行即取消；原注释存于 .run/release-0.6.2-r2/mac-engine-cancellation.json。加上前一候选的两次同类失败，ARM Engine runner 获取已累计三次失败，阻断整个依赖链。终止未完成的旧候选，不计通过。
+
+Engine 三平台矩阵继续覆盖 Linux、macOS、Windows，将 macOS15 的 Engine runner 固定到官方 macos-15-intel，以绕开反复不可分配的 ARM 池；全套命令、选择器、断言和单项超时不变。Intel macOS 的整体冷编译/测试 job 预算同 Windows 设为90分钟，Linux仍60分钟。五组安装包任务未改变：Apple Silicon 继续在原生 ARM runner 完整 App 测试和打包，Intel 继续原生 Intel 测试和打包。最终候选与证据使用独立 .run/release-0.6.2-r3/。
