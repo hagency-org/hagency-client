@@ -26,6 +26,7 @@ struct OAuthState {
     binding_state: String,
     agent_state: String,
     management_calls: usize,
+    management_failure: Option<(u16, String)>,
     commands: std::collections::BTreeSet<String>,
     execution_device: Option<String>,
     agent_generation: i64,
@@ -540,6 +541,14 @@ async fn oauth(req: &mut Request, depot: &Depot, res: &mut Response) {
                 ),
                 "creation requires device bearer, other management uses owner session"
             );
+            if path == "/hagency/api/v1/agents" && req.method() == Method::GET {
+                let failure = f.state.lock().unwrap().management_failure.clone();
+                if let Some((status, code)) = failure {
+                    res.status_code(StatusCode::from_u16(status).unwrap());
+                    res.render(Json(json!({"code": code})));
+                    return;
+                }
+            }
             if path.contains("agt_other") {
                 res.status_code(StatusCode::FORBIDDEN);
                 res.render(Json(json!({"code":"owner_scope_required"})));
@@ -689,6 +698,7 @@ async fn native_server_login_pkce_device_authorization_and_revocation() {
             binding_state: "joining".into(),
             agent_state: "creating".into(),
             management_calls: 0,
+            management_failure: None,
             commands: Default::default(),
             execution_device: Some("dev_fixture".into()),
             agent_generation: 1,
@@ -757,6 +767,20 @@ async fn native_server_login_pkce_device_authorization_and_revocation() {
             .status_code,
         Some(StatusCode::OK)
     );
+    // Owner checks precede any local provider process. A temporary remote
+    // failure must not falsely report that the local Codex account expired.
+    for (status, remote_code, expected) in [
+        (503, "server_unavailable", "owner_authorization_unavailable"),
+        (502, "invalid_server_response", "invalid_server_response"),
+        (403, "owner_scope_required", "owner_scope_required"),
+        (401, "sign_in_required", "owner_authorization_required"),
+    ] {
+        fake.state.lock().unwrap().management_failure = Some((status, remote_code.into()));
+        let mut response = get("/console/api/owner-provider", &cookie).send(&service).await;
+        assert_eq!(response.status_code, Some(StatusCode::from_u16(status).unwrap()), "{remote_code}");
+        assert_eq!(response.take_json::<Value>().await.unwrap()["code"], expected);
+    }
+    fake.state.lock().unwrap().management_failure = None;
     let binding: Value =
         serde_json::from_slice(&std::fs::read(state.join("server-login.json")).unwrap()).unwrap();
     assert_eq!(binding["owner"], "@owner:example.test");
@@ -854,6 +878,7 @@ async fn native_server_login_background_refresh_logout_and_issuer_pin() {
             binding_state: "joining".into(),
             agent_state: "creating".into(),
             management_calls: 0,
+            management_failure: None,
             commands: Default::default(),
             execution_device: Some("dev_fixture".into()),
             agent_generation: 1,
@@ -984,6 +1009,7 @@ async fn native_server_login_offline_logout_retries_after_restart_without_restor
             binding_state: "joining".into(),
             agent_state: "creating".into(),
             management_calls: 0,
+            management_failure: None,
             commands: Default::default(),
             execution_device: Some("dev_fixture".into()),
             agent_generation: 1,
@@ -1093,6 +1119,7 @@ async fn native_owned_agents_user_scope_local_policy_privacy_and_lifecycle() {
             binding_state: "joining".into(),
             agent_state: "creating".into(),
             management_calls: 0,
+            management_failure: None,
             commands: Default::default(),
             execution_device: Some("dev_fixture".into()),
             agent_generation: 1,
@@ -2125,6 +2152,7 @@ async fn native_account_profiles_switch_revoke_old_tabs_and_pin_pasion_identity(
                 binding_state: "joining".into(),
                 agent_state: "creating".into(),
                 management_calls: 0,
+                management_failure: None,
                 commands: Default::default(),
                 execution_device: Some("dev_fixture".into()),
                 agent_generation: 1,
@@ -2396,6 +2424,7 @@ async fn native_owner_space_candidates_use_own_oauth_and_paginate_partial_failur
             binding_state: "joining".into(),
             agent_state: "creating".into(),
             management_calls: 0,
+            management_failure: None,
             commands: Default::default(),
             execution_device: Some("dev_fixture".into()),
             agent_generation: 1,
@@ -2574,6 +2603,7 @@ async fn native_in_process_facade_pins_matrix_account_without_exposing_credentia
             binding_state: "joining".into(),
             agent_state: "creating".into(),
             management_calls: 0,
+            management_failure: None,
             commands: Default::default(),
             execution_device: Some("dev_fixture".into()),
             agent_generation: 1,

@@ -172,7 +172,9 @@ fn runtime_diagnostic(code: &str) -> String {
         "codex_provider_unavailable" => "The local provider could not start or complete its handshake. Check its installation and Service logs.",
         "codex_provider_timeout" => "The local provider did not respond in time. Check Service logs and retry.",
         "provider_profile_mismatch" | "provider_authorization_lost" => "The connected account changed or expired. Reconnect it in Model & resources and save the model again.",
-        "owner_authorization_required" => "Your account authorization expired. Sign in again to continue.",
+        "owner_authorization_required" => "Hagency account or device authorization is unavailable. Refresh the account check. Sign in again to Hagency if it still fails.",
+        "owner_authorization_unavailable" => "Hagency could not verify account permissions with the server. Check the connection and refresh the account check.",
+        "owner_scope_required" => "This Hagency account does not have permission for this operation. Check the signed-in account and Agent ownership.",
         "matrix_authorization_unavailable" | "server_unavailable" => "Cannot verify this account right now. Check the server connection and retry.",
         "agent_runtime_already_active" => "A service is already active for this Agent. Refresh its status before starting again.",
         "runtime_stopped" | "execution_not_running" => "This service has stopped. Refresh its status, check Model & resources and start again.",
@@ -479,7 +481,9 @@ fn user_error(error: &str) -> &str {
         "agent_model_required" => "No model is configured on this device. Open Model & resources, connect an account and save a model before starting.",
         "runtime_profile_unavailable" => "The saved local model, workspace or account is unavailable. Open Model & resources, reconnect the account and save an available model.",
         "provider_profile_mismatch" | "provider_authorization_lost" => "The connected account changed or expired. Reconnect it in Model & resources and save the model again.",
-        "owner_authorization_required" => "Your account authorization expired. Sign in again to continue.",
+        "owner_authorization_required" => "Hagency account or device authorization is unavailable. Refresh the account check. Sign in again to Hagency if it still fails.",
+        "owner_authorization_unavailable" => "Hagency could not verify account permissions with the server. Check the connection and refresh the account check.",
+        "owner_scope_required" => "This Hagency account does not have permission for this operation. Check the signed-in account and Agent ownership.",
         "configuration_unsupported" | "unsupported_hagency_capabilities" => "This server does not support execution device configuration. Upgrade the server and execution device client, then refresh.",
         "server_unavailable" | "configuration_local_state_unavailable" => "Could not reach execution device configuration. Check your connection and refresh.",
         "configuration_authority_changed" | "configuration_authority_invalidated" => "Account or device authorization changed. Sign in again and reopen this Agent.",
@@ -5445,6 +5449,18 @@ impl HagencyPanelRef {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn owner_check_failures_identify_hagency_and_preserve_retry_guidance() {
+        let unavailable = visible_error("owner_authorization_unavailable");
+        assert!(unavailable.contains("Hagency"));
+        assert!(unavailable.contains("refresh"));
+        assert!(!unavailable.contains("Sign in again"));
+        let required = visible_error("owner_authorization_required");
+        assert!(required.contains("Sign in again to Hagency"));
+        assert!(!required.contains("Codex"));
+        assert!(runtime_diagnostic("owner_authorization_unavailable").contains("Check the connection"));
+        assert!(visible_error("owner_scope_required").contains("permission"));
+    }
     #[test]
     #[cfg(feature = "agent_chat")]
     fn approval_chats_open_account_scope_only_from_the_agent_list() {

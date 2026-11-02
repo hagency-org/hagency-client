@@ -2810,5 +2810,8 @@
   "Signed out locally. Remote token revocation remains pending.": "已在本地退出，远端令牌撤销仍待完成。",
   "Configured; restore this device": "已配置；此设备尚需恢复",
   "Identity keys available on this device": "此设备已持有身份密钥",
-  "Connected": "已连接"
+  "Connected": "已连接",
+  "Hagency account or device authorization is unavailable. Refresh the account check. Sign in again to Hagency if it still fails.": "Hagency 账号或设备授权不可用。请刷新账号检查；若仍失败，请重新登录 Hagency。",
+  "Hagency could not verify account permissions with the server. Check the connection and refresh the account check.": "Hagency 暂时无法向服务器核验账号权限。请检查网络连接并刷新账号检查。",
+  "This Hagency account does not have permission for this operation. Check the signed-in account and Agent ownership.": "当前 Hagency 账号无权执行此操作。请检查登录账号和 Agent 的归属。"
 }

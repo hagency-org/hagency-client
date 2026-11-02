@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import tomllib
 import plistlib
+import shutil
 import unittest
 from unittest.mock import patch
 
@@ -30,14 +31,41 @@ class ResourcePaths(unittest.TestCase):
         extension = package.ROOT / "resources/android/java" / Path(*config["identifier"].split(".")) / "MakepadAppExtension.java"
         self.assertIn(f'package {config["identifier"]};', extension.read_text(encoding="utf-8"))
 
-    def collect(self, triple):
+    def collect(self, triple, damaged=None):
         with tempfile.TemporaryDirectory() as temporary:
             target = Path(temporary) / "external-cargo-target"
+            root = Path(temporary) / "app"
+            resources = root / "resources"
+            (resources / "icons").mkdir(parents=True)
+            (root / "Cargo.toml").write_text('[package]\nname="hagency-app"\n')
+            (resources / "icons/send.svg").write_bytes(b"original send icon")
+            (resources / "icon_128.png").write_bytes(b"original app image")
+            (resources / "android").mkdir()
+            (resources / "android/mobile-only").write_bytes(b"mobile")
+
+            def prepare(command, **kwargs):
+                if command[0] != "robius-packaging-commands":
+                    return
+                # The pinned 0.4.1 collector uses --binary-name, not the Rust
+                # crate namespace, for this directory (the real release bug).
+                collected = root / "dist/resources/hagency/resources"
+                shutil.copytree(resources, collected, ignore=shutil.ignore_patterns("android"))
+                if damaged == "missing":
+                    (collected / "icons/send.svg").unlink()
+                elif damaged == "changed":
+                    (collected / "icons/send.svg").write_bytes(b"wrong icon bytes")
+
             with patch.dict(os.environ, {}, clear=True), \
+                    patch.object(package, "ROOT", root), \
                     patch.object(package.subprocess, "check_output", return_value=json.dumps({"target_directory": str(target)})), \
-                    patch.object(package.subprocess, "run") as run:
+                    patch.object(package.subprocess, "run", side_effect=prepare) as run:
                 if triple:
                     os.environ["CARGO_BUILD_TARGET"] = triple
+                if damaged:
+                    with self.assertRaisesRegex(RuntimeError, "icons/send.svg"):
+                        package.main()
+                    self.assertEqual(run.call_count, 1, "refuse before preparing other payloads")
+                    return
                 package.main()
                 collection = run.call_args_list[0]
                 command = collection.args[0]
@@ -46,14 +74,25 @@ class ResourcePaths(unittest.TestCase):
                 self.assertEqual(binary.parent, directory / "release")
                 self.assertEqual(binary.stem, "hagency")
                 self.assertEqual(command[command.index("--binary-name") + 1], "hagency")
-                self.assertEqual(collection.kwargs["cwd"], package.ROOT)
-                self.assertEqual(Path(run.call_args_list[1].args[0][1]), package.ROOT / "tools/package-octos.py")
+                self.assertEqual(collection.kwargs["cwd"], root)
+                self.assertEqual(Path(run.call_args_list[1].args[0][1]), root / "tools/package-octos.py")
+                packaged = root / "dist/resources/hagency_app/resources"
+                self.assertEqual((packaged / "icons/send.svg").read_bytes(), b"original send icon")
+                self.assertEqual((packaged / "icon_128.png").read_bytes(), b"original app image")
+                self.assertFalse((packaged / "android").exists())
+                self.assertFalse((root / "dist/resources/hagency").exists())
 
     def test_external_host_target(self):
         self.collect(None)
 
     def test_explicit_target_triple(self):
         self.collect("aarch64-apple-darwin")
+
+    def test_missing_collected_app_asset_refuses_packaging(self):
+        self.collect(None, "missing")
+
+    def test_changed_collected_app_asset_refuses_packaging(self):
+        self.collect(None, "changed")
 
 
 if __name__ == "__main__":

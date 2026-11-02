@@ -2810,5 +2810,8 @@
   "Signed out locally. Remote token revocation remains pending.": "Signed out locally. Remote token revocation remains pending.",
   "Configured; restore this device": "Configured; restore this device",
   "Identity keys available on this device": "Identity keys available on this device",
-  "Connected": "Connected"
+  "Connected": "Connected",
+  "Hagency account or device authorization is unavailable. Refresh the account check. Sign in again to Hagency if it still fails.": "Hagency account or device authorization is unavailable. Refresh the account check. Sign in again to Hagency if it still fails.",
+  "Hagency could not verify account permissions with the server. Check the connection and refresh the account check.": "Hagency could not verify account permissions with the server. Check the connection and refresh the account check.",
+  "This Hagency account does not have permission for this operation. Check the signed-in account and Agent ownership.": "This Hagency account does not have permission for this operation. Check the signed-in account and Agent ownership."
 }

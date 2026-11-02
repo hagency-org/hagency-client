@@ -4,7 +4,7 @@ pub(crate) mod external;
 pub(super) mod speech;
 use super::{
     Console, body, console, cookie, current, owned_agents::ledger_path, recheck,
-    server_login::OwnerOperation,
+    server_login::{OwnerError, OwnerOperation},
 };
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -30,6 +30,18 @@ pub(crate) struct ProviderError {
 }
 fn failure(status: u16, code: &'static str) -> ProviderError {
     ProviderError { status, code }
+}
+// Keep owner-server failures distinct from local provider sign-in failures.
+// Only fixed codes cross into provider diagnostics; remote bodies stay private.
+fn owner_api_error(error: OwnerError) -> ProviderError {
+    let code = match error.status {
+        401 => "owner_authorization_required",
+        403 => "owner_scope_required",
+        502 => "invalid_server_response",
+        429 | 500..=599 => "owner_authorization_unavailable",
+        _ => "server_request_failed",
+    };
+    failure(error.status, code)
 }
 fn private_directory(path: &Path) -> Result<PathBuf, ProviderError> {
     hagency_store::private::directory(path)
@@ -679,7 +691,7 @@ impl OwnerProvider {
         let reply = console
             .owner_api(cookie, OwnerOperation::Agents)
             .await
-            .map_err(|_| failure(401, "owner_authorization_required"))?;
+            .map_err(owner_api_error)?;
         let device = console
             .authorized_device()
             .await
@@ -749,7 +761,7 @@ impl OwnerProvider {
                 let verified = console
                     .owner_api(cookie, OwnerOperation::Agents)
                     .await
-                    .map_err(|_| failure(401, "owner_authorization_required"))?;
+                    .map_err(owner_api_error)?;
                 if verified.owner != reply.owner
                     || verified.origin != reply.origin
                     || verified.issuer != reply.issuer
@@ -811,7 +823,7 @@ impl OwnerProvider {
             let fresh = console
                 .owner_api(cookie, OwnerOperation::Agents)
                 .await
-                .map_err(|_| failure(401, "owner_authorization_required"))?;
+                .map_err(owner_api_error)?;
             if fresh.origin != reply.origin
                 || fresh.issuer != reply.issuer
                 || fresh.subject != reply.subject
@@ -901,7 +913,7 @@ impl OwnerProvider {
         let verified = console
             .owner_api(cookie, OwnerOperation::Agents)
             .await
-            .map_err(|_| failure(401, "owner_authorization_required"))?;
+            .map_err(owner_api_error)?;
         if verified.owner != reply.owner
             || verified.origin != reply.origin
             || verified.issuer != reply.issuer

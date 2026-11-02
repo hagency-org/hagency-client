@@ -72,6 +72,7 @@ fn recovery_error_code(code: &str) -> &'static str {
         "agent_execution_device_required" => "agent_execution_device_required",
         "ledger_recovery_required" => "ledger_recovery_required",
         "owner_authorization_required" => "owner_authorization_required",
+        "owner_authorization_unavailable" => "owner_authorization_unavailable",
         "owner_scope_required" => "owner_scope_required",
         "sign_in_required" => "sign_in_required",
         "invalid_arguments" => "invalid_arguments",
