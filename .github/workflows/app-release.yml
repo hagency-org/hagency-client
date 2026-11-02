@@ -48,8 +48,9 @@ jobs:
       - name: Verify real owner and two-Agent observations
         run: cargo test --locked -p hagency --test qualification native_two_agent_qualification_records_its_evidence
   package:
-    needs: [engine, qualification]
-    if: ${{ !cancelled() && needs.engine.result == 'success' && (needs.qualification.result == 'success' || needs.qualification.result == 'skipped') }}
+    # Compile installers alongside Engine verification; publication still needs both.
+    needs: [qualification]
+    if: ${{ !cancelled() && (needs.qualification.result == 'success' || needs.qualification.result == 'skipped') }}
     name: Installer (${{ matrix.platform }}-${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
@@ -95,13 +96,17 @@ jobs:
           from pathlib import Path
           root = Path('D:/BuildCache/hagency-client') if os.name == 'nt' else Path(os.environ['RUNNER_TEMP']) / 'hagency-client'
           paths = {'CARGO_HOME': root / 'cargo', 'CARGO_TARGET_DIR': root / 'target',
-                   'TEMP': root / 'tmp', 'TMP': root / 'tmp'}
+                   'TEMP': root / 'tmp', 'TMP': root / 'tmp',
+                   'HAGENCY_PACKAGING_TOOLS': root / 'packaging-tools'}
           with open(os.environ['GITHUB_ENV'], 'a') as env:
               for key, path in paths.items():
                   path.mkdir(parents=True, exist_ok=True)
                   print(f'{key}={path}', file=env)
+              # rust-cache targets are relative to the workspace, not CARGO_TARGET_DIR.
+              print('CARGO_CACHE_TARGET=' + os.path.relpath(root / 'target', os.environ['GITHUB_WORKSPACE']), file=env)
           with open(os.environ['GITHUB_PATH'], 'a') as path:
               print(root / 'cargo' / 'bin', file=path)
+              print(root / 'packaging-tools' / 'bin', file=path)
           PY
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -172,12 +177,28 @@ jobs:
         run: choco install nsis --no-progress -y
       - uses: Swatinem/rust-cache@v2
         with:
+          prefix-key: v1-installer-target
           key: installer-${{ matrix.platform }}-${{ matrix.arch }}
+          workspaces: . -> ${{ env.CARGO_CACHE_TARGET }}
+          cache-bin: false
           cache-on-failure: true
-      - name: Install pinned packaging tools
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Restore pinned packaging tools
+        id: packaging-tools
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.HAGENCY_PACKAGING_TOOLS }}
+          key: packaging-tools-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.0-packager0.10.1-robius0.4.1
+      - name: Install or verify pinned packaging tools
         run: |
-          cargo install cargo-packager --version 0.10.1 --locked
-          cargo install robius-packaging-commands --version 0.4.1 --locked
+          cargo install cargo-packager --version 0.10.1 --locked --root "$HAGENCY_PACKAGING_TOOLS"
+          cargo install robius-packaging-commands --version 0.4.1 --locked --root "$HAGENCY_PACKAGING_TOOLS"
+      - name: Save pinned packaging tools before app tests
+        if: github.ref == 'refs/heads/main' && steps.packaging-tools.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.HAGENCY_PACKAGING_TOOLS }}
+          key: ${{ steps.packaging-tools.outputs.cache-primary-key }}
       - name: Test app before packaging
         run: |
           cargo test --locked -p octosense-app-contract --lib

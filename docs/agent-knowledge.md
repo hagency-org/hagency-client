@@ -5963,3 +5963,6 @@ Integrated main cf7 + SDK95 credentials source has exact-CI App857/0/2 and own a
 
 
 - **Release policy, 2026-11-03:** From0.6.2, official macOS packages/feeds are Apple Silicon arm64 only, by explicit user request. Linux amd64/arm64 DEB+AppImage and Windows amd64 NSIS remain: four installer jobs/six installers,11unsigned assets or18signed-update assets. Keep native Intel compile/test checks separate from distribution. Historical dual-architecture releases/failed observations remain immutable; freeze a new source when changing the release matrix.
+
+
+- **CI cache audit, 2026-11-03:** Swatinem workspaces target mappings are relative to GITHUB_WORKSPACE and do not follow CARGO_TARGET_DIR automatically. Release and Windows-build outputs moved outside the checkout must map the actual relative target; article-core uses the unified root target. Bump a wrong-path cache prefix when correcting it. Keep fixed packaging tool installations/metadata separate, and treat cache hits only as build inputs, never passed tests. Release may compile installers alongside Engine but public promotion must retain every Engine/qualification/package gate. Some docs contain compiled Agent templates; avoid blanket documentation path exclusions.

@@ -5,10 +5,10 @@ name: CI
 on:
   push:
     branches: [main]
-    paths-ignore: ['docs/**', 'knowledge/**', 'README.md', 'README.zh-CN.md']
+    paths-ignore: ['docs/progress.md', 'docs/agent-knowledge.md', 'docs/plan.md', 'docs/projects.md', 'docs/workspace.md', 'dev-vibe/release-*.zh.md', 'README.md', 'README.zh-CN.md']
   pull_request:
     branches: [main]
-    paths-ignore: ['docs/**', 'knowledge/**', 'README.md', 'README.zh-CN.md']
+    paths-ignore: ['docs/progress.md', 'docs/agent-knowledge.md', 'docs/plan.md', 'docs/projects.md', 'docs/workspace.md', 'dev-vibe/release-*.zh.md', 'README.md', 'README.zh-CN.md']
   workflow_dispatch:
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
@@ -37,6 +37,7 @@ jobs:
           fi
       - uses: Swatinem/rust-cache@v2
         with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           key: ci-ubuntu
       - uses: actions/setup-node@v4
         with:

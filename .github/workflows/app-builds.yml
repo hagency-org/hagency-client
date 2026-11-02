@@ -21,8 +21,10 @@ name: Hagency App Build CI
 on:
   push:
     branches: [main]
+    paths-ignore: ['docs/progress.md', 'docs/agent-knowledge.md', 'docs/plan.md', 'docs/projects.md', 'docs/workspace.md', 'dev-vibe/release-*.zh.md', 'README.md', 'README.zh-CN.md']
   pull_request:
     branches: [main]
+    paths-ignore: ['docs/progress.md', 'docs/agent-knowledge.md', 'docs/plan.md', 'docs/projects.md', 'docs/workspace.md', 'dev-vibe/release-*.zh.md', 'README.md', 'README.zh-CN.md']
   workflow_dispatch:
 
 env:
@@ -74,7 +76,8 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.runner }}-build-${{ hashFiles('Cargo.lock') }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: ${{ matrix.runner }}-build
 
       - name: Test native Linux library and guarded sharing
         run: |
@@ -130,7 +133,8 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: macos-${{ matrix.arch }}-build-${{ hashFiles('Cargo.lock') }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: macos-${{ matrix.arch }}-build
 
       - name: Build
         env:
@@ -157,6 +161,7 @@ jobs:
           # the system volume; large build caches can still use the D volume.
           $temporary = "$($env:SystemDrive)/hagency-ci-tmp"
           $paths = @{CARGO_HOME="$root/cargo"; CARGO_TARGET_DIR="$root/target"; TEMP=$temporary; TMP=$temporary}
+          "CARGO_CACHE_TARGET=$([System.IO.Path]::GetRelativePath($env:GITHUB_WORKSPACE, "$root/target"))" >> $env:GITHUB_ENV
           foreach ($entry in $paths.GetEnumerator()) {
             New-Item -ItemType Directory -Force -Path $entry.Value | Out-Null
             "$($entry.Key)=$($entry.Value)" >> $env:GITHUB_ENV
@@ -168,7 +173,10 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: windows-build-${{ hashFiles('Cargo.lock') }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          prefix-key: v1-windows-target
+          key: windows-build
+          workspaces: . -> ${{ env.CARGO_CACHE_TARGET }}
 
       - name: Test Windows update verification and file locking
         run: cargo test --locked -p hagency-updater
@@ -234,7 +242,8 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: ios-macos-build-${{ hashFiles('Cargo.lock') }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: ios-macos-build
 
       - name: Build for iOS targets
         env:
@@ -278,7 +287,8 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: android-macos-build-${{ hashFiles('Cargo.lock') }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: android-macos-build
 
       - name: Build Android APK
         env:
@@ -314,7 +324,8 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: android-linux-build-${{ hashFiles('Cargo.lock') }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: android-linux-build
 
       - name: Build Android APK
         env:
@@ -345,7 +356,8 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: android-windows-build-${{ hashFiles('Cargo.lock') }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: android-windows-build
 
       - name: Setup cargo-makepad
         uses: ./.github/actions/setup-cargo-makepad
