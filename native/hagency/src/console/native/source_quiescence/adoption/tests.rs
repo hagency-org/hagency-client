@@ -2,6 +2,7 @@ use super::*;
 use crate::console::native::reconciliation_sources::tests::Fixture;
 use hagency_core::project::Seat;
 use std::sync::atomic::Ordering;
+include!("server_administration_tests.rs");
 fn provider() -> VerifiedProviderAccount {
     VerifiedProviderAccount::new(
         "codex",
@@ -292,7 +293,9 @@ async fn adoption_process_child() {
     session.prepare_intent(&context, pending).await.unwrap();
     assert_eq!(
         f.owner
-            .execute(super::super::super::Command::Projects)
+            .execute(super::super::super::Command::Provider {
+                action: crate::console::native::ProviderAction::Status,
+            })
             .await
             .unwrap_err()
             .code,

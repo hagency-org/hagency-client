@@ -853,6 +853,8 @@ impl Drop for Inner {
 /// standalone browser authentication listens only for its OAuth callback.
 #[derive(Clone)]
 pub struct NativeOwner(Arc<Inner>);
+#[cfg(feature = "resource-adoption")]
+mod server_administration;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LoginMode {
     Browser,
@@ -1354,7 +1356,7 @@ impl NativeOwner {
         Ok(json!({"recoveries":results}))
     }
     pub async fn execute(&self, command: Command) -> Result<Value, NativeError> {
-        self.require_regular_mode()?;
+        self.admit_owner_command(&command).await?;
         if configuration::is_wrapper(&command) {
             return configuration::remote(self, command).await;
         }
@@ -1364,16 +1366,34 @@ impl NativeOwner {
     /// Per-controller admission without retiring the shared owner. A queued
     /// call rechecks its lease after acquiring the ordinary owner command lock.
     pub async fn execute_guarded(&self, command: Command, admitted: Arc<dyn Fn() -> bool + Send + Sync>) -> Result<Value, NativeError> {
-        self.require_regular_mode()?;
+        self.admit_owner_command(&command).await?;
         if configuration::is_wrapper(&command) {
             if !admitted() { return Err(failure(401, "management_scope_changed")); }
             return configuration::remote(self, command).await;
         }
         let _guard = self.0.calls.lock().await;
         if !admitted() { return Err(failure(401, "management_scope_changed")); }
-        self.execute_locked(command).await
+        self.execute_admitted_locked(command, Some(&admitted)).await
+    }
+    async fn admit_owner_command(&self, command: &Command) -> Result<bool, NativeError> {
+        #[cfg(feature = "resource-adoption")]
+        if self.0.adoption_recovery.get().is_some() {
+            if !server_administration::allows(command)
+                || !self.0.management.adopted_ready().await
+            {
+                return Err(failure(403, "source_adoption_recovery_only"));
+            }
+            return Ok(true);
+        }
+        let _ = command;
+        self.require_regular_mode()?;
+        Ok(false)
     }
     async fn execute_locked(&self, command: Command) -> Result<Value, NativeError> {
+        self.execute_admitted_locked(command, None).await
+    }
+    async fn execute_admitted_locked(&self, command: Command, admitted: Option<&Arc<dyn Fn() -> bool + Send + Sync>>) -> Result<Value, NativeError> {
+        let server_administration = self.admit_owner_command(&command).await?;
         let matrix_managed = self
             .0
             .matrix_source
@@ -1390,7 +1410,24 @@ impl NativeOwner {
             return Err(failure(400, "sdk_owns_matrix_login"));
         }
         if matrix_managed && !matches!(command, Command::Logout) {
-            self.sync_matrix().await?;
+            if server_administration {
+                self.sync_management_matrix().await?;
+                // Renewal can reuse a cached server grant. The SDK's current
+                // account remains authority for each administration request.
+                let cookie = self.0.cookie.lock().await.clone();
+                let raw = cookie.strip_prefix("hagency_console=")
+                    .ok_or(failure(401, "owner_authorization_required"))?;
+                self.0.host.console.0.server_login.check_matrix_source(raw).await
+                    .map_err(|code| failure(if code.ends_with("unavailable") {503} else {401}, code))?;
+            } else {
+                self.sync_matrix().await?;
+            }
+        }
+        // Authorization may await the SDK. Recheck custody and the originating
+        // controller before dispatching a server mutation, not just on enqueue.
+        self.admit_owner_command(&command).await?;
+        if admitted.is_some_and(|admitted| !admitted()) {
+            return Err(failure(401, "management_scope_changed"));
         }
         if matches!(command, Command::BeginLogin) {
             let ticket = self
@@ -1448,6 +1485,7 @@ impl NativeOwner {
             self.identity().await?;
         }
         let is_logout = matches!(command, Command::Logout);
+        let server_command = server_administration.then(|| command.clone());
         let cookie = self.0.cookie.lock().await.clone();
         let result = if let Some(action) = matrix_creations::action(&command)? {
             self.creation_locked(&cookie, action)
@@ -1517,6 +1555,12 @@ impl NativeOwner {
                     ));
                 }
             }
+        }
+        if let Some(command) = server_command {
+            self.admit_owner_command(&command).await?;
+        }
+        if admitted.is_some_and(|admitted| !admitted()) {
+            return Err(failure(401, "management_scope_changed"));
         }
         result
     }

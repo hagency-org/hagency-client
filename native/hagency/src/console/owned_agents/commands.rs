@@ -22,7 +22,7 @@ fn unavailable() -> OwnerError {
     error(503, "agent_command_state_unavailable")
 }
 fn directory(root: &Path, reply: &OwnerReply) -> Result<PathBuf, OwnerError> {
-    let path = ledger_path(
+    let path = journal_profile_directory(
         root,
         &reply.origin,
         &reply.issuer,
@@ -30,8 +30,6 @@ fn directory(root: &Path, reply: &OwnerReply) -> Result<PathBuf, OwnerError> {
         &reply.owner,
     )
     .map_err(|_| unavailable())?
-    .parent()
-    .ok_or_else(unavailable)?
     .join("agent-commands");
     hagency_store::private::directory(&path).map_err(|_| unavailable())?;
     Ok(path)

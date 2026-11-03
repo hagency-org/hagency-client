@@ -143,7 +143,8 @@ impl Fixture {
                         _ => panic!("unexpected fixture route: {path}"),
                     }};
                     let body = value.to_string();
-                    let _=stream.write_all(format!("HTTP/1.1 200 Fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await;
+                    let status = value["__fixture_http_status"].as_u64().unwrap_or(200);
+                    let _=stream.write_all(format!("HTTP/1.1 {status} Fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await;
                 });
             }
         });
