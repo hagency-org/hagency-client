@@ -11,17 +11,17 @@ use hagency::native_owner::{
 };
 use hagency_agent_local::{Budget, Limit, Period, Policy, RequestPolicy, ToolPolicy};
 use matrix_sdk::ruma::{
-    events::{
-        room::message::{OriginalSyncRoomMessageEvent, RoomMessageEventContent},
-        Mentions,
-    },
     OwnedRoomId, OwnedUserId,
+    events::{
+        Mentions,
+        room::message::{OriginalSyncRoomMessageEvent, RoomMessageEventContent},
+    },
 };
 use matrix_sdk::{
-    authentication::matrix::MatrixSession, config::SyncSettings, store::RoomLoadSettings, Client,
-    SessionMeta, SessionTokens,
+    Client, SessionMeta, SessionTokens, authentication::matrix::MatrixSession,
+    config::SyncSettings, store::RoomLoadSettings,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
@@ -124,16 +124,20 @@ impl DaemonProcess {
         // Signal only this test's owned child. Production shutdown retains
         // custody through drain; no daemon service or other process is touched.
         let pid = self.0.id().unwrap();
-        assert!(std::process::Command::new("/bin/kill")
-            .args(["-TERM", &pid.to_string()])
-            .status()
-            .unwrap()
-            .success());
-        assert!(tokio::time::timeout(Duration::from_secs(30), self.0.wait())
-            .await
-            .unwrap()
-            .unwrap()
-            .success());
+        assert!(
+            std::process::Command::new("/bin/kill")
+                .args(["-TERM", &pid.to_string()])
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_secs(30), self.0.wait())
+                .await
+                .unwrap()
+                .unwrap()
+                .success()
+        );
     }
 }
 async fn create_agent(native: &NativeOwner, name: &str) -> Value {
@@ -200,6 +204,25 @@ async fn reply_count(replies: &Arc<Mutex<Vec<(String, String)>>>, marker: &Path,
         expected,
         "one model execution per accepted encrypted request"
     );
+}
+async fn send_expected(
+    client: &Client,
+    room: &str,
+    text: &str,
+    mention: Option<&str>,
+    expected: &mut Vec<(String, String)>,
+) -> String {
+    let event = send(client, room, text, mention).await;
+    expected.push((room.to_owned(), event.clone()));
+    event
+}
+fn reply_parent(content: &RoomMessageEventContent) -> String {
+    let value = serde_json::to_value(content).unwrap();
+    value["m.relates_to"]["m.in_reply_to"]["event_id"]
+        .as_str()
+        .or_else(|| value["m.relates_to"]["event_id"].as_str())
+        .unwrap_or("")
+        .to_owned()
 }
 async fn send(client: &Client, room: &str, text: &str, mention: Option<&str>) -> String {
     let room: OwnedRoomId = room.try_into().unwrap();
@@ -282,6 +305,11 @@ async fn real_daemon_encrypted_child() {
     assert_eq!(fixture["human"]["owner"], owner);
     let daemon_token = fixture["daemon"]["accessToken"].as_str().unwrap();
     let human_token = fixture["human"]["accessToken"].as_str().unwrap();
+    let member_owner = fixture["member"]["owner"]
+        .as_str()
+        .expect("separate real human");
+    let member_token = fixture["member"]["accessToken"].as_str().unwrap();
+    assert_ne!(member_owner, owner);
     let native_root = root.join("owner");
     let native = NativeOwner::open_with_matrix(
         &native_root,
@@ -338,9 +366,7 @@ async fn real_daemon_encrypted_child() {
         .unwrap();
     native.execute(local(id, LocalAction::SaveAgentPolicy, Some(json!({"expectedRevision":policy["policy"]["revision"],"policy":Policy { budget: Budget { limit: Limit::Tokens(100_000), period: Period::Lifetime }, requests: RequestPolicy::Allow, high_risk: ToolPolicy::Deny }})))).await.unwrap();
 
-    // A second real joined puppet makes this a multi-member room. It is never
-    // configured for execution and is not used as a mocked membership flag.
-    let spectator = create_agent(&native, &format!("CryptoSpectator{unique:x}")).await;
+    // The second participant has a separate real Pasion/Matrix account.
     let space = http(base, human_token, reqwest::Method::POST, "/_matrix/client/v3/createRoom", Some(json!({"preset":"private_chat","name":"Crypto fixture space","creation_content":{"type":"m.space"}}))).await;
     let group = http(base, human_token, reqwest::Method::POST, "/_matrix/client/v3/createRoom", Some(json!({"preset":"private_chat","name":"Encrypted fixture group","initial_state":[{"type":"m.room.encryption","state_key":"","content":{"algorithm":"m.megolm.v1.aes-sha2"}}]}))).await;
     let group = group["room_id"].as_str().unwrap();
@@ -371,20 +397,24 @@ async fn real_daemon_encrypted_child() {
         })
         .await
         .unwrap();
-    for (agent, key) in [
-        (id, "bind-crypto"),
-        (spectator["id"].as_str().unwrap(), "bind-spectator"),
-    ] {
-        native
-            .execute(Command::BindAgent {
-                agent_id: agent.into(),
-                input: json!({"projectId":project,"roomId":group,"idempotencyKey":format!("{key}-{unique:x}")}),
-            })
-            .await
-            .unwrap();
-    }
+    native.execute(Command::BindAgent {agent_id:id.into(),input:json!({"projectId":project,"roomId":group,"idempotencyKey":format!("bind-crypto-{unique:x}")})}).await.unwrap();
     bindings(&native, id, 2).await;
-    bindings(&native, spectator["id"].as_str().unwrap(), 1).await;
+    http(
+        base,
+        human_token,
+        reqwest::Method::POST,
+        &format!("/_matrix/client/v3/rooms/{}/invite", segment(group)),
+        Some(json!({"user_id":member_owner})),
+    )
+    .await;
+    http(
+        base,
+        member_token,
+        reqwest::Method::POST,
+        &format!("/_matrix/client/v3/rooms/{}/join", segment(group)),
+        Some(json!({})),
+    )
+    .await;
     let joined = http(
         base,
         human_token,
@@ -460,14 +490,21 @@ async fn real_daemon_encrypted_child() {
         .unwrap();
     let replies = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
     let output = replies.clone();
+    let relations = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
+    let related = relations.clone();
     let expected_sender = puppet.to_owned();
     human.add_event_handler(
         move |event: OriginalSyncRoomMessageEvent, room: matrix_sdk::Room| {
             let output = output.clone();
+            let related = related.clone();
             let expected_sender = expected_sender.clone();
             async move {
                 if event.sender.as_str() == expected_sender && event.content.body().contains(ANSWER)
                 {
+                    related
+                        .lock()
+                        .unwrap()
+                        .push((room.room_id().to_string(), reply_parent(&event.content)));
                     output
                         .lock()
                         .unwrap()
@@ -483,6 +520,64 @@ async fn real_daemon_encrypted_child() {
     let sync_client = human.clone();
     let sync = tokio::spawn(async move {
         sync_client
+            .sync(SyncSettings::default().timeout(Duration::from_secs(1)))
+            .await
+    });
+    let member_identity = http(
+        base,
+        member_token,
+        reqwest::Method::GET,
+        "/_matrix/client/v3/account/whoami",
+        None,
+    )
+    .await;
+    let member = Client::builder()
+        .homeserver_url(base)
+        .sqlite_store(root.join("member-sdk"), Some("isolated-member-key"))
+        .build()
+        .await
+        .unwrap();
+    member
+        .matrix_auth()
+        .restore_session(
+            MatrixSession {
+                meta: SessionMeta {
+                    user_id: member_owner.try_into().unwrap(),
+                    device_id: member_identity["device_id"].as_str().unwrap().into(),
+                },
+                tokens: SessionTokens {
+                    access_token: member_token.into(),
+                    refresh_token: None,
+                },
+            },
+            RoomLoadSettings::default(),
+        )
+        .await
+        .unwrap();
+    let member_replies = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
+    let member_output = member_replies.clone();
+    let member_sender = puppet.to_owned();
+    member.add_event_handler(
+        move |event: OriginalSyncRoomMessageEvent, room: matrix_sdk::Room| {
+            let output = member_output.clone();
+            let sender = member_sender.clone();
+            async move {
+                if event.sender.as_str() == sender && event.content.body().contains(ANSWER) {
+                    output
+                        .lock()
+                        .unwrap()
+                        .push((room.room_id().to_string(), reply_parent(&event.content)));
+                }
+            }
+        },
+    );
+    member
+        .sync_once(SyncSettings::default().timeout(Duration::ZERO))
+        .await
+        .unwrap();
+    let member_sync_client = member.clone();
+    let member_sync = tokio::spawn(async move {
+        member_sync_client
             .sync(SyncSettings::default().timeout(Duration::from_secs(1)))
             .await
     });
@@ -510,7 +605,15 @@ async fn real_daemon_encrypted_child() {
         "Agent encryption keys were not uploaded"
     );
     let original_keys = keys["device_keys"][puppet].clone();
-    let event = send(&human, dm, "DAEMON_DM_AFTER_BOTH_CONTROLLERS_DETACH", None).await;
+    let mut expected_replies = Vec::new();
+    let event = send_expected(
+        &human,
+        dm,
+        "DAEMON_DM_AFTER_BOTH_CONTROLLERS_DETACH",
+        None,
+        &mut expected_replies,
+    )
+    .await;
     let wire = http(
         base,
         human_token,
@@ -527,43 +630,142 @@ async fn real_daemon_encrypted_child() {
     assert!(wire["content"]["body"].is_null());
     reply_count(&replies, &marker, 1).await;
     send(&human, group, "GROUP_WITHOUT_MENTION_MUST_NOT_RUN", None).await;
+    send(
+        &member,
+        group,
+        "SECOND_HUMAN_WITHOUT_MENTION_MUST_NOT_RUN",
+        None,
+    )
+    .await;
     tokio::time::sleep(Duration::from_secs(4)).await;
     assert_eq!(turns(&marker).len(), 1);
-    send(
+    send_expected(
         &human,
         group,
         "DAEMON_GROUP_MENTION_AFTER_DETACH",
         Some(puppet),
+        &mut expected_replies,
     )
     .await;
     reply_count(&replies, &marker, 2).await;
+    send_expected(
+        &member,
+        group,
+        "SECOND_HUMAN_EXPLICIT_MENTION",
+        Some(puppet),
+        &mut expected_replies,
+    )
+    .await;
+    reply_count(&replies, &marker, 3).await;
     daemon.stop().await;
     let daemon = DaemonProcess::start(&home, &root.join("daemon.log")).await;
     tokio::time::sleep(Duration::from_secs(4)).await;
     assert_eq!(
         turns(&marker).len(),
-        2,
+        3,
         "restart must not reexecute old requests"
     );
-    send(&human, dm, "DAEMON_DM_AFTER_PROCESS_RESTART", None).await;
-    reply_count(&replies, &marker, 3).await;
+    send_expected(
+        &human,
+        dm,
+        "DAEMON_DM_AFTER_PROCESS_RESTART",
+        None,
+        &mut expected_replies,
+    )
+    .await;
+    reply_count(&replies, &marker, 4).await;
+    send_expected(
+        &member,
+        group,
+        "SECOND_HUMAN_MENTION_AFTER_RESTART",
+        Some(puppet),
+        &mut expected_replies,
+    )
+    .await;
+    reply_count(&replies, &marker, 5).await;
     let executed = turns(&marker);
     assert_ne!(
         executed[0]["cwd"], executed[1]["cwd"],
         "DM and group must use different working directories"
     );
     assert_eq!(
-        executed[0]["cwd"], executed[2]["cwd"],
+        executed[0]["cwd"], executed[3]["cwd"],
         "the same room keeps its working directory across restart"
     );
     assert_eq!(
-        executed[0]["thread"], executed[2]["thread"],
+        executed[0]["thread"], executed[3]["thread"],
         "restart resumes only the original room context"
     );
     assert_ne!(
         executed[0]["thread"], executed[1]["thread"],
         "group cannot reuse the DM provider context"
     );
+    for index in [2, 4] {
+        assert_eq!(
+            executed[1]["cwd"], executed[index]["cwd"],
+            "both humans share only this group's directory across restart"
+        );
+        assert_ne!(
+            executed[1]["thread"], executed[index]["thread"],
+            "separate top-level group threads must not reuse another request's provider context"
+        );
+    }
+    let mut observed = relations.lock().unwrap().clone();
+    observed.sort();
+    // Personal DM replies intentionally stay flat; group replies retain the
+    // exact thread root. The exact provider input sequence checks DM routing.
+    let mut expected: Vec<_> = expected_replies
+        .iter()
+        .map(|(room, event)| {
+            (
+                room.clone(),
+                if room == dm {
+                    String::new()
+                } else {
+                    event.clone()
+                },
+            )
+        })
+        .collect();
+    expected.sort();
+    assert_eq!(
+        observed, expected,
+        "every decrypted owner-visible reply must target the exact accepted request, never a suppressed message"
+    );
+    let member_expected: Vec<_> = expected_replies
+        .iter()
+        .filter(|(room, _)| room == group)
+        .cloned()
+        .collect();
+    for _ in 0..50 {
+        if member_expected
+            .iter()
+            .all(|item| member_replies.lock().unwrap().contains(item))
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        member_expected
+            .iter()
+            .all(|item| member_replies.lock().unwrap().contains(item)),
+        "second human must decrypt replies to their actual group requests"
+    );
+    let expected_inputs = [
+        "DAEMON_DM_AFTER_BOTH_CONTROLLERS_DETACH",
+        "DAEMON_GROUP_MENTION_AFTER_DETACH",
+        "SECOND_HUMAN_EXPLICIT_MENTION",
+        "DAEMON_DM_AFTER_PROCESS_RESTART",
+        "SECOND_HUMAN_MENTION_AFTER_RESTART",
+    ];
+    for (recorded, expected) in turns(&marker).iter().zip(expected_inputs) {
+        let inputs = recorded["input"].as_array().expect("provider inputs");
+        assert!(
+            inputs.iter().any(|input| input["text"] == expected),
+            "exact accepted text must reach provider: {recorded}"
+        );
+    }
     let current = http(
         base,
         human_token,
@@ -594,9 +796,11 @@ async fn real_daemon_encrypted_child() {
     }
     daemon.stop().await;
     sync.abort();
+    member_sync.abort();
     let _ = sync.await;
+    let _ = member_sync.await;
     println!(
-        "PASS: actual daemon process, two controller detaches, real encrypted DM/group, no-mention suppression, crypto identity restart and exactly three offline model turns"
+        "PASS: actual daemon process, two controller detaches, real encrypted DM/group, no-mention suppression, crypto identity restart and two real humans and exactly five offline model turns"
     );
     hagency_store::private::write_new(
         &fixture_path.parent().unwrap().join("client-done.json"),

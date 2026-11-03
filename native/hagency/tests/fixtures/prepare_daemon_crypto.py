@@ -4,6 +4,8 @@
 Input is the disposable Server smoke harness client-fixture.json. This test
 helper refuses non-loopback origins and never reads an installed account.
 OAuth protocol follows sibling Server scripts/test-cross-device-config.py.
+The disposable Pasion configuration must enable password registration without
+requiring contact details so the group cases can create a separate human.
 """
 import argparse
 import base64
@@ -116,6 +118,26 @@ def main():
         raise RuntimeError("disposable loopback Server fixture required")
     tag = secrets.token_hex(5)
     grants = {key: grant(value["base"], value["username"], value["password"], key + tag) for key in ["daemon", "human"]}
+    # A separate real human, not a spoofed sender or an appservice puppet, is
+    # needed to exercise encrypted multi-user room policy.
+    username = "crypto_member_" + tag
+    password = secrets.token_urlsafe(32)
+    registration = build_opener(ProxyHandler({}), HTTPCookieProcessor(http.cookiejar.CookieJar()))
+    def register(path, body):
+        with registration.open(Request(value["base"] + path,
+                data=json.dumps(body).encode(),
+                headers={"Content-Type": "application/json", "Origin": value["base"]}), timeout=20) as response:
+            result = json.load(response)
+        if result.get("status") != "success":
+            raise RuntimeError("fixture second-human registration failed at " + path + ": " + str(result.get("error")))
+        return result
+    registered = register("/auth/api/v1/auth/register", {"username": username,
+        "password": password, "password_confirm": password})
+    registration_path = "/auth/api/v1/auth/register/" + registered["id"]
+    if registered.get("next_step") == "display_name":
+        register(registration_path + "/display-name", {"display_name": "Encrypted fixture member"})
+    register(registration_path + "/finish", {})
+    grants["member"] = grant(value["base"], username, password, "member" + tag)
     output = path.parent / "daemon-crypto-fixture.json"
     if output.exists() and output.stat().st_mode & 0o077:
         raise RuntimeError("existing output is not private")

@@ -68,6 +68,25 @@ mod fixture {
         );
         value
     }
+    // Room administration is a Server owner operation. The adopted executor's
+    // legacy source root deliberately cannot perform personal-owner mutations.
+    async fn owner_api(
+        base: &str,
+        matrix_token: &str,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<Value>,
+    ) -> Value {
+        let session = http(
+            base,
+            matrix_token,
+            reqwest::Method::POST,
+            "/hagency/api/v1/sessions/pasion",
+            Some(json!({"accessToken":matrix_token})),
+        )
+        .await;
+        http(base, session["token"].as_str().unwrap(), method, path, body).await
+    }
     fn segment(value: &str) -> String {
         percent_encoding::utf8_percent_encode(value, percent_encoding::NON_ALPHANUMERIC).to_string()
     }
@@ -162,6 +181,25 @@ mod fixture {
             expected,
             "one model execution per accepted encrypted request"
         );
+    }
+    async fn send_expected(
+        client: &Client,
+        room: &str,
+        text: &str,
+        mention: Option<&str>,
+        expected: &mut Vec<(String, String)>,
+    ) -> String {
+        let event = send(client, room, text, mention).await;
+        expected.push((room.to_owned(), event.clone()));
+        event
+    }
+    fn reply_parent(content: &RoomMessageEventContent) -> String {
+        let value = serde_json::to_value(content).unwrap();
+        value["m.relates_to"]["m.in_reply_to"]["event_id"]
+            .as_str()
+            .or_else(|| value["m.relates_to"]["event_id"].as_str())
+            .unwrap_or("")
+            .to_owned()
     }
     async fn send(client: &Client, room: &str, text: &str, mention: Option<&str>) -> String {
         let room: OwnedRoomId = room.try_into().unwrap();
@@ -306,6 +344,11 @@ mod fixture {
         assert_eq!(fixture["human"]["owner"], owner);
         let daemon_token = fixture["daemon"]["accessToken"].as_str().unwrap();
         let human_token = fixture["human"]["accessToken"].as_str().unwrap();
+        let member_owner = fixture["member"]["owner"]
+            .as_str()
+            .expect("separate real human");
+        let member_token = fixture["member"]["accessToken"].as_str().unwrap();
+        assert_ne!(member_owner, owner);
         let marker = PathBuf::from(std::env::var_os("HAGENCY_DAEMON_CRYPTO_TURNS").unwrap());
         let native_root = root.join("owner");
         let source = Arc::new(Source(fixture["daemon"].clone()));
@@ -379,7 +422,8 @@ mod fixture {
         let review = access
             .prepare(
                 contribution_id.clone(),
-                OwnerGrantChoices { per_request_tokens: None,
+                OwnerGrantChoices {
+                    per_request_tokens: None,
                     calendar: None,
                     coordinator_mxid: owner.into(),
                     delegation_expires_at_ms: now + 3_600_000,
@@ -560,6 +604,111 @@ mod fixture {
             "adopted daemon reports original Codex account short and weekly windows before model use",
         );
 
+        // A separate owner-authorized room retains its own durable binding and workspace.
+        let agent_id = ready["request"]["agentId"]
+            .as_str()
+            .expect("pooled Agent id")
+            .to_owned();
+        let space = http(base, human_token, reqwest::Method::POST, "/_matrix/client/v3/createRoom",
+            Some(json!({"preset":"private_chat","name":"Pooled encrypted space","creation_content":{"type":"m.space"}}))).await;
+        let group = http(base, human_token, reqwest::Method::POST, "/_matrix/client/v3/createRoom",
+            Some(json!({"preset":"private_chat","name":"Separate pooled encrypted group","invite":[format!("@_hagency_service:{}",owner.split_once(':').unwrap().1)],"initial_state":[{"type":"m.room.encryption","state_key":"","content":{"algorithm":"m.megolm.v1.aes-sha2"}}]}))).await;
+        let group = group["room_id"].as_str().unwrap().to_owned();
+        http(
+            base,
+            human_token,
+            reqwest::Method::PUT,
+            &format!(
+                "/_matrix/client/v3/rooms/{}/state/m.space.child/{}",
+                segment(space["room_id"].as_str().unwrap()),
+                segment(&group)
+            ),
+            Some(json!({"via":[owner.split_once(':').unwrap().1]})),
+        )
+        .await;
+        let project = owner_api(
+            base,
+            human_token,
+            reqwest::Method::POST,
+            "/hagency/api/v1/projects/adopt",
+            Some(json!({"spaceId":space["room_id"]})),
+        )
+        .await;
+        let project_id = project["project"]["id"].as_str().unwrap();
+        owner_api(
+            base,
+            human_token,
+            reqwest::Method::POST,
+            &format!("/hagency/api/v1/projects/{project_id}/rooms/adopt"),
+            Some(json!({"roomId":group})),
+        )
+        .await;
+        let binding_path = format!("/hagency/api/v1/agents/{agent_id}/bindings");
+        let binding_key = unique_id("pooled_group_bind");
+        let bound = owner_api(
+            base,
+            human_token,
+            reqwest::Method::POST,
+            &binding_path,
+            Some(json!({"projectId":project_id,"roomId":group,"idempotencyKey":binding_key})),
+        )
+        .await;
+        // Pooled bindings are observed through their original command receipt;
+        // the legacy /agents/:id/bindings list is personal-Agent-only.
+        let command_path = format!("/hagency/api/v1/commands/agent.bind/{binding_key}");
+        let group_binding = bound["creation"]["binding"]["id"]
+            .as_str()
+            .expect("additional room binding")
+            .to_owned();
+        let mut binding_active = false;
+        for _ in 0..90 {
+            let bindings =
+                owner_api(base, human_token, reqwest::Method::GET, &command_path, None).await;
+            if (bindings["creation"]["binding"]["id"] == group_binding
+                && bindings["creation"]["binding"]["state"] == "active")
+            {
+                binding_active = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+        assert!(
+            binding_active,
+            "additional pooled room binding must become active"
+        );
+        let joined = http(
+            base,
+            human_token,
+            reqwest::Method::GET,
+            &format!(
+                "/_matrix/client/v3/rooms/{}/joined_members",
+                segment(&group)
+            ),
+            None,
+        )
+        .await;
+        assert!(
+            joined["joined"].get(&puppet).is_some(),
+            "pooled Agent must actually join additional room"
+        );
+        http(
+            base,
+            human_token,
+            reqwest::Method::POST,
+            &format!("/_matrix/client/v3/rooms/{}/invite", segment(&group)),
+            Some(json!({"user_id":member_owner})),
+        )
+        .await;
+        http(
+            base,
+            member_token,
+            reqwest::Method::POST,
+            &format!("/_matrix/client/v3/rooms/{}/join", segment(&group)),
+            Some(json!({})),
+        )
+        .await;
+        stage("separate encrypted group bound with real requester and second human");
+
         remote.retire();
         other.retire();
         drop(remote);
@@ -601,15 +750,22 @@ mod fixture {
             .unwrap();
         let replies = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
         let output = replies.clone();
+        let relations = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
+        let related = relations.clone();
         let expected_sender = puppet.to_owned();
         human.add_event_handler(
             move |event: OriginalSyncRoomMessageEvent, room: matrix_sdk::Room| {
                 let output = output.clone();
+                let related = related.clone();
                 let expected_sender = expected_sender.clone();
                 async move {
                     if event.sender.as_str() == expected_sender
                         && event.content.body().contains(ANSWER)
                     {
+                        related
+                            .lock()
+                            .unwrap()
+                            .push((room.room_id().to_string(), reply_parent(&event.content)));
                         output
                             .lock()
                             .unwrap()
@@ -625,6 +781,64 @@ mod fixture {
         let sync_client = human.clone();
         let sync = tokio::spawn(async move {
             sync_client
+                .sync(SyncSettings::default().timeout(Duration::from_secs(1)))
+                .await
+        });
+        let member_identity = http(
+            base,
+            member_token,
+            reqwest::Method::GET,
+            "/_matrix/client/v3/account/whoami",
+            None,
+        )
+        .await;
+        let member = Client::builder()
+            .homeserver_url(base)
+            .sqlite_store(root.join("member-sdk"), Some("isolated-member-key"))
+            .build()
+            .await
+            .unwrap();
+        member
+            .matrix_auth()
+            .restore_session(
+                MatrixSession {
+                    meta: SessionMeta {
+                        user_id: member_owner.try_into().unwrap(),
+                        device_id: member_identity["device_id"].as_str().unwrap().into(),
+                    },
+                    tokens: SessionTokens {
+                        access_token: member_token.into(),
+                        refresh_token: None,
+                    },
+                },
+                RoomLoadSettings::default(),
+            )
+            .await
+            .unwrap();
+        let member_replies = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
+        let member_output = member_replies.clone();
+        let member_sender = puppet.to_owned();
+        member.add_event_handler(
+            move |event: OriginalSyncRoomMessageEvent, room: matrix_sdk::Room| {
+                let output = member_output.clone();
+                let sender = member_sender.clone();
+                async move {
+                    if event.sender.as_str() == sender && event.content.body().contains(ANSWER) {
+                        output
+                            .lock()
+                            .unwrap()
+                            .push((room.room_id().to_string(), reply_parent(&event.content)));
+                    }
+                }
+            },
+        );
+        member
+            .sync_once(SyncSettings::default().timeout(Duration::ZERO))
+            .await
+            .unwrap();
+        let member_sync_client = member.clone();
+        let member_sync = tokio::spawn(async move {
+            member_sync_client
                 .sync(SyncSettings::default().timeout(Duration::from_secs(1)))
                 .await
         });
@@ -655,12 +869,14 @@ mod fixture {
             "Agent encryption keys were not uploaded"
         );
         let original_keys = keys["device_keys"][puppet.as_str()].clone();
+        let mut expected_replies = Vec::new();
 
-        let event = send(
+        let event = send_expected(
             &human,
             dm,
             "POOLED_ENCRYPTED_AFTER_BOTH_CONTROLLERS_DETACH",
             None,
+            &mut expected_replies,
         )
         .await;
         let wire = http(
@@ -681,26 +897,183 @@ mod fixture {
         stage(
             "pooled encrypted request executed and reply decrypted after both controllers detached",
         );
+        // The requester alone can talk in the original room without @. A real
+        // second human changes that policy for BOTH senders immediately.
+        http(
+            base,
+            human_token,
+            reqwest::Method::POST,
+            &format!("/_matrix/client/v3/rooms/{}/invite", segment(dm)),
+            Some(json!({"user_id":member_owner})),
+        )
+        .await;
+        http(
+            base,
+            member_token,
+            reqwest::Method::POST,
+            &format!("/_matrix/client/v3/rooms/{}/join", segment(dm)),
+            Some(json!({})),
+        )
+        .await;
+        let dm_id: OwnedRoomId = dm.try_into().unwrap();
+        for _ in 0..90 {
+            if member
+                .get_room(&dm_id)
+                .is_some_and(|room| room.state() == matrix_sdk::RoomState::Joined)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        let joined = http(
+            base,
+            human_token,
+            reqwest::Method::GET,
+            &format!("/_matrix/client/v3/rooms/{}/joined_members", segment(dm)),
+            None,
+        )
+        .await;
+        assert!(
+            joined["joined"].get(owner).is_some()
+                && joined["joined"].get(member_owner).is_some()
+                && joined["joined"].get(&puppet).is_some()
+        );
+        send(&human, dm, "OWNER_NO_MENTION_AFTER_SECOND_HUMAN", None).await;
+        send(&member, dm, "MEMBER_NO_MENTION_AFTER_JOIN", None).await;
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        assert_eq!(
+            turns(&marker).len(),
+            1,
+            "neither human may trigger group execution without explicit @"
+        );
+        send_expected(
+            &human,
+            dm,
+            "OWNER_EXPLICIT_MENTION",
+            Some(&puppet),
+            &mut expected_replies,
+        )
+        .await;
+        reply_count(&replies, &marker, 2).await;
+        send_expected(
+            &member,
+            dm,
+            "MEMBER_EXPLICIT_MENTION",
+            Some(&puppet),
+            &mut expected_replies,
+        )
+        .await;
+        reply_count(&replies, &marker, 3).await;
+        send(&human, &group, "SEPARATE_GROUP_OWNER_WITHOUT_MENTION", None).await;
+        send(
+            &member,
+            &group,
+            "SEPARATE_GROUP_MEMBER_WITHOUT_MENTION",
+            None,
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        assert_eq!(
+            turns(&marker).len(),
+            3,
+            "bound group also requires @ from both humans"
+        );
+        send_expected(
+            &member,
+            &group,
+            "SEPARATE_GROUP_MEMBER_MENTION",
+            Some(&puppet),
+            &mut expected_replies,
+        )
+        .await;
+        reply_count(&replies, &marker, 4).await;
+        stage(
+            "both humans require explicit @ after DM becomes a group; separate bound group executes encrypted member mention",
+        );
         daemon.stop().await;
         let daemon = DaemonProcess::start(&home, &root.join("daemon.log")).await;
         tokio::time::sleep(Duration::from_secs(4)).await;
         assert_eq!(
             turns(&marker).len(),
-            1,
-            "restart must not duplicate pooled turn"
+            4,
+            "restart must not duplicate accepted pooled turns"
         );
-        send(&human, dm, "POOLED_ENCRYPTED_AFTER_RESTART", None).await;
-        reply_count(&replies, &marker, 2).await;
+        send_expected(
+            &human,
+            dm,
+            "POOLED_ENCRYPTED_AFTER_RESTART",
+            Some(&puppet),
+            &mut expected_replies,
+        )
+        .await;
+        reply_count(&replies, &marker, 5).await;
+        send_expected(
+            &member,
+            &group,
+            "GROUP_ENCRYPTED_AFTER_RESTART",
+            Some(&puppet),
+            &mut expected_replies,
+        )
+        .await;
+        reply_count(&replies, &marker, 6).await;
         let recorded = turns(&marker);
+        for index in [1, 2, 4] {
+            assert_eq!(
+                recorded[0]["cwd"], recorded[index]["cwd"],
+                "same pooled room preserves directory"
+            );
+        }
         assert_eq!(
-            recorded[0]["cwd"], recorded[1]["cwd"],
-            "pooled room workspace survives daemon restart"
+            recorded[3]["cwd"], recorded[5]["cwd"],
+            "separate room survives restart"
         );
-        assert!(
-            Path::new(recorded[0]["cwd"].as_str().unwrap()).starts_with(&native_root),
-            "workspace remains under the original adopted owner root"
+        assert_ne!(
+            recorded[0]["cwd"], recorded[3]["cwd"],
+            "distinct pooled rooms cannot share working directories"
         );
+        for item in &recorded {
+            assert!(Path::new(item["cwd"].as_str().unwrap()).starts_with(&native_root));
+        }
 
+        let mut observed = relations.lock().unwrap().clone();
+        observed.sort();
+        let mut expected = expected_replies.clone();
+        expected.sort();
+        assert_eq!(
+            observed, expected,
+            "every decrypted owner-visible reply must target the exact accepted request, never a suppressed message"
+        );
+        let member_expected: Vec<_> = expected_replies.iter().skip(1).cloned().collect();
+        for _ in 0..50 {
+            if member_expected
+                .iter()
+                .all(|item| member_replies.lock().unwrap().contains(item))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(
+            member_expected
+                .iter()
+                .all(|item| member_replies.lock().unwrap().contains(item)),
+            "second human must decrypt replies to their actual group requests"
+        );
+        let expected_inputs = [
+            "POOLED_ENCRYPTED_AFTER_BOTH_CONTROLLERS_DETACH",
+            "OWNER_EXPLICIT_MENTION",
+            "MEMBER_EXPLICIT_MENTION",
+            "SEPARATE_GROUP_MEMBER_MENTION",
+            "POOLED_ENCRYPTED_AFTER_RESTART",
+            "GROUP_ENCRYPTED_AFTER_RESTART",
+        ];
+        for (recorded, expected) in turns(&marker).iter().zip(expected_inputs) {
+            let inputs = recorded["input"].as_array().expect("provider inputs");
+            assert!(
+                inputs.iter().any(|input| input["text"] == expected),
+                "exact accepted text must reach provider: {recorded}"
+            );
+        }
         let current = http(
             base,
             human_token,
@@ -730,7 +1103,7 @@ mod fixture {
             assert_eq!(wire["type"], "m.room.encrypted");
             assert!(wire["content"]["body"].is_null());
         }
-        // A new observer after both model turns inspects real server/native usage;
+        // A new observer after the six model turns inspects real server/native usage;
         // it does not supply execution authority for either request.
         let observer = ControllerClient::new(home.clone(), owner.into(), origin.clone(), 1);
         let remote = observer.management(package(7)).await.unwrap();
@@ -742,12 +1115,12 @@ mod fixture {
                 ))
                 .await
                 .unwrap();
-            if budget["budget"]["knownConsumedTokens"] == 10 {
+            if budget["budget"]["knownConsumedTokens"] == 30 {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
-        assert_eq!(budget["budget"]["knownConsumedTokens"], 10, "{budget}");
+        assert_eq!(budget["budget"]["knownConsumedTokens"], 30, "{budget}");
         assert_eq!(budget["budget"]["effectiveCeilingTokens"], 1000);
         // A live Agent retains its declared capacity for later turns. Per-call
         // liabilities below must settle to actual usage; its total ceiling stays reserved.
@@ -761,7 +1134,7 @@ mod fixture {
         let items = work["work"]["items"].as_array().expect("settled work rows");
         assert_eq!(
             items.len(),
-            2,
+            6,
             "restart must not add a duplicate accepted work: {work}"
         );
         for item in items {
@@ -772,7 +1145,7 @@ mod fixture {
             assert!(item["completedAtMs"].as_i64().is_some_and(|at| at > 0));
         }
         stage(
-            "real server recorded two completed work receipts, 10 consumed tokens, no uncertain liability",
+            "real server recorded six completed work receipts, 30 consumed tokens, no uncertain liability",
         );
         let mut client = daemon::DaemonClient::connect(&home).await.unwrap();
         let snapshot = client
@@ -790,32 +1163,86 @@ mod fixture {
             .unwrap();
         assert_eq!(
             snapshot.usage.counts.input,
-            Some(6),
+            Some(18),
             "dashboard retains pre-restart input usage"
         );
-        assert_eq!(snapshot.usage.counts.output, Some(4));
-        assert_eq!(snapshot.usage.counts.display_volume().unwrap(), Some(10));
+        assert_eq!(snapshot.usage.counts.output, Some(12));
+        assert_eq!(snapshot.usage.counts.display_volume().unwrap(), Some(30));
         // This collector began after the selected calendar day started. The
         // observed turns are complete; earlier unobserved history stays unknown.
-        let total = &snapshot.usage_breakdown.as_ref().expect("usage breakdown").report.total;
+        let total = &snapshot
+            .usage_breakdown
+            .as_ref()
+            .expect("usage breakdown")
+            .report
+            .total;
         assert!(!snapshot.usage.complete && total.coverage_gap);
-        assert_eq!(total.executions, 2);
+        assert_eq!(total.executions, 6);
         assert_eq!(total.unmeasured_executions, 0);
         assert_eq!(total.diagnostics.conflicts, 0);
         assert_eq!(total.diagnostics.regressions, 0);
         assert_eq!(total.diagnostics.undeduplicable, 0);
         assert_eq!(total.diagnostics.incomplete_captures, 0);
         assert_eq!(total.diagnostics.missing_after_known, 0);
-        stage("daemon dashboard persisted exact two-turn usage across restart");
+        stage("daemon dashboard persisted exact six-turn usage across restart");
+        let bindings =
+            owner_api(base, human_token, reqwest::Method::GET, &command_path, None).await;
+        assert!(
+            (bindings["creation"]["binding"]["id"] == group_binding
+                && bindings["creation"]["binding"]["state"] == "active"),
+            "same original group binding survives restart"
+        );
+        http(
+            base,
+            human_token,
+            reqwest::Method::POST,
+            &format!("/_matrix/client/v3/rooms/{}/leave", segment(&group)),
+            Some(json!({})),
+        )
+        .await;
+        let mut fenced = false;
+        for _ in 0..90 {
+            let bindings =
+                owner_api(base, human_token, reqwest::Method::GET, &command_path, None).await;
+            if (bindings["creation"]["binding"]["id"] == group_binding
+                && bindings["creation"]["binding"]["state"] == "left")
+            {
+                fenced = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        assert!(
+            fenced,
+            "owner departure must permanently fence extra room binding"
+        );
+        send(
+            &member,
+            &group,
+            "OWNER_ABSENT_EXPLICIT_MENTION_MUST_NOT_RUN",
+            Some(&puppet),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        assert_eq!(
+            turns(&marker).len(),
+            6,
+            "owner absence revokes room execution even with explicit @"
+        );
+        stage(
+            "owner departure fenced original extra-room binding; remaining member mention caused no execution",
+        );
         remote.retire();
         drop(remote);
         observer.retire();
         drop(observer);
         daemon.stop().await;
         sync.abort();
+        member_sync.abort();
         let _ = sync.await;
+        let _ = member_sync.await;
         println!(
-            "PASS: real pooled daemon encrypted execution after two controller detaches and process restart, exactly two deterministic model turns"
+            "PASS: real pooled daemon encrypted execution after two controller detaches and process restart, six deterministic turns, two real humans, encrypted group mention rules, distinct room directories and owner membership fencing"
         );
         hagency_store::private::write_new(
             &fixture_path.parent().unwrap().join("client-done.json"),
