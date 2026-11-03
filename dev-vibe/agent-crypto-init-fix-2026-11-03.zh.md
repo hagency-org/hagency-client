@@ -1,6 +1,6 @@
 # Agent 加密身份初始化：诊断与跨组件修复
 
-2026-11-03。本次由用户授权定位、修复、提交 PR、复核合并，并验证一次最小 Codex 对话。没有新的版本发布授权，不覆盖 v0.6.2 资产。
+2026-11-03。本次由用户授权定位、修复、提交 PR、复核合并，并验证一次最小 Codex 对话。诊断阶段没有发布授权；后续按用户授权另行发布 0.6.3。
 
 ## 现场与根因边界
 
@@ -26,8 +26,10 @@
 - Server 本地 library：25 passed / 0 failed / 1 新的显式数据库用例 ignored；该数据库用例已对独立空数据库另行实际运行并通过，覆盖并发幂等、完整注册身份及禁用状态保留。
 - Palpo 默认 library：310 passed / 0 failed / 72 ignored；所改 HTTP 数据库用例另行运行，不把普通套件的 ignored 算通过。最终 default/all-features 用例及 hosted CI 继续验证。
 
-## 当前限制
+## 后续验证与发行
 
-三组件 PR 尚待最终复核/合并和服务端部署，实际加密身份验证及固定文本 Codex 回复尚未验收通过。本次模型任务发送数仍为 0；不声称端到端已修复。保留用户既有凭据、身份和所有原失败。
+[Client #45](https://github.com/hagency-org/hagency-client/pull/45) 与 [Server #32](https://github.com/hagency-org/hagency-server/pull/32) 已合并。隔离环境使用修复后的服务端验证了 Agent 加密身份初始化、一次真实 Codex 固定文本任务，以及客户端收到并解密回复。诊断阶段未发送模型任务。既有凭据、身份及原始失败均保留。
+
+[Client 0.6.3](https://github.com/hagency-org/hagency-client/releases/tag/v0.6.3) 已公开。公网服务需要部署含 Server #32 的构建；本次发行未部署或验证公网服务，也未重新调用模型。安装包检查及隔离对话均不替代真实 Codex sandbox 与双 Agent 发布验收。
 
 证据分别保留在三个隔离 worktree 的 `.run/agent-crypto-init/` 与 `.run/agent-device-init/`；包含原始失败和阶段日志。桌面截图位于本聊天工具输出，未宣称存在本地 PNG。没有 provisioned task-writer 或 project.spec.md；其他 worktree 保持原状。
