@@ -168,6 +168,28 @@ async fn wait_stopped(f:&Fixture){
 }
 #[tokio::test]
 #[ignore="requires explicitly built offline supervised probe"]
+async fn native_shared_interrupted_call_budget_successor_collects_final_usage(){
+    let(f,t,_)=prepared().await;
+    t.poll_budget_successor_fixture(&f.registry,launch(&f,"text-interrupt-usage")).await.unwrap();
+    method_seen(&f,"turn/start").await;
+    f.owner.suspend().await.unwrap();
+    let db=rusqlite::Connection::open(f._root.path().join("registry/domain.sqlite3")).unwrap();
+    let row:(String,u64,u64,bool)=db.query_row("SELECT state,reserved_tokens,known_consumed_tokens,usage_complete FROM owner_managed_calls",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
+    assert_eq!(row,("settled".into(),300,27,true));
+    let raw:String=db.query_row("SELECT payload FROM owner_shared_work_observations ORDER BY ledger_revision DESC LIMIT 1",[],|r|r.get(0)).unwrap();
+    let receipt:SharedWorkReceipt=serde_json::from_str(&raw).unwrap();
+    assert_eq!(receipt.state,"failed");
+    assert!(receipt.usage_complete);
+    assert_eq!(receipt.retained_tokens,Some(27));
+    assert_eq!(rows(&f,"owner_managed_budget_deltas"),1);
+    let methods=std::fs::read_to_string(f._root.path().join("shared-probe/methods")).unwrap();
+    assert_eq!(methods.lines().filter(|m|*m=="turn/start").count(),1);
+    assert_eq!(methods.lines().filter(|m|*m=="turn/interrupt").count(),1);
+    drop(db);
+    f.stop().await;
+}
+#[tokio::test]
+#[ignore="requires explicitly built offline supervised probe"]
 async fn native_shared_budget_v3_lost_start_reply_retains_intent_and_one_actual_turn(){
     let(f,t,_)=prepared().await;
     f.state.lock().unwrap().shared.lose_work_result=true;

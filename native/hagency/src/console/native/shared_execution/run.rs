@@ -456,7 +456,7 @@ async fn work_loop(
         Err(error) => {
             let receipt = super::stop_capture::settle(process, &mut capture, &mut usage, a.until).await;
             if let Some(receipt) = receipt {
-                let _ = report_work(io, r, sink.command(), &work, &receipt).await;
+                let _ = tokio::time::timeout(Duration::from_secs(1), report_work(io, r, sink.command(), &work, &receipt)).await;
             } else {
                 let _ = capture.record_unknown().await;
             }
