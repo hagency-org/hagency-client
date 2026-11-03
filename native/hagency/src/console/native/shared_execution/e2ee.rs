@@ -226,6 +226,7 @@ pub(super) async fn input(io: &Io, b: &Bound, w: &SharedWorkItem) -> Result<Stri
     }
     #[cfg(test)]
     if let Some(fixture) = &io.crypto_fixture {
+        tokio::time::sleep(fixture.input_delay).await;
         return fixture.input.clone().ok_or_else(|| failure(503, "shared_room_keys_pending"));
     }
     let d = device(io, b, &w.assignment_id).await?;
@@ -274,6 +275,7 @@ async fn send_reply(io: &Io, b: &Bound, w: &SharedWorkItem, body: &str) -> Resul
 #[cfg(test)]
 pub(super) struct CryptoFixture {
     input: Option<String>,
+    input_delay: Duration,
     sent: Arc<std::sync::Mutex<Vec<(String, String)>>>,
 }
 #[cfg(test)]
@@ -282,8 +284,12 @@ impl SharedExecutionTransport {
         mut self, input: Option<String>,
     ) -> (Self, Arc<std::sync::Mutex<Vec<(String, String)>>>) {
         let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
-        self.io.crypto_fixture = Some(Arc::new(CryptoFixture {input, sent: sent.clone()}));
+        self.io.crypto_fixture = Some(Arc::new(CryptoFixture {input, input_delay: Duration::ZERO, sent: sent.clone()}));
         (self, sent)
+    }
+    pub(in crate::console::native) fn with_crypto_input_delay(mut self, delay: Duration) -> Self {
+        Arc::get_mut(self.io.crypto_fixture.as_mut().unwrap()).unwrap().input_delay = delay;
+        self
     }
 }
 #[derive(Serialize, Deserialize)]

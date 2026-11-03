@@ -4,6 +4,36 @@ use super::*;
 
 const PROMPT: &str = "Private encrypted request for the new Agent";
 
+#[tokio::test]
+#[ignore = "requires explicit offline supervised runtime probe; crosses cold Matrix recovery lease"]
+async fn native_shared_encrypted_cold_recovery_renews_before_starting_original_call() {
+    for successor in [false, true] {
+        let (f, t, _) = Box::pin(setup(successor)).await;
+        let (t, sent) = t.with_crypto_fixture(Some(PROMPT.into()));
+        let t = t.with_crypto_input_delay(Duration::from_secs(32));
+        if successor {
+            t.poll_successor_fixture(&f.registry, launch(&f, "text-usage")).await.unwrap();
+        } else {
+            t.poll_fixture(&f.registry, launch(&f, "text-usage")).await.unwrap();
+        }
+        tokio::time::timeout(Duration::from_secs(45), async {
+            loop {
+                if !sent.lock().unwrap().is_empty() { break; }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        }).await.expect("cold encrypted input must retain the same live process and complete");
+        if successor { attempts::wait_stopped(&f).await; } else { stopped(&f).await; }
+        assert!(f.state.lock().unwrap().shared.activity_epoch >= 3);
+        assert_eq!(f.state.lock().unwrap().shared.starts, 1);
+        assert_eq!(sent.lock().unwrap().len(), 1);
+        let methods = std::fs::read_to_string(f._root.path().join("shared-probe/methods")).unwrap();
+        assert_eq!(methods.lines().filter(|l| *l == "turn/start").count(), 1);
+        assert_eq!(rows(&f, "owner_managed_budget_deltas"), 0);
+        assert!(f.state.lock().unwrap().shared.receipts.values().any(|r|r.state=="completed" && r.usage_complete));
+        f.stop().await;
+    }
+}
+
 async fn setup(successor: bool) -> (Fixture, SharedExecutionTransport, SharedRuntimeCommand) {
     let (f, t, c) = if successor {
         let (f, t, c) = Box::pin(attempts::predecessor()).await;

@@ -145,6 +145,29 @@ async fn maybe_renew(
     }
     Ok(())
 }
+// Matrix recovery and provider thread setup can outlive the first 30-second
+// lease. Keep the SAME future and process alive; refresh the proof only after
+// local preparation, before admitting the one model call.
+#[allow(clippy::too_many_arguments)]
+async fn prepare_while_active<T>(
+    io: &Io, r: &OwnerResourceRegistry, sink: &Arc<SharedProcessSink>,
+    control: &SharedTextActivityControl, a: &mut Activity,
+    cancel: &mut watch::Receiver<bool>,
+    preparation: impl std::future::Future<Output = Result<T, NativeError>>,
+) -> Result<T, NativeError> {
+    tokio::pin!(preparation);
+    loop {
+        let wake = a.until.checked_sub(Duration::from_secs(20)).unwrap_or_else(Instant::now);
+        tokio::select! { biased;
+            _ = cancel.changed() => return Err(failure(409, "shared_execution_closed")),
+            _ = tokio::time::sleep_until(a.until.into()) => return Err(failure(409, "shared_execution_expired")),
+            _ = tokio::time::sleep_until(wake.into()) => {
+                guarded(cancel, a.until, || maybe_renew(io,r,sink,control,a)).await?;
+            }
+            result = &mut preparation => return result,
+        }
+    }
+}
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run(
     r: OwnerResourceRegistry,
@@ -329,10 +352,26 @@ async fn work_loop(
         })
         .await?;
     };
+    guarded(cancel,a.until,|| maybe_renew(io,r,sink,control,a)).await?;
     let (b,p)=proof(io,r,sink,a).await?;
-    let input=if cfg!(feature="shared-context") {
+    let input=if cfg!(feature="shared-context") && work.encrypted {
+        let text = prepare_while_active(io,r,sink,control,a,cancel,super::e2ee::input(io,&b,&work)).await?;
+        let (_,fresh) = proof(io,r,sink,a).await?;
+        Some(r.prepare_shared_decrypted_input(fresh,work.clone(),text).await.map_err(store)?)
+    } else if cfg!(feature="shared-context") {
         Some(guarded(cancel,a.until,|| super::context_io::prepare(io,&b,r,p,&work,a.lease.authority.clone(),a.until)).await?)
     }else{None};
+    // Opening a provider thread does not run the model. Finish it before
+    // recording call admission, so startup failure cannot reserve the budget.
+    prepare_while_active(io,r,sink,control,a,cancel,async {
+        io.check(sink.command()).await?;
+        process.start_shared_text_thread_for_room(&work.room_id).await.map_err(|error| {
+            tracing::warn!(?error, "Shared Agent thread setup failed before call admission");
+            failure(409, "shared_execution_thread_unknown")
+        })?;
+        io.check(sink.command()).await
+    }).await?;
+    guarded(cancel,a.until,|| maybe_renew(io,r,sink,control,a)).await?;
     let (_,p)=proof(io,r,sink,a).await?;
     let call=if let Some(input)=&input {r.prepare_shared_input_call(p,work.clone(),input.clone()).await} else {r.prepare_shared_call(p,work.clone()).await}.map_err(store)?;
     let call_id = call.call_id.clone();
@@ -340,12 +379,6 @@ async fn work_loop(
     let attempt=if let Some(input)=&input {r.begin_shared_input_start(p,work.clone(),call.call_id,input.clone()).await} else {r.begin_shared_start(p,work.clone(),call.call_id).await}.map_err(store)?;
     let issued=guarded(cancel,a.until,|| super::context_io::start(&b,r,attempt,&work,input.as_ref(),a.lease.authority.clone(),a.until)).await?;
     guarded(cancel, a.until, || async {
-        io.check(sink.command()).await?;
-        issued.check().map_err(store)?;
-        process
-            .start_shared_text_thread_for_room(&work.room_id)
-            .await
-            .map_err(|_| failure(409, "shared_execution_thread_unknown"))?;
         io.check(sink.command()).await?;
         issued.check().map_err(store)?;
         issued.start_turn(process).await.map_err(store)?;
@@ -369,7 +402,7 @@ async fn work_loop(
                     _ = cancel.changed()=>break Err(failure(409,"shared_execution_closed")),
                     _ = tokio::time::sleep_until(a.until.into())=>break Err(failure(409,"shared_execution_expired")),
                     _ = tokio::time::sleep_until(wake.into())=>{guarded(cancel,a.until,|| maybe_renew(io,r,sink,control,a)).await}
-                    event=&mut read=>break event.map_err(|_|failure(409,"shared_execution_event_unknown")),
+                    event=&mut read=>break event.map_err(|error|{tracing::warn!(?error,"Shared Agent event stream ended before completion");failure(409,"shared_execution_event_unknown")}),
                 };
                 if let Err(e) = event {
                     break Err(e);
