@@ -1,28 +1,12 @@
-## Changes in 0.6.2
+## Hagency Client 0.6.3
 
-macOS installers are now Apple Silicon arm64 only; Intel macOS packages and
-update feeds are no longer published.
+- Show safe diagnostics when the server refuses Agent encryption initialization, so the message distinguishes that failure from local Codex sign-in.
+- Includes the desktop icon and account-check fixes previously shipped in 0.6.2.
+- The Agent encryption fix also requires an updated Hagency Server containing [Server PR #32](https://github.com/hagency-org/hagency-server/pull/32). With that server, an isolated test verified Agent identity, one real Codex call, and an encrypted reply. Production rollout is verified separately.
 
-This is an unsigned, manual-installation release, following the 0.6.1 distribution method.
-macOS Developer ID signing/notarization, Windows code signing and signed automatic-update feeds are not included. macOS Gatekeeper and Windows SmartScreen may warn or block installation.
+This is an unsigned release for manual installation. macOS packages are for Apple Silicon. Linux packages are available for amd64 and arm64, and the Windows package is for amd64. Code signing, macOS notarization and automatic updates are unavailable for this release. The real Codex sandbox and two-Agent release qualification records remain incomplete. The isolated conversation test does not replace them.
 
-The source-bound real Codex sandbox and two-Agent release qualification records remain placeholders. The strict signed-release publication gate is not satisfied; this release does not claim those qualifications. Existing focused/native observations do not replace these missing records.
-
-- Restore missing desktop icons and images by packaging resources under the correct Rust crate namespace. Packaging now refuses missing or changed source resources before creating an installer.
-- Distinguish Hagency owner/device authorization checks from local Codex sign-in. Server connection failures, unexpected responses and permission denials are no longer all reported as expired authorization; genuine authorization checks remain enforced.
-- Clarify the account-check messages in English and Simplified Chinese.
-
-Projects, Matrix chat and locally executed Agents are available in this release.
-
-- Create Projects and discussion Rooms, create owner-bound Agents and bind them to Rooms.
-- Configure Codex, Claude Code or Octos, model/reasoning options, workspaces, budgets and exact-action approvals.
-- Configure supported Agent resources on another assigned execution device; offline settings remain read-only.
-- Control Codex live web search per Agent, enabled by default.
-- Use the Hagency desktop branding and icons.
-- Maintain the cross-platform Hagency app and its local owner engine together in [hagency-org/hagency-client](https://github.com/hagency-org/hagency-client), with a single root Cargo.lock and no sibling source checkout.
-
-The client version is 0.6.2, following consolidation of the native app and the local engine.
-Existing installations may need to install this version manually.
+[Agent setup](https://github.com/hagency-org/hagency-client/blob/main/crates/hagency-app/docs/hagency-quickstart.md)
 
 Current source supports encrypted owner-private-chat tasks, Codex programming,
 encrypted replies and file transfers after exact Agent identity verification from
@@ -38,8 +22,6 @@ previously published package contains this source path. Pasion browser sign-in
 remains the supported login path.
 Windows ARM64, mobile store packages, automatic updates and install-and-launch verification on every OS are not included.
 Provider runtimes and accounts must be installed/configured on the execution device.
-
-[Agent setup](https://github.com/hagency-org/hagency-client/blob/main/crates/hagency-app/docs/hagency-quickstart.md)
 
 Dependency audit follow-up remains open for the embedded and bundled Octos runtime,
 including PDF/XML parsing. See the [recorded assessment](https://github.com/hagency-org/hagency-client/blob/main/dev-vibe/desktop/release-0.5.0/assessment.zh.md)
