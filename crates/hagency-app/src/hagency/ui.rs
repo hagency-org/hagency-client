@@ -1769,10 +1769,13 @@ impl HagencyPanel {
         cx.stop_timer(self.read_timer);
         self.read_timer = Timer::default();
         self.read_wait = None;
+        self.agents_loading = false;
     }
     fn arm_read_wait(&mut self, cx: &mut Cx, command: &Command) {
         self.cancel_read_wait(cx);
         if super::backend::management_read(command) {
+            // My Agents reads the command journal before requesting the roster.
+            self.agents_loading = matches!(command, Command::AgentCommands | Command::Agents);
             self.read_wait = Some(ReadWait {
                 identity: self.identity.clone(), request: self.request,
                 deadline: std::time::Instant::now() + MANAGEMENT_READ_WAIT,
@@ -1789,7 +1792,6 @@ impl HagencyPanel {
         // Do not cancel the account-scoped task: first-read authorization may
         // already have side effects. Only stop accepting its old UI response.
         self.request = nonce();
-        self.agents_loading = false;
         if self.runtime_resources_loading {self.runtime_resources_loading=false;self.runtime_resources_checked=false;}
         self.set_busy(cx, false);
         self.status(cx, crate::i18n::tr(user_error("management_request_unavailable")));
@@ -2874,7 +2876,6 @@ impl HagencyPanel {
                 return;
             }
         };
-        if matches!(target, Target::Agents) { self.agents_loading = true; }
         self.request = nonce();
         self.arm_read_wait(cx, &command);
         let request = self.request;
@@ -4051,7 +4052,6 @@ impl Widget for HagencyPanel {
                 self.set_busy(cx, false);
                 if matches!(done.target,Target::AgentCreated) {self.agent_creating=false;}
                 self.sync_navigation(cx);
-                if matches!(done.target, Target::Agents) { self.agents_loading = false; }
                 if done.configuration_fence.is_some() {self.finish_configuration_intent(done.configuration_digest.as_ref(),&done.result);}
                 match &done.result {
                     Ok(value) => {
@@ -5304,7 +5304,6 @@ impl HagencyPanelRef {
             panel.agents.clear(); panel.runtime_list.clear();panel.runtime_list_errors.clear();panel.runtime_list_loading=false;panel.runtime_list_request=nonce();
             panel.devices_loaded = false; panel.current_device_id.clear(); panel.execution_devices.clear(); panel.execution_agent_record = Value::Null; panel.agent_crypto = Value::Null;panel.render_crypto(cx);
             panel.agents_loaded = false;
-            panel.agents_loading = false;
             panel.bindings.clear();
             panel.clear_approval_state(cx);panel.clear_remote_reviews(cx);panel.approval_blocked.clear();
             panel.approvals.clear();
@@ -6799,10 +6798,13 @@ mod tests {
             assert!(vm.take_errors().is_empty()); panel
         });
         assert!(!agent_empty_message(panel.agents_loaded, panel.agents_loading).contains("No Agents"));
-        panel.agents_loading = true;
+        // Opening or refreshing My Agents starts with the command journal.
+        panel.arm_read_wait(&mut cx, &Command::AgentCommands);
         assert_eq!(agent_empty_message(panel.agents_loaded, panel.agents_loading), "Loading your Agents…");
-        // A failed load stops the spinner without declaring the account empty.
-        panel.agents_loading = false;
+        panel.arm_read_wait(&mut cx, &Command::Agents);
+        assert_eq!(agent_empty_message(panel.agents_loaded, panel.agents_loading), "Loading your Agents…");
+        // Failure or cancellation ends the wait without declaring the account empty.
+        panel.cancel_read_wait(&mut cx);
         assert!(agent_empty_message(panel.agents_loaded, panel.agents_loading).contains("could not be loaded"));
         panel.apply(&mut cx, Target::Agents, &json!({"agents":[], "projects":[]}));
         assert!(agent_empty_message(panel.agents_loaded, panel.agents_loading).starts_with("No Agents yet"));

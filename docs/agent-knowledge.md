@@ -5978,3 +5978,5 @@ A public native identity failure can be a broker refusal independently of local 
 - **Release replacement, 2026-11-03:** Verify the replacement as publicly downloadable and Latest before deleting authorized old GitHub Releases. Snapshot the old release and compare each backup against its server digest, then remove only the selected release records. Preserving the source tags keeps historical commit references intact. Verify the deleted release and download endpoints independently.
 
 - **Agent private-chat status:** The Contacts view owns a RoomScreen for direct chats. Keep the focused Contacts room eligible for runtime polling and keep the selected room ID check so another room's status cannot leak into the banner. A chat status banner can become stale even while the Agent service is online and returning encrypted replies.
+
+- **Agent roster loading:** Opening or refreshing My Agents reads the command journal before the roster. Track both reads as loading, and clear their state through the same completion and timeout lifecycle. A cold-start error message can precede any actual roster response.
