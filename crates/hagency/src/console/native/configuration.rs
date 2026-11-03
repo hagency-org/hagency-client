@@ -62,8 +62,14 @@ fn operation(command: Command, agent: &str) -> Result<(&'static str, Value), Nat
                 LocalAction::SaveAgentPolicy => "save_agent_policy",
                 _ => return Err(failure(400, "configuration_operation_unsupported")),
             };
-            let input = input.unwrap_or(json!({}));
+            let mut input = input.unwrap_or(json!({}));
             validate_input(op, &input)?;
+            if op == "save_agent_model" && input["profile"].get("web_search").is_none() {
+                // The server persists the default explicitly. Compare against
+                // the canonical request while preserving an explicit opt-out.
+                input["profile"]["web_search"] = json!(hagency_agent_local::default_web_search());
+                validate_input(op, &input)?;
+            }
             Ok((op, input))
         }
         Command::PrepareAgentWorkspace { agent_id } if agent_id == agent => {
@@ -1136,6 +1142,23 @@ pub(super) fn start(native: &NativeOwner) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn model_save_uses_canonical_server_defaults_in_the_request() {
+        let intent = |profile| Command::Local {
+            agent_id: "a".into(),
+            action: LocalAction::SaveAgentModel,
+            input: Some(json!({"profile":profile})),
+            binding_id: None,
+            requester: None,
+        };
+        let mut profile = json!({"model":"sonnet","credential_ref":"ref","workspace_root":"/target","reasoning_effort":"low"});
+        let (_, normalized) = operation(intent(profile.clone()), "a").unwrap();
+        assert_eq!(normalized["profile"]["web_search"], true);
+        profile["web_search"] = json!(false);
+        let (_, explicit) = operation(intent(profile.clone()), "a").unwrap();
+        assert_eq!(explicit["profile"], profile);
+    }
+
     #[test]
     fn execution_device_programming_settings_are_not_exported_to_v1_configuration() {
         let mut value = json!({"configuration":{"agentId":"agent","modelProfile":{"model":"m","credential_ref":"keychain:owned","workspace_root":"/workspace","reasoning_effort":"low","web_search":false,"programming":{"enabled":true,"mcp_servers":{"private":{"transport":"stdio","command":"/private/local-helper","args":[]}}}},"usage":{"spent":17}}});
