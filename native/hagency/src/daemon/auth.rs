@@ -168,6 +168,157 @@ async fn build_client(dir: &Path, origin: &str) -> Result<Client, AuthError> {
         .map_err(|_| AuthError::Storage)
 }
 
+/// OAuth staging has no persistent crypto store and cannot refresh a token.
+async fn provisioning_client(origin: &str) -> Result<Client, AuthError> {
+    Client::builder()
+        .homeserver_url(origin)
+        .with_encryption_settings(matrix_sdk::encryption::EncryptionSettings {
+            auto_enable_cross_signing: false,
+            auto_enable_backups: false,
+            ..Default::default()
+        })
+        .request_config(matrix_sdk::config::RequestConfig::new().timeout(TIMEOUT))
+        .build()
+        .await
+        .map_err(|_| AuthError::Unavailable)
+}
+
+fn requested_device(url: &reqwest::Url) -> Result<String, AuthError> {
+    let devices: Vec<_> = url
+        .query_pairs()
+        .filter(|(key, _)| key == "scope")
+        .flat_map(|(_, value)| {
+            value
+                .split_whitespace()
+                .filter_map(|scope| {
+                    scope
+                        .strip_prefix("urn:matrix:client:device:")
+                        .or_else(|| scope.strip_prefix("urn:matrix:org.matrix.msc2967.client:device:"))
+                        .map(str::to_owned)
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    if devices.len() != 1 || devices[0].is_empty() {
+        return Err(AuthError::AccountMismatch);
+    }
+    Ok(devices[0].clone())
+}
+
+#[derive(Deserialize)]
+struct FreshIdentity {
+    user_id: matrix_sdk::ruma::OwnedUserId,
+    device_id: matrix_sdk::ruma::OwnedDeviceId,
+}
+
+async fn complete_new_grant(
+    client: &Client,
+    query: matrix_sdk::utils::UrlOrQuery,
+    origin: &str,
+    expected_owner: Option<&str>,
+    expected_device: &str,
+    budget: Duration,
+    first_delay: Duration,
+) -> Result<Saved, AuthError> {
+    // Never call this method again for the same code. A failed whoami can be
+    // resumed using the SDK's already-issued tokens, not another exchange.
+    let deadline = tokio::time::Instant::now() + budget;
+    if let Err(error) = tokio::time::timeout_at(deadline, client.oauth().finish_login(query))
+        .await
+        .map_err(|_| AuthError::Unavailable)?
+    {
+        if matches!(&error,matrix_sdk::Error::OAuth(error) if matches!(error.as_ref(),OAuthError::SessionMismatch))
+        {
+            return Err(AuthError::AccountMismatch);
+        }
+        if !error
+            .as_client_api_error()
+            .is_some_and(|error| error.status_code.as_u16() == 401)
+        {
+            return Err(AuthError::SignInRequired);
+        }
+    }
+    let tokens = client.session_tokens().ok_or(AuthError::SignInRequired)?;
+    let client_id = client
+        .oauth()
+        .client_id()
+        .ok_or(AuthError::SignInRequired)?
+        .as_str()
+        .to_owned();
+    let identity = fresh_identity(
+        origin,
+        &tokens.access_token,
+        deadline.saturating_duration_since(tokio::time::Instant::now()),
+        first_delay,
+    )
+    .await?;
+    if identity.device_id.as_str() != expected_device
+        || expected_owner.is_some_and(|owner| owner != identity.user_id.as_str())
+    {
+        return Err(AuthError::AccountMismatch);
+    }
+    Ok(Saved {
+        version: 1,
+        homeserver: origin.into(),
+        owner: identity.user_id.to_string(),
+        oauth_client_id: client_id,
+        user: UserSession {
+            meta: matrix_sdk::SessionMeta {
+                user_id: identity.user_id,
+                device_id: identity.device_id,
+            },
+            tokens,
+        },
+    })
+}
+
+async fn fresh_identity(
+    origin: &str,
+    token: &str,
+    budget: Duration,
+    first_delay: Duration,
+) -> Result<FreshIdentity, AuthError> {
+    let url = reqwest::Url::parse(origin)
+        .and_then(|url| url.join("/_matrix/client/v3/account/whoami"))
+        .map_err(|_| AuthError::UnsupportedServer)?;
+    // No redirects, retries, token refresh or credential replacement in this
+    // transport. Only this read-only identity probe can repeat a fresh grant.
+    let http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .build()
+        .map_err(|_| AuthError::Unavailable)?;
+    tokio::time::timeout(budget, async {
+        let mut delay = first_delay;
+        for attempt in 0..9 {
+            let response = http
+                .get(url.clone())
+                .bearer_auth(token)
+                .send()
+                .await
+                .map_err(|_| AuthError::Unavailable)?;
+            if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+                if attempt == 8 {
+                    return Err(AuthError::SignInRequired);
+                }
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(Duration::from_secs(1));
+                continue;
+            }
+            if !response.status().is_success() {
+                return Err(AuthError::Unavailable);
+            }
+            return response
+                .json()
+                .await
+                .map_err(|_| AuthError::AccountMismatch);
+        }
+        Err(AuthError::SignInRequired)
+    })
+    .await
+    .map_err(|_| AuthError::Unavailable)?
+}
+
 fn read_saved(dir: &Path) -> Result<Option<Saved>, AuthError> {
     let Some(bytes) =
         super::read_private(&dir.join(SESSION), LIMIT).map_err(|_| AuthError::Storage)?
@@ -551,30 +702,32 @@ impl SdkCustody {
             ruma::serde::Raw,
             utils::local_server::LocalServerBuilder,
         };
+        hagency_store::private::directory(dir).map_err(|_| AuthError::Storage)?;
         crate::server_admission::discover(origin)
             .await
             .map_err(|_| AuthError::UnsupportedServer)?;
-        let (client, previous) = if let Some((client, saved)) = previous {
-            (client, Some(saved))
-        } else {
-            // Only a never-enrolled store may be reset. Reauthentication always
-            // retains the existing device's encryption keys and private history.
-            let store = dir.join(STORE);
-            if store.exists() {
-                std::fs::remove_dir_all(&store).map_err(|_| AuthError::Storage)?;
-            }
-            (build_client(dir, origin).await?, None)
-        };
+        // The SDK exchanges the one-use code before its first whoami. Keep
+        // provisional credentials out of the durable crypto store, and disable
+        // automatic refresh so a cold identity never rotates the issued token.
+        let previous = previous.map(|(client, saved)| {
+            drop(client);
+            saved
+        });
+        let client = provisioning_client(origin).await?;
         let oauth = client.oauth();
-        if let Some(client_id) = existing_public_client.filter(|_| previous.is_none()) {
+        if let Some(client_id) = previous
+            .as_ref()
+            .map(|saved| saved.oauth_client_id.as_str())
+            .or(existing_public_client)
+        {
             if client_id.is_empty()
                 || client_id.len() > 255
                 || client_id.chars().any(char::is_control)
             {
                 return Err(AuthError::AccountMismatch);
             }
-            // Only the public registration is reused. The new browser flow
-            // obtains an independent Matrix device and rotating OAuth session.
+            // Reuse only the public registration here. The login below also
+            // pins the saved device when this is explicit reauthorization.
             oauth.restore_registered_client(ClientId::new(client_id.to_owned()));
         }
         let metadata = tokio::time::timeout(TIMEOUT, oauth.server_metadata())
@@ -623,6 +776,7 @@ impl SdkCustody {
             .build()
             .await
             .map_err(|_| AuthError::Unavailable)?;
+        let requested_device = requested_device(&data.url)?;
         if open(data.url.to_string()).await.is_err() {
             oauth.abort_login(&data.state).await;
             return Err(AuthError::Cancelled);
@@ -636,42 +790,36 @@ impl SdkCustody {
             }
         };
         let completed = async {
-            oauth
-                .finish_login(query.into())
-                .await
-                .map_err(|error| match error {
-                    matrix_sdk::Error::OAuth(error)
-                        if matches!(error.as_ref(), OAuthError::SessionMismatch) =>
-                    {
-                        AuthError::AccountMismatch
-                    }
-                    _ => AuthError::SignInRequired,
-                })?;
-            let identity = tokio::time::timeout(TIMEOUT, client.whoami())
-                .await
-                .map_err(|_| AuthError::Unavailable)?
-                .map_err(|_| AuthError::Unavailable)?;
-            if identity.device_id.as_deref() != client.device_id() {
-                return Err(AuthError::AccountMismatch);
-            }
-            let owner = identity.user_id.to_string();
-            if expected_owner.is_some_and(|expected| expected != owner) {
-                return Err(AuthError::AccountMismatch);
-            }
-            let saved = saved_from_client(&client, origin, &owner)?;
+            let saved = complete_new_grant(
+                &client,
+                query.into(),
+                origin,
+                expected_owner,
+                &requested_device,
+                TIMEOUT,
+                Duration::from_millis(100),
+            )
+            .await?;
+            let owner = saved.owner.clone();
             if let Some(previous) = &previous {
                 verify_same_session(previous, &saved)?;
+            }
+            // Reset only an uncommitted first-enrollment store, after identity
+            // is verified. Existing enrollment keys and history stay intact.
+            if previous.is_none() && dir.join(STORE).exists() {
+                std::fs::remove_dir_all(dir.join(STORE)).map_err(|_| AuthError::Storage)?;
             }
             {
                 let _io = SESSION_IO.lock().map_err(|_| AuthError::Storage)?;
                 write_saved(dir, &saved)?;
             }
-            install_callbacks(&client, dir.into(), origin.into(), owner.clone())?;
-            Ok(owner)
+            let custody = Self::restore(dir, origin, &owner).await?;
+            custody.explicit.store(true, Ordering::Release);
+            Ok(custody)
         }
         .await;
         match completed {
-            Ok(owner) => Ok(Self::attach(client, origin, &owner, true)),
+            Ok(custody) => Ok(custody),
             Err(error) => {
                 // Revoke only the grant this attempt created.
                 if client.access_token().is_some_and(|token| {
@@ -1223,3 +1371,7 @@ mod reauthentication_tests {
         assert_eq!(std::fs::read(temp.path().join(SESSION)).unwrap(), original);
     }
 }
+
+#[cfg(test)]
+#[path = "auth_readiness_tests.rs"]
+mod readiness_tests;
