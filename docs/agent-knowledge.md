@@ -5966,3 +5966,6 @@ Integrated main cf7 + SDK95 credentials source has exact-CI App857/0/2 and own a
 
 
 - **CI cache audit, 2026-11-03:** Swatinem workspaces target mappings are relative to GITHUB_WORKSPACE and do not follow CARGO_TARGET_DIR automatically. Release and Windows-build outputs moved outside the checkout must map the actual relative target; article-core uses the unified root target. Bump a wrong-path cache prefix when correcting it. Keep fixed packaging tool installations/metadata separate, and treat cache hits only as build inputs, never passed tests. Release may compile installers alongside Engine but public promotion must retain every Engine/qualification/package gate. Some docs contain compiled Agent templates; avoid blanket documentation path exclusions.
+
+
+- **Published0.6.2, 2026-11-03:** Latest https://github.com/hagency-org/hagency-client/releases/tag/v0.6.2, built/tagged at6874517354c3f6c9ba763b1cfde2c2ee967c220b from run41543120369;4targets/6installers/11unsigned assets. Every installer contains139exact desktop resource files in the runtime namespace. Full draft server-digest plus authenticated-byte and public download verification passed. Tag remains the actual build SHA even after documentation commits. Preserve unsigned/manual-install, missing real-host qualification and all earlier original failure limits.

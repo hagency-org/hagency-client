@@ -1,6 +1,6 @@
 # GitHub CI 与 Release 耗时审计（2026-11-03）
 
-本次覆盖全部10个工作流及两个本地 composite action。依据是现有配置、GitHub jobs/steps 的真实时间戳、原始日志和缓存 API 快照；时间是实际执行时间，排队单列。证据原件保存在本工作树忽略目录 `.run/ci-audit/`。当前0.6.2已冻结的667e62730 / run41530365979继续独立构建，本优化不移动其源码或标签。
+本次覆盖全部10个工作流及两个本地 composite action。依据是现有配置、GitHub jobs/steps 的真实时间戳、原始日志和缓存 API 快照；时间是实际执行时间，排队单列。证据原件保存在本工作树忽略目录 `.run/ci-audit/`。原667e62730 / run41530365979与PR预览41532739429随后被账号手动取消，保留原件且未混用。PR44由@chrislearn合并后，从main的687451735重新完整构建run41543120369，并以实际构建SHA发布0.6.2；标签不移动。
 
 ## 实测瓶颈
 
@@ -64,3 +64,11 @@ rust-cache通常只保留依赖编译结果，不保存workspace自身结果或�
 - 修正后缓存可能超过仓库限额：后续用命中率、条目尺寸和压缩/上传时间选择共享下载缓存、远端编译缓存或经授权扩容。没有擅自购买runner、扩大额度或安装外部缓存服务。
 - 本地已通过修改的五个workflow actionlint（含ShellCheck）、实际执行release目录准备脚本并确认缓存目标等于Cargo输出，Windows步骤PowerShell解析、跨盘布局同盘相对路径核对、diff检查。全仓actionlint只有未改AUR原SC2129 style提示；不伪称原仓无提示。
 - 合并前需复核PR差异、真实原生检查和非发布Installer流水线；保留任何原始失败。未完成hosted结果、冷/热缓存测速或新安装包启动之前，不给出已提速百分比或平台资格通过的结论。
+
+## 最终运行与发行回读
+
+PR44于2026-11-02T23:07:59Z由@chrislearn squash合入main（687451735），树与复核PR相同；合并时部分旧ARM检查仍在排队。独立main发行run41543120369实际3Engine/4Installer全成功，普通CI/App CI/App Build/Spelling亦成功。原容量取消不算通过，重排的原生ARM job另有实际成功收据。
+
+最终发行构建于2026-11-02T23:09:01Z创建、2026-11-03T00:52:02Z完成，约103分钟。执行时间：Engine Linux38.7分/Windows70.7分/Mac48.6分；Installer Linux ARM52.5分/amd64 71.6分/Mac ARM67.7分/Windows102.9分。并行DAG已由真实开始/完成时间证明；此为本次运行观察，与旧版不同runner容量、缓存及移除Intel目标同时存在，不能当作隔离的缓存加速比例或warm-cache基准。
+
+[公开0.6.2](https://github.com/hagency-org/hagency-client/releases/tag/v0.6.2)于2026-11-03T01:01:58Z发布，六安装包共863132794字节，11服务端摘要、11认证草稿回读、匿名总清单与6Latest安装包入口全通过。6包每包139源码资源逐字节一致；只读解包不替代安装启动或真实环境qualification。发行签名/自动更新/资格缺失与旧真实失败限制保持。详细收据在release工作树忽略目录.run/release-0.6.2-r6/。

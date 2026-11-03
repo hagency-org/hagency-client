@@ -1,11 +1,21 @@
 # Hagency Client 0.6.2 发布记录
 
+## 最终公开发行（2026-11-03）
+
+- 已公开：[Hagency Client v0.6.2](https://github.com/hagency-org/hagency-client/releases/tag/v0.6.2)，GitHub Release id432132711；发布时间2026-11-03T01:01:58Z（上海2026-11-03T09:01:58+08:00），Latest。
+- 实际构建/标签源：`6874517354c3f6c9ba763b1cfde2c2ee967c220b`；[成功run41543120369](https://github.com/hagency-org/hagency-client/actions/runs/41543120369)。原3平台Engine与4组Installer全部实际成功，原始运行attempt1；qualification和自动publish两项条件skip不计通过。
+- 新范围为Linux amd64/arm64 DEB+AppImage、macOS arm64 DMG、Windows amd64 EXE，共6包及4平台清单/总清单，11附件。安装包共863132794字节。每包正确运行时目录139个桌面资源与该源码逐字节一致；版本/内部架构、原始SHA清单均通过只读解包校验，未执行安装器。
+- 草稿11附件的GitHub服务端digest/大小/state及全部认证下载字节与本地原件一致后才公开。独立回读公开Release、Latest、lightweight tag目标、11digest、匿名总清单和6个Latest安装包入口全部通过。tag触发重复严格流水线41556353158已completed/cancelled；不计通过，实际来源仍是成功run41543120369。
+- PR44于2026-11-02T23:07:59Z由@chrislearn squash合并为687；当时部分旧PR ARM检查尚未结束，不能称合并时全绿。667构建41530365979和PR预览41532739429手动取消，未重启或混用产物；随后此main源重新完整发行验收。普通CI41542982243、App CI41542982335、App Build41542982218和Spelling41542982284实际成功；后两者原ARM runner未获得执行的取消留档，单job重排后实际成功。
+- 沿用用户确认的未签名、手动安装方式；不含Developer ID/notarization、Windows签名、自动更新或两项真实环境qualification。历史实际失败及未知原因均保留下文与Release说明，不将重跑/取消/skip解释为原失败通过。
+
+
 本轮用户要求把已验证的修复推至远程 main，并发布 0.6.2。沿用本会话既定的未签名、手动安装方式；保留真实 Codex sandbox / two-Agent 资格记录仍为 placeholder、签名和自动更新缺失的限制，不把条件 skip 当作通过。
 
 - 修复提交 761ffdc4f 已快进推送至 origin/main；版本同步 workspace、App、21 个本地锁项、macOS bundle 及未改变 placeholder 状态的版本 pin。第三方依赖零变更。
 - 修复图标资源打包目录错配，以及 owner API 把所有失败改成“授权过期”的错误分类。源码修复已有 App 885 passed / 0 failed / 2 pre-existing ignored、授权 HTTP/过期/撤销回归、严格 Clippy 和资源缺失/改写拒绝测试。
 - 发布预检整理新增 Engine Rust 代码的格式。严格 real-host 资格检查仍保留拒绝，不改门槛；使用 app-release.yml publish=false 构建并逐个核验产物，准备七个安装包及原始 SHA256 清单后再公开。
-- 当前阶段：准备构建，尚未公开。证据位于本工作树忽略目录 .run/release-0.6.2/。
+- 初始准备阶段的原始记录为尚未公开，证据保留于本工作树忽略目录 .run/release-0.6.2/；最终结果见上文，发行原件与完整收据位于 .run/release-0.6.2-r6/。
 
 ## 构建期间保留的原始异常
 
