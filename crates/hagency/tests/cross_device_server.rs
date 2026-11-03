@@ -177,6 +177,10 @@ async fn controller_without_local_tools() {
         .find(|m| m["model"] == "sonnet")
         .unwrap();
     let profile = json!({"model":"sonnet","credential_ref":model["credentialRef"],"workspace_root":value["workspaceA"],"reasoning_effort":"medium"});
+    // Keep the setting absent on the wire input, but require the returned and
+    // persisted profiles to contain the documented default.
+    let mut expected_profile = profile.clone();
+    expected_profile["web_search"] = json!(true);
     let mut invalid = profile.clone();
     invalid["model"] = "not-in-target-catalog".into();
     assert_eq!(
@@ -226,7 +230,7 @@ async fn controller_without_local_tools() {
         ))
         .await
         .unwrap();
-    assert_eq!(saved["modelProfile"], profile);
+    assert_eq!(saved["modelProfile"], expected_profile);
     let replay = b
         .execute(remote(
             agent,
@@ -241,7 +245,7 @@ async fn controller_without_local_tools() {
         .await
         .unwrap();
     assert_eq!(
-        replay["modelProfile"], profile,
+        replay["modelProfile"], expected_profile,
         "same request returns original result"
     );
     let before = b
@@ -291,7 +295,7 @@ async fn controller_without_local_tools() {
         ))
         .await
         .unwrap();
-    assert_eq!(reopened["modelProfile"], profile);
+    assert_eq!(reopened["modelProfile"], expected_profile);
     assert_eq!(
         reopened["policy"]["policy"]["budget"]["limit"],
         json!({"Tokens":43210})
@@ -299,7 +303,7 @@ async fn controller_without_local_tools() {
     b.shutdown().await;
     hagency_store::private::replace(
         &path.parent().unwrap().join("controller-result.json"),
-        &serde_json::to_vec(&json!({"profile":profile,"passed":true})).unwrap(),
+        &serde_json::to_vec(&json!({"profile":expected_profile,"passed":true})).unwrap(),
     )
     .unwrap();
 }
