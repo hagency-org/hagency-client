@@ -300,6 +300,14 @@ async fn work_loop(
     cancel: &mut watch::Receiver<bool>,
     telemetry: &crate::console::native::telemetry::OwnerTelemetry,
 ) -> Result<(), NativeError> {
+    let (b, verified) = proof(io, r, sink, a).await?;
+    if r.shared_bootstrap_requires_successor(verified).await.map_err(store)? {
+        // Durable intake keeps the original message pending until the ordinary
+        // successor captures the owner's policy. Never execute it under V1's
+        // fixed text-only settings or reserve a call budget during bootstrap.
+        super::demand_io::require_pair(&b).await?;
+        return Ok(());
+    }
     let admission = io.hosting_admission()?;
     let (work, mut turn) = loop {
         guarded(cancel, a.until, || maybe_renew(io, r, sink, control, a)).await?;

@@ -381,7 +381,7 @@ impl AllocationTransport {
         .map_err(storage)?;
         match (grant.version, grant.admission_request_id.as_ref()) {
             (1, None) => {},
-            (2..=5, Some(request)) if grant.supported_shape() => { proof = proof.with_admission_request(request.clone()).map_err(storage)?; },
+            (2..=6, Some(request)) if grant.supported_shape() => { proof = proof.with_admission_request(request.clone()).map_err(storage)?; },
             _ => return Err(failure(409, "allocation_enrollment_changed")),
         }
         Ok((proof, revision, reply.observed_at_ms))

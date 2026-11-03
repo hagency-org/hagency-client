@@ -6,6 +6,48 @@ struct PoolFixture {
     profile: ProfileAuthority,
     grant: NativeGrantReceipt,
 }
+
+#[tokio::test]
+async fn pool_agent_inherits_owner_permissions_and_network_once_without_overwriting_overrides() {
+    let f = pool_fixture().await;
+    let mut first = None;
+    for (n, yolo, web) in [(1,true,true), (2,false,false), (3,true,false)] {
+        let profile = f.profile.digest.clone(); let resource = f.grant.resource_id.clone();
+        f.registry.0.store.call(4096,move|db|{
+            db.db.execute("INSERT INTO owner_web_catalog_settings(profile,kind,entity,value) VALUES(?1,'resource_default',?2,?3) ON CONFLICT(profile,kind,entity) DO UPDATE SET value=excluded.value",params![profile,resource,serde_json::json!({"yolo":yolo,"webSearch":web}).to_string()])?;
+            Ok(())
+        }).await.unwrap();
+        let command = pool_command(&f, &format!("policy_{n}"), 100);
+        let saved = pool_reserve(&f, command.clone()).await;
+        let child = saved.agent_reservation_id.clone().unwrap();
+        let profile = f.profile.digest.clone(); let agent=command.proposed_agent_id.clone();
+        f.registry.0.store.call(4096,move|db|{
+            let actual:bool=db.db.query_row("SELECT yolo FROM owner_shared_tool_policies WHERE child_id=?1",[&child],|r|r.get(0))?;
+            assert_eq!(actual,yolo);
+            assert_eq!(crate::domain::exec_policy::shared_web::read(&db.db,&child,&profile,&agent)?.enabled,web);
+            Ok(())
+        }).await.unwrap();
+        if n == 1 { first=Some((command,saved)); }
+    }
+    let (first_command, first_receipt)=first.unwrap();
+    let child=first_receipt.agent_reservation_id.clone().unwrap();
+    let profile=f.profile.digest.clone(); let agent=first_command.proposed_agent_id.clone();
+    f.registry.0.store.call(4096,move|db|{
+        db.db.execute("UPDATE owner_shared_tool_policies SET yolo=0,revision=2 WHERE child_id=?1",[&child])?;
+        crate::domain::exec_policy::shared_web::write(&db.db,&child,&profile,&agent,true)?;
+        Ok(())
+    }).await.unwrap();
+    let replay=pool_reserve(&f,first_command.clone()).await;
+    assert_eq!(replay.agent_reservation_id,first_receipt.agent_reservation_id);
+    let child=replay.agent_reservation_id.unwrap(); let profile=f.profile.digest.clone();
+    f.registry.0.store.call(4096,move|db|{
+        let actual:(bool,u64)=db.db.query_row("SELECT yolo,revision FROM owner_shared_tool_policies WHERE child_id=?1",[&child],|r|Ok((r.get(0)?,r.get(1)?)))?;
+        assert_eq!(actual,(false,2));
+        assert!(crate::domain::exec_policy::shared_web::read(&db.db,&child,&profile,&first_command.proposed_agent_id)?.enabled);
+        Ok(())
+    }).await.unwrap();
+    f.registry.shutdown().await.unwrap();
+}
 fn proof(p: &ProfileAuthority, g: &NativeGrantReceipt) -> VerifiedManagementEnrollment {
     VerifiedManagementEnrollment::new(
         p.clone(),
@@ -48,7 +90,7 @@ async fn pool_fixture_limits(total: u64, limit: Option<u64>) -> PoolFixture {
     let grant = registry
         .prepare_capacity_grant(
             e,
-            OwnerGrantSelection { per_request_tokens: limit,
+            OwnerGrantSelection { renewal_mode: None, per_request_tokens: limit,
                 calendar: None,
                 command_id: "pool_consent".into(),
                 grant_id: "pool_grant".into(),

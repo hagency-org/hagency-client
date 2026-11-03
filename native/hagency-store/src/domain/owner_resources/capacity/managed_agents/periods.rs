@@ -65,7 +65,7 @@ impl ManagedAgentPeriodRenewCommand {
             || self.capability != AGENT_PERIOD_CAPABILITY
             || self.operation != "agent.period.renew"
             || self.assignment_generation != 1
-            || self.reserve_command.renewal_mode != Some(self.renewal_mode)
+            || self.current_grant.renewal_mode.or(self.reserve_command.renewal_mode) != Some(self.renewal_mode)
             || self.decision_actor_mxid != owner
             || original.owner_mxid != owner
             || g.owner_mxid != owner

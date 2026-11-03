@@ -116,9 +116,9 @@ impl AdoptedManagementStore {
             backing.check(&authority)?;let tx=db.db.unchecked_transaction()?;authorize_resource(&tx,&authority,&query.resource_id)?;
             let resource=read_resource(&tx,&query.resource_id)?;let name=backing.name_for(&tx,&query.resource_id)?.name;
             let rate=setting(&tx,&authority.digest,"rate_cap",&query.resource_id)?.and_then(|v|v.as_i64());
-            let policy=setting(&tx,&authority.digest,"resource_default",&query.resource_id)?.and_then(|v|v["yolo"].as_bool()).unwrap_or(resource.execution_policy.is_some_and(|p|p.yolo));
+            let (policy,web_search)=crate::domain::exec_policy::resource_defaults::read(&tx,&authority.digest,&query.resource_id)?;
             let blocker=retire_blocker(&tx,&query.resource_id)?;let (agents,next_after)=agents(&tx,&authority,query.after.as_deref())?;
-            let result=WebCatalogView{resource_id:query.resource_id.clone(),resource_name:if name.is_empty(){resource.model}else{name},revision:revision(&tx,&authority,&query.resource_id)?,rate_cap_per_day:rate,rate_enforced:false,default_yolo:policy,can_retire:blocker.is_none(),retire_blocked_reason:blocker,agents,next_after};
+            let result=WebCatalogView{resource_id:query.resource_id.clone(),resource_name:if name.is_empty(){resource.model}else{name},revision:revision(&tx,&authority,&query.resource_id)?,rate_cap_per_day:rate,rate_enforced:false,default_yolo:policy,default_web_search:web_search,can_retire:blocker.is_none(),retire_blocked_reason:blocker,agents,next_after};
             backing.check(&authority)?;tx.commit()?;Ok(result)
         }).await?;self.check(profile)?;Ok(result)
     }
@@ -150,9 +150,11 @@ impl AdoptedManagementStore {
             let retired=matches!(input.change,WebCatalogChange::Retire{});
             match &input.change {
                 WebCatalogChange::RateCap{rate_cap_per_day}=>put(&tx,&authority.digest,"rate_cap",&input.resource_id,&json!(rate_cap_per_day))?,
-                WebCatalogChange::DefaultPolicy{yolo}=>{
+                WebCatalogChange::DefaultPolicy{yolo,web_search}=>{
                     hagency_core::execution::ExecutionPolicy{yolo:*yolo}.validate_for(&resource.framework)?;
-                    put(&tx,&authority.digest,"resource_default",&input.resource_id,&json!({"yolo":yolo}))?;
+                    let prior=setting(&tx,&authority.digest,"resource_default",&input.resource_id)?;
+                    let web=web_search.or_else(||prior.as_ref().and_then(|v|v["webSearch"].as_bool())).unwrap_or(*yolo);
+                    put(&tx,&authority.digest,"resource_default",&input.resource_id,&json!({"yolo":yolo,"webSearch":web}))?;
                 },
                 WebCatalogChange::Retire{}=>{
                     if retire_blocker(&tx,&input.resource_id)?.is_some(){return Err(Error::State)}

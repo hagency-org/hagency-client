@@ -426,7 +426,7 @@ mod fixture {
             .prepare(
                 contribution_id.clone(),
                 OwnerGrantChoices {
-                    per_request_tokens: None,
+                    renewal_mode: None, per_request_tokens: None,
                     calendar: Some(hagency_core::recurring_quota::Calendar {
                         cadence: hagency_core::recurring_quota::Cadence::Monthly,
                         time_zone: "UTC".into(),

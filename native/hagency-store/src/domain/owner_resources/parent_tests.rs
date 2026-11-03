@@ -383,7 +383,7 @@ async fn parent_cleanup_allows_fresh_generation_after_access_loss_but_recovery_s
     let g = registry
         .prepare_capacity_grant(
             enrollment(&registry, &a, &resource.resource_id, 1).await,
-            OwnerGrantSelection { per_request_tokens: None,
+            OwnerGrantSelection { renewal_mode: None, per_request_tokens: None,
                 calendar: None,
                 command_id: "consent_parent".into(),
                 grant_id: "parent".into(),

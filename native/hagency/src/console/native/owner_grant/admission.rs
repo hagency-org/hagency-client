@@ -94,6 +94,9 @@ impl OwnerGrantIntents {
     }
     /// The server accepts v3 successors (`grants/{id}/successors`): an
     /// amendment of this month's grant or a renewal for the next month.
+    pub(super) async fn supports_pool_renewal(&self, io: &NativeIo<'_>) -> Result<bool, NativeError> {
+        Ok(self.session_features(io).await?.iter().any(|v| v.as_str() == Some("pool-renewal-policy-v1")))
+    }
     pub(super) async fn supports_split_limits(&self, io: &NativeIo<'_>) -> Result<bool, NativeError> {
         Ok(self.session_features(io).await?.iter().any(|v| v.as_str() == Some("pool-grant-limits-v1")))
     }

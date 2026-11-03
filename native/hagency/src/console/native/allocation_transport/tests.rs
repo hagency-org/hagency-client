@@ -628,7 +628,7 @@ impl Fixture {
         let grant = registry
             .prepare_capacity_grant(
                 enrollment,
-                OwnerGrantSelection { per_request_tokens,
+                OwnerGrantSelection { renewal_mode: None, per_request_tokens,
                     calendar,
                     command_id: "grant_consent".into(),
                     grant_id: "grant_fixture".into(),

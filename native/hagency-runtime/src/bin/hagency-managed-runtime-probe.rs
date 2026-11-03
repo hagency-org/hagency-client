@@ -82,14 +82,15 @@ fn main() -> io::Result<()> {
                     let (key, value) = setting
                         .split_once('=')
                         .ok_or(io::Error::other("fixture override"))?;
-                    if value != "false" {
-                        return Err(io::Error::other("fixture override"));
-                    }
                     let keys: Vec<_> = key.split('.').collect();
                     match keys.as_slice() {
-                        ["features", name] => config["features"][*name] = false.into(),
-                        ["mcp_servers", name, "enabled"] => {
+                        ["features", name] if matches!(value,"false"|"true") => config["features"][*name] = (value=="true").into(),
+                        ["mcp_servers", name, "enabled"] if value=="false" => {
                             config["mcp_servers"][*name]["enabled"] = false.into()
+                        }
+                        ["web_search" | "model_instructions_file"] => {
+                            let value:String=serde_json::from_str(value).map_err(io::Error::other)?;
+                            config[key] = value.into();
                         }
                         _ => return Err(io::Error::other("fixture override")),
                     }
@@ -105,8 +106,8 @@ fn main() -> io::Result<()> {
             }
             "thread/start" if mode.starts_with("text-workspace") => {
                 let sandbox = match mode.as_ref() {
-                    "text-workspace-standard" => json!({"type":"workspaceWrite","writableRoots":[v["params"]["cwd"]],"networkAccess":false}),
-                    "text-workspace-yolo" => json!({"type":"dangerFullAccess"}),
+                    "text-workspace-standard" | "text-workspace-standard-usage" => json!({"type":"workspaceWrite","writableRoots":[v["params"]["cwd"]],"networkAccess":false}),
+                    "text-workspace-yolo" | "text-workspace-yolo-usage" => json!({"type":"dangerFullAccess"}),
                     _ => json!({"type":"readOnly","networkAccess":false}),
                 };
                 json!({"thread":{"id":"text-thread","cwd":v["params"]["cwd"],"status":{"type":"idle"},"turns":[]},"cwd":v["params"]["cwd"],"model":v["params"]["model"],"modelProvider":"openai","approvalPolicy":v["params"]["approvalPolicy"],"approvalsReviewer":"user","sandbox":sandbox})
@@ -201,7 +202,7 @@ fn main() -> io::Result<()> {
             };
             if matches!(
                 &*mode,
-                "text-usage" | "text-long" | "text-overflow" | "text-stream" | "text-escaped" | "text-items" | "text-renew" | "text-overrun" | "text-context" | "text-context-workspace"
+                "text-workspace-standard-usage" | "text-workspace-yolo-usage" | "text-usage" | "text-long" | "text-overflow" | "text-stream" | "text-escaped" | "text-items" | "text-renew" | "text-overrun" | "text-context" | "text-context-workspace"
             ) {
                 let usage = if mode == "text-overrun" {
                     json!({"totalTokens":4813,"inputTokens":4713,"cachedInputTokens":0,"cacheWriteInputTokens":0,"outputTokens":100,"reasoningOutputTokens":0})

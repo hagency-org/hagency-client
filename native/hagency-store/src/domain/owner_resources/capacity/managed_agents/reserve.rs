@@ -313,6 +313,9 @@ impl DomainRepository {
             };
             tx.execute("INSERT INTO owner_managed_agents(id,profile,agent_id,request_id,project_reservation_id,pool_grant_id,original_command_id,original_command_digest,original_command,definition_digest,allocated_tokens,budget_revision,state,allocation_generation) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,1,'reserved',?12)",params![id,e.profile.digest,c.proposed_agent_id,c.request_id,project,pool,c.command_id,d.digest,canonical::encode(&serde_json::to_value(c)?)?,c.definition_digest,c.requested_tokens,c.allocation_generation()])?;
             tx.execute("INSERT INTO owner_managed_effects(id,child_id,kind,state,fence,payload_digest) VALUES(?1,?2,'provision','pending',0,?3)",params![format!("{id}_provision"),id,d.digest])?;
+            if c.pool_grant.is_some() {
+                crate::domain::exec_policy::resource_defaults::inherit(&tx, &e.profile.digest, &c.resource_id, &c.proposed_agent_id, &id)?;
+            }
             tx.execute(
                 "UPDATE owner_project_reservations SET accounting_mode=?2 WHERE id=?1",
                 params![project, MANAGED],

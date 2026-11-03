@@ -346,6 +346,8 @@ fn same_package(a: &Package, b: &native::ManagementPackage) -> bool {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Choices {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    renewal_mode: Option<hagency_core::recurring_quota::RenewalMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     per_request_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     calendar: Option<hagency_core::recurring_quota::Calendar>,
@@ -359,6 +361,7 @@ impl From<native::OwnerGrantChoices> for Choices {
     fn from(c: native::OwnerGrantChoices) -> Self {
         Self {
             calendar: c.calendar,
+            renewal_mode: c.renewal_mode,
             per_request_tokens: c.per_request_tokens,
             coordinator_mxid: c.coordinator_mxid,
             delegation_expires_at_ms: c.delegation_expires_at_ms,
@@ -372,6 +375,7 @@ impl From<Choices> for native::OwnerGrantChoices {
     fn from(c: Choices) -> Self {
         Self {
             calendar: c.calendar,
+            renewal_mode: c.renewal_mode,
             per_request_tokens: c.per_request_tokens,
             coordinator_mxid: c.coordinator_mxid,
             delegation_expires_at_ms: c.delegation_expires_at_ms,

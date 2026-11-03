@@ -16,6 +16,7 @@
 //!   `agent.executionPolicy?.yolo === true`).
 mod management;
 pub(crate) mod shared_web;
+pub(crate) mod resource_defaults;
 mod workspaces;
 use super::DomainRepository;
 use crate::Error;

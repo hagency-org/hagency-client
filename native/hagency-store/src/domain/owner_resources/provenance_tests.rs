@@ -231,7 +231,7 @@ async fn capacity_grant_exposure_commits_with_receipt_and_rolls_back_on_failure(
     assert_eq!(saved[6], receipt.resource_revision);
     let replay = registry.prepare_capacity_grant(
         enrollment(&registry, &a, id, 1).await,
-        OwnerGrantSelection { per_request_tokens: None,
+        OwnerGrantSelection { renewal_mode: None, per_request_tokens: None,
             calendar: None,
             command_id: "consent_approved".into(),
             grant_id: receipt.grant_id.clone(),

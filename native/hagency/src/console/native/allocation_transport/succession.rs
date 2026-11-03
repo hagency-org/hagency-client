@@ -9,7 +9,7 @@ fn predecessor(grant: &NativeGrantReceipt) -> Result<&GrantSuccession, NativeErr
     grant
         .succession
         .as_ref()
-        .filter(|_| matches!(grant.version, 3 | 4 | 5) && grant.supported_shape())
+        .filter(|_| matches!(grant.version, 3 | 4 | 5 | 6) && grant.supported_shape())
         .ok_or_else(|| failure(409, "native_grant_receipt_required"))
 }
 

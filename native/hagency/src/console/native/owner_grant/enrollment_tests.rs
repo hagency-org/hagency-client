@@ -127,7 +127,7 @@ impl Fixture {
         self.registry
             .prepare_capacity_grant(
                 proof,
-                OwnerGrantSelection { per_request_tokens: None,
+                OwnerGrantSelection { renewal_mode: None, per_request_tokens: None,
                     calendar: None,
                     command_id: "probe_command".into(),
                     grant_id: "probe_grant".into(),

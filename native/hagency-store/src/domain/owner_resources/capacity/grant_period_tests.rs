@@ -70,7 +70,7 @@ impl Fixture {
         self.registry
             .prepare_capacity_grant_at(
                 enrollment,
-                OwnerGrantSelection { per_request_tokens: None,
+                OwnerGrantSelection { renewal_mode: None, per_request_tokens: None,
                     calendar: None,
                     command_id: format!("command_{id}"),
                     grant_id: id.into(),

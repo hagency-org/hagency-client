@@ -10,18 +10,18 @@ use hagency_runtime::{
 };
 use shared_execution::*;
 
-async fn spawn(f: &Fixture, id: &str) -> (OwnedSession, std::path::PathBuf) {
+async fn spawn(f: &Fixture, id: &str, tools: bool) -> (OwnedSession, std::path::PathBuf) {
     let binary = std::path::PathBuf::from(
         std::env::var_os("HAGENCY_TEST_RUNTIME_PROBE").expect("offline supervised fixture"),
     );
     let root = f._temp.path().join(id);
     std::fs::create_dir(&root).unwrap();
     let root = root.canonicalize().unwrap();
-    let instructions = root.join(SHARED_TEXT_INSTRUCTIONS_FILE);
-    std::fs::write(&instructions, SHARED_TEXT_INSTRUCTIONS).unwrap();
+    let instructions = root.join(if tools {hagency_runtime::owned::SHARED_TOOLS_INSTRUCTIONS_FILE} else {SHARED_TEXT_INSTRUCTIONS_FILE});
+    std::fs::write(&instructions, if tools {hagency_runtime::owned::SHARED_TOOLS_INSTRUCTIONS} else {SHARED_TEXT_INSTRUCTIONS}).unwrap();
     let features: serde_json::Map<String, serde_json::Value> = MANAGED_DISABLED_FEATURES
         .iter()
-        .map(|key| ((*key).into(), false.into()))
+        .map(|key| ((*key).into(), (tools && matches!(*key, "shell_tool" | "unified_exec" | "code_mode_host")).into()))
         .collect();
     let config = json!({"model_provider":"openai","chatgpt_base_url":"https://chatgpt.com/backend-api","model_providers":{},"model_instructions_file":instructions,"instructions":"","notify":[],"web_search":"disabled","project_doc_max_bytes":0,"skills":{"include_instructions":false,"bundled":{"enabled":false}},"developer_instructions":"","include_apps_instructions":false,"include_environment_context":false,"mcp_servers":{},"features":features});
     std::fs::write(
@@ -39,9 +39,10 @@ async fn spawn(f: &Fixture, id: &str) -> (OwnedSession, std::path::PathBuf) {
     let mut process = OwnedSession::spawn(
         &binary,
         &launch,
-        Settings::new(root, "fixture".into(), "medium".into())
-            .unwrap()
-            .read_only(),
+        {
+            let settings = Settings::new(root, "fixture".into(), "medium".into()).unwrap();
+            if tools {settings.with_execution_policy(false)} else {settings.read_only()}
+        },
         Limits {
             write_timeout_ms: 500,
             event_wait_ms: 1500,
@@ -176,7 +177,7 @@ async fn recurring_native_actual_stop_renew_new_demand_and_call() {
     else {
         panic!("first process")
     };
-    let (mut process, instructions) = spawn(&f, "first_process").await;
+    let (mut process, instructions) = spawn(&f, "first_process", false).await;
     let sink = (*custody)
         .bind_process(process.shared_text_process_source())
         .unwrap();
@@ -313,11 +314,11 @@ async fn recurring_native_actual_stop_renew_new_demand_and_call() {
     else {
         panic!("new process")
     };
-    let (mut process, instructions) = spawn(&f, "next_process").await;
+    let (mut process, instructions) = spawn(&f, "next_process", true).await;
     let sink = (*custody)
         .bind_process(process.shared_text_process_source())
         .unwrap();
-    sink.record(process.qualify_shared_text(&instructions).await.unwrap())
+    sink.record(process.qualify_shared_tools(&instructions, next.web_search, next.tool_policy.as_ref().map(|p|p.mode.as_str())).await.unwrap())
         .await
         .unwrap();
     let call = f
@@ -517,7 +518,7 @@ async fn recurring_native_expired_unissued_initial_proves_absence_and_replacemen
     else {
         panic!("fresh initial process")
     };
-    let (mut process, instructions) = spawn(&f, "replacement_process").await;
+    let (mut process, instructions) = spawn(&f, "replacement_process", false).await;
     let sink = (*custody)
         .bind_process(process.shared_text_process_source())
         .unwrap();

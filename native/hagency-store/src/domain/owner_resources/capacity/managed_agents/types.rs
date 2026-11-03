@@ -116,8 +116,9 @@ impl ManagedAgentReserveCommand {
                     || !self.project_id.is_empty() || !self.setup_id.is_empty()
                     || !self.domain_project_id.is_empty() || !self.allocation_receipt_digest.is_empty()
                     || self.project_revision != 0 || self.setup_binding_revision != 0
-                    || !matches!(grant.version, 2 | 3 | 4 | 5) || !grant.supported_shape()
+                    || !matches!(grant.version, 2 | 3 | 4 | 5 | 6) || !grant.supported_shape()
                     || grant.calendar.is_some() != self.renewal_mode.is_some()
+                    || grant.renewal_mode.is_some_and(|mode| self.renewal_mode != Some(mode))
                     || (self.allocation_generation.is_some() && grant.calendar.is_none())
                     || grant.admission_request_id.is_none()
                     || grant.capability != CAPABILITY || grant.owner_mxid != grant.coordinator_mxid

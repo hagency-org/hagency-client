@@ -128,7 +128,7 @@ async fn fixture_kind(
     let grant = registry
         .prepare_capacity_grant(
             e,
-            OwnerGrantSelection { per_request_tokens: None,
+            OwnerGrantSelection { renewal_mode: None, per_request_tokens: None,
                 calendar: Some(calendar),
                 command_id: "period_grant_consent".into(),
                 grant_id: "period_grant".into(),
@@ -252,7 +252,7 @@ async fn next_grant(
             enrollment(f),
             previous,
             "renewal",
-            OwnerGrantSelection { per_request_tokens: None,
+            OwnerGrantSelection { renewal_mode: None, per_request_tokens: None,
                 calendar: f.grant.calendar.clone(),
                 command_id: format!("{id}_consent"),
                 grant_id: id.into(),
@@ -703,7 +703,7 @@ async fn recurring_native_pending_renewal_survives_same_period_parent_amendment(
             enrollment(&f),
             next,
             "amendment",
-            OwnerGrantSelection { per_request_tokens: None,
+            OwnerGrantSelection { renewal_mode: None, per_request_tokens: None,
                 calendar: f.grant.calendar.clone(),
                 command_id: "amend_pending_consent".into(),
                 grant_id: "amended_parent".into(),

@@ -10,7 +10,7 @@ pub enum WebCatalogChange {
     RateCap { rate_cap_per_day:Option<i64> },
     Retire {},
     AssignPreset { engagement_id:String },
-    DefaultPolicy { yolo:bool },
+    DefaultPolicy { yolo:bool, #[serde(default, skip_serializing_if="Option::is_none")] web_search:Option<bool> },
     Offer { role:String,count:Option<i64>,budget_cap_per_engagement:Option<i64>,rate_cap:Option<i64>,published:bool },
     TrustAdd { project_room_id:String,display_name:Option<String> },
     TrustRemove { project_room_id:String },
@@ -29,6 +29,7 @@ pub struct WebCatalogAgent {pub id:String,pub name:String,pub resource_id:String
 pub struct WebCatalogView {
     pub resource_id:String,pub resource_name:String,pub revision:String,
     pub rate_cap_per_day:Option<i64>,pub rate_enforced:bool,pub default_yolo:bool,
+    #[serde(default)] pub default_web_search:bool,
     pub can_retire:bool,pub retire_blocked_reason:Option<String>,
     pub agents:Vec<WebCatalogAgent>,pub next_after:Option<String>,
 }

@@ -102,7 +102,7 @@ pub(super) fn management(
                 }
                 let original = s.shared.command.clone().unwrap();
                 let c = SharedAttemptCommand {
-        web_search: false, tool_policy: None,
+                    web_search: input.start.web_search, tool_policy: input.start.tool_policy,
                     version: 2,
                     capability: SHARED_ATTEMPT_CAPABILITY.into(),
                     operation: "agent.execution.provision".into(),
@@ -989,3 +989,51 @@ mod capacity;
 
 #[cfg(feature="shared-context")]
 pub(super) fn context_binding(s:&super::super::State)->Option<SharedDemandBinding>{s.shared.demands.binding.clone()}
+
+#[tokio::test]
+#[ignore = "requires explicit offline supervised runtime probe"]
+async fn native_shared_owner_policy_applies_before_the_first_model_call() {
+    for (yolo, web) in [(true, true), (false, false), (true, false)] {
+        let (f, t, c) = Box::pin(fixture()).await;
+        {
+            let db = rusqlite::Connection::open(f._root.path().join("registry/domain.sqlite3")).unwrap();
+            db.execute("INSERT INTO owner_shared_tool_policies(child_id,yolo,revision) VALUES(?1,?2,1)", rusqlite::params![c.agent_reservation_id,yolo]).unwrap();
+            db.execute("INSERT INTO owner_web_catalog_settings(profile,kind,entity,value) SELECT profile,'agent_live_web',id,?2 FROM owner_managed_agents WHERE id=?1", rusqlite::params![c.agent_reservation_id,json!({"enabled":web,"revision":1}).to_string()]).unwrap();
+        }
+        t.poll_fixture(&f.registry, launch(&f, "text-usage")).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                if f.state.lock().unwrap().shared.processes.values().any(|r| r.state == "stopped") {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await.expect("bootstrap stops without draining the owner transport");
+        assert_eq!(f.state.lock().unwrap().shared.starts, 0);
+        assert_eq!(rows(&f, "owner_managed_calls"), 0);
+        {
+            let mut state = f.state.lock().unwrap();
+            state.shared.demands.active = true;
+            state.shared.demands.revision = 1;
+        }
+        offer(&f, 1);
+        let progress = t.poll_demand_fixture(&f.registry, None, Some(launch(&f, if yolo {"text-workspace-yolo-usage"} else {"text-workspace-standard-usage"}).shared_fixture()))
+            .await.unwrap().outcome.unwrap();
+        assert!(matches!(progress, SharedDemandProgress::Execution { progress: SharedExecutionProgress::Running { .. }, .. }));
+        attempts::wait_stopped(&f).await;
+        {
+            let s = f.state.lock().unwrap();
+            let next = s.shared.attempts.command.as_ref().unwrap();
+            assert_eq!(next.web_search, web);
+            assert_eq!(next.tool_policy.as_ref().unwrap().mode, if yolo {"yolo"} else {"standard"});
+            assert_eq!(s.shared.demands.generic_starts, 0);
+        }
+        assert_eq!(rows(&f, "owner_shared_demand_bindings"), 1);
+        assert_eq!(f.state.lock().unwrap().shared.starts, 1);
+        let thread: Value = serde_json::from_slice(&std::fs::read(f._root.path().join("shared-probe/thread-request.json")).unwrap()).unwrap();
+        assert_eq!(thread["sandbox"], if yolo {"danger-full-access"} else {"workspace-write"});
+        assert_eq!(thread["approvalPolicy"], if yolo {"never"} else {"on-request"});
+        assert!(f.state.lock().unwrap().shared.receipts.values().any(|r| r.usage_complete && r.state == "completed"));
+        f.registry.shutdown().await.unwrap();
+    }
+}

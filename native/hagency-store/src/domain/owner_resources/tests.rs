@@ -43,7 +43,7 @@ async fn native_host_fence_denies_a_grant_queued_before_account_retirement() {
     let consent = registry
         .prepare_capacity_grant(
             enrollment(&registry, &a, &resource.resource_id, 1).await,
-            OwnerGrantSelection { per_request_tokens: None,
+            OwnerGrantSelection { renewal_mode: None, per_request_tokens: None,
                 calendar: None,
                 command_id: "queued_consent".into(),
                 grant_id: "queued_grant".into(),
@@ -163,7 +163,7 @@ async fn grant(
     tokens: u64,
 ) -> Result<NativeGrantReceipt, Error> {
     let domain = profile.account.split_once(':').unwrap().1;
-    let selection = OwnerGrantSelection { per_request_tokens: None,
+    let selection = OwnerGrantSelection { renewal_mode: None, per_request_tokens: None,
         calendar: None,
         command_id: format!("consent_{id}"),
         grant_id: id.into(),
@@ -252,7 +252,7 @@ async fn oversized_or_unpublishable_owner_grant_rolls_back_before_holding_capaci
     let a = authority('a');
     let resource = enroll(&registry, &a, "enroll").await;
     for oversized in [true, false] {
-        let selection = OwnerGrantSelection { per_request_tokens: None,
+        let selection = OwnerGrantSelection { renewal_mode: None, per_request_tokens: None,
             calendar: None,
             command_id: format!("invalid_{oversized}"),
             grant_id: format!("grant_{oversized}"),

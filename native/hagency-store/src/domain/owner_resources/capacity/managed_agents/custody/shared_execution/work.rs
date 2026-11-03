@@ -188,6 +188,23 @@ pub(super) fn exact_work(db: &Connection, child: &str, w: &SharedWorkItem) -> Re
     }
 }
 impl OwnerResourceRegistry {
+    /// V1 bootstrap only qualifies the provider. Owner tool or network policy
+    /// requires a versioned successor before the first model call can run.
+    pub async fn shared_bootstrap_requires_successor(&self, a: VerifiedSharedActivity) -> Result<bool, Error> {
+        a.check()?;
+        let registry = self.0.clone();
+        if !Arc::ptr_eq(&registry, a.sink.registry()) || a.sink.is_successor() {
+            return Err(Error::LocalAuthority);
+        }
+        self.0.store.call(4096, move |db| {
+            live(&db.db, &a)?;
+            let original = a.sink.original();
+            let required = owner_tool_policy(&db.db, original)?.is_some()
+                || owner_live_web(&db.db, original);
+            a.check()?;
+            Ok(required)
+        }).await
+    }
     /// Persist the exact private event before acknowledging it centrally. This
     /// changes no capacity and cannot by itself authorize a model request.
     pub async fn receive_shared_work(

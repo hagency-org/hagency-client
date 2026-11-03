@@ -98,7 +98,7 @@ async fn offer(f: &Fixture, s: &Session, c: &HostContext, allocated: u64) -> Nat
                 Instant::now() + Duration::from_secs(30),
             )
             .unwrap(),
-            OwnerGrantSelection { per_request_tokens: None,
+            OwnerGrantSelection { renewal_mode: None, per_request_tokens: None,
                 calendar: None,
                 command_id: "ceiling_consent".into(),
                 grant_id: "ceiling_grant".into(),

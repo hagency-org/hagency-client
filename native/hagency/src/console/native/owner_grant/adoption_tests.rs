@@ -721,7 +721,7 @@ async fn adoption_grant_handoff_process_child() {
             .prepare(
                 &registry,
                 enrollment,
-                OwnerGrantChoices { per_request_tokens: None,
+                OwnerGrantChoices { renewal_mode: None, per_request_tokens: None,
                     calendar: None,
                     allocated_tokens: 300,
                     ..Fixture::choices()

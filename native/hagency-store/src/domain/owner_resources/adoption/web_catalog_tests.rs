@@ -47,9 +47,29 @@ async fn web_catalog_retirement_retains_history_and_original_receipt(){
 #[tokio::test]
 async fn web_catalog_future_defaults_do_not_change_existing_resource_snapshot(){
     let f=fixture().await;let b=resource_name_tests::active(&f).await;let c=context(&f);let s=session(b.clone(),&c);let before=s.resource(&c,f.resource.id()).await.unwrap().revision;
-    let command=input(&s,&c,&f,"default",WebCatalogChange::DefaultPolicy{yolo:true}).await;s.apply_web_catalog(&c,command).await.unwrap();
+    let command=input(&s,&c,&f,"default",WebCatalogChange::DefaultPolicy{yolo:true,web_search:None}).await;s.apply_web_catalog(&c,command).await.unwrap();
     assert!(s.web_catalog(&c,query(&f)).await.unwrap().default_yolo);assert_eq!(s.resource(&c,f.resource.id()).await.unwrap().revision,before);
     let id=f.resource.id();f.registry.0.store.call(1,move|db|{assert!(crate::domain::web_catalog::future_policy(&db.db,&id)?.unwrap().yolo);Ok(())}).await.unwrap();
+    b.shutdown().await.unwrap();f.registry.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn web_catalog_network_default_is_explicit_and_legacy_policy_edits_preserve_it() {
+    let f=fixture().await;let b=resource_name_tests::active(&f).await;let c=context(&f);let s=session(b.clone(),&c);
+    let before=s.resource(&c,f.resource.id()).await.unwrap().revision;
+    let change=input(&s,&c,&f,"network_off",WebCatalogChange::DefaultPolicy{yolo:true,web_search:Some(false)}).await;
+    s.apply_web_catalog(&c,change.clone()).await.unwrap();
+    let view=s.web_catalog(&c,query(&f)).await.unwrap();assert!(view.default_yolo);assert!(!view.default_web_search);
+    let old=input(&s,&c,&f,"legacy_policy",WebCatalogChange::DefaultPolicy{yolo:false,web_search:None}).await;
+    s.apply_web_catalog(&c,old).await.unwrap();
+    s.apply_web_catalog(&c,change).await.unwrap();
+    let view=s.web_catalog(&c,query(&f)).await.unwrap();assert!(!view.default_yolo);assert!(!view.default_web_search);
+    let on=input(&s,&c,&f,"network_on",WebCatalogChange::DefaultPolicy{yolo:false,web_search:Some(true)}).await;
+    s.apply_web_catalog(&c,on).await.unwrap();
+    let view=s.web_catalog(&c,query(&f)).await.unwrap();assert!(!view.default_yolo);assert!(view.default_web_search);
+    assert_eq!(s.resource(&c,f.resource.id()).await.unwrap().revision,before);
+    let legacy:WebCatalogChange=serde_json::from_value(serde_json::json!({"operation":"default_policy","yolo":true})).unwrap();
+    assert_eq!(serde_json::to_value(legacy).unwrap(),serde_json::json!({"operation":"default_policy","yolo":true}));
     b.shutdown().await.unwrap();f.registry.shutdown().await.unwrap();
 }
 
@@ -106,11 +126,11 @@ async fn provision_default(f:&Fixture,name:&str)->(String,String,u64) {
 #[tokio::test]
 async fn web_catalog_future_default_reaches_first_provision_and_preserves_existing_agent_policy() {
     let f=fixture().await;let b=resource_name_tests::active(&f).await;let c=context(&f);let s=session(b.clone(),&c);
-    let change=input(&s,&c,&f,"future_unrestricted",WebCatalogChange::DefaultPolicy{yolo:true}).await;s.apply_web_catalog(&c,change).await.unwrap();
+    let change=input(&s,&c,&f,"future_unrestricted",WebCatalogChange::DefaultPolicy{yolo:true,web_search:None}).await;s.apply_web_catalog(&c,change).await.unwrap();
     let resource=f.resource.id();
     f.registry.0.store.call(1,move|db|{db.db.execute("INSERT INTO owner_web_catalog_settings VALUES(?1,'resource_default',?2,?3)",params!["f".repeat(64),resource,"{\"yolo\":false}"])?;Ok(())}).await.unwrap();
     let first=provision_default(&f,"future_one").await;
-    let change=input(&s,&c,&f,"future_standard",WebCatalogChange::DefaultPolicy{yolo:false}).await;s.apply_web_catalog(&c,change).await.unwrap();
+    let change=input(&s,&c,&f,"future_standard",WebCatalogChange::DefaultPolicy{yolo:false,web_search:None}).await;s.apply_web_catalog(&c,change).await.unwrap();
     let second=provision_default(&f,"future_two").await;
     f.registry.0.store.call(4096,move|db|{
         assert_eq!(db.execution_policy(&first.0)?["executionPolicy"]["yolo"],true);

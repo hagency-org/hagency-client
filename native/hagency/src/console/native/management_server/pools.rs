@@ -60,6 +60,8 @@ struct Pool {
     grant_revision: Option<i64>,
     published_tokens: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    renewal_mode: Option<RenewalMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     per_request_tokens: Option<i64>,
     native_available_tokens: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -79,6 +81,8 @@ struct Renewal {
     period_key: String,
     period_start_ms: i64,
     published_tokens: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    renewal_mode: Option<RenewalMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     per_request_tokens: Option<i64>,
     grant_revision: i64,
@@ -313,6 +317,7 @@ pub(in crate::console::native) fn known_failure(e: &NativeError) -> bool {
             | "agent_allocation_fenced"
             | "agent_assignment_unavailable"
             | "pool_agent_renewal_mode_required"
+            | "pool_renewal_policy_changed"
             | "invalid_managed_agent_definition"
             | "invalid_management_revision"
             | "management_revision_changed"

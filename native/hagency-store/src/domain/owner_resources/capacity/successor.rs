@@ -194,7 +194,7 @@ impl OwnerResourceRegistry {
         now: u64,
     ) -> Result<OwnerGrantConsent, Error> {
         let kind = self::kind(kind)?;
-        if !matches!(predecessor.version, 2 | 3 | 4 | 5)
+        if !matches!(predecessor.version, 2 | 3 | 4 | 5 | 6)
             || !predecessor.supported_shape()
             || predecessor.capability != CAPABILITY
             || !enrollment.matches(&predecessor)
@@ -634,8 +634,8 @@ impl DomainRepository {
         if ledger_revision <= p.ledger_revision {
             return Err(Error::Conflict);
         }
-        let result = NativeGrantReceipt { per_request_tokens: s.per_request_tokens,
-            version: if s.per_request_tokens.is_some() { 5 } else if s.calendar.is_some() { 4 } else { 3 },
+        let result = NativeGrantReceipt { renewal_mode: s.renewal_mode, per_request_tokens: s.per_request_tokens,
+            version: if s.renewal_mode.is_some() { 6 } else if s.per_request_tokens.is_some() { 5 } else if s.calendar.is_some() { 4 } else { 3 },
             calendar: s.calendar.clone(),
             capability: CAPABILITY.into(),
             admission_request_id: e.admission_request_id.clone(),

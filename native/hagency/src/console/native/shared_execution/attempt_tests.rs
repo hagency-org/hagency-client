@@ -27,7 +27,7 @@ pub(super) fn management(path: &str, body: &Value, s: &mut super::super::State) 
             let original = s.shared.command.clone().unwrap();
             assert!(s.shared.processes.values().any(|r| r.state == "stopped"));
             s.shared.attempts.command = Some(SharedAttemptCommand {
-        web_search: false, tool_policy: None,
+                web_search: input.web_search, tool_policy: input.tool_policy,
                 version: 2,
                 capability: SHARED_ATTEMPT_CAPABILITY.into(),
                 operation: "agent.execution.provision".into(),

@@ -49,6 +49,8 @@ pub const CAPABILITY: &str = "hagency.project_reservations.v1";
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NativeGrantReceipt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renewal_mode: Option<hagency_core::recurring_quota::RenewalMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub per_request_tokens: Option<u64>,
 
     pub version: u16,
@@ -104,7 +106,9 @@ impl NativeGrantReceipt {
     /// owner calendar; old receipt digests never contain that field.
     pub fn supported_shape(&self) -> bool {
         if (self.version < 5 && (self.version == 4) != self.calendar.is_some())
-            || (self.version == 5) != self.per_request_tokens.is_some()
+            || (self.version >= 5) != self.per_request_tokens.is_some()
+            || (self.version == 6) != self.renewal_mode.is_some()
+            || (self.version == 6 && self.calendar.is_none())
             || self.per_request_tokens.is_some_and(|n| n == 0 || n > self.allocated_tokens || n > JSON_SAFE_MAX) {
             return false;
         }
@@ -123,8 +127,8 @@ impl NativeGrantReceipt {
             self.admission_request_id.as_ref(),
             self.succession.as_ref(),
         ) {
-            (1, None, None) | (2 | 4 | 5, Some(_), None) => true,
-            (3 | 4 | 5, Some(_), Some(s)) => {
+            (1, None, None) | (2 | 4 | 5 | 6, Some(_), None) => true,
+            (3 | 4 | 5 | 6, Some(_), Some(s)) => {
                 matches!(s.kind.as_str(), SUCCESSION_RENEWAL | SUCCESSION_AMENDMENT)
                     && identifier(&s.predecessor_grant_id, 128).is_ok()
                     && s.predecessor_grant_id != self.grant_id
@@ -336,6 +340,8 @@ impl VerifiedManagementEnrollment {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OwnerGrantSelection {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub renewal_mode: Option<hagency_core::recurring_quota::RenewalMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub per_request_tokens: Option<u64>,
 
@@ -719,6 +725,7 @@ impl OwnerResourceRegistry {
         identifier(&selection.command_id, 128)?;
         identifier(&selection.grant_id, 128)?;
         exact(selection.allocated_tokens)?;
+        if selection.renewal_mode.is_some() && (selection.calendar.is_none() || selection.per_request_tokens.is_none()) { return Err(Error::LocalAuthority); }
         if selection.per_request_tokens.is_some_and(|n| n == 0 || n > selection.allocated_tokens || n > JSON_SAFE_MAX) { return Err(Error::LocalAuthority); }
         exact(selection.delegation_expires_at_ms)?;
         local_user(&selection.coordinator_mxid, &enrollment.profile.account)?;
@@ -1081,8 +1088,8 @@ impl DomainRepository {
             return Err(Error::NoCeiling);
         }
         let ledger_revision = revision(&tx)?;
-        let result = NativeGrantReceipt { per_request_tokens: s.per_request_tokens,
-            version: if s.per_request_tokens.is_some() { 5 } else if s.calendar.is_some() { 4 } else if e.admission_request_id.is_some() { 2 } else { 1 },
+        let result = NativeGrantReceipt { renewal_mode: s.renewal_mode, per_request_tokens: s.per_request_tokens,
+            version: if s.renewal_mode.is_some() { 6 } else if s.per_request_tokens.is_some() { 5 } else if s.calendar.is_some() { 4 } else if e.admission_request_id.is_some() { 2 } else { 1 },
             calendar: s.calendar.clone(),
             capability: CAPABILITY.into(),
             admission_request_id: e.admission_request_id.clone(),

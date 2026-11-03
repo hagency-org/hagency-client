@@ -14,7 +14,7 @@ async fn calendar_owner_abandoned_manual_amendment_expires_without_authorizing_c
         time_zone: "America/Los_Angeles".into(),
     };
     let period = calendar.period_at(now_ms().unwrap()).unwrap();
-    let choices = OwnerGrantChoices { per_request_tokens: None,
+    let choices = OwnerGrantChoices { renewal_mode: None, per_request_tokens: None,
         calendar: Some(calendar.clone()),
         delegation_expires_at_ms: period.end_ms,
         ..Fixture::choices()
@@ -38,7 +38,7 @@ async fn calendar_owner_abandoned_manual_amendment_expires_without_authorizing_c
             f.enrollment().await,
             "fixture_contribution".into(),
             OwnerGrantSuccessionKind::Amendment,
-            OwnerGrantChoices { per_request_tokens: None,
+            OwnerGrantChoices { renewal_mode: None, per_request_tokens: None,
                 allocated_tokens: 600,
                 ..choices
             },
@@ -115,7 +115,7 @@ async fn calendar_owner_publication_uses_selected_zone_and_does_not_refill_same_
         .prepare(
             &f.registry,
             f.enrollment().await,
-            OwnerGrantChoices { per_request_tokens: None,
+            OwnerGrantChoices { renewal_mode: None, per_request_tokens: None,
                 calendar: Some(calendar.clone()),
                 delegation_expires_at_ms: period.end_ms,
                 ..Fixture::choices()
@@ -179,7 +179,7 @@ async fn calendar_owner_publication_requires_advertised_server_support() {
         .prepare(
             &f.registry,
             f.enrollment().await,
-            OwnerGrantChoices { per_request_tokens: None,
+            OwnerGrantChoices { renewal_mode: None, per_request_tokens: None,
                 calendar: Some(calendar),
                 delegation_expires_at_ms: end,
                 ..Fixture::choices()
@@ -213,7 +213,7 @@ async fn standing_calendar_consent_cannot_change_amount_members_zone_or_legacy_o
         .prepare(
             &f.registry,
             f.enrollment().await,
-            OwnerGrantChoices { per_request_tokens: None,
+            OwnerGrantChoices { renewal_mode: None, per_request_tokens: None,
                 calendar: Some(calendar.clone()),
                 delegation_expires_at_ms: end,
                 ..Fixture::choices()
@@ -264,4 +264,33 @@ async fn standing_calendar_consent_cannot_change_amount_members_zone_or_legacy_o
     legacy.selection.calendar = None;
     assert!(!super::recurring::inherits(&legacy, &next));
     f.stop().await;
+}
+
+#[tokio::test]
+async fn pool_owner_renewal_policy_is_in_receipt_and_cannot_be_changed_by_replay() {
+    use hagency_core::recurring_quota::{Cadence, Calendar, RenewalMode};
+    for mode in [RenewalMode::Owner, RenewalMode::Automatic] {
+        let mut f = Fixture::new().await;
+        f.enable_publication().await;
+        { let mut s=f.publications.lock().unwrap();s.admission_receipts=true;s.calendar=true;s.pool_renewal=true;s.succession=true; }
+        let calendar=Calendar {cadence:Cadence::Daily,time_zone:"America/Los_Angeles".into()};
+        let end=calendar.period_at(now_ms().unwrap()).unwrap().end_ms;
+        let review=f.service.prepare(&f.registry,f.enrollment().await,OwnerGrantChoices {
+            renewal_mode:Some(mode), per_request_tokens:Some(100),calendar:Some(calendar),delegation_expires_at_ms:end,..Fixture::choices()
+        }).await.unwrap();
+        let original=review.original.clone();let id=review.summary().intent_id;
+        assert_eq!(review.summary().renewal_mode,Some(mode));
+        f.service.confirm(&f.registry,review).await.unwrap();
+        let review=f.publication_review(&id).await;
+        f.service.publication_apply(&f.registry,id.clone(),Some(review)).await.unwrap();
+        let h=f.history().await;let record=&h.data.records[h.index(&id).unwrap()];
+        let receipt:NativeGrantReceipt=serde_json::from_str(record.receipt.as_ref().unwrap()).unwrap();
+        assert_eq!(receipt.version,6);assert_eq!(receipt.renewal_mode,Some(mode));assert!(original.matches_receipt(&receipt));
+        let mut altered=receipt.clone();altered.renewal_mode=Some(if mode==RenewalMode::Owner{RenewalMode::Automatic}else{RenewalMode::Owner});
+        assert!(!original.matches_receipt(&altered));
+        let access=OwnerGrantIntents::new(f.service.manager.clone()).bind_registry(f.registry.clone()).await.unwrap();
+        assert_eq!(access.renew_recurring().await.unwrap(),0);
+        assert_eq!(f.count("owner_capacity_grants"),1);
+        f.stop().await;
+    }
 }

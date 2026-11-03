@@ -162,6 +162,7 @@ async fn server() -> (
                             vec!["admission-bound-grants-v2"]
                         } else { vec!["project-reservations-v1"] };
                         if state.calendar && !state.allocations_disabled { features.push("calendar-grants-v1"); }
+                        if state.pool_renewal && !state.allocations_disabled { features.extend(["pool-grant-limits-v1", "pool-renewal-policy-v1"]); }
                         if state.succession && !state.allocations_disabled {
                             features.push("pool-grant-succession-v1");
                         }
@@ -310,7 +311,7 @@ impl Fixture {
         }
     }
     fn choices() -> OwnerGrantChoices {
-        OwnerGrantChoices { per_request_tokens: None,
+        OwnerGrantChoices { renewal_mode: None, per_request_tokens: None,
             calendar: None,
             coordinator_mxid: "@owner:test".into(),
             delegation_expires_at_ms: now_ms().unwrap() + 60000,
@@ -716,7 +717,7 @@ async fn native_owner_grant_intent_writer_guard_rechecks_history_after_review() 
         .registry
         .prepare_capacity_grant(
             f.enrollment().await,
-            OwnerGrantSelection { per_request_tokens: None,
+            OwnerGrantSelection { renewal_mode: None, per_request_tokens: None,
                 calendar: None,
                 command_id: "concurrent_native_command".into(),
                 grant_id: "concurrent_native_grant".into(),
@@ -1125,7 +1126,7 @@ async fn native_owner_grant_review_snapshot_changed_budget_requires_same_intent_
     f.registry
         .prepare_capacity_grant(
             other,
-            OwnerGrantSelection { per_request_tokens: None,
+            OwnerGrantSelection { renewal_mode: None, per_request_tokens: None,
                 calendar: None,
                 command_id: "competing_review_budget".into(),
                 grant_id: "competing_review_budget".into(),

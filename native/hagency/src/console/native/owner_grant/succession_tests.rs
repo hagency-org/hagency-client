@@ -62,7 +62,7 @@ impl Fixture {
         id
     }
     fn amendment_choices(tokens: u64, managers: &[&str]) -> OwnerGrantChoices {
-        OwnerGrantChoices { per_request_tokens: None,
+        OwnerGrantChoices { renewal_mode: None, per_request_tokens: None,
             calendar: None,
             allocated_tokens: tokens,
             eligible_managers: managers.iter().map(|m| m.to_string()).collect(),

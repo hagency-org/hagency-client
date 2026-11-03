@@ -407,7 +407,7 @@ impl OwnerGrantIntents {
         if choices.coordinator_mxid != io.identity.owner {
             return Err(failure(409, "resource_owner_is_coordinator"));
         }
-        let selection = OwnerGrantSelection { per_request_tokens: choices.per_request_tokens,
+        let selection = OwnerGrantSelection { renewal_mode: choices.renewal_mode, per_request_tokens: choices.per_request_tokens,
             calendar: choices.calendar,
             command_id: random_id()?,
             grant_id: random_id()?,
@@ -428,7 +428,10 @@ impl OwnerGrantIntents {
         // Keep the transport future out of the enclosing adoption/consent
         // state machine, which also runs on ordinary small worker stacks.
         let admission = Box::pin(self.observe_grant_admission(&io, &binding)).await?;
-        let receipt_version = if consent.selection().per_request_tokens.is_some() {
+        let receipt_version = if consent.selection().renewal_mode.is_some() {
+            if !Box::pin(self.supports_pool_renewal(&io)).await? { return Err(failure(409,"management_pool_renewal_policy_required")); }
+            6
+        } else if consent.selection().per_request_tokens.is_some() {
             if !Box::pin(self.supports_split_limits(&io)).await? { return Err(failure(409,"management_pool_limits_required")); }
             5
         } else if consent.selection().calendar.is_some() {
@@ -713,7 +716,8 @@ impl OwnerGrantIntents {
         if review.regrant && !Box::pin(self.supports_monthly_regrant(&io)).await? {
             return Err(failure(409, "management_monthly_regrant_required"));
         }
-        if review.original.receipt_version == 5 && !Box::pin(self.supports_split_limits(&io)).await? { return Err(failure(409,"management_pool_limits_required")); }
+        if review.original.receipt_version == 6 && !Box::pin(self.supports_pool_renewal(&io)).await? { return Err(failure(409,"management_pool_renewal_policy_required")); }
+        if review.original.receipt_version >= 5 && !Box::pin(self.supports_split_limits(&io)).await? { return Err(failure(409,"management_pool_limits_required")); }
         if review.original.receipt_version == 4 && !Box::pin(self.supports_calendar(&io)).await? {
             return Err(failure(409,"management_calendar_grants_required"));
         }

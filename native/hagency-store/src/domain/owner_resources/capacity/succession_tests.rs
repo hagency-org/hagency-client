@@ -66,7 +66,7 @@ fn month_end() -> u64 {
     month(graphs::now_ms().unwrap()).unwrap().2
 }
 fn selection(id: &str, tokens: u64, managers: &[&str], delegation: u64) -> OwnerGrantSelection {
-    OwnerGrantSelection { per_request_tokens: None,
+    OwnerGrantSelection { renewal_mode: None, per_request_tokens: None,
         calendar: None,
         command_id: format!("{id}_consent"),
         grant_id: id.into(),

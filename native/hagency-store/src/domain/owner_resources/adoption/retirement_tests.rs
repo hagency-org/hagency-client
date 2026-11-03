@@ -16,7 +16,7 @@ async fn pool_retirement_preserves_expired_grants_and_unsettled_usage_after_conf
     let clock=Arc::new(AtomicU64::new(now));
     let worker_clock=clock.clone();
     f.registry.0.store.call(1024,move |_|{graphs::install_test_clock(&worker_clock);Ok(())}).await.unwrap();
-    let grant=f.registry.prepare_capacity_grant(enrollment(),OwnerGrantSelection{ per_request_tokens: None,calendar:None,command_id:"retirement_consent".into(),grant_id:"retirement_grant".into(),coordinator_mxid:f.profile.account.clone(),delegation_expires_at_ms:now+60_000,allow_self_approval:false,eligible_managers:vec!["@manager:a.test".into()],allocated_tokens:500},Instant::now()+Duration::from_secs(60)).unwrap().with_admission_request("retirement_admission".into()).unwrap().approve().await.unwrap();
+    let grant=f.registry.prepare_capacity_grant(enrollment(),OwnerGrantSelection{ renewal_mode: None, per_request_tokens: None,calendar:None,command_id:"retirement_consent".into(),grant_id:"retirement_grant".into(),coordinator_mxid:f.profile.account.clone(),delegation_expires_at_ms:now+60_000,allow_self_approval:false,eligible_managers:vec!["@manager:a.test".into()],allocated_tokens:500},Instant::now()+Duration::from_secs(60)).unwrap().with_admission_request("retirement_admission".into()).unwrap().approve().await.unwrap();
     let fixture:Value=serde_json::from_str(include_str!("../capacity/managed_agents/pool-agent-v1.json")).unwrap();
     let mut command:ManagedAgentReserveCommand=serde_json::from_value(fixture["command"].clone()).unwrap();
     command.command_id="retirement_reserve".into();command.request_id="retirement_request".into();command.proposed_agent_id="retirement_agent".into();command.allocation_id=command.request_id.clone();
@@ -92,7 +92,7 @@ async fn pool_retirement_keeps_recurring_authorization_after_its_initial_period(
     let clock=Arc::new(AtomicU64::new(now));let worker_clock=clock.clone();
     f.registry.0.store.call(1024,move |_|{graphs::install_test_clock(&worker_clock);Ok(())}).await.unwrap();
     let calendar=serde_json::from_value(json!({"cadence":"monthly","timeZone":"UTC"})).unwrap();
-    let grant=f.registry.prepare_capacity_grant(enrollment,OwnerGrantSelection{ per_request_tokens: None,calendar:Some(calendar),command_id:"retirement_calendar_consent".into(),grant_id:"retirement_calendar_grant".into(),coordinator_mxid:f.profile.account.clone(),delegation_expires_at_ms:now+60_000,allow_self_approval:false,eligible_managers:vec!["@manager:a.test".into()],allocated_tokens:500},Instant::now()+Duration::from_secs(60)).unwrap().approve().await.unwrap();
+    let grant=f.registry.prepare_capacity_grant(enrollment,OwnerGrantSelection{ renewal_mode: None, per_request_tokens: None,calendar:Some(calendar),command_id:"retirement_calendar_consent".into(),grant_id:"retirement_calendar_grant".into(),coordinator_mxid:f.profile.account.clone(),delegation_expires_at_ms:now+60_000,allow_self_approval:false,eligible_managers:vec!["@manager:a.test".into()],allocated_tokens:500},Instant::now()+Duration::from_secs(60)).unwrap().approve().await.unwrap();
     clock.store(grant.period_end_ms+1,Ordering::SeqCst);
     let view=session.web_catalog(&context,WebCatalogQuery{resource_id:resource.clone(),after:None}).await.unwrap();
     assert!(!view.can_retire);

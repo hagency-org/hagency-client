@@ -6,12 +6,13 @@ use super::*;
 
 pub(super) fn inherits(previous: &Original, next: &Original) -> bool {
     let (a, b) = (&previous.selection, &next.selection);
-    matches!(previous.receipt_version, 4 | 5)
-        && matches!(next.receipt_version, 4 | 5)
+    matches!(previous.receipt_version, 4 | 5 | 6)
+        && matches!(next.receipt_version, 4 | 5 | 6)
         && a.calendar.is_some()
         && a.calendar == b.calendar
         && a.allocated_tokens == b.allocated_tokens
         && a.per_request_tokens == b.per_request_tokens
+        && a.renewal_mode == b.renewal_mode
         && a.coordinator_mxid == b.coordinator_mxid
         && a.eligible_managers == b.eligible_managers
         && a.allow_self_approval == b.allow_self_approval
@@ -88,6 +89,11 @@ impl OwnerGrantAccess {
                     // A reply can be lost after commit. Recover the exact
                     // server result even after its period has ended, so the
                     // next renewal can follow the actual chain head.
+                    if original.selection.renewal_mode == Some(hagency_core::recurring_quota::RenewalMode::Owner)
+                        && !record.publication.as_ref().is_some_and(|p| p.confirmed)
+                    {
+                        continue;
+                    }
                     let observed = self.observe_publication(original.intent_id.clone()).await?;
                     if !observed.is_some_and(|p| {
                         matches!(
@@ -119,6 +125,8 @@ impl OwnerGrantAccess {
             {
                 continue;
             }
+            if original.selection.renewal_mode == Some(hagency_core::recurring_quota::RenewalMode::Owner)
+                && !record.publication.as_ref().is_some_and(|p| p.confirmed) { continue; }
             let observed = self.observe_publication(original.intent_id.clone()).await?;
             if observed.as_ref().is_some_and(|p| {
                 matches!(
@@ -180,11 +188,12 @@ impl OwnerGrantAccess {
         let Some(calendar) = &p.calendar else {
             return Ok(false);
         };
+        if p.renewal_mode == Some(hagency_core::recurring_quota::RenewalMode::Owner) { return Ok(false); }
         if now < p.period_end_ms {
             return Ok(false);
         }
         let period = calendar.period_at(now).map_err(|_| history_error())?;
-        let choices = OwnerGrantChoices { per_request_tokens: p.per_request_tokens,
+        let choices = OwnerGrantChoices { renewal_mode: p.renewal_mode, per_request_tokens: p.per_request_tokens,
             calendar: Some(calendar.clone()),
             coordinator_mxid: p.coordinator_mxid.clone(),
             delegation_expires_at_ms: period.end_ms,

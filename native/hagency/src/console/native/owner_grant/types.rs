@@ -2,6 +2,7 @@
 /// accounting month or raw receipt may be supplied by a script.
 #[derive(Clone)]
 pub struct OwnerGrantChoices {
+    pub renewal_mode: Option<hagency_core::recurring_quota::RenewalMode>,
     pub per_request_tokens: Option<u64>,
 
     pub calendar: Option<hagency_core::recurring_quota::Calendar>,
@@ -92,6 +93,8 @@ pub struct OwnerGrantSuccessionForm {
 #[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OwnerGrantSummary {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renewal_mode: Option<hagency_core::recurring_quota::RenewalMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub per_request_tokens: Option<u64>,
 
@@ -273,6 +276,8 @@ impl Period {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Selection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    renewal_mode: Option<hagency_core::recurring_quota::RenewalMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     per_request_tokens: Option<u64>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -287,7 +292,7 @@ struct Selection {
 }
 impl Selection {
     fn native(&self) -> OwnerGrantSelection {
-        OwnerGrantSelection { per_request_tokens: self.per_request_tokens,
+        OwnerGrantSelection { renewal_mode: self.renewal_mode, per_request_tokens: self.per_request_tokens,
             calendar: self.calendar.clone(),
             command_id: self.command_id.clone(),
             grant_id: self.grant_id.clone(),
@@ -300,6 +305,7 @@ impl Selection {
     }
     fn from_native(value: &OwnerGrantSelection) -> Self {
         Self {
+            renewal_mode: value.renewal_mode,
             per_request_tokens: value.per_request_tokens,
             calendar: value.calendar.clone(),
             command_id: value.command_id.clone(),
@@ -380,7 +386,7 @@ fn legacy_receipt_version() -> u16 { 1 }
 fn is_legacy_receipt(version: &u16) -> bool { *version == 1 }
 impl Original {
     fn summary(&self) -> OwnerGrantSummary {
-        OwnerGrantSummary { per_request_tokens: self.selection.per_request_tokens,
+        OwnerGrantSummary { renewal_mode: self.selection.renewal_mode, per_request_tokens: self.selection.per_request_tokens,
             calendar: self.selection.calendar.clone(),
             intent_id: self.intent_id.clone(),
             grant_id: self.selection.grant_id.clone(),
@@ -405,12 +411,14 @@ impl Original {
         }
     }
     fn validate(&self, identity: &Identity) -> Result<(), NativeError> {
-        if !matches!(self.receipt_version, 1 | 2 | 3 | 4 | 5)
+        if !matches!(self.receipt_version, 1 | 2 | 3 | 4 | 5 | 6)
             || (self.receipt_version >= 2 && self.admission.is_none())
             || (self.receipt_version < 3 && self.succession.is_some())
             || (self.receipt_version == 3 && self.succession.is_none())
             || (self.receipt_version < 5 && (self.receipt_version == 4) != self.selection.calendar.is_some())
-            || (self.receipt_version == 5) != self.selection.per_request_tokens.is_some()
+            || (self.receipt_version >= 5) != self.selection.per_request_tokens.is_some()
+            || (self.receipt_version == 6) != self.selection.renewal_mode.is_some()
+            || (self.receipt_version == 6 && self.selection.calendar.is_none())
         {
             return Err(history_error());
         }
@@ -510,6 +518,7 @@ impl Original {
             && receipt.eligible_managers == s.eligible_managers
             && receipt.allocated_tokens == s.allocated_tokens
             && receipt.per_request_tokens == s.per_request_tokens
+            && receipt.renewal_mode == s.renewal_mode
             && receipt.period_key == self.period.key
             && receipt.period_start_ms == self.period.start_ms
             && receipt.period_end_ms == self.period.end_ms
