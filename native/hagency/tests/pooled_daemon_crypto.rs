@@ -219,6 +219,7 @@ mod fixture {
             .to_string()
     }
 
+    use hagency::native_owner::Command;
     use hagency::native_owner::{
         EnrollResource, ManagementCommand, ManagementPackage, NativeManagement, OwnerGrantChoices,
         OwnerGrantPublicationResult, initialize_resource_activation_fixture,
@@ -335,6 +336,7 @@ mod fixture {
         let fixture: Value =
             serde_json::from_reader(hagency_store::private::open(&fixture_path, false).unwrap())
                 .unwrap();
+        let native_admin = std::env::var_os("HAGENCY_POOLED_NATIVE_ADMIN_ONLY").is_some();
         let base = fixture["base"].as_str().unwrap();
         let origin = format!("{}/", base.trim_end_matches('/'));
         let url = reqwest::Url::parse(base).unwrap();
@@ -626,35 +628,98 @@ mod fixture {
             Some(json!({"via":[owner.split_once(':').unwrap().1]})),
         )
         .await;
-        let project = owner_api(
-            base,
-            human_token,
-            reqwest::Method::POST,
-            "/hagency/api/v1/projects/adopt",
-            Some(json!({"spaceId":space["room_id"]})),
-        )
-        .await;
+        if native_admin {
+            let projects = a.execute(Command::Projects).await.unwrap();
+            assert!(projects["projects"].is_array());
+            let candidates = a
+                .execute(Command::SpaceCandidates { cursor: None })
+                .await
+                .unwrap();
+            assert!(candidates["spaces"].is_array(), "{candidates}");
+        }
+        let project = if native_admin {
+            a.execute(Command::AdoptProject {
+                space_id: space["room_id"].as_str().unwrap().into(),
+            })
+            .await
+            .unwrap()
+        } else {
+            owner_api(
+                base,
+                human_token,
+                reqwest::Method::POST,
+                "/hagency/api/v1/projects/adopt",
+                Some(json!({"spaceId":space["room_id"]})),
+            )
+            .await
+        };
         let project_id = project["project"]["id"].as_str().unwrap();
-        owner_api(
-            base,
-            human_token,
-            reqwest::Method::POST,
-            &format!("/hagency/api/v1/projects/{project_id}/rooms/adopt"),
-            Some(json!({"roomId":group})),
-        )
-        .await;
+        if native_admin {
+            let rooms = a
+                .execute(Command::ProjectRooms {
+                    project_id: project_id.into(),
+                })
+                .await
+                .unwrap();
+            assert!(rooms["rooms"].is_array());
+            a.execute(Command::AdoptRoom {
+                project_id: project_id.into(),
+                room_id: group.clone(),
+            })
+            .await
+            .unwrap();
+            let rooms = a
+                .execute(Command::ProjectRooms {
+                    project_id: project_id.into(),
+                })
+                .await
+                .unwrap();
+            assert!(
+                rooms["rooms"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|room| room["roomId"] == group)
+            );
+            let agents = a.execute(Command::RoomAgents).await.unwrap();
+            assert!(
+                agents["agents"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|agent| agent["id"] == agent_id),
+                "pooled Agent visible in actual native picker: {agents}"
+            );
+        } else {
+            owner_api(
+                base,
+                human_token,
+                reqwest::Method::POST,
+                &format!("/hagency/api/v1/projects/{project_id}/rooms/adopt"),
+                Some(json!({"roomId":group})),
+            )
+            .await;
+        }
         let binding_path = format!("/hagency/api/v1/agents/{agent_id}/bindings");
         let binding_key = unique_id("pooled_group_bind");
-        let bound = owner_api(
-            base,
-            human_token,
-            reqwest::Method::POST,
-            &binding_path,
-            Some(json!({"projectId":project_id,"roomId":group,"idempotencyKey":binding_key})),
-        )
-        .await;
-        // Pooled bindings are observed through their original command receipt;
-        // the legacy /agents/:id/bindings list is personal-Agent-only.
+        let input = json!({"projectId":project_id,"roomId":group,"idempotencyKey":binding_key});
+        let bound = if native_admin {
+            a.execute(Command::BindAgent {
+                agent_id: agent_id.clone(),
+                input: input.clone(),
+            })
+            .await
+            .unwrap()
+        } else {
+            owner_api(
+                base,
+                human_token,
+                reqwest::Method::POST,
+                &binding_path,
+                Some(input.clone()),
+            )
+            .await
+        };
         let command_path = format!("/hagency/api/v1/commands/agent.bind/{binding_key}");
         let group_binding = bound["creation"]["binding"]["id"]
             .as_str()
@@ -707,6 +772,56 @@ mod fixture {
             Some(json!({})),
         )
         .await;
+        if native_admin {
+            let commands = a.execute(Command::AgentCommands).await.unwrap();
+            let rows = commands["commands"]
+                .as_array()
+                .expect("original command journal");
+            for command in rows
+                .iter()
+                .filter(|command| command["input"]["idempotencyKey"] == binding_key)
+            {
+                let resumed = a
+                    .execute(Command::ResumeAgentCommand {
+                        id: command["id"].as_str().unwrap().into(),
+                    })
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    resumed["creation"]["binding"]["id"], group_binding,
+                    "saved resume keeps original binding"
+                );
+            }
+            let repeated = a
+                .execute(Command::BindAgent {
+                    agent_id: agent_id.clone(),
+                    input,
+                })
+                .await
+                .unwrap();
+            assert_eq!(
+                repeated["creation"]["binding"]["id"], group_binding,
+                "same native command resolves its original receipt"
+            );
+            let roster = a
+                .execute(Command::RoomRoster {
+                    project_id: project_id.into(),
+                    room_id: group.clone(),
+                })
+                .await
+                .unwrap();
+            assert!(
+                roster["agents"].as_array().unwrap().iter().any(|agent| {
+                    agent["agentId"] == agent_id
+                        && agent["bindingState"] == "active"
+                        && agent["ownerMxid"] == owner
+                }),
+                "actual room roster exposes active shared Agent and owner: {roster}"
+            );
+            stage(
+                "native adopted Projects/adoption/room picker/BindAgent/original command journal/RoomRoster succeeded",
+            );
+        }
         stage("separate encrypted group bound with real requester and second human");
 
         remote.retire();
@@ -717,6 +832,22 @@ mod fixture {
         b.retire();
         drop(a);
         drop(b);
+        if native_admin {
+            assert!(
+                turns(&marker).is_empty(),
+                "server administration cannot start model execution"
+            );
+            daemon.stop().await;
+            println!(
+                "PASS: adopted daemon original Native room administration, shared Agent picker/binding, original receipt replay and roster; no legacy execution"
+            );
+            hagency_store::private::write_new(
+                &fixture_path.parent().unwrap().join("client-done.json"),
+                b"{\"passed\":true}",
+            )
+            .unwrap();
+            return;
+        }
         let human_identity = http(
             base,
             human_token,
