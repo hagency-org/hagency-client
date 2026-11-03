@@ -8,7 +8,7 @@
 //! content, so re-delivery is a no-op while a conflicting payload for the
 //! same identity is kept and replayed as a conflict.
 
-use hagency_metering::dashboard::ledger::{ExecutionBinding, LedgerRecord, UsageEvent, UsageLedger};
+use hagency_metering::dashboard::ledger::{ExecutionBinding, LedgerRecord, UsageEvent, UsageLedger, IngestOutcome};
 use hagency_metering::dashboard::quota::AccountRegistration;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::{Serialize, de::DeserializeOwned};
@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 pub const STORE_FILE: &str = "owner-telemetry.sqlite3";
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 /// Compact the event journal into a full ledger checkpoint at this size.
 /// A checkpoint preserves cumulative baselines, dedup keys, and attribution.
 pub const MAX_EVENT_ROWS: i64 = 200_000;
@@ -54,6 +54,7 @@ pub(super) struct Loaded {
     pub bindings: usize,
     pub events: usize,
     pub rejected_rows: usize,
+    pub history_incomplete: bool,
 }
 
 fn key(kind: &str, payload: &[u8]) -> String {
@@ -133,6 +134,11 @@ impl Store {
              CREATE TABLE IF NOT EXISTS bindings(id TEXT PRIMARY KEY, execution_id TEXT NOT NULL, payload BLOB NOT NULL, at_ms INTEGER NOT NULL);
              CREATE TABLE IF NOT EXISTS usage_events(id TEXT PRIMARY KEY, execution_id TEXT NOT NULL, epoch TEXT NOT NULL, payload BLOB NOT NULL, at_ms INTEGER NOT NULL);
              CREATE INDEX IF NOT EXISTS usage_events_at ON usage_events(at_ms);
+             CREATE TABLE IF NOT EXISTS archives(id INTEGER PRIMARY KEY, payload BLOB NOT NULL, min_ms INTEGER NOT NULL, max_ms INTEGER NOT NULL);
+             CREATE INDEX IF NOT EXISTS archive_range ON archives(max_ms,min_ms);
+             CREATE TABLE IF NOT EXISTS quarantined_telemetry(kind TEXT NOT NULL,id TEXT NOT NULL,payload BLOB NOT NULL,PRIMARY KEY(kind,id));
+             CREATE TABLE IF NOT EXISTS archived_executions(execution_id TEXT PRIMARY KEY, archive_id INTEGER NOT NULL);
+             CREATE INDEX IF NOT EXISTS archived_execution_shard ON archived_executions(archive_id);
              CREATE TABLE IF NOT EXISTS accounts(account_id TEXT PRIMARY KEY, payload BLOB NOT NULL);
              CREATE TABLE IF NOT EXISTS quota(account_id TEXT NOT NULL, source TEXT NOT NULL, payload BLOB NOT NULL, at_ms INTEGER NOT NULL, PRIMARY KEY(account_id, source));",
         )?;
@@ -144,13 +150,25 @@ impl Store {
                 db.execute("INSERT INTO meta VALUES('schema',?1)", [SCHEMA_VERSION])?;
                 db.execute("INSERT INTO meta VALUES('coverage_start_ms',?1)", [now_ms as i64])?;
             }
-            Some(1) => { db.execute("UPDATE meta SET value=?1 WHERE key='schema'", [SCHEMA_VERSION])?; },
+            Some(1 | 2) => { db.execute("UPDATE meta SET value=?1 WHERE key='schema'", [SCHEMA_VERSION])?; },
             Some(SCHEMA_VERSION) => {}
             Some(_) => return Err(StoreError::Schema),
         }
         Ok(Self { db, path })
     }
 
+    pub(super) fn reader(&self) -> Result<Self, StoreError> {
+        let db=Connection::open_with_flags(&self.path,OpenFlags::SQLITE_OPEN_READ_ONLY|OpenFlags::SQLITE_OPEN_NO_MUTEX|OpenFlags::SQLITE_OPEN_NOFOLLOW)?;
+        db.busy_timeout(std::time::Duration::from_millis(500))?;
+        db.execute_batch("BEGIN DEFERRED")?;
+        // Pin the same SQLite snapshot as the hot-ledger clone, before the
+        // owner telemetry mutex is released. Rollover cannot double count.
+        let _: i64=db.query_row("SELECT value FROM meta WHERE key='schema'",[],|r|r.get(0))?;
+        Ok(Self{db,path:self.path.clone()})
+    }
+    pub(super) fn archived_count(&self) -> Result<u64, StoreError> {
+        Ok(self.db.query_row("SELECT value FROM meta WHERE key='archived_count'",[],|r|r.get(0)).optional()?.unwrap_or(0))
+    }
     pub(super) fn path(&self) -> &Path {
         &self.path
     }
@@ -164,6 +182,16 @@ impl Store {
 
     /// Returns whether a new row was written.
     pub(super) fn put_binding(&self, binding: &ExecutionBinding, at_ms: u64) -> Result<bool, StoreError> {
+        if let Some(previous) = self.archived_binding(&binding.execution_id)? {
+            return if previous == *binding { Ok(false) } else { Err(StoreError::Schema) };
+        }
+        if let Some(parent)=binding.parent_execution_id.as_deref() {
+            if let Some((id,mut ledger))=self.archive_for(parent)? {
+                let added=ledger.bind_execution(binding.clone()).map_err(|_|StoreError::Schema)?;
+                self.replace_archive(id,&ledger,u64::from(added))?;
+                return Ok(added);
+            }
+        }
         let payload = encode(binding)?;
         let id = key("binding", &payload);
         let count: i64 = self.db.query_row("SELECT COUNT(*) FROM bindings", [], |r| r.get(0))?;
@@ -177,6 +205,7 @@ impl Store {
     }
 
     pub(super) fn put_event(&self, event: &UsageEvent, epoch: &str) -> Result<bool, StoreError> {
+        if let Some(outcome) = self.archived_event(event)? { return Ok(outcome == IngestOutcome::Applied); }
         let payload = encode(event)?;
         let id = key("usage", &payload);
         let inserted = self.db.execute(
@@ -203,12 +232,85 @@ impl Store {
         // event would re-count its whole baseline on the next restart.
         let loaded = self.load()?;
         if loaded.rejected_rows != 0 { return Err(StoreError::Schema); }
-        let checkpoint = loaded.ledger.export_json().map_err(|_| StoreError::Capacity)?;
+        self.replace_checkpoint(&loaded.ledger)
+    }
+
+    /// The caller holds the telemetry mutex; the checkpoint and both journals
+    /// move together, preserving retained IDs and high-water marks on reopen.
+    pub(super) fn replace_checkpoint(&self, ledger: &UsageLedger) -> Result<(), StoreError> {
+        let checkpoint = ledger.export_json().map_err(|_| StoreError::Capacity)?;
         let tx = self.db.unchecked_transaction()?;
         tx.execute("INSERT INTO checkpoint VALUES(1,?1) ON CONFLICT(singleton) DO UPDATE SET payload=excluded.payload", [checkpoint])?;
         tx.execute("DELETE FROM usage_events", [])?;
+        tx.execute("DELETE FROM bindings", [])?;
         tx.commit()?;
         Ok(())
+    }
+
+    pub(super) fn mark_incomplete(&self) -> Result<(), StoreError> {
+        self.db.execute("INSERT INTO meta VALUES('history_incomplete',1) ON CONFLICT(key) DO UPDATE SET value=1",[])?;Ok(())
+    }
+    pub(super) fn archive(&self, archived: &UsageLedger, current: &UsageLedger, quarantine:bool) -> Result<(), StoreError> {
+        let shards=archived.clone().into_shards(4*1024*1024);
+        let payloads=shards.iter().map(|s|s.export_json().map_err(|_|StoreError::Capacity)).collect::<Result<Vec<_>,_>>()?;
+        let current_bytes = current.export_json().map_err(|_| StoreError::Capacity)?;
+        let tx = self.db.unchecked_transaction()?;
+        for (archived,bytes) in shards.iter().zip(payloads) {
+            let (min,max)=archived.time_bounds().ok_or(StoreError::Schema)?;
+            tx.execute("INSERT INTO archives(payload,min_ms,max_ms) VALUES(?1,?2,?3)", params![bytes,min.min(i64::MAX as u64),max.min(i64::MAX as u64)])?;
+            let id = tx.last_insert_rowid();
+            for binding in archived.bindings() { tx.execute("INSERT INTO archived_executions VALUES(?1,?2)", params![binding.execution_id,id])?; }
+        }
+        tx.execute("INSERT INTO meta VALUES('archived_count',?1) ON CONFLICT(key) DO UPDATE SET value=value+excluded.value",[archived.execution_count() as i64])?;
+        tx.execute("INSERT INTO checkpoint VALUES(1,?1) ON CONFLICT(singleton) DO UPDATE SET payload=excluded.payload", [current_bytes])?;
+        if quarantine {
+            tx.execute("INSERT OR IGNORE INTO quarantined_telemetry SELECT 'binding',id,payload FROM bindings",[])?;
+            tx.execute("INSERT OR IGNORE INTO quarantined_telemetry SELECT 'event',id,payload FROM usage_events",[])?;
+            tx.execute("INSERT INTO meta VALUES('history_incomplete',1) ON CONFLICT(key) DO UPDATE SET value=1",[])?;
+        }
+        tx.execute("DELETE FROM usage_events", [])?;tx.execute("DELETE FROM bindings", [])?;tx.commit()?;
+        Ok(())
+    }
+    /// Read one shard at a time, keeping memory bounded independently of
+    /// lifetime execution count. No archive is ever discarded for capacity.
+    pub(super) fn visit_archives(&self, range: hagency_metering::dashboard::period::TimeRange, mut visit: impl FnMut(&UsageLedger)) -> Result<(), StoreError> {
+        let mut statement = self.db.prepare("SELECT payload FROM archives WHERE max_ms>=?1 AND min_ms<?2 ORDER BY id")?;
+        for row in statement.query_map(params![range.start_ms.min(i64::MAX as u64),range.end_ms.min(i64::MAX as u64)], |r| r.get::<_,Vec<u8>>(0))? {
+            let ledger = UsageLedger::import_json(&row?).map_err(|_| StoreError::Schema)?;
+            visit(&ledger);
+        }
+        Ok(())
+    }
+    fn archive_for(&self, execution_id: &str) -> Result<Option<(i64, UsageLedger)>, StoreError> {
+        let row: Option<(i64,Vec<u8>)> = self.db.query_row("SELECT a.id,a.payload FROM archived_executions e JOIN archives a ON a.id=e.archive_id WHERE e.execution_id=?1", [execution_id], |r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+        row.map(|(id,bytes)| Ok((id,UsageLedger::import_json(&bytes).map_err(|_| StoreError::Schema)?))).transpose()
+    }
+    pub(super) fn archived_binding(&self, id: &str) -> Result<Option<ExecutionBinding>, StoreError> {
+        Ok(self.archive_for(id)?.and_then(|(_,ledger)|ledger.binding(id).cloned()))
+    }
+    fn replace_archive(&self,id:i64,ledger:&UsageLedger,added:u64)->Result<(),StoreError> {
+        let shards=ledger.clone().into_shards(4*1024*1024);
+        let bytes=shards.iter().map(|s|s.export_json().map_err(|_|StoreError::Capacity)).collect::<Result<Vec<_>,_>>()?;
+        let tx=self.db.unchecked_transaction()?;
+        tx.execute("DELETE FROM archived_executions WHERE archive_id=?1",[id])?;
+        tx.execute("DELETE FROM archives WHERE id=?1",[id])?;
+        for (shard,payload) in shards.iter().zip(bytes) {
+            let (min,max)=shard.time_bounds().ok_or(StoreError::Schema)?;
+            tx.execute("INSERT INTO archives(payload,min_ms,max_ms) VALUES(?1,?2,?3)",params![payload,min.min(i64::MAX as u64),max.min(i64::MAX as u64)])?;
+            let key=tx.last_insert_rowid();
+            for binding in shard.bindings(){tx.execute("INSERT INTO archived_executions VALUES(?1,?2)",params![binding.execution_id,key])?;}
+        }
+        if added>0 {tx.execute("INSERT INTO meta VALUES('archived_count',?1) ON CONFLICT(key) DO UPDATE SET value=value+excluded.value",[added])?;}
+        tx.commit()?;Ok(())
+    }
+    pub(super) fn archived_event(&self, event: &UsageEvent) -> Result<Option<IngestOutcome>, StoreError> {
+        let Some((id,mut ledger)) = self.archive_for(&event.execution_id)? else { return Ok(None) };
+        let outcome = ledger.ingest(event).map_err(|_| StoreError::Schema)?;
+        if ledger.encoded_size()>8*1024*1024 {self.replace_archive(id,&ledger,0)?;return Ok(Some(outcome));}
+        let bytes = ledger.export_json().map_err(|_| StoreError::Capacity)?;
+        let (min,max)=ledger.time_bounds().ok_or(StoreError::Schema)?;
+        self.db.execute("UPDATE archives SET payload=?1,min_ms=?3,max_ms=?4 WHERE id=?2", params![bytes,id,min.min(i64::MAX as u64),max.min(i64::MAX as u64)])?;
+        Ok(Some(outcome))
     }
 
     pub(super) fn put_account(&self, account_id: &str, registration: &AccountRegistration) -> Result<(), StoreError> {
@@ -303,6 +405,7 @@ impl Store {
             bindings,
             events,
             rejected_rows,
+            history_incomplete: rejected_rows>0 || self.db.query_row("SELECT value FROM meta WHERE key='history_incomplete'",[],|r|r.get::<_,i64>(0)).optional()?.is_some_and(|v|v!=0),
         })
     }
 }

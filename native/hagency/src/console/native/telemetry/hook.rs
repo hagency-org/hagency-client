@@ -185,7 +185,7 @@ impl OwnerTelemetry {
         let execution_id = binding.execution_id.clone();
         match inner.bind(binding) {
             Ok(_) => turn.execution_id = Some(execution_id),
-            Err(error) => inner.fail(&error),
+            Err(error) => {inner.mark_gap();inner.fail(&error)},
         }
         turn.account_id = account_id;
         drop(inner);
@@ -292,5 +292,11 @@ impl TurnTelemetry {
         if let Ok(mut inner) = self.telemetry.0.lock() {
             inner.quota(account, source, payload, snapshot.received_at_ms());
         }
+    }
+}
+
+impl Drop for TurnTelemetry {
+    fn drop(&mut self) {
+        if let Some(id) = &self.execution_id { self.telemetry.finish_execution(id); }
     }
 }

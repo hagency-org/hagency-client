@@ -27,7 +27,9 @@ impl OwnerTelemetry {
         };
         let mut inner = self.lock()?;
         let result = inner.bind(binding.clone()).and_then(|_| inner.event(event, "personal-terminal").map(|_| ()));
+        inner.active.remove(&binding.execution_id);
         if let Err(error) = result {
+            inner.mark_gap();
             inner.fail(&error);
             return Err(error);
         }

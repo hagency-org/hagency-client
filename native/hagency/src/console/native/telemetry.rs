@@ -193,8 +193,28 @@ struct Inner {
     store: Option<store::Store>,
     /// Pending in-memory records to persist on attach.
     unsaved: Vec<Unsaved>,
+    active: std::collections::BTreeSet<String>,
     failures: u64,
     last_failure: Option<String>,
+    history_incomplete: bool,
+    needs_quarantine: bool,
+}
+
+// Historical projections use a read transaction separate from the live hook.
+// A long All-history query cannot hold the native execution telemetry mutex.
+struct ReadView {
+    current_accounts: std::collections::BTreeMap<String,String>,
+    collector: DashboardCollector,
+    store: Option<store::Store>,
+    history_incomplete: bool,
+    has_unsaved: bool,
+}
+impl ReadView {
+    fn visit_ledgers(&self, range: hagency_metering::dashboard::period::TimeRange, mut visit: impl FnMut(&UsageLedger)) -> Result<(), TelemetryError> {
+        visit(self.collector.ledger());
+        if let Some(store) = &self.store { store.visit_archives(range,visit)?; }
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -203,6 +223,7 @@ enum Unsaved {
     Event(UsageEvent, String),
     Account(String, AccountRegistration),
     Quota(String, String, serde_json::Value, u64),
+    Gap,
 }
 const MAX_UNSAVED: usize = 16_384;
 
@@ -230,8 +251,11 @@ impl OwnerTelemetry {
             collector: DashboardCollector::new(UsageLedger::new(coverage_start_ms), RefreshPolicy::default()),
             store: None,
             unsaved: Vec::new(),
+            active: Default::default(),
             failures: 0,
             last_failure: None,
+            history_incomplete: false,
+            needs_quarantine: false,
         })))
     }
 
@@ -253,6 +277,7 @@ impl OwnerTelemetry {
                 Unsaved::Event(e, epoch) => store.put_event(e, epoch).map(|_| ()),
                 Unsaved::Account(id, r) => store.put_account(id, r),
                 Unsaved::Quota(id, source, value, at) => store.put_quota(id, source, value, *at),
+                Unsaved::Gap => store.mark_incomplete(),
             };
             match written {
                 Ok(()) => carried_over += 1,
@@ -261,7 +286,9 @@ impl OwnerTelemetry {
         }
         let loaded = store.load()?;
         inner.failures = inner.failures.saturating_add(loaded.rejected_rows as u64);
-        if loaded.rejected_rows != 0 { inner.last_failure = Some("telemetry_history_incomplete".into()); }
+        inner.history_incomplete |= loaded.history_incomplete;
+        inner.needs_quarantine |= loaded.rejected_rows>0;
+        if loaded.rejected_rows != 0 { inner.history_incomplete = true; inner.last_failure = Some("telemetry_history_incomplete".into()); }
         let mut collector = DashboardCollector::new(loaded.ledger, inner.collector.quotas().policy());
         for account in &loaded.accounts {
             if collector.quotas_mut().register(account.clone()).is_err() {
@@ -292,7 +319,7 @@ impl OwnerTelemetry {
         TelemetryStatus {
             persistent: inner.store.is_some(),
             store_path: inner.store.as_ref().map(|s| s.path().to_owned()),
-            executions: inner.collector.ledger().execution_count() as u64,
+            executions: inner.collector.ledger().execution_count() as u64 + inner.store.as_ref().and_then(|s|s.archived_count().ok()).unwrap_or(0),
             accounts: inner.collector.quotas().project(now_ms()).len() as u64,
             failures: inner.failures,
             last_failure: inner.last_failure.clone(),
@@ -302,25 +329,31 @@ impl OwnerTelemetry {
 
     /// Accounts, period usage and per-resource usage for the daemon snapshot.
     pub fn parts(&self, now_ms: u64, options: SnapshotOptions) -> Result<TelemetryParts, TelemetryError> {
-        let inner = self.lock()?;
+        let inner = self.lock()?.read_view()?;
         let range = options
             .period
             .resolve(now_ms, options.utc_offset_minutes)
             .map_err(CollectorError::from)?;
-        let ledger = inner.collector.ledger();
-        let total = ledger.aggregate(&UsageQuery::range(range));
-        let mut resources: Vec<String> = ledger.bindings().map(|b| b.resource_id.clone()).collect();
+        use hagency_metering::dashboard::ledger::{GroupBy, UsageAggregate};
+        let mut total = inner.collector.ledger().aggregate(&UsageQuery::range(range));
+        let mut resource_usage: std::collections::BTreeMap<Option<String>, UsageAggregate> = Default::default();
+        let mut account_usage: std::collections::BTreeMap<Option<String>, UsageAggregate> = Default::default();
+        let mut resource_accounts: std::collections::BTreeMap<String, std::collections::BTreeSet<Option<String>>> = Default::default();
+        let mut first = true;
+        inner.visit_ledgers(range, |ledger| {
+            if !first { total.merge(&ledger.aggregate(&UsageQuery::range(range))); } first = false;
+            merge_groups(&mut resource_usage, ledger.aggregate_by(&UsageQuery::range(range), GroupBy::Resource));
+            merge_groups(&mut account_usage, ledger.aggregate_by(&UsageQuery::range(range), GroupBy::Account));
+            for binding in ledger.bindings() { resource_accounts.entry(binding.resource_id.clone()).or_default().insert(binding.account_id.clone()); }
+        })?;
+        let mut resources: Vec<String> = resource_accounts.keys().cloned().collect();
         resources.extend(inner.current_accounts.keys().cloned());
-        resources.sort();
-        resources.dedup();
+        resources.sort(); resources.dedup();
         let resources = resources
             .into_iter()
             .map(|resource_id| {
-                let mut query = UsageQuery::range(range);
-                query.resource_id = Some(resource_id.clone());
-                let usage = ledger.aggregate(&query);
-                let accounts: std::collections::BTreeSet<Option<String>> = ledger.bindings()
-                    .filter(|b| b.resource_id == resource_id).map(|b| b.account_id.clone()).collect();
+                let usage = resource_usage.get(&Some(resource_id.clone())).cloned().unwrap_or_else(|| inner.collector.ledger().aggregate(&UsageQuery { resource_id:Some(resource_id.clone()), ..UsageQuery::range(range) }));
+                let accounts = resource_accounts.remove(&resource_id).unwrap_or_default();
                 // Historical consumption can span accounts after a resource
                 // reconnect. Never attribute the entire sum to its latest one.
                 let idle=accounts.is_empty();
@@ -331,7 +364,7 @@ impl OwnerTelemetry {
                     account_id,
                     counts: if idle {hagency_metering::dashboard::UNKNOWN_COUNTS}else{usage.counts},
                     state: if idle {ResourceState::Unmeasured}
-                        else if inner.failures > 0 { if usage.measured() {ResourceState::Partial} else {ResourceState::Unmeasured} }
+                        else if inner.history_incomplete || inner.has_unsaved { if usage.measured() {ResourceState::Partial} else {ResourceState::Unmeasured} }
                         else {resource_state(&usage)},
                     executions: usage.executions,
                     observed_at_ms: usage.observed_at_ms,
@@ -340,16 +373,14 @@ impl OwnerTelemetry {
             .collect();
         Ok(TelemetryParts {
             accounts: inner.collector.quotas().project(now_ms).into_iter().map(|mut account| {
-                let mut query = UsageQuery::range(range);
-                query.account_id = Some(account.id.clone());
-                let usage = ledger.aggregate(&query);
-                account.usage = Some(UsageSummary { counts: if usage.executions==0 {hagency_metering::dashboard::UNKNOWN_COUNTS}else{usage.counts}, complete: usage.executions>0 && usage.complete && inner.failures == 0,
+                let usage = account_usage.get(&Some(account.id.clone())).cloned().unwrap_or_else(|| inner.collector.ledger().aggregate(&UsageQuery {account_id:Some(account.id.clone()), ..UsageQuery::range(range)}));
+                account.usage = Some(UsageSummary { counts: if usage.executions==0 {hagency_metering::dashboard::UNKNOWN_COUNTS}else{usage.counts}, complete: usage.executions>0 && usage.complete && !inner.history_incomplete && !inner.has_unsaved,
                     observed_at_ms: usage.observed_at_ms, estimated_cost_usd: None });
                 account
             }).collect(),
             usage: UsageSummary {
                 counts: total.counts,
-                complete: total.complete && inner.failures == 0,
+                complete: total.complete && !inner.history_incomplete && !inner.has_unsaved,
                 observed_at_ms: total.observed_at_ms,
                 estimated_cost_usd: None,
             },
@@ -387,9 +418,27 @@ impl OwnerTelemetry {
         options: SnapshotOptions,
         filter: Option<UsageQuery>,
     ) -> Result<UsageReport, TelemetryError> {
-        let inner = self.lock()?;
-        let mut report = inner.collector.usage_report(now_ms, options, filter)?;
-        if inner.failures > 0 {
+        let inner = self.lock()?.read_view()?;
+        let mut report = inner.collector.usage_report(now_ms, options, filter.clone())?;
+        if let Some(store) = &inner.store {
+            let mut failure = None;
+            store.visit_archives(report.range, |ledger| {
+                match DashboardCollector::new(ledger.clone(), inner.collector.quotas().policy()).usage_report(now_ms, options, filter.clone()) {
+                    Ok(shard) => {
+                        report.total.merge(&shard.total);
+                        for (target, values) in [(&mut report.by_account, shard.by_account), (&mut report.by_resource, shard.by_resource), (&mut report.by_model, shard.by_model), (&mut report.by_requester, shard.by_requester)] {
+                            let mut grouped = std::mem::take(target).into_iter().collect();
+                            merge_groups(&mut grouped, values.into_iter().collect());
+                            *target = grouped.into_iter().collect();
+                        }
+                        for (target, day) in report.daily.iter_mut().zip(shard.daily) { target.usage.merge(&day.usage); }
+                    },
+                    Err(error) => failure = Some(error),
+                }
+            })?;
+            if let Some(error) = failure { return Err(error.into()); }
+        }
+        if inner.history_incomplete || inner.has_unsaved {
             report.total.complete = false;
             for (_, usage) in report.by_account.iter_mut().chain(report.by_resource.iter_mut()).chain(report.by_model.iter_mut()).chain(report.by_requester.iter_mut()) {
                 usage.complete = false;
@@ -414,6 +463,15 @@ impl OwnerTelemetry {
     pub fn bind_execution(&self, binding: ExecutionBinding) -> Result<bool, TelemetryError> {
         let mut inner = self.lock()?;
         inner.bind(binding)
+    }
+
+    /// Mark a terminal execution eligible for bounded historical retention.
+    /// Its original binding and dedup state remain until later compaction.
+    pub fn finish_execution(&self, execution_id: &str) {
+        if let Ok(mut inner) = self.lock() {
+            inner.active.remove(execution_id);
+            if let Err(error)=inner.compact() { inner.fail(&error); }
+        }
     }
 
     /// Ingest normalized runtime evidence for a bound execution, e.g. from a
@@ -444,6 +502,10 @@ impl OwnerTelemetry {
 }
 
 impl Inner {
+    fn read_view(&self) -> Result<ReadView, TelemetryError> {
+        Ok(ReadView {current_accounts:self.current_accounts.clone(),collector:self.collector.clone(),store:self.store.as_ref().map(store::Store::reader).transpose()?,history_incomplete:self.history_incomplete,has_unsaved:self.store.is_some() && !self.unsaved.is_empty()})
+    }
+
     fn fail(&mut self, error: &impl std::fmt::Display) {
         self.failures = self.failures.saturating_add(1);
         self.last_failure = Some(error.to_string());
@@ -456,11 +518,13 @@ impl Inner {
         } else {
             self.failures = self.failures.saturating_add(1);
             self.last_failure = Some("unsaved_capacity".into());
+            self.history_incomplete = true;
         }
     }
 
     fn persist(&mut self, record: Unsaved) {
         let Some(store) = self.store.as_ref() else { self.remember(record); return; };
+        if self.history_incomplete && let Err(error)=store.mark_incomplete() {self.fail(&error);self.remember(record);return;}
         // Preserve order after a transient SQLite failure. A successful later
         // observation flushes earlier bindings/events before its own record.
         let result = self.unsaved.iter().try_for_each(|pending| persist_record(store, pending));
@@ -476,14 +540,80 @@ impl Inner {
         }
     }
 
+    fn mark_gap(&mut self) {
+        self.history_incomplete=true;
+        self.persist(Unsaved::Gap);
+    }
+    fn flush_pending(&mut self) -> Result<(),StoreError> {
+        if let Some(store)=&self.store {
+            if self.history_incomplete {store.mark_incomplete()?;}
+            for pending in &self.unsaved {persist_record(store,pending)?;}
+            self.unsaved.clear();
+        }
+        Ok(())
+    }
+    fn compact(&mut self) -> Result<(),TelemetryError> {
+        const HOT_EXECUTIONS:usize=4096;const HOT_BYTES:usize=8*1024*1024;
+        let Some(store)=&self.store else{return Ok(())};
+        let ledger=self.collector.ledger();
+        if ledger.execution_count()<HOT_EXECUTIONS && ledger.encoded_size()<HOT_BYTES {return Ok(())}
+        if self.history_incomplete {store.mark_incomplete()?;}
+        for pending in &self.unsaved {persist_record(store,pending)?;}
+        let mut retained=ledger.clone();
+        let archived=retained.split_inactive_budget(HOT_EXECUTIONS/2,HOT_BYTES/2,&self.active);
+        if archived.execution_count()==0 {return Ok(())}
+        store.archive(&archived,&retained,self.needs_quarantine)?;
+        self.unsaved.clear();self.needs_quarantine=false;
+        *self.collector.ledger_mut()=retained;
+        Ok(())
+    }
+
     fn bind(&mut self, binding: ExecutionBinding) -> Result<bool, TelemetryError> {
+        if let Some(previous)=self.unsaved.iter().find_map(|pending|match pending {Unsaved::Binding(previous) if previous.execution_id==binding.execution_id=>Some(previous),_=>None}) {
+            return if previous==&binding {Ok(false)} else {Err(StoreError::Schema.into())};
+        }
+        if let Some(previous)=self.collector.ledger().binding(&binding.execution_id) {
+            return if previous==&binding {Ok(false)} else {Err(StoreError::Schema.into())};
+        }
+        if let Some(store) = &self.store {
+            if let Some(previous) = store.archived_binding(&binding.execution_id)? {
+                return if previous == binding { Ok(false) } else { Err(StoreError::Schema.into()) };
+            }
+            if let Some(parent)=binding.parent_execution_id.as_deref() {
+                if store.archived_binding(parent)?.is_some() {
+                    if let Err(error)=self.flush_pending() {self.fail(&error);self.remember(Unsaved::Binding(binding));return Ok(true);}
+                    return match self.store.as_ref().unwrap().put_binding(&binding,binding.started_at_ms) {
+                        Ok(added)=>Ok(added),
+                        Err(StoreError::Unavailable)=>{self.fail(&StoreError::Unavailable);self.remember(Unsaved::Binding(binding));Ok(true)},
+                        Err(error)=>Err(error.into()),
+                    };
+                }
+            }
+        }
+        if let Err(error)=self.compact() {self.fail(&error);}
         let added = self.collector.bind_execution(binding.clone())?;
+        self.active.insert(binding.execution_id.clone());
         if added { self.persist(Unsaved::Binding(binding)); }
         Ok(added)
     }
 
     fn event(&mut self, event: UsageEvent, epoch: &str) -> Result<IngestOutcome, TelemetryError> {
-        let outcome = self.collector.ingest_usage(&event)?;
+        if self.collector.ledger().binding(&event.execution_id).is_none() {
+            // Replay queued earlier samples before touching any cold shard.
+            // A newer cumulative high-water must not consume an earlier delta.
+            if let Err(error)=self.flush_pending() {self.fail(&error);self.remember(Unsaved::Event(event,epoch.into()));return Err(error.into());}
+            if let Some(store) = &self.store {
+                match store.archived_event(&event) {
+                    Ok(Some(outcome)) => return Ok(outcome),
+                    Ok(None) => {},
+                    Err(error) => { self.fail(&error); self.remember(Unsaved::Event(event,epoch.into())); return Err(error.into()); }
+                }
+            }
+        }
+        let outcome = match self.collector.ingest_usage(&event) {
+            Ok(outcome)=>outcome,
+            Err(error)=>{self.mark_gap();return Err(error.into());}
+        };
         if matches!(outcome, IngestOutcome::Applied | IngestOutcome::Conflict) {
             self.persist(Unsaved::Event(event, epoch.to_owned()));
         }
@@ -513,6 +643,7 @@ fn persist_record(store: &store::Store, record: &Unsaved) -> Result<(), StoreErr
         Unsaved::Event(event, epoch) => store.put_event(event, epoch).map(|_| ()),
         Unsaved::Account(id, registration) => store.put_account(id, registration),
         Unsaved::Quota(id, source, value, at) => store.put_quota(id, source, value, *at),
+        Unsaved::Gap => store.mark_incomplete(),
     }
 }
 
@@ -552,4 +683,8 @@ pub(crate) fn codex_account(subject_digest: Option<&str>, resource_id: &str, pla
         capability: QuotaCapability::Supported,
         runtime_version: None,
     }
+}
+
+fn merge_groups(target: &mut std::collections::BTreeMap<Option<String>, hagency_metering::dashboard::ledger::UsageAggregate>, values: std::collections::BTreeMap<Option<String>, hagency_metering::dashboard::ledger::UsageAggregate>) {
+    for (key, value) in values { target.entry(key).and_modify(|existing| existing.merge(&value)).or_insert(value); }
 }

@@ -499,6 +499,28 @@ pub struct UsageAggregate {
 }
 
 impl UsageAggregate {
+    /// Combine disjoint execution shards. Families must not span shards.
+    pub fn merge(&mut self, other: &Self) {
+        let a_empty = !self.measured();
+        let b_empty = !other.measured();
+        let sum = |a: Option<u64>, b: Option<u64>| {
+            a.or(a_empty.then_some(0)).zip(b.or(b_empty.then_some(0)))
+                .and_then(|(a,b)| add(a,b).ok())
+        };
+        self.counts = TokenCounts { input:sum(self.counts.input,other.counts.input), output:sum(self.counts.output,other.counts.output), cache_write:sum(self.counts.cache_write,other.counts.cache_write), cache_read:sum(self.counts.cache_read,other.counts.cache_read) };
+        self.reasoning_output = if a_empty && b_empty { None } else { sum(self.reasoning_output,other.reasoning_output) };
+        self.coverage_gap |= other.coverage_gap;
+        if a_empty && b_empty && self.coverage_gap { self.counts = super::UNKNOWN_COUNTS; }
+        self.complete &= other.complete;
+        self.complete &= categories(&self.counts).iter().all(Option::is_some);
+        self.observed_at_ms = self.observed_at_ms.max(other.observed_at_ms);
+        self.executions = self.executions.saturating_add(other.executions);
+        self.unmeasured_executions = self.unmeasured_executions.saturating_add(other.unmeasured_executions);
+        self.contained_executions = self.contained_executions.saturating_add(other.contained_executions);
+        self.diagnostics.add(&other.diagnostics);
+        self.sources.extend(other.sources.iter().copied()); self.sources.sort(); self.sources.dedup();
+    }
+
     pub fn cache_hit_ratio(&self) -> Option<f64> {
         super::cache_hit_ratio(&self.counts)
     }
@@ -688,6 +710,91 @@ impl UsageLedger {
         self.coverage_start_ms = self.coverage_start_ms.max(cutoff_ms);
         self.buckets = self.count_buckets();
         before - self.executions.len()
+    }
+
+    /// Inclusive evidence bounds for skipping cold shards on range queries.
+    pub fn time_bounds(&self) -> Option<(u64,u64)> {
+        let mut start = u64::MAX; let mut end = 0;
+        for record in self.executions.values() {
+            start = start.min(record.binding.started_at_ms); end = end.max(record.binding.started_at_ms);
+            for stream in record.streams.values() {
+                if let Some(first) = stream.first_at_ms { start = start.min(first); }
+                if let Some(last) = stream.last_at_ms.max(stream.last_observed_ms) { end = end.max(last); }
+            }
+        }
+        (!self.executions.is_empty()).then_some((start,end))
+    }
+
+    /// Move entire inactive execution families into a separate bounded shard.
+    /// Parent/child containment and every immutable binding, high-water mark,
+    /// dedup identity and quality flag remain together in exactly one shard.
+    pub fn split_inactive(&mut self, keep: usize, protected: &BTreeSet<String>) -> Self {
+        self.split_inactive_budget(keep, usize::MAX, protected)
+    }
+    pub fn encoded_size(&self) -> usize {
+        128 + self.executions.values().map(|r| serde_json::to_vec(r).map_or(MAX_EXPORT_BYTES, |v|v.len()+1)).sum::<usize>()
+    }
+    fn families(&self) -> Vec<Vec<String>> {
+        // Connected components also preserve malformed/deep parent chains:
+        // no cycle or missing ancestor can split containment across shards.
+        let mut links: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (id, record) in &self.executions {
+            links.entry(id.clone()).or_default();
+            if let Some(parent)=&record.binding.parent_execution_id {
+                links.entry(id.clone()).or_default().push(parent.clone());
+                links.entry(parent.clone()).or_default().push(id.clone());
+            }
+        }
+        let mut seen=BTreeSet::new();let mut families=BTreeMap::new();
+        for id in self.executions.keys() {
+            if seen.contains(id) { continue; }
+            let mut stack=vec![id.clone()];let mut family=Vec::new();
+            while let Some(id)=stack.pop() {
+                if !seen.insert(id.clone()) { continue; }
+                if self.executions.contains_key(&id) { family.push(id.clone()); }
+                if let Some(neighbors)=links.get(&id) { stack.extend(neighbors.iter().cloned()); }
+            }
+            families.insert(id.clone(),family);
+        }
+        families.into_values().collect()
+    }
+    pub fn split_inactive_budget(&mut self, keep: usize, max_bytes:usize, protected:&BTreeSet<String>) -> Self {
+        let mut bytes=self.encoded_size();
+        let mut candidates: Vec<_> = self.families().into_iter()
+            .filter(|ids| !ids.iter().any(|id| protected.contains(id)))
+            // An unresolved parent may arrive later. Keep that entire family
+            // hot until its immutable containment context is known.
+            .filter(|ids| ids.iter().all(|id| self.executions[id].binding.parent_execution_id.as_ref().is_none_or(|parent| self.executions.contains_key(parent))))
+            .map(|ids| (ids.iter().map(|id| self.executions[id].binding.started_at_ms).max().unwrap_or(0), ids))
+            .collect();
+        candidates.sort_by(|a,b| a.0.cmp(&b.0).then_with(||a.1.cmp(&b.1)));
+        let mut archived = Self::new(self.coverage_start_ms);
+        for (_, ids) in candidates {
+            if self.executions.len() <= keep && bytes <= max_bytes { break; }
+            for id in ids {
+                if let Some(record) = self.executions.remove(&id) {
+                    bytes=bytes.saturating_sub(serde_json::to_vec(&record).map_or(MAX_EXPORT_BYTES,|v|v.len()+1));
+                    archived.executions.insert(id, record);
+                }
+            }
+        }
+        self.buckets = self.count_buckets();
+        archived.buckets = archived.count_buckets();
+        archived
+    }
+    /// Cold shards are byte-bounded, keeping complete families together.
+    pub fn into_shards(mut self, max_bytes:usize) -> Vec<Self> {
+        let families=self.families();let mut shards=Vec::new();let mut current=Self::new(self.coverage_start_ms);let mut size=128;
+        for family in families {
+            let bytes=family.iter().map(|id|serde_json::to_vec(&self.executions[id]).map_or(MAX_EXPORT_BYTES,|v|v.len()+1)).sum::<usize>();
+            if size+bytes>max_bytes && current.execution_count()>0 {
+                current.buckets=current.count_buckets();shards.push(current);current=Self::new(self.coverage_start_ms);size=128;
+            }
+            for id in family { if let Some(record)=self.executions.remove(&id){current.executions.insert(id,record);} }
+            size+=bytes;
+        }
+        if current.execution_count()>0 {current.buckets=current.count_buckets();shards.push(current);}
+        shards
     }
 
     fn count_buckets(&self) -> usize {
