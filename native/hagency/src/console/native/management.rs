@@ -316,12 +316,9 @@ impl NativeOwner {
                             // A different account may already have initialized
                             // this installation. Server administration needs
                             // durable receipts, never a legacy resource writer.
-                            // Do not switch custody away from an existing ledger.
-                            match directory.join("domain.sqlite3").symlink_metadata() {
-                                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
-                                Ok(_) => return Err(failure(409, "device_setup_required")),
-                                Err(_) => return Err(failure(503, "management_state_unavailable")),
-                            }
+                            // An existing receipt-only ledger keeps its original
+                            // database and lock. The journal opener rejects any
+                            // resource history rather than splitting custody.
                             service::ServerManagementJournal::open(&directory, &profile, &owner)
                                 .map(ManagementStore::Server).map_err(store_error)
                         }

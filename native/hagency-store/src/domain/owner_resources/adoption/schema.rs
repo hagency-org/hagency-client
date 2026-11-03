@@ -28,7 +28,7 @@ pub(super) fn validate(
     validate_personal(personal, deadline, archived.1)
 }
 
-pub(super) fn validate_domain(
+pub(crate) fn validate_domain(
     domain: &Connection,
     version: i32,
     deadline: Instant,

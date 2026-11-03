@@ -15,6 +15,7 @@ mod management;
 #[cfg(feature = "resource-adoption")]
 pub use management::AdoptedManagementStore;
 mod schema;
+pub(crate) use schema::validate_domain as validate_journal_source_schema;
 mod task_transfer;
 mod alert_transfer;
 #[cfg(all(test, feature = "resource-adoption"))]

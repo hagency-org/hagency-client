@@ -4,7 +4,7 @@ use serde_json::json;
 
 #[test]
 fn server_management_after_another_account_initializes_resources() {
-    for case in ["fresh", "existing"] {
+    for case in ["fresh", "existing", "existing_empty"] {
         let result = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "console::native::management::server_only_tests::server_management_process_child",
@@ -29,12 +29,30 @@ async fn server_management_process_child() {
         Ok(case) => case,
         Err(_) => return,
     };
-    let installation = hagency_platform::legacy_writer::test_support::initialize_process_root().unwrap();
+    let installation =
+        hagency_platform::legacy_writer::test_support::initialize_process_root().unwrap();
     let f = Fixture::with_configured_installation().await;
     let old = if case == "existing" {
         let (db, path, _) = f.domain();
         drop(db);
         Some(path)
+    } else {
+        None
+    };
+    let empty = if case == "existing_empty" {
+        let device = f.owner.0.host.console.authorized_device().await.unwrap();
+        let profile = profile_identity(
+            device.origin(),
+            device.issuer(),
+            device.subject(),
+            device.owner_mxid(),
+        )
+        .unwrap();
+        let owners = f.owner.0.host.state_directory().join("owned-agent-owners");
+        hagency_store::private::directory(&owners).unwrap();
+        let directory = owners.join(format!("management_{profile}"));
+        drop(DomainRepository::open_managed(&directory, &profile).unwrap());
+        Some((directory, profile))
     } else {
         None
     };
@@ -109,6 +127,41 @@ async fn server_management_process_child() {
         assert_eq!(saved.len(), 1);
         assert_eq!(saved[0].command_id, "admin_decision");
         assert!(saved[0].reply.is_some());
+        if let Some((directory, profile)) = &empty {
+            assert!(!directory.join("server-management.sqlite3").exists());
+            let db = rusqlite::Connection::open_with_flags(
+                directory.join("domain.sqlite3"),
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )
+            .unwrap();
+            assert_eq!(
+                db.query_row("SELECT profile_digest FROM management_identity", [], |r| {
+                    r.get::<_, String>(0)
+                })
+                .unwrap(),
+                *profile
+            );
+            assert_eq!(
+                db.query_row("SELECT command_id FROM management_intents", [], |r| r
+                    .get::<_, String>(0))
+                    .unwrap(),
+                "admin_decision"
+            );
+            assert_eq!(
+                db.query_row("SELECT count(*) FROM resources", [], |r| r.get::<_, u32>(0))
+                    .unwrap(),
+                0
+            );
+            // SDK revocation still fences an existing server-only manager.
+            f.live.store(false, Ordering::Release);
+            assert!(
+                manager
+                    .central(ManagementCommand::Session {})
+                    .await
+                    .is_err()
+            );
+            f.live.store(true, Ordering::Release);
+        }
         manager.retire();
         assert_eq!(
             manager

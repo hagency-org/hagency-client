@@ -288,6 +288,12 @@ pub(crate) struct JournalCommand {
     pub(super) deadline: Instant,
 }
 impl JournalCommand {
+    pub(super) fn intent_operation(&self) -> Option<IntentOperation> {
+        match &self.action {
+            JournalAction::Prepare(intent) | JournalAction::Reply(intent, _) => Some(intent.operation()),
+            _ => None,
+        }
+    }
     pub(super) fn new(
         authority: ManagementAuthority,
         context: HostContext,

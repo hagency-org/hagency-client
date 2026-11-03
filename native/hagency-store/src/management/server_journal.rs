@@ -1,8 +1,12 @@
-//! Private receipts for a server-only account. This store has no resource,
-//! provider, budget or execution tables and never opens a retired resource DB.
+//! Private receipts for a server-only account. Existing receipt-only profiles
+//! retain their original database and lock, without a resource writer or migration.
 use super::*;
 use std::path::Path;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
+mod existing;
+#[cfg(all(test, feature = "resource-adoption"))]
+#[path = "server_journal/existing_tests.rs"]
+mod existing_tests;
 
 const DEADLINE: Duration = Duration::from_secs(2);
 const SCHEMA: &str = concat!(
@@ -196,6 +200,14 @@ impl ServerManagementJournal {
         }
         palpo_hagency_contract::MatrixUserId::try_from(owner.to_owned())
             .map_err(|_| Error::LocalAuthority)?;
+        match directory.join("domain.sqlite3").symlink_metadata() {
+            Ok(_) => {
+                let (database, files) = existing::open(directory, profile)?;
+                return Self::start(database, Some(files), owner);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
         let mut database = crate::database::open(
             directory,
             crate::database::Schema {
@@ -240,6 +252,13 @@ impl ServerManagementJournal {
             tx.execute("INSERT INTO server_journal_identity VALUES(1,?1)", [owner])?;
         }
         tx.commit()?;
+        Self::start(database, None, owner)
+    }
+    fn start(
+        mut database: crate::database::Database,
+        original: Option<existing::Files>,
+        owner: &str,
+    ) -> Result<Self, Error> {
         database
             .connection
             .authorizer(Some(super::archive_journal::authorize_sql))?;
@@ -253,6 +272,10 @@ impl ServerManagementJournal {
                             let authority = command.authority.clone();
                             let deadline = command.deadline;
                             let result = (|| {
+                                if let Some(files) = &original {
+                                    files.check()?;
+                                    existing::check_command(&command)?;
+                                }
                                 database.connection.progress_handler(
                                     1000,
                                     Some(move || {
@@ -263,12 +286,22 @@ impl ServerManagementJournal {
                                 database
                                     .connection
                                     .progress_handler(0, None::<fn() -> bool>)?;
+                                if result.is_ok()
+                                    && original
+                                        .as_ref()
+                                        .is_some_and(|files| files.check().is_err())
+                                {
+                                    return Err(Error::OutcomeUnknown);
+                                }
                                 result
                             })();
                             let _ = reply.send(result);
                         }
                         Job::Shutdown(reply) => {
                             drop(database);
+                            // Retained file identities include a clone of the
+                            // original lock. Release it before acknowledging.
+                            drop(original);
                             let _ = reply.send(());
                             return;
                         }
