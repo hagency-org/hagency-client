@@ -361,8 +361,9 @@ impl SharedTextEvent {
     }
 }
 impl OwnedSession {
-    pub async fn next_shared_event_or_tick(&mut self, controlled: bool) -> Result<Option<SharedTextEvent>, Error> {
-        if !controlled {return self.next_shared_text_event().await.map(Some);}
+    /// Yield for host maintenance without cancelling the retained pipe read.
+    /// Approval authority remains independently controlled by the session.
+    pub async fn next_shared_event_or_tick(&mut self) -> Result<Option<SharedTextEvent>, Error> {
         let tick=tokio::time::sleep(Duration::from_millis(500));tokio::pin!(tick);
         match self.next_observed_or_control(tick.as_mut()).await? {
             crate::codex::session::ControlUpdate::Update(update,observation)=>self.shared_event(update,*observation).map(Some),

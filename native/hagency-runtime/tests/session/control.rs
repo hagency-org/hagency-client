@@ -34,6 +34,11 @@ async fn controlled_with_policy(
     stdout_bytes: usize,
     policy: ApprovalControlPolicy,
 ) -> (Session, Peer) {
+    let (mut session, peer) = uncontrolled(stdin_bytes, stdout_bytes).await;
+    session.enable_approval_control(policy).unwrap();
+    (session, peer)
+}
+async fn uncontrolled(stdin_bytes: usize, stdout_bytes: usize) -> (Session, Peer) {
     let (stdin, peer_in) = tokio::io::duplex(stdin_bytes);
     let (stdout, peer_out) = tokio::io::duplex(stdout_bytes);
     let (stderr, peer_err) = tokio::io::duplex(1024);
@@ -58,8 +63,33 @@ async fn controlled_with_policy(
     initialize(&mut session, &mut peer).await;
     open(&mut session, &mut peer, false).await;
     start(&mut session, &mut peer, vec![]).await.unwrap();
-    session.enable_approval_control(policy).unwrap();
     (session, peer)
+}
+
+#[tokio::test]
+async fn native_codex_control_without_approval_policy_retains_partial_usage_frame() {
+    let (mut session, mut peer) = uncontrolled(4096, 1).await;
+    let source = session.observation_source().unwrap();
+    let (send, wait) = tokio::sync::oneshot::channel::<()>();
+    let mut control=Box::pin(wait);
+    let mut frame=serde_json::to_vec(&note("thread/tokenUsage/updated",metrics())).unwrap();
+    frame.push(b'\n');
+    let half=frame.len()/2;
+    let (result,())=tokio::join!(session.next_observed_or_control(control.as_mut()),async {
+        peer.stdout.write_all(&frame[..half]).await.unwrap();
+        send.send(()).unwrap();
+    });
+    assert!(matches!(result.unwrap(),ControlUpdate::Control(Ok(()))));
+    assert_eq!(session.phase(),Phase::Running);
+    let mut never=Box::pin(std::future::pending::<()>());
+    let (result,())=tokio::join!(session.next_observed_or_control(never.as_mut()),async {
+        peer.stdout.write_all(&frame[half..]).await.unwrap();
+    });
+    let ControlUpdate::Update(Update::Progress,observation)=result.unwrap() else {panic!("original usage event")};
+    assert!(observation.source()==&source);
+    assert_eq!(observation.sequence(),1);
+    assert!(matches!(observation.kind(),ObservationKind::Usage(_)));
+    no_response(&mut peer).await;
 }
 async fn observe(
     s: &mut Session,

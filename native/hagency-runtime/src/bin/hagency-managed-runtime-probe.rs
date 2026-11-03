@@ -66,7 +66,11 @@ fn main() -> io::Result<()> {
             );
             io::stdout().flush()?;
         }
+        if mode == "text-start-renew" && method == "turn/start" {
+            std::thread::sleep(Duration::from_secs(12));
+        }
         let value = match method {
+            "turn/interrupt" if mode == "text-interrupt-usage" => json!({}),
             "initialize" => {
                 json!({"userAgent":"managed-offline-fixture","platformFamily":"unix","platformOs":"fixture","codexHome":"/fixture"})
             }
@@ -138,8 +142,16 @@ fn main() -> io::Result<()> {
             _ => return Err(io::Error::other("fixture received non-metadata command")),
         };
         println!("{}", json!({"id":v["id"],"result":value}));
+        if method == "turn/interrupt" && mode == "text-interrupt-usage" {
+            let usage=json!({"totalTokens":27,"inputTokens":20,"cachedInputTokens":0,"cacheWriteInputTokens":0,"outputTokens":7,"reasoningOutputTokens":0});
+            println!("{}",json!({"method":"thread/tokenUsage/updated","params":{"threadId":"text-thread","turnId":"text-turn","tokenUsage":{"total":usage,"last":usage,"modelContextWindow":10000}}}));
+            println!("{}",json!({"method":"turn/completed","params":{"threadId":"text-thread","turn":{"id":"text-turn","status":"interrupted","items":[]}}}));
+            io::stdout().flush()?;
+            continue;
+        }
         if method == "turn/start" && mode.starts_with("text") {
             io::stdout().flush()?;
+            if mode == "text-interrupt-usage" { continue; }
             if matches!(&*mode, "text-block" | "text-renew") {
                 let deadline = std::time::Instant::now()
                     + std::time::Duration::from_secs(if mode == "text-renew" { 12 } else { 5 });
@@ -202,7 +214,7 @@ fn main() -> io::Result<()> {
             };
             if matches!(
                 &*mode,
-                "text-workspace-standard-usage" | "text-workspace-yolo-usage" | "text-usage" | "text-long" | "text-overflow" | "text-stream" | "text-escaped" | "text-items" | "text-renew" | "text-overrun" | "text-context" | "text-context-workspace"
+                "text-workspace-standard-usage" | "text-workspace-yolo-usage" | "text-start-renew" | "text-usage" | "text-long" | "text-overflow" | "text-stream" | "text-escaped" | "text-items" | "text-renew" | "text-overrun" | "text-context" | "text-context-workspace"
             ) {
                 let usage = if mode == "text-overrun" {
                     json!({"totalTokens":4813,"inputTokens":4713,"cachedInputTokens":0,"cacheWriteInputTokens":0,"outputTokens":100,"reasoningOutputTokens":0})

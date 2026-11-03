@@ -18,7 +18,7 @@ pub struct SharedCallSink {
 }
 impl SharedCallCustody {
     pub fn bind_turn(self, process: &OwnedSession) -> Result<SharedCallSink, Error> {
-        self.check()?;
+        self.check_capture(process)?;
         let source = process
             .observation_source()
             .map_err(|_| Error::LocalAuthority)?;

@@ -7,6 +7,7 @@ mod demand_io;
 mod demands;
 mod io;
 mod guarded;
+mod stop_capture;
 use guarded::guarded;
 pub use demands::{
     SharedDemandPoll, SharedDemandProgress, SharedDemandResume, SharedDemandStopReceipt,

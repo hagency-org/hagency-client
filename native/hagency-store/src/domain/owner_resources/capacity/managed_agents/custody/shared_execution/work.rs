@@ -321,7 +321,19 @@ impl SharedCallCustody {
         }else{
             process.start_shared_text_turn(self.model_input().into()).await
         }.map_err(|_|Error::OutcomeUnknown)?;
-        self.check().map_err(|_|Error::OutcomeUnknown)
+        self.check_capture(process).map_err(|_|Error::OutcomeUnknown)
+    }
+    /// Recording the original process is distinct from admitting another call.
+    /// Its renewable live lease may outlast the proof used before turn/start.
+    pub(super) fn check_capture(&self, process: &hagency_runtime::owned::OwnedSession) -> Result<(), Error> {
+        // The old profile proof deliberately pins its old activity epoch. It
+        // cannot authorize another dispatch after renewal, but must not reject
+        // observations from this already-issued call and its same live source.
+        if self.call.scope.registry.closed.load(Ordering::Acquire)
+            || !self.sink.source().same(&process.shared_text_process_source())
+            || !self.sink.source().has_live_activity()
+        { return Err(Error::LocalAuthority); }
+        Ok(())
     }
     pub fn work(&self) -> &SharedWorkItem {
         &self.work

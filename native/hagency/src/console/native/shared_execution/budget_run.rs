@@ -401,7 +401,7 @@ async fn work_loop(
             return Err(error);
         }
     };
-    guarded(cancel, a.until, || async {
+    prepare_while_active(io,r,sink,control,a,cancel,async {
         io.check(&sink.command().original_runtime_command).await?;
         issued.check().map_err(store)?;
         issued.start_turn(process).await.map_err(store)?;
@@ -414,35 +414,40 @@ async fn work_loop(
     let approvals_enabled=sink.command().tool_policy.as_ref().is_some_and(|p|p.mode=="standard");
     let mut approvals=super::approvals::Approvals::default();
     if approvals_enabled {super::approvals::enable(process)?;}
-    let terminal = loop {
+    let terminal_result: Result<SharedWorkReceipt, NativeError> = async {
+      let terminal = loop {
+        if super::stop_capture::requested(cancel) {
+            return Err(failure(409, "shared_execution_closed"));
+        }
         let result = {
             // Pin the actual read. Renewal branches keep polling this same
-            // future; only cancellation/expiry intentionally drops and stops it.
-            let read = process.next_shared_event_or_tick(approvals_enabled);
+            // future. A requested stop yields cooperatively for final usage.
+            let read = process.next_shared_event_or_tick();
             tokio::pin!(read);
             loop {
                 // Anchor renewal to the lease, not to the latest stream event.
                 // A ready event must not starve an already-due renewal.
                 let wake = a.until.checked_sub(Duration::from_secs(20)).unwrap_or_else(Instant::now);
                 let event = tokio::select! {biased;
-                    _ = cancel.changed()=>break Err(failure(409,"shared_execution_closed")),
+                    _ = cancel.changed()=>break read.as_mut().await.map_err(|_|failure(409,"shared_execution_event_unknown")),
                     _ = tokio::time::sleep_until(a.until.into())=>break Err(failure(409,"shared_execution_expired")),
                     _ = tokio::time::sleep_until(wake.into())=>{guarded(cancel,a.until,|| maybe_renew(io,r,sink,control,a)).await}
                     event=&mut read=>break event.map_err(|error|{tracing::warn!(?error,"Shared Agent event stream ended before completion");failure(409,"shared_execution_event_unknown")}),
                 };
                 if let Err(e) = event {
+                    if super::stop_capture::requested(cancel) {
+                        break read.as_mut().await.map_err(|_|failure(409,"shared_execution_event_unknown"));
+                    }
                     break Err(e);
                 }
             }
         };
         let event = match result {
             Ok(v) => v,
-            Err(e) => {
-                let _ = capture.record_unknown().await;
-                return Err(e);
-            }
+            Err(e) => return Err(e),
         };
         let Some(event)=event else {
+            if super::stop_capture::requested(cancel) || !approvals_enabled { continue; }
             guarded(cancel,a.until,|| maybe_renew(io,r,sink,control,a)).await?;
             let b=io.bound().await?;
             if let Some(receipt)=guarded(cancel,a.until,|| approvals.poll(io,&b,&work,&a.lease.authority,a.until,process,&mut capture,&mut usage)).await? {break receipt;}
@@ -471,6 +476,20 @@ async fn work_loop(
         if let Some(request)=approval {
             let b=io.bound().await?;
             guarded(cancel,a.until,|| approvals.register(io,&b,&work,&a.lease.authority,a.until,process,request)).await?;
+        }
+      };
+      Ok(terminal)
+    }.await;
+    let terminal = match terminal_result {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            let receipt = super::stop_capture::settle(process, &mut capture, &mut usage, a.until).await;
+            if let Some(receipt) = receipt {
+                let _ = report_work(io, r, sink.command(), &work, &receipt).await;
+            } else {
+                let _ = capture.record_unknown().await;
+            }
+            return Err(error);
         }
     };
     // Reply delivery uses the central durable Matrix transaction. Keep this same

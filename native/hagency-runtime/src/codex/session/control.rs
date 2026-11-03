@@ -107,9 +107,8 @@ impl ControlState {
         self.callbacks.remove(id);
     }
     fn deadline<R, W, E>(&mut self, wire: &transport::Driver<R, W, E>) -> Result<Instant, Error> {
-        if !self.enabled() {
-            return Err(Error::State);
-        }
+        // Read-only host maintenance also needs a cancellation-safe yield.
+        // This does not enable approvals or reset the original event deadline.
         let deadline = self
             .callbacks
             .values()
@@ -293,7 +292,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> SessionD
         &mut self,
         control: Pin<&mut F>,
     ) -> Result<ControlUpdate<F::Output>, Error> {
-        if self.phase() != Phase::Running || !self.control.enabled() {
+        if self.phase() != Phase::Running {
             return Err(Error::State);
         }
         let operation = Operation {

@@ -752,7 +752,7 @@ async fn native_shared_execution_renews_same_process_while_original_event_read_i
 
 #[tokio::test]
 #[ignore = "requires explicitly built offline supervised probe"]
-async fn native_shared_execution_suspend_stops_process_without_refunding_or_revoking_session() {
+async fn native_shared_interrupted_call_without_final_usage_preserves_unknown_and_session() {
     let (f, t, _) = fixture().await;
     t.poll_fixture(&f.registry, launch(&f, "text-block"))
         .await
@@ -780,6 +780,55 @@ async fn native_shared_execution_suspend_stops_process_without_refunding_or_revo
     assert_eq!(methods.lines().filter(|v| *v == "initialize").count(), 1);
     assert_eq!(methods.lines().filter(|v| *v == "turn/start").count(), 1);
     drop(db);
+    f.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires explicit offline supervised runtime probe"]
+async fn native_shared_interrupted_call_collects_final_usage_before_stopping_original_and_successor() {
+    for successor in [false, true] {
+        let (f, t, c) = if successor { attempts::predecessor().await } else { fixture().await };
+        if successor {
+            attempts::prepare_lost_start(&f, &t, &c).await;
+            t.poll_successor_fixture(&f.registry, launch(&f, "text-interrupt-usage")).await.unwrap();
+        } else {
+            t.poll_fixture(&f.registry, launch(&f, "text-interrupt-usage")).await.unwrap();
+        }
+        method_seen(&f, "turn/start").await;
+        // Stop the real retained process through the same owner lifecycle as
+        // an app restart. Provider receipts, never the stop alone, release credit.
+        f.owner.suspend().await.unwrap();
+        let db=rusqlite::Connection::open(f._root.path().join("registry/domain.sqlite3")).unwrap();
+        let row:(String,u64,u64,bool)=db.query_row("SELECT state,reserved_tokens,known_consumed_tokens,usage_complete FROM owner_managed_calls",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
+        assert_eq!(row,("settled".into(),100,27,true));
+        let raw:String=db.query_row("SELECT payload FROM owner_shared_work_observations ORDER BY ledger_revision DESC LIMIT 1",[],|r|r.get(0)).unwrap();
+        let receipt:SharedWorkReceipt=serde_json::from_str(&raw).unwrap();
+        assert_eq!(receipt.state,"failed");
+        assert!(receipt.usage_complete);
+        assert_eq!(receipt.retained_tokens,Some(27));
+        assert_eq!(rows(&f,"owner_managed_budget_deltas"),0);
+        let methods=std::fs::read_to_string(f._root.path().join("shared-probe/methods")).unwrap();
+        assert_eq!(methods.lines().filter(|m|*m=="turn/start").count(),1);
+        assert_eq!(methods.lines().filter(|m|*m=="turn/interrupt").count(),1);
+        drop(db);
+        f.stop().await;
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires explicit offline supervised runtime probe"]
+async fn native_shared_interrupted_call_start_ack_survives_activity_renewal_without_second_call() {
+    let (f,t,_)=fixture().await;
+    t.poll_fixture(&f.registry,launch(&f,"text-start-renew")).await.unwrap();
+    stopped(&f).await;
+    let state=f.state.lock().unwrap();
+    assert!(state.shared.activity_epoch>=2);
+    assert_eq!(state.shared.starts,1);
+    assert!(state.shared.receipts.values().any(|r|r.state=="completed" && r.usage_complete));
+    drop(state);
+    let methods=std::fs::read_to_string(f._root.path().join("shared-probe/methods")).unwrap();
+    assert_eq!(methods.lines().filter(|m|*m=="turn/start").count(),1);
+    assert_eq!(rows(&f,"owner_managed_budget_deltas"),0);
     f.stop().await;
 }
 
