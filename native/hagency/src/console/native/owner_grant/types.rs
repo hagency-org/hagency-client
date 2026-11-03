@@ -188,6 +188,8 @@ fn capacity_blocker(budget: &hagency_core::allocation::Budget) -> Option<String>
 /// reservation, grant intent, provider login or server publication.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OwnerGrantForm {
+    #[serde(default)]
+    pub awaiting_admission: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendar: Option<hagency_core::recurring_quota::Calendar>,
     pub contribution_id: String,

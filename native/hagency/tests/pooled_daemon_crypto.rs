@@ -405,28 +405,32 @@ mod fixture {
             .iter()
             .find(|r| r.id == resource_id)
             .unwrap();
-        let contribution=central(&manager,json!({"operation":"contribute","command_id":"fixture_contribute","resource_id":resource.id,
+        let contribution=central(&manager,json!({"operation":"contribute","publication_first":true,"command_id":"fixture_contribute","resource_id":resource.id,
         "expected_revision":resource.revision,"label":"Offline pooled daemon acceptance","coordinator_mxid":owner})).await;
         let admission = &contribution["admission"];
         let contribution_id = admission["contribution"]["id"]
             .as_str()
             .expect("contribution id")
             .to_owned();
-        if admission["request"]["state"] != "approved" {
-            central(&manager,json!({"operation":"decide","command_id":"fixture_admit","request_id":admission["request"]["id"],
-            "expected_revision":admission["request"]["revision"],"approve":true})).await;
-        }
+        assert_eq!(admission["contribution"]["state"], "draft");
+        let before = central(&manager, json!({"operation":"pools","after":null,"capability":null})).await;
+        assert!(!before["items"].as_array().unwrap().iter().any(|p| p["id"] == contribution_id));
         let access = selection.grant_access(&native, package(4)).await.unwrap();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
+        // This fixture explicitly configures a UTC monthly account ceiling.
+        // The owner-selected pool calendar must stay within that ceiling.
         let review = access
             .prepare(
                 contribution_id.clone(),
                 OwnerGrantChoices {
                     per_request_tokens: None,
-                    calendar: None,
+                    calendar: Some(hagency_core::recurring_quota::Calendar {
+                        cadence: hagency_core::recurring_quota::Cadence::Monthly,
+                        time_zone: "UTC".into(),
+                    }),
                     coordinator_mxid: owner.into(),
                     delegation_expires_at_ms: now + 3_600_000,
                     allow_self_approval: true,
@@ -451,7 +455,13 @@ mod fixture {
             published.state,
             hagency::native_owner::OwnerGrantPublicationState::ServerObserved
         ));
-        stage("authentic contribution admitted and native capacity grant published");
+        let submitted = central(&manager, json!({"operation":"connection","id":contribution_id})).await;
+        assert_eq!(submitted["admission"]["contribution"]["state"], "pending_admission");
+        let pending_pools = central(&manager, json!({"operation":"pools","after":null,"capability":null})).await;
+        assert!(!pending_pools["items"].as_array().unwrap().iter().any(|p| p["id"] == contribution_id));
+        central(&manager,json!({"operation":"decide","command_id":"fixture_admit","request_id":admission["request"]["id"],
+            "expected_revision":submitted["admission"]["request"]["revision"],"approve":true})).await;
+        stage("one native publication before approval; approval exposes the original capacity without another owner command");
         let pool_page = central(
             &manager,
             json!({"operation":"pools","after":null,"capability":null}),
@@ -483,7 +493,7 @@ mod fixture {
             .expect("native pooled room");
         let request=central(&manager,json!({"operation":"pool_agent_request","command_id":"fixture_pool_agent","pool_id":contribution_id,
         "request":{"roomId":dm,"expectedPoolRevision":pool["revision"],"expectedGrantRevision":pool["grantRevision"],
-            "definition":{"name":"Offline pooled Agent","capability":pool["capabilities"][0],"description":"Daemon acceptance","toolMode":"none"},"requestedTokens":1000}})).await;
+            "definition":{"name":"Offline pooled Agent","capability":pool["capabilities"][0],"description":"Daemon acceptance","toolMode":"none"},"requestedTokens":1000,"renewalMode":"owner"}})).await;
         let request_id = request["request"]["id"]
             .as_str()
             .expect("pool request id")

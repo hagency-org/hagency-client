@@ -90,7 +90,7 @@ impl AllocationTransport {
         let scope = self.scope(Permission::PublishGrants).await?;
         let grant = self.original_grant(&scope, registry, grant_id).await?;
         let (enrollment, revision, observed) =
-            self.enrollment_observation(&scope, &grant, true).await?;
+            self.enrollment_observation(&scope, &grant, true, true).await?;
         self.require_publishable(&scope, registry, enrollment, grant)
             .await?;
         self.check_scope(&scope, false).await?;
@@ -259,7 +259,7 @@ impl AllocationTransport {
             // Validate current enrollment before the first publication/retry;
             // semantic conflict never causes a replacement local grant.
             let preflight = async {
-                let enrollment = self.enrollment(&scope, &input.receipt, true).await?;
+                let enrollment = self.enrollment_observation(&scope, &input.receipt, true, true).await?.0;
                 self.require_publishable(&scope, registry, enrollment, input.receipt.clone())
                     .await
             }

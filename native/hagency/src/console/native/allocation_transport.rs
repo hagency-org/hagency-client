@@ -316,13 +316,14 @@ impl AllocationTransport {
         grant: &NativeGrantReceipt,
         active: bool,
     ) -> Result<VerifiedManagementEnrollment, NativeError> {
-        Ok(self.enrollment_observation(scope, grant, active).await?.0)
+        Ok(self.enrollment_observation(scope, grant, active, false).await?.0)
     }
     async fn enrollment_observation(
         &self,
         scope: &Scope,
         grant: &NativeGrantReceipt,
         active: bool,
+        publication: bool,
     ) -> Result<(VerifiedManagementEnrollment, u64, u64), NativeError> {
         let reply: ConnectionReply = self
             .request(
@@ -333,6 +334,17 @@ impl AllocationTransport {
             .await?;
         positive(reply.observed_at_ms)?;
         let c = reply.admission.contribution;
+        let r = reply.admission.request;
+        // Pre-admission authority is confined to publication. Reserve/execution
+        // callers use enrollment(), which always requires admitted capacity.
+        let staged = publication && c.publication_first
+            && ((c.state == "draft" && r.state == "draft")
+                || (c.state == "pending_admission" && r.state == "pending"))
+            && r.id == c.request_id && r.kind == "resource_admission"
+            && r.requester_mxid == c.owner_mxid
+            && r.project_id.is_none() && r.allocation_id.is_none()
+            && grant.admission_request_id.as_deref() == Some(c.request_id.as_str())
+            && grant.calendar.is_some();
         if c.id != grant.contribution_id
             || c.owner_mxid != scope.device.owner_mxid()
             || c.executor_device_id != scope.device.device_id()
@@ -340,9 +352,9 @@ impl AllocationTransport {
             || c.executor_generation > scope.device.generation()
             || c.resource_id != grant.resource_id
             || c.revision == 0
-            || reply.admission.request.contribution_id != c.id
+            || r.contribution_id != c.id
             || (active
-                && (c.state != "admitted"
+                && (!(c.state == "admitted" || staged)
                     || c.resource_revision != grant.resource_revision
                     || (c.coordinator_mxid != grant.coordinator_mxid && c.coordinator_mxid != grant.owner_mxid)
                     || c.executor_generation != grant.executor_generation

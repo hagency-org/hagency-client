@@ -82,6 +82,8 @@ pub(in crate::console::native) struct Admission {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(in crate::console::native) struct Contribution {
+    #[serde(default)]
+    pub publication_first: bool,
     pub id: String,
     pub owner_mxid: String,
     pub executor_device_id: String,

@@ -1,6 +1,27 @@
 use super::*;
 use hagency_store::management::IntentOperation;
 
+#[test]
+fn server_management_publication_first_preserves_legacy_wire_and_exact_retry_identity() {
+    let legacy=json!({"operation":"contribute","command_id":"original","resource_id":"resource_one",
+        "expected_revision":"a".repeat(64),"label":"Pool","coordinator_mxid":"@owner:test"});
+    let command:ManagementCommand=serde_json::from_value(legacy.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&command).unwrap(),legacy);
+    let original=command.intent().unwrap().unwrap();
+    let (_,_,body)=ServerOperation::prepare(&command,Some(&resource())).unwrap().request().unwrap();
+    assert!(body.unwrap().get("publicationFirst").is_none());
+    let mut staged=legacy;
+    staged["publication_first"]=json!(true);
+    let command:ManagementCommand=serde_json::from_value(staged.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&command).unwrap(),staged);
+    let (_,path,body)=ServerOperation::prepare(&command,Some(&resource())).unwrap().request().unwrap();
+    assert_eq!(path,"/hagency/api/v1/management/contributions");
+    assert_eq!(body.unwrap()["publicationFirst"],true);
+    // Both wire modes retain the same operation. The serialized original is
+    // separately fingerprinted by the durable intent, so it cannot be swapped.
+    assert_eq!(command.intent().unwrap().unwrap().operation(),original.operation());
+}
+
 fn resource() -> ResourceSummary {
     let budget=hagency_core::allocation::resource_budget(&serde_json::from_value(json!({
         "preset":{"id":"canonical_preset"},"seatId":"canonical_seat","commitments":[]

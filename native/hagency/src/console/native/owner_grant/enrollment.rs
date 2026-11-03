@@ -138,16 +138,21 @@ pub(super) fn validate_admission(
     super::super::key(&c.resource_id)?;
     super::super::key(&c.request_id)?;
     same_server_user(&c.coordinator_mxid, &io.identity.owner)?;
+    // A new pool has its owner's exact terms before administrator approval.
+    // This grants only local reservation/publication authority; every execution
+    // path still requires the central contribution to be admitted.
+    let admitted = c.state == "admitted" && r.state == "approved";
+    let staged = c.publication_first && ((c.state == "draft" && r.state == "draft")
+        || (c.state == "pending_admission" && r.state == "pending"));
     if c.id != id
         || c.owner_mxid != io.identity.owner
         || c.executor_device_id != io.identity.device
         || c.executor_generation != io.device.generation()
-        || c.state != "admitted"
+        || !(admitted || staged)
         || c.request_id != r.id
         || r.contribution_id != c.id
         || r.requester_mxid != c.owner_mxid
         || r.kind != "resource_admission"
-        || r.state != "approved"
         || r.project_id.is_some()
         || r.allocation_id.is_some()
     {
@@ -230,6 +235,7 @@ impl OwnerGrantIntents {
         let calendar = registry.resource_calendar(io.profile.clone(), c.resource_id.clone()).await.map_err(storage)?;
         io.check().await?;
         Ok(OwnerGrantForm {
+            awaiting_admission: c.state != "admitted",
             calendar,
             contribution_id, resource_id: c.resource_id, label: c.label,
             context: OwnerGrantReviewContext {

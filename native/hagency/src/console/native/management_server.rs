@@ -139,6 +139,8 @@ pub enum ManagementCommand {
         expected_revision: i64,
     },
     Contribute {
+        #[serde(default, skip_serializing_if = "publication_first_disabled")]
+        publication_first: bool,
         command_id: String,
         resource_id: String,
         expected_revision: String,
@@ -180,6 +182,7 @@ pub enum ManagementCommand {
         resource_revision: String,
     },
 }
+fn publication_first_disabled(value: &bool) -> bool { !*value }
 impl ManagementCommand {
     pub(super) fn intent(&self) -> Result<Option<hagency_store::management::Intent>, NativeError> {
         use hagency_store::management::{Intent, IntentOperation as Op};
@@ -589,6 +592,7 @@ impl ServerOperation {
                 )
             }
             ManagementCommand::Contribute {
+                publication_first,
                 command_id,
                 resource_id,
                 expected_revision,
@@ -602,15 +606,11 @@ impl ServerOperation {
                 if resource.id != *resource_id || resource.revision != *expected_revision {
                     return Err(failure(409, "management_revision_conflict"));
                 }
-                // Runtime/capabilities are derived from the actual native ledger.
-                // This request advertises no fabricated capacity or readiness.
-                (
-                    Method::POST,
-                    "contributions".into(),
-                    Some(
-                        json!({"commandId":command_id,"resourceId":resource.id,"resourceRevision":resource.revision,"label":label,"runtime":resource.framework,"capabilities":resource.capabilities,"coordinatorMxid":coordinator_mxid}),
-                    ),
-                )
+                // The draft is not actionable until the owner confirms a native
+                // capacity receipt. Keep legacy wire bytes and replay IDs intact.
+                let mut body = json!({"commandId":command_id,"resourceId":resource.id,"resourceRevision":resource.revision,"label":label,"runtime":resource.framework,"capabilities":resource.capabilities,"coordinatorMxid":coordinator_mxid});
+                if *publication_first { body["publicationFirst"] = json!(true); }
+                (Method::POST, "contributions".into(), Some(body))
             }
             ManagementCommand::Reoffer {
                 command_id, contribution_id, expected_contribution_revision,
@@ -1070,6 +1070,7 @@ mod tests {
         assert!(
             ServerOperation::prepare(
                 &ManagementCommand::Contribute {
+                    publication_first: false,
                     command_id: "one".into(),
                     resource_id: "r1".into(),
                     expected_revision: "a".repeat(64),

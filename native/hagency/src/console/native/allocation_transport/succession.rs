@@ -26,7 +26,7 @@ impl AllocationTransport {
         let grant = self.original_grant(&scope, registry, grant_id).await?;
         let link = predecessor(&grant)?.clone();
         let (enrollment, revision, observed) =
-            self.enrollment_observation(&scope, &grant, true).await?;
+            self.enrollment_observation(&scope, &grant, true, true).await?;
         self.require_publishable(&scope, registry, enrollment, grant.clone())
             .await?;
         let view = self.predecessor_view(&scope, &link).await?;
@@ -230,7 +230,7 @@ impl AllocationTransport {
             grant
         } else {
             let preflight = async {
-                let enrollment = self.enrollment(&scope, &input.receipt, true).await?;
+                let enrollment = self.enrollment_observation(&scope, &input.receipt, true, true).await?.0;
                 self.require_publishable(&scope, registry, enrollment, input.receipt.clone())
                     .await
             }

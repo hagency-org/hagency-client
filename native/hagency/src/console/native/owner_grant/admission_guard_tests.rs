@@ -225,3 +225,64 @@ async fn native_owner_grant_legacy_review_keeps_digest_and_refuses_later_round()
         f.stop().await;
     }
 }
+#[tokio::test]
+async fn native_owner_grant_publication_form_prepares_only_the_exact_private_draft() {
+    for legitimate in [true, false] {
+        let mut f = Fixture::new().await;
+        {
+            let mut features = f.publications.lock().unwrap();
+            features.calendar = true;
+            features.admission_receipts = true;
+        }
+        f.service.manager.retire();
+        let mut package = package(8, true);
+        package.permissions.extend([Permission::ReadProviders, Permission::ConnectProviders, Permission::PublishGrants, Permission::ReadIntents]);
+        f.service = OwnerGrantIntents::new(f.owner.management(package).await.unwrap());
+        {
+            let mut a = f.admission.lock().unwrap();
+            a["admission"]["contribution"]["publicationFirst"] = json!(legitimate);
+            a["admission"]["contribution"]["state"] = json!("draft");
+            a["admission"]["contribution"]["revision"] = json!(1);
+            a["admission"]["request"]["state"] = json!("draft");
+            a["admission"]["request"]["revision"] = json!(1);
+        }
+        let form = f.service.publication_form(&f.registry, "fixture_contribution".into()).await;
+        assert_eq!(form.is_ok(), legitimate, "{:?}", form.as_ref().err().map(|e| &e.code));
+        if legitimate {
+            assert!(form.unwrap().awaiting_admission);
+            let proof = f.factory().await.unwrap();
+            let mut choices = Fixture::choices();
+            choices.calendar = Some(hagency_core::recurring_quota::Calendar {
+                cadence: hagency_core::recurring_quota::Cadence::Monthly,
+                time_zone: "America/Los_Angeles".into(),
+            });
+            let review = f.service.prepare(&f.registry, proof, choices).await.unwrap();
+            let id = review.summary().intent_id;
+            assert!(matches!(f.service.confirm(&f.registry, review).await.unwrap().state, OwnerGrantState::Recorded));
+            let transport = crate::console::native::AllocationTransport::new(f.service.manager.clone());
+            let scope = transport.scope(Permission::PublishGrants).await.unwrap();
+            let grant_id = f.history().await.data.records[0].original.selection.grant_id.clone();
+            let grant = f.registry.recover_capacity_grant(scope.profile.clone(), scope.device.device_id().into(), grant_id).await.unwrap().unwrap();
+            assert_eq!(transport.enrollment(&scope, &grant, true).await.err().unwrap().code,
+                "allocation_enrollment_changed", "publication must not authorize execution");
+            let publication = f.publication_review(&id).await;
+            f.service.publication_apply(&f.registry, id.clone(), Some(publication)).await.unwrap();
+            // Admission changes only availability; the same owner receipt
+            // remains the sole capacity authorization, including after restart.
+            {
+                let mut a = f.admission.lock().unwrap();
+                a["admission"]["contribution"]["state"] = json!("admitted");
+                a["admission"]["contribution"]["revision"] = json!(3);
+                a["admission"]["request"]["state"] = json!("approved");
+                a["admission"]["request"]["revision"] = json!(2);
+            }
+            drop(scope);
+            drop(transport);
+            let mut f = f.restart().await;
+            f.enable_publication().await;
+            assert!(f.service.publication_observe(&f.registry,id).await.unwrap().is_some());
+            assert_eq!(f.count("owner_capacity_grants"),1);
+            f.stop().await;
+        } else { f.stop().await; }
+    }
+}

@@ -42,6 +42,7 @@ async fn verify_adopted_provenance_contract(
     use super::super::ManagementCommand;
     let revision = hagency_store::resource_publication_revision(resource).unwrap();
     let command = |id: &str, revision: String| ManagementCommand::Contribute {
+        publication_first: false,
         command_id: id.into(), resource_id: resource.id(), expected_revision: revision,
         label: "Original resource".into(), coordinator_mxid: "@owner:test".into(),
     };
