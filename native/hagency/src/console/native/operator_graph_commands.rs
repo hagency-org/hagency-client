@@ -195,7 +195,7 @@ pub struct OperatorGraphResult {
     pub delivery_state: String,
     pub runtime_delivery_authorized: bool,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreparedOperatorGraph {
     pub command_id: String,
@@ -206,7 +206,8 @@ pub struct PreparedOperatorGraph {
     pub change_json: String,
     pub result: Option<OperatorGraphResult>,
     pub error: Option<String>,
-    pub delivery_state: &'static str,
+    #[serde(deserialize_with = "hagency_store::management::wire_static::one")]
+    pub delivery_state: hagency_store::management::wire_static::Label,
     pub runtime_delivery_authorized: bool,
 }
 fn delivery(change: &OperatorGraphChange) -> &'static str {

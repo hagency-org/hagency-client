@@ -1,5 +1,9 @@
 //! First shared text execution protocol. Wire values confer no native authority.
 use super::*;
+
+pub(super) fn check_period_account(db:&Connection, child:&str, binding:&Binding)->Result<(),Error>{
+    attempt_work::account_budget(db,child,binding)
+}
 // V2 claim and actual-process evidence. Its model-call adapter remains separate.
 mod tool_policy;
 pub use tool_policy::SharedAgentToolPolicy;
@@ -18,6 +22,7 @@ pub use attempt_fence::SharedAttemptFence;
 pub use attempt_process::SharedAttemptProcessSink;
 mod capture;
 mod claim;
+mod initial_unstarted;
 mod process;
 mod recovery;
 mod successor;

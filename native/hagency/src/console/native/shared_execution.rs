@@ -6,6 +6,8 @@ mod approvals;
 mod demand_io;
 mod demands;
 mod io;
+mod guarded;
+use guarded::guarded;
 pub use demands::{
     SharedDemandPoll, SharedDemandProgress, SharedDemandResume, SharedDemandStopReceipt,
     SharedDemandStopResume,
@@ -52,7 +54,7 @@ fn hash(v: &str) -> Result<(), NativeError> {
         Err(invalid())
     }
 }
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, serde::Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum SharedExecutionProgress {
     Idle,
@@ -73,7 +75,7 @@ pub enum SharedExecutionProgress {
         process_state: Option<String>,
     },
 }
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, serde::Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum SharedWorkRecoveryProgress {
     EvidenceMissing {
@@ -268,15 +270,28 @@ impl SharedExecutionTransport {
             });
         }
         let a = b.cleanup(r, c).await?;
-        let local = r
+        let mut local = r
             .recover_shared_process(a, c.clone(), historical.as_ref().and_then(|v| v.2.clone()))
             .await
             .map_err(store)?;
         b.transport.check_scope(&b.scope, false).await?;
-        if local.is_some() {
+        if local.is_none() && !d.execution_allowed && d.cleanup_allowed && historical.is_none()
+            && c.reserve_command.pool_grant.as_ref().is_some_and(|grant| grant.calendar.is_some())
+        {
+            // Only the native atomic no-issuance proof can retire an expired
+            // original. A missing receipt or elapsed lease alone never proves
+            // that a process did not run.
+            let authority = b.cleanup(r, c).await?;
+            local = r.record_unstarted_shared_runtime(authority, c.clone()).await.map_err(store)?;
+            b.transport.check_scope(&b.scope, false).await?;
+        }
+        if local.as_ref().is_some_and(|receipt| receipt.state != "not_started") {
             // Process history alone is insufficient: durable work observations
             // may still need reporting after a lost reply or process restart.
-            run::recover_process_work(&self.io, r, c).await?;
+            run::recover_process_work(&self.io, r, c).await.map_err(|error| {
+                tracing::debug!(status = error.status, code = %error.code, "Shared process historical work recovery pending");
+                error
+            })?;
         }
         if let Some(saved) = &d.recorded {
             saved.validate_for(c).map_err(store)?;
@@ -289,7 +304,10 @@ impl SharedExecutionTransport {
             }
             if let Some(latest) = &local {
                 if latest.ledger_revision > saved.ledger_revision {
-                    run::report_process(&self.io, r, c, latest).await?;
+                    run::report_process(&self.io, r, c, latest).await.map_err(|error| {
+                        tracing::debug!(status = error.status, code = %error.code, "Shared process latest receipt recovery pending");
+                        error
+                    })?;
                     return Ok(SharedExecutionProgress::Recorded {
                         command_id: c.command_id.clone(),
                         observation_id: latest.observation_id.clone(),

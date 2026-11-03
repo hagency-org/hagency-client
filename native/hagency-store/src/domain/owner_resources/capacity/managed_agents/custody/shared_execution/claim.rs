@@ -98,8 +98,9 @@ fn original(
     db: &Connection,
     p: &VerifiedSharedRuntimeDelivery,
 ) -> Result<(Binding, String), Error> {
-    let c = &p.command;
-    let e = &p.enrollment;
+    original_command(db,&p.enrollment,&p.command)
+}
+pub(super) fn original_command(db:&Connection,e:&VerifiedManagementEnrollment,c:&SharedRuntimeCommand)->Result<(Binding,String),Error>{
     let saved: ManagedAgentReservationReceipt = receipt(
         db,
         &e.profile.digest,
@@ -157,6 +158,7 @@ fn history(
 }
 fn preflight(db: &Connection, p: &VerifiedSharedRuntimeDelivery) -> Result<(), Error> {
     let c = &p.command;
+    initial_unstarted::require_not_void(db,c)?;
     authority::original(db, &p.enrollment, &c.agent_reservation_id, false)?;
     if read_resource(db, &c.reserve_command.resource_id)?.framework != "codex" {
         return Err(Error::LocalAuthority);

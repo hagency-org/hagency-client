@@ -16,6 +16,7 @@ fn no_provider_usage() -> crate::Usage {
         input: 0,
         output: 0,
         cached_input: 0,
+        cache_write_input: None,
         reasoning_output: 0,
         accounting_version: "no-provider-call-v1".into(),
     }

@@ -24,7 +24,7 @@ pub struct WebCatalogCommand { pub command_id:String,pub resource_id:String,pub 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all="camelCase")]
 pub struct WebCatalogAgent {pub id:String,pub name:String,pub resource_id:String}
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all="camelCase")]
 pub struct WebCatalogView {
     pub resource_id:String,pub resource_name:String,pub revision:String,
@@ -38,7 +38,7 @@ pub struct WebRoleOffer {
     pub role:String,pub count:Option<i64>,pub budget_cap_per_engagement:Option<i64>,pub rate_cap:Option<i64>,
     pub published:bool,pub qualified:bool,pub catalog_published:bool,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all="camelCase")]
 pub struct WebOfferPage {
     pub resource_id:String,pub revision:String,pub items:Vec<WebRoleOffer>,
@@ -50,7 +50,7 @@ pub struct WebOfferPage {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct WebTrustEntry {pub project_room_id:String,pub display_name:Option<String>}
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all="camelCase")]
 pub struct WebTrustPage {pub resource_id:String,pub revision:String,pub items:Vec<WebTrustEntry>,pub next_after:Option<String>,pub server_auto_approval:bool}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

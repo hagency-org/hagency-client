@@ -310,7 +310,7 @@ impl DomainRepository {
             return Err(Error::Conflict);
         }
         let child: Option<(String, String, String, bool, String)> = tx.query_row(
-            "SELECT id,original_command_digest,original_command,permanent_fence,state FROM owner_managed_agents WHERE profile=?1 AND (agent_id=?2 OR request_id=?3)",
+            "SELECT id,original_command_digest,original_command,permanent_fence,state FROM owner_managed_agents WHERE profile=?1 AND (agent_id=?2 AND request_id=?3)",
             params![e.profile.digest,original.proposed_agent_id,original.request_id],
             |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)),
         ).optional()?;

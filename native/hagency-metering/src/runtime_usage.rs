@@ -117,7 +117,12 @@ pub(crate) fn normalize(
 ) -> Result<(TokenCounts, RuntimeEvidence), MeteringError> {
     usage.total.sanitize(&mut usage.diagnostics);
     usage.last.sanitize(&mut usage.diagnostics);
-    sanitize(&mut usage.context_window, &mut usage.diagnostics);
+    // Model capacity is optional protocol metadata, never consumed tokens.
+    // Preserve absence without diagnosing missing consumption evidence, while
+    // still rejecting an explicitly out-of-range capacity.
+    if usage.context_window.is_some() {
+        sanitize(&mut usage.context_window, &mut usage.diagnostics);
+    }
     let normalization = NormalizationDiagnostics {
         total_inconsistent: usage.total.inconsistent(),
         last_inconsistent: usage.last.inconsistent(),

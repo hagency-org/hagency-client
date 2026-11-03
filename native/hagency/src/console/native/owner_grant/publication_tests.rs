@@ -1,6 +1,7 @@
 #[derive(Default)]
 struct PublicationFixtureState {
     admission_receipts: bool,
+    calendar: bool,
     /// The server accepts one grant per admission per UTC month.
     monthly_regrant: bool,
     allocations_disabled: bool,

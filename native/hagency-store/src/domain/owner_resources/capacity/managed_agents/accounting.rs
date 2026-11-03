@@ -24,6 +24,9 @@ pub(super) struct ChildLiability {
 /// The same bounded accounting calculation backs project and agent settlement.
 /// A stopped process never substitutes for complete provider usage.
 pub(super) fn child(db: &Connection, id: &str) -> Result<ChildLiability, Error> {
+    child_at(db,id,graphs::now_ms()?)
+}
+fn child_at(db: &Connection, id: &str, _at: u64) -> Result<ChildLiability, Error> {
     let (original, state, fenced): (u64, String, bool) = db.query_row(
         "SELECT allocated_tokens,state,permanent_fence FROM owner_managed_agents WHERE id=?1",
         [id],
@@ -185,11 +188,12 @@ pub(in super::super) fn grant_floor(db: &Connection, grant: &str) -> Result<Liab
         value.complete &= child.complete;
         digest.update(child.digest.as_bytes());
     }
-    let mut direct = db.prepare("SELECT id FROM owner_managed_agents WHERE pool_grant_id=?1 ORDER BY id")?;
+    let mut direct = db.prepare("SELECT id FROM owner_managed_agents WHERE pool_grant_id=?1 UNION SELECT child_id AS id FROM owner_managed_periods WHERE grant_id=?1 ORDER BY id")?;
     let children = direct.query_map([grant], |r| r.get::<_,String>(0))?;
     for (count, id) in children.enumerate() {
         if count >= 100_000 { return Err(Error::Capacity); }
-        let child = child(db, &id?)?;
+        let id=id?;
+        let child = child_for_grant(db, &id, grant, graphs::now_ms()?)?;
         value.retained = add(value.retained,child.retained)?;
         value.consumed = add(value.consumed,child.consumed)?;
         value.complete &= child.complete;
@@ -221,13 +225,16 @@ pub(in super::super) fn accounted_children(
             if out.len() >= 100_000 {
                 return Err(Error::Capacity);
             }
+            if periods::enabled(db,&id)? {continue;}
             let fenced = super::super::succession::fenced_at(db, &id)?;
             if super::super::succession::accounting_grant(db, &original, fenced, at)? == grant {
                 out.push((id, fenced.is_some()));
             }
         }
     }
+    out.extend(periods::grant_children(db,grant,at)?);
     out.sort();
+    out.dedup();
     Ok(out)
 }
 /// A grant's hold split for section 3.5: what stays with it when its chain
@@ -282,7 +289,7 @@ pub(in super::super) fn accounted_floor(
         digest.update(child.digest.as_bytes());
     }
     for (id, fenced) in accounted_children(db, grant, at)? {
-        let child = child(db, &id)?;
+        let child = child_for_grant(db, &id, grant, at)?;
         include(&mut floor.total, child.retained, child.consumed, child.complete)?;
         if fenced {
             include(&mut floor.staying, child.retained, child.consumed, child.complete)?;
@@ -351,13 +358,19 @@ pub(in super::super) fn accounted_pool_liability(
     let mut digest = Sha256::new();
     let mut count = 0;
     for (id, _) in accounted_children(db, grant, at)? {
-        let child = child(db, &id)?;
+        let child = child_for_grant(db, &id, grant, at)?;
         include(&mut value, child.retained, child.consumed, child.complete)?;
         digest.update(canonical::encode(&child.manifest)?.as_bytes());
         count += 1;
     }
     value.digest = format!("{:x}", digest.finalize());
     Ok((value, count))
+}
+fn child_for_grant(db:&Connection,id:&str,grant:&str,at:u64)->Result<ChildLiability,Error>{
+    if !periods::enabled(db,id)? {return child_at(db,id,at);}
+    let (retained,consumed,complete)=periods::grant_usage(db,id,grant,at)?;
+    Ok(ChildLiability{retained,consumed,complete,process_state:if complete{"stopped"}else{"unknown"},
+        manifest:json!({"id":id,"grantId":grant,"retainedTokens":retained,"knownConsumedTokens":consumed,"complete":complete})})
 }
 /// E20 for a successor: a carried child's in-flight usage is bounded by its
 /// hold, so it counts as held instead of blocking. Usage that cannot be

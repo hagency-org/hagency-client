@@ -33,14 +33,14 @@ impl WebAlertsQuery {
         Ok(())
     }
 }
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WebAlertCounts {
     pub total: u64,
     pub by_status: BTreeMap<String, u64>,
     pub open_by_severity: BTreeMap<String, u64>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WebAlertsPage {
     pub alerts: Vec<ResourceAlert>,
@@ -51,7 +51,7 @@ pub struct WebAlertsPage {
     pub observed_at_ms: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WebWorkforceLink {
     pub request_id: String,
@@ -66,12 +66,15 @@ pub struct WebWorkforceLink {
     pub period_key: String,
     pub allocated_tokens: u64,
     pub retained_tokens: u64,
+    /// Old-period unresolved resource liability, separate from current allowance.
+    #[serde(default)]
+    pub prior_retained_tokens: u64,
     pub known_consumed_tokens: u64,
     pub usage_complete: bool,
     pub process_state: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WebManagedUsageRow {
     pub request_id: String,
@@ -86,11 +89,14 @@ pub struct WebManagedUsageRow {
     pub period_key: String,
     pub allocated_tokens: u64,
     pub retained_tokens: u64,
+    /// Old-period unresolved resource liability, separate from current allowance.
+    #[serde(default)]
+    pub prior_retained_tokens: u64,
     pub known_consumed_tokens: u64,
     pub usage_complete: bool,
     pub call_count: u64,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WebManagedUsage {
     pub supported: bool,

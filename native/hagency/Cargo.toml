@@ -52,7 +52,11 @@ salvo = { workspace = true, features = ["server", "server-handle", "http1", "tes
 clap = { workspace = true, features = ["derive"] }
 getrandom.workspace = true
 # The executor's own Agent device for encrypted owner-direct Rooms.
-matrix-sdk = { workspace = true, features = ["e2e-encryption", "markdown", "sqlite", "bundled-sqlite", "rustls-aws-lc-rs", "experimental-send-custom-to-device"] }
+matrix-sdk = { workspace = true, features = ["e2e-encryption", "markdown", "sqlite", "bundled-sqlite", "rustls-aws-lc-rs", "experimental-send-custom-to-device", "local-server"] }
+# Shared owner-dashboard DTOs served by the owner daemon (ADR 0012).
+hagency-metering.workspace = true
+# Owner daemon peer identity checks (geteuid) for private local IPC.
+rustix = { workspace = true, features = ["process", "time"] }
 base64.workspace = true
 subtle.workspace = true
 tracing.workspace = true
@@ -68,7 +72,6 @@ matrix-sdk-sqlite = { workspace = true, features = ["state-store", "bundled"] }
 matrix-sdk-store-encryption.workspace = true
 matrix-sdk-crypto.workspace = true
 ruma = { workspace = true, features = ["client-api-c", "events"] }
-hagency-metering.workspace = true
 tokio = { workspace = true, features = ["process"] }
 rmcp = { workspace = true, features = ["client", "transport-async-rw"] }
 rusqlite = { workspace = true, features = ["bundled"] }
@@ -101,3 +104,10 @@ path = "tests/fixtures/sdk_mcp_test_peer.rs"
 
 [lints]
 workspace = true
+
+# Explicit isolated acceptance executable: current_exe must implement the real
+# supervisor guardian entry before dispatching the daemon test subprocess.
+[[test]]
+name = "pooled_daemon_crypto"
+harness = false
+required-features = ["test-support", "shared-budget-execution"]

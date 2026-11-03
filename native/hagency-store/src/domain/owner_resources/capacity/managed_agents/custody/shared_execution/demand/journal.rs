@@ -127,6 +127,7 @@ pub(in super::super) fn save_offer(
     child: &str,
     revision: u64,
 ) -> Result<(), Error> {
+    periods::require_received(db,child,p.offer.received_at_ms)?;
     let digest = p.offer.digest()?;
     let old: Option<(String, String, u64)> = db
         .query_row(
@@ -144,7 +145,8 @@ pub(in super::super) fn save_offer(
         }
         return Ok(());
     }
-    let (total,pending):(u64,u64)=db.query_row("SELECT count(*),COALESCE(sum(NOT EXISTS(SELECT 1 FROM owner_shared_demand_decisions d WHERE d.demand_id=o.id) AND NOT EXISTS(SELECT 1 FROM owner_shared_demand_bindings b WHERE b.demand_id=o.id) AND NOT EXISTS(SELECT 1 FROM owner_shared_budget_demand_terminals t WHERE t.demand_id=o.id)),0) FROM owner_shared_demands o WHERE child_id=?1",[child],|r|Ok((r.get(0)?,r.get(1)?)))?;
+    let period_start=if periods::enabled(db,child)? {periods::current(db,child,graphs::now_ms()?)?.ok_or(Error::LocalAuthority)?.period.start_ms} else {0};
+    let (total,pending):(u64,u64)=db.query_row("SELECT count(*),COALESCE(sum(json_extract(o.offer_payload,'$.receivedAtMs')>=?2 AND NOT EXISTS(SELECT 1 FROM owner_shared_demand_decisions d WHERE d.demand_id=o.id) AND NOT EXISTS(SELECT 1 FROM owner_shared_demand_bindings b WHERE b.demand_id=o.id) AND NOT EXISTS(SELECT 1 FROM owner_shared_budget_demand_terminals t WHERE t.demand_id=o.id)),0) FROM owner_shared_demands o WHERE child_id=?1",params![child,period_start],|r|Ok((r.get(0)?,r.get(1)?)))?;
     if total >= 10_000 || pending >= 100 {
         return Err(Error::Capacity);
     }
@@ -224,6 +226,7 @@ impl OwnerResourceRegistry {
             let e=&proof.enrollment;let child=&original.agent_reservation_id;
             let tx=db.db.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let b=authority::original(&tx,e,child,false)?;
+            periods::require_received(&tx,child,proof.offer.received_at_ms)?;
             if b.digest!=original.reserve_command_digest||proof.offer.assignment_id!=original.assignment_id
                 ||original.reserve_command.executor_device_id!=e.executor_device_id
                 ||original.reserve_command.executor_generation!=e.executor_generation{return Err(Error::LocalAuthority)}
@@ -259,7 +262,7 @@ impl OwnerResourceRegistry {
                     (SharedDemandDisposition::BudgetBlocked,None,Some(description),revision(&tx)?)
                 }else{
                     let id=format!("sdstart_{}",&canonical::digest(&json!({"registry":registry.id,"profile":profile.digest,"demandId":proof.offer.demand_id,"demandDigest":proof.offer.digest()?}))?[..40]);
-                    let competing:Option<String>=tx.query_row("SELECT id FROM owner_shared_start_intents WHERE child_id=?1 AND predecessor_digest=?2",params![child,head_digest],|r|r.get(0)).optional()?;
+                    let competing:Option<String>=tx.query_row("SELECT id FROM owner_shared_start_intents WHERE child_id=?1 AND predecessor_digest=?2 AND period_id IS ?3",params![child,head_digest,periods::current_id(&tx,child)?],|r|r.get(0)).optional()?;
                     if competing.as_ref().is_some_and(|old|old!=&id){
                         (SharedDemandDisposition::Pending,None,None,pending_revision()?)
                     }else{
@@ -334,8 +337,9 @@ pub(in super::super) fn has_older(
     child: &str,
     offer: &SharedDemandOffer,
 ) -> Result<bool, Error> {
+    let start=if periods::enabled(db,child)? {periods::current(db,child,graphs::now_ms()?)?.ok_or(Error::LocalAuthority)?.period.start_ms} else {0};
     Ok(db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM owner_shared_demands o WHERE o.child_id=?1 AND o.id!=?2 AND json_extract(o.offer_payload,'$.controlRevision')=?3 AND NOT EXISTS(SELECT 1 FROM owner_shared_demand_bindings b WHERE b.demand_id=o.id) AND NOT EXISTS(SELECT 1 FROM owner_shared_budget_demand_terminals t WHERE t.demand_id=o.id) AND (json_extract(o.offer_payload,'$.receivedAtMs')<?4 OR (json_extract(o.offer_payload,'$.receivedAtMs')=?4 AND o.id<?2)))",
-        params![child,offer.demand_id,offer.control_revision,offer.received_at_ms],|r|r.get(0),
+        "SELECT EXISTS(SELECT 1 FROM owner_shared_demands o WHERE o.child_id=?1 AND o.id!=?2 AND json_extract(o.offer_payload,'$.controlRevision')=?3 AND json_extract(o.offer_payload,'$.receivedAtMs')>=?5 AND NOT EXISTS(SELECT 1 FROM owner_shared_demand_bindings b WHERE b.demand_id=o.id) AND NOT EXISTS(SELECT 1 FROM owner_shared_budget_demand_terminals t WHERE t.demand_id=o.id) AND (json_extract(o.offer_payload,'$.receivedAtMs')<?4 OR (json_extract(o.offer_payload,'$.receivedAtMs')=?4 AND o.id<?2)))",
+        params![child,offer.demand_id,offer.control_revision,offer.received_at_ms,start],|r|r.get(0),
     )?)
 }

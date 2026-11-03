@@ -4,6 +4,13 @@ async fn native_run_control_adopted_owner_selection_retains_original_device(){ru
 fn handoff_resource() -> hagency_core::project::Resource {
     serde_json::from_value(json!({"presetId":"handoff-original","seatId":"handoff-seat","framework":"codex","model":"gpt-5.6-sol","reasoning":"medium","published":false,"ceiling":{"tokens":1000,"period":"monthly"}})).unwrap()
 }
+fn handoff_provider(case:&str)->VerifiedProviderAccount {
+    if case=="quota" {
+        // This case observes the real Codex metadata protocol after adoption;
+        // its canonical issuer must match that protocol's fixed provider ID.
+        VerifiedProviderAccount::new("codex","openai.chatgpt","synthetic-account",Instant::now()+Duration::from_secs(25)).unwrap()
+    } else {provider_fixture("synthetic-account")}
+}
 fn handoff_package(instance: u64) -> ManagementPackage {
     let mut p = package(instance, false);
     p.permissions.extend([
@@ -51,7 +58,7 @@ async fn run_original_handoff(case: &str) {
         publications.lock().unwrap().device_generation=Some(2);
         publications.lock().unwrap().connections.lose_resume_reply=true;
         &["adopt"]
-    } else if matches!(case,"namespace"|"provenance") { &["adopt"] } else { &["adopt", "recover", "new_device"] };
+    } else if matches!(case,"namespace"|"quota"|"provenance") { &["adopt"] } else { &["adopt", "recover", "new_device"] };
     for phase in phases {
         if *phase == "new_device" {
             publications.lock().unwrap().device_override = Some("replacement-device".into());
@@ -78,13 +85,13 @@ async fn run_original_handoff(case: &str) {
         );
     }
     let published = publications.lock().unwrap();
-    assert_eq!(published.device_posts, if matches!(case,"connection"|"namespace"|"provenance") {1} else {2}, "ordinary source/canonical/process restarts reuse original native device; only explicit fresh login registers another");
+    assert_eq!(published.device_posts, if matches!(case,"connection"|"namespace"|"quota"|"provenance") {1} else {2}, "ordinary source/canonical/process restarts reuse original native device; only explicit fresh login registers another");
     if case == "provenance" {
         assert_eq!(published.connections.contribution_posts, 4);
         assert_eq!(published.posts, 0, "offering does not allocate capacity");
         drop(published);server.abort();return;
     }
-    if case=="namespace" {
+    if matches!(case,"namespace"|"quota") {
         assert_eq!(published.posts,0,"namespace probe does not publish capacity");
         drop(published);server.abort();return;
     }
@@ -234,7 +241,7 @@ async fn adoption_grant_handoff_process_child() {
                         .confirm_resource_activation_fixture_with_gate(
                             review,
                             handoff_package(2),
-                            provider_fixture("synthetic-account"),
+                            handoff_provider(&case),
                             move || !gate_path.exists(),
                         )
                         .await
@@ -256,7 +263,7 @@ async fn adoption_grant_handoff_process_child() {
                 let transfer = sources
                     .prepare_resource_adoption(
                         "original_pending_migration".into(),
-                        provider_fixture("synthetic-account"),
+                        handoff_provider(&case),
                         700,
                     )
                     .await
@@ -323,7 +330,7 @@ async fn adoption_grant_handoff_process_child() {
                 .confirm_resource_activation_fixture(
                     review,
                     handoff_package(2),
-                    provider_fixture("synthetic-account"),
+                    handoff_provider(&case),
                 )
                 .await
                 .unwrap();
@@ -359,7 +366,7 @@ async fn adoption_grant_handoff_process_child() {
                 .confirm_resource_activation_fixture(
                     review,
                     handoff_package(2),
-                    provider_fixture("synthetic-account"),
+                    handoff_provider(&case),
                 )
                 .await
                 .unwrap();
@@ -379,7 +386,7 @@ async fn adoption_grant_handoff_process_child() {
             let transfer = sources
                 .prepare_resource_adoption(
                     "handoff_original".into(),
-                    provider_fixture("synthetic-account"),
+                    handoff_provider(&case),
                     700,
                 )
                 .await
@@ -390,7 +397,7 @@ async fn adoption_grant_handoff_process_child() {
             );
             assert_eq!(
                 transfer
-                    .advance(provider_fixture("synthetic-account"))
+                    .advance(handoff_provider(&case))
                     .await
                     .unwrap()
                     .phase,
@@ -656,15 +663,15 @@ async fn adoption_grant_handoff_process_child() {
         .await
         .unwrap();
     #[cfg(unix)]
-    if case=="namespace" {
+    if matches!(case.as_str(),"namespace"|"quota") {
         // Run the management call as an executor task, as the Desktop host does.
         // Keeping every adoption phase and recovery poll on this test's one
         // synchronous stack can overflow a debug libtest thread despite bounded
         // retained futures. Keep the original stack limit and all assertions.
         let probe_owner=owner.clone();let probe_registry=registry.clone();
-        let probe_profile=profile.clone();let probe_state=state.clone();
+        let probe_profile=profile.clone();let probe_state=state.clone();let quota_only=case=="quota";
         tokio::spawn(async move {
-            verify_namespace_execution_contract(&probe_owner,&probe_registry,&probe_profile,&probe_state).await;
+            verify_namespace_execution_contract(&probe_owner,&probe_registry,&probe_profile,&probe_state,quota_only).await;
         }).await.unwrap();
         drop(access);manager.retire();drop(manager);drop(selection);
         owner.suspend().await.unwrap();drop(owner);registry.shutdown().await.unwrap();return;
@@ -714,7 +721,8 @@ async fn adoption_grant_handoff_process_child() {
             .prepare(
                 &registry,
                 enrollment,
-                OwnerGrantChoices {
+                OwnerGrantChoices { per_request_tokens: None,
+                    calendar: None,
                     allocated_tokens: 300,
                     ..Fixture::choices()
                 },

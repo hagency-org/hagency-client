@@ -96,7 +96,7 @@ fn owner_projection(
     {
         return Err(invalid());
     }
-    let budget = json!({"supported":true,"source":"original_managed_call_accounting","observation":{"effectiveCeilingTokens":link.allocated_tokens,"nativeRetainedTokens":link.retained_tokens,"knownConsumedTokens":link.known_consumed_tokens,"usageComplete":link.usage_complete}});
+    let budget = json!({"supported":true,"source":"original_managed_call_accounting","observation":{"effectiveCeilingTokens":link.allocated_tokens,"nativeRetainedTokens":link.retained_tokens,"priorRetainedTokens":link.prior_retained_tokens,"knownConsumedTokens":link.known_consumed_tokens,"usageComplete":link.usage_complete}});
     let allocation = json!({"supported":true,"scope":"original_binding","observation":{"allocation":{"id":link.allocation_id,"projectId":link.project_id}}});
     let model = link.model_revision_matches.then_some(link.model.clone());
     let reasoning = link
@@ -220,6 +220,7 @@ mod tests {
             period_key: "2026-10".into(),
             allocated_tokens: 100,
             retained_tokens: 100,
+            prior_retained_tokens: 0,
             known_consumed_tokens: 7,
             usage_complete: true,
             call_count: 1,
@@ -281,6 +282,7 @@ mod tests {
             period_key: "2026-10".into(),
             allocated_tokens: 100,
             retained_tokens: 100,
+            prior_retained_tokens: 20,
             known_consumed_tokens: 7,
             usage_complete: true,
             process_state: "stopped".into(),
@@ -294,6 +296,7 @@ mod tests {
             "later configuration is not original runtime identity"
         );
         assert_eq!(v["budget"]["observation"]["knownConsumedTokens"], 7);
+        assert_eq!(v["budget"]["observation"]["priorRetainedTokens"], 20);
         assert_eq!(
             v["allocation"]["observation"]["allocation"]["id"],
             "allocation_original"

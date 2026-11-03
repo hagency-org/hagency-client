@@ -66,7 +66,7 @@ pub fn operator_transitions(status: &str) -> &'static [&'static str] {
 /// One operator task on the wire. Timestamps are the retained ISO-8601 UTC
 /// strings — the retained route serves them and the console renders them, so
 /// this is the wire shape, not an internal figure.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, serde::Deserialize)]
 pub struct OperatorTask {
     pub id: String,
     pub title: String,
@@ -88,7 +88,7 @@ pub struct OperatorTask {
     pub comments: Vec<OperatorTaskComment>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, serde::Deserialize)]
 pub struct OperatorTaskComment {
     pub author: String,
     pub text: String,

@@ -259,7 +259,11 @@ fn amounts(o: &ManagedUsageObservation) -> Result<(u64, bool, bool, bool), Error
             let valid = u.runtime_evidence().is_some_and(|e| {
                 let d = e.usage().diagnostics;
                 let n = e.normalization();
-                !d.invalid && !d.unsupported && !n.total_inconsistent && !n.last_inconsistent
+                !d.missing
+                    && !d.invalid
+                    && !d.unsupported
+                    && !n.total_inconsistent
+                    && !n.last_inconsistent
             });
             clean = valid && u.failure().is_none();
             complete = o.terminal
@@ -384,7 +388,7 @@ impl OwnerResourceRegistry {
             if let Some(old)=replay(&tx,&command,&a.child,&a.child,"fence",&digest)? {a.check(&r)?;return Ok(old);}
             tx.execute("UPDATE owner_managed_agents SET state='fenced',permanent_fence=1 WHERE id=?1",[&a.child])?;
             tx.execute("UPDATE owner_managed_calls SET state='cancelled_before_issue' WHERE child_id=?1 AND state='prepared'",[&a.child])?;
-            let (held,unknown)=match call_budget(&tx,&a.child) { Ok(v)=>v, Err(Error::Capacity)=>(JSON_SAFE_MAX,true), Err(error)=>return Err(error) };
+            let (held,unknown)=match call_budget_all(&tx,&a.child) { Ok(v)=>v, Err(Error::Capacity)=>(JSON_SAFE_MAX,true), Err(error)=>return Err(error) };
             let (consumed,overflow)=known_consumed(&tx,&a.child)?;
             let provision=provision::history(&tx,&a.child)?;
             let provision_unknown=matches!(provision.state.as_str(),"issued"|"unknown");

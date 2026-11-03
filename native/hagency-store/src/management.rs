@@ -72,7 +72,7 @@ impl HostContext {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Permission {
     ReadWebCatalog,
     ManageWebCatalog,
@@ -610,7 +610,7 @@ impl CommandReceipt {
 
 /// Public configuration and ledger observations only. Account homes, credentials,
 /// provider login URLs, bootstrap commands and filesystem paths are excluded.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceSummary {
     pub id: String,
@@ -626,10 +626,11 @@ pub struct ResourceSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub local_name: Option<ResourceLocalName>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourcePage {
-    pub protocol: &'static str,
+    #[serde(deserialize_with = "crate::management::wire_static::one")]
+    pub protocol: crate::management::wire_static::Label,
     pub observed_at_ms: u64,
     pub resources: Vec<ResourceSummary>,
     pub next_after: Option<String>,
@@ -802,3 +803,6 @@ pub use web_overview::{WebAlertsQuery, WebAlertsPage, WebAlertCounts, WebWorkfor
 
 mod web_connections;
 pub use web_connections::{WebConnection, WebConnectionApplicability, WebConnectionPage, WebConnectionResult, WebConnectionCommand, WebConnectionChange, WebConnectionPrivate, web_connection_credential_digest};
+
+#[doc(hidden)]
+pub mod wire_static;

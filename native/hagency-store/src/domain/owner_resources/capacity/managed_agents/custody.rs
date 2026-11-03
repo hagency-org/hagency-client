@@ -82,6 +82,16 @@ impl ManagedAssignmentAuthority {
         }
     }
 }
+
+/// Only a verified period writer may establish this original assignment before
+/// the Agent's first process. Reuse the ordinary pin writer after new credit is
+/// inserted in the same transaction; no history or mismatched pin is replaced.
+pub(super) fn bind_period_assignment(
+    db:&Connection, enrollment:&VerifiedManagementEnrollment, child:&str,
+    assignment:&str, generation:u64,
+)->Result<(),Error>{
+    authority::assignment_for_period(db,enrollment,child,assignment,generation)
+}
 impl ManagedCallAuthority {
     fn check(&self, registry: &Inner) -> Result<(), Error> {
         self.assignment.check(registry)?;

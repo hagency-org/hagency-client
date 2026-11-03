@@ -134,6 +134,10 @@ impl OwnerResourceRegistry {
         let registry = self.0.clone();
         let value=self.0.store.call(32*1024,move|db|{
    a.check(&registry)?;authority::cleanup(&db.db,&a)?;
+   if let Some(value)=initial_unstarted::saved(&db.db,&a.enrollment.profile.digest,&c)? {
+    if observation_id.as_ref().is_none_or(|id|id==&value.observation_id) {a.check(&registry)?;return Ok(Some(value));}
+    return Ok(None);
+   }
    let digest=canonical::digest(&serde_json::to_value(&c)?)?;
    let saved:Option<String>=db.db.query_row("SELECT command_digest FROM owner_shared_runtime_lifetimes WHERE child_id=?1 AND profile=?2",params![a.child,a.enrollment.profile.digest],|r|r.get(0)).optional()?;
    if saved.is_none(){a.check(&registry)?;return Ok(None)}

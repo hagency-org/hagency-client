@@ -12,7 +12,7 @@ pub struct ResourceTemplate {
     pub status: String,
     pub active_engagements: u64,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceTemplatePage {
     pub resource_id: String,
@@ -23,7 +23,7 @@ pub struct ResourceTemplatePage {
     pub roles: Vec<String>,
     pub can_create: bool,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceTemplateDetail {
     pub resource_id: String,

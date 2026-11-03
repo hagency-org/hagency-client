@@ -5,7 +5,7 @@ use crate::console::{device_execution::E2eeDeviceGrant, owned_runtime::e2ee::Age
 use hagency_agent_local::inbox::Dispatch;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::{collections::HashMap, path::PathBuf, sync::LazyLock};
+use std::{collections::HashMap, io::Read, path::{Path, PathBuf}, sync::LazyLock};
 use tokio::sync::Mutex;
 
 static DEVICES: LazyLock<Mutex<HashMap<String, Arc<AgentDevice>>>> =
@@ -294,6 +294,37 @@ struct Sent {
     sent_at_ms: u64,
     content: Value,
 }
+// A delivery record contains the Matrix content, not merely a short secret.
+// Allow the 32 KiB answer + 64 KiB formatted answer with worst-case JSON
+// escaping, plus bounded Matrix identifiers and the delivery projection.
+const MAX_SENT_BYTES: u64 = 640 * 1024;
+
+fn read_sent(path: &Path) -> Result<Option<Sent>, NativeError> {
+    let file = match hagency_store::private::open(path, false) {
+        Ok(file) => file,
+        Err(hagency_store::Error::Io(error))
+            if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(store(error)),
+    };
+    if file.metadata().map_err(hagency_store::Error::from).map_err(store)?.len() > MAX_SENT_BYTES {
+        return Err(invalid());
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_SENT_BYTES + 1).read_to_end(&mut bytes)
+        .map_err(hagency_store::Error::from).map_err(store)?;
+    if bytes.len() as u64 > MAX_SENT_BYTES {
+        return Err(invalid());
+    }
+    serde_json::from_slice(&bytes).map(Some).map_err(|_| invalid())
+}
+
+fn encode_sent(sent: &Sent) -> Result<Vec<u8>, NativeError> {
+    let bytes = serde_json::to_vec(sent).map_err(|_| invalid())?;
+    if bytes.len() as u64 > MAX_SENT_BYTES {
+        return Err(invalid());
+    }
+    Ok(bytes)
+}
 /// The ledger retains the original full receipt locally. Its wire projection
 /// replaces only the answer with a closed Matrix delivery receipt and hashes
 /// that projection separately; retries never confuse the two digests.
@@ -314,9 +345,9 @@ pub(super) async fn wire_receipt(
     hagency_store::private::directory(&dir).map_err(store)?;
     let path = dir.join(sha(&w.id));
     let _send = SENDS.lock().await;
-    let saved = match hagency_store::private::read_secret(&path) {
-        Ok(bytes) => serde_json::from_slice::<Sent>(&bytes).map_err(|_| invalid())?,
-        Err(hagency_store::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+    let saved = match read_sent(&path)? {
+        Some(saved) => saved,
+        None => {
             let authorized: Result<Timed<Value>, NativeError> = b
                 .request(CryptoAction::Send { work: w.id.clone() }.into(), false)
                 .await;
@@ -337,12 +368,11 @@ pub(super) async fn wire_receipt(
                 content:serde_json::to_value(content).map_err(|_|invalid())?,
                 sent_at_ms:std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_|invalid())?.as_millis() as u64,
             };
-            let bytes = serde_json::to_vec(&saved).map_err(|_| invalid())?;
+            let bytes = encode_sent(&saved)?;
             // Atomic replacement makes a crash leave either no receipt or the complete receipt.
             hagency_store::private::replace(&path, &bytes).map_err(store)?;
             saved
         }
-        Err(e) => return Err(store(e)),
     };
     if saved.source_digest != sha(body) {
         return Err(invalid());
@@ -384,4 +414,61 @@ pub(super) async fn wire_receipt(
     wire.body_digest = Some(sha(&saved.body));
     wire.body = Some(saved.body);
     Ok(wire)
+}
+
+#[cfg(test)]
+mod delivery_file_tests {
+    use super::*;
+
+    fn saved(content: Value) -> Sent {
+        Sent {
+            source_digest: "a".repeat(64),
+            body: json!({"algorithm":"m.megolm.v1.aes-sha2","roomId":format!("!{}:example.test", "r".repeat(230)),"eventId":format!("${}", "e".repeat(254)),"delivery":"sent"}).to_string(),
+            sent_at_ms: 1,
+            content,
+        }
+    }
+
+    #[test]
+    fn encrypted_delivery_record_replays_above_short_secret_limit() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("sent");
+        let original = saved(json!({"msgtype":"m.text","body":"offline encrypted answer"}));
+        let bytes = encode_sent(&original).unwrap();
+        assert!(bytes.len() > 512);
+        hagency_store::private::write_new(&path, &bytes).unwrap();
+        assert!(hagency_store::private::read_secret(&path).is_err());
+        let replay = read_sent(&path).unwrap().unwrap();
+        assert_eq!(encode_sent(&replay).unwrap(), bytes);
+    }
+
+    #[test]
+    fn encrypted_delivery_record_accepts_maximum_escaped_content_and_rejects_oversize() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("sent");
+        let original = saved(json!({"msgtype":"m.text","body":"\u{0000}".repeat(32*1024),"formatted_body":"\u{0000}".repeat(64*1024),"format":"org.matrix.custom.html"}));
+        let bytes = encode_sent(&original).unwrap();
+        assert!(bytes.len() > 576 * 1024);
+        hagency_store::private::write_new(&path, &bytes).unwrap();
+        assert_eq!(encode_sent(&read_sent(&path).unwrap().unwrap()).unwrap(), bytes);
+        let oversized = saved(json!({"body":"x".repeat(MAX_SENT_BYTES as usize)}));
+        assert!(encode_sent(&oversized).is_err());
+        hagency_store::private::replace(&path, &vec![b' '; MAX_SENT_BYTES as usize + 1]).unwrap();
+        assert!(read_sent(&path).is_err());
+        assert!(read_sent(&root.path().join("missing")).unwrap().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn encrypted_delivery_record_rejects_public_files_and_symlinks() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("sent");
+        hagency_store::private::write_new(&path, &encode_sent(&saved(json!({"body":"done"}))).unwrap()).unwrap();
+        let link = root.path().join("link");
+        symlink(&path, &link).unwrap();
+        assert!(read_sent(&link).is_err());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(read_sent(&path).is_err());
+    }
 }

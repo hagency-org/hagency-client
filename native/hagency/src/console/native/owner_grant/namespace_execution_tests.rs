@@ -2,11 +2,16 @@
 async fn native_namespace_launch_after_actual_adoption_uses_selected_home_and_stops() {
     run_original_handoff("namespace").await;
 }
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_idle_quota_after_actual_adoption_is_account_bound_and_revocable() {
+    run_original_handoff("quota").await;
+}
 async fn verify_namespace_execution_contract(
     owner: &NativeOwner,
     registry: &OwnerResourceRegistry,
     profile: &str,
     root: &std::path::Path,
+    quota_only: bool,
 ) {
     use hagency_store::management::{PrepareAccount, AccountInventoryQuery, AccountModelQuery};
     use hagency_store::owner_resources::NamespaceEnrollment;
@@ -84,8 +89,16 @@ async fn verify_namespace_execution_contract(
     let python = python.trim();
     assert!(std::path::Path::new(python).is_absolute());
     assert!(!python.contains('\n'));
-    verify_namespace_provider_contract(&manager,registry,&authority,&resource,&namespace,root,python).await;
-    verify_namespace_enrollment_contract(&manager,registry,&authority,query,&namespace,root,profile).await;
+    if quota_only {Box::pin(verify_legacy_idle_quota_contract(owner,registry,&authority,root,python)).await;}
+    Box::pin(verify_namespace_provider_contract(&manager,registry,&authority,&resource,&namespace,root,python)).await;
+    if quota_only {
+        *manager.owner.0.account_logins.executable.lock().unwrap()=Some(root.join("namespace-provider-probe.py"));
+        Box::pin(verify_namespace_idle_quota_contract(&manager,&resource,&namespace)).await;
+        *manager.owner.0.account_logins.executable.lock().unwrap()=None;
+        manager.retire();
+        return;
+    }
+    Box::pin(verify_namespace_enrollment_contract(&manager,registry,&authority,query,&namespace,root,profile)).await;
     let executable = root.join("namespace-runtime-probe.py");
     std::fs::write(&executable,format!("#!{python}\n" )+r#"import os,json,pathlib,sys
 home=pathlib.Path(os.environ['CODEX_HOME'])
@@ -195,6 +208,73 @@ for line in sys.stdin:
     drop(manager);
 }
 
+// Starts with an authentically adopted original resource: this deliberately
+// has no owner_resource_namespaces row, unlike the account-enrollment fixture.
+async fn verify_legacy_idle_quota_contract(
+    owner:&NativeOwner, registry:&OwnerResourceRegistry, authority:&ProfileAuthority,
+    root:&std::path::Path, python:&str,
+) {
+    use std::os::unix::fs::PermissionsExt;
+    let mut package=handoff_package(389);
+    package.permissions.push(Permission::ReadProviders);
+    let manager=owner.management(package).await.unwrap();
+    let resource=registry.resource(authority,handoff_resource().id()).await.unwrap();
+    assert!(registry.resource_namespace(authority.clone(),resource.id.clone(),resource.revision.clone()).await.unwrap().is_none());
+    let (context,_)=manager.authorized().await.unwrap();
+    let device=owner.0.host.console.authorized_device().await.unwrap();
+    let expected=crate::console::owner_provider::paths(root,device.origin(),device.issuer(),device.subject(),device.owner_mxid()).unwrap();
+    let executable=root.join("legacy-idle-quota.py");
+    let script=r#"import json,os,pathlib,sys,time
+root=pathlib.Path(__ROOT__)
+with (root/'legacy-quota-homes').open('a') as f:f.write(os.environ['CODEX_HOME']+'\n')
+for line in sys.stdin:
+ r=json.loads(line);m=r.get('method');i=r.get('id')
+ if i is None:continue
+ with (root/'legacy-quota-methods').open('a') as f:f.write(m+'\n')
+ if m=='initialize':v={}
+ elif m=='config/read':v={'config':{'model_provider':'openai','chatgpt_base_url':'https://chatgpt.com/backend-api','model_providers':{}}}
+ elif m=='account/read':
+  if (root/'legacy-quota-hold').exists():
+   (root/'legacy-quota-waiting').touch()
+   limit=time.monotonic()+5
+   while (root/'legacy-quota-hold').exists() and time.monotonic()<limit:time.sleep(.01)
+  v={'requiresOpenaiAuth':True,'account':{'type':'chatgpt','email':None,'planType':'plus'}}
+ elif m=='account/rateLimits/read':v={'accountId':('different-account' if (root/'legacy-quota-switch').exists() else 'synthetic-account'),'rateLimits':{'primary':{'usedPercent':25,'windowDurationMins':300,'resetsAt':1900000000}}}
+ else:raise Exception('idle probe must not login or start inference')
+ print(json.dumps({'id':i,'result':v}),flush=True)
+"#.replace("__ROOT__",&serde_json::to_string(root).unwrap());
+    std::fs::write(&executable,format!("#!{python}\n{script}")).unwrap();
+    std::fs::set_permissions(&executable,std::fs::Permissions::from_mode(0o700)).unwrap();
+    *owner.0.account_logins.executable.lock().unwrap()=Some(executable);
+    manager.refresh_resource_quota(&resource).await.unwrap();
+    let telemetry=owner.telemetry();
+    let parts=telemetry.parts(now_ms().unwrap(),Default::default()).unwrap();
+    assert_eq!(parts.accounts.len(),1);
+    assert_eq!(parts.accounts[0].plan.as_deref(),Some("plus"));
+    assert!(parts.resources.iter().any(|r|r.resource_id==resource.id&&r.account_id.is_some()&&r.executions==0));
+    let homes=std::fs::read_to_string(root.join("legacy-quota-homes")).unwrap();
+    assert!(homes.lines().all(|home|std::path::Path::new(home)==expected.codex_home));
+    std::fs::write(root.join("legacy-quota-switch"),b"").unwrap();
+    assert!(manager.refresh_resource_quota(&resource).await.is_err(),"a stable different account cannot be attached to this resource");
+    let parts=telemetry.parts(now_ms().unwrap(),Default::default()).unwrap();
+    assert_eq!(parts.accounts.len(),1,"mismatched account report never enters telemetry");
+    assert!(!parts.resources.iter().any(|r|r.resource_id==resource.id&&r.account_id.is_some()));
+    std::fs::remove_file(root.join("legacy-quota-switch")).unwrap();
+    std::fs::write(root.join("legacy-quota-hold"),b"").unwrap();
+    let probe=manager.clone();let id=resource.id.clone();let profile=authority.clone();let store=registry.clone();
+    let pending=tokio::spawn(async move {let resource=store.resource(&profile,id).await.unwrap();probe.refresh_resource_quota(&resource).await});
+    tokio::time::timeout(Duration::from_secs(3),async {
+        while !root.join("legacy-quota-waiting").exists() {tokio::time::sleep(Duration::from_millis(10)).await;}
+    }).await.unwrap();
+    manager.retire();
+    std::fs::remove_file(root.join("legacy-quota-hold")).unwrap();
+    assert!(pending.await.unwrap().is_err(),"retired authority cannot publish a late report");
+    assert!(!telemetry.parts(now_ms().unwrap(),Default::default()).unwrap().resources.iter().any(|r|r.resource_id==resource.id&&r.account_id.is_some()));
+    assert!(manager.authorized().await.is_err());
+    let _=context;
+    *owner.0.account_logins.executable.lock().unwrap()=None;
+}
+
 async fn verify_namespace_provider_contract(
     manager:&crate::native_owner::NativeManagement,
     registry:&OwnerResourceRegistry,
@@ -245,6 +325,21 @@ for line in sys.stdin:
     *manager.owner.0.account_logins.executable.lock().unwrap()=None;
 }
 
+async fn verify_namespace_idle_quota_contract(
+    manager:&crate::native_owner::NativeManagement,
+    resource:&hagency_store::management::ResourceSummary,
+    namespace:&std::path::Path,
+) {
+    manager.refresh_resource_quota(resource).await.unwrap();
+    let reports=manager.owner.telemetry().parts(now_ms().unwrap(),Default::default()).unwrap();
+    assert!(reports.resources.iter().any(|r|r.resource_id==resource.id&&r.account_id.is_some()));
+    std::fs::write(namespace.join("provider-other-quota"),"").unwrap();
+    assert!(manager.refresh_resource_quota(resource).await.is_err(),"an explicit namespace cannot report a replacement account against the original resource");
+    let reports=manager.owner.telemetry().parts(now_ms().unwrap(),Default::default()).unwrap();
+    assert!(!reports.resources.iter().any(|r|r.resource_id==resource.id&&r.account_id.is_some()));
+    std::fs::remove_file(namespace.join("provider-other-quota")).unwrap();
+}
+
 async fn verify_namespace_enrollment_contract(
     manager:&crate::native_owner::NativeManagement,
     registry:&OwnerResourceRegistry,
@@ -275,7 +370,7 @@ async fn verify_namespace_enrollment_contract(
     let mut changed=input.clone();changed.monthly_tokens=2000;
     assert!(manager.enroll_account_resource(changed,Instant::now()+Duration::from_secs(30)).await.is_err());
     assert!(manager.enroll_account_resource(input,Instant::now()).await.is_err());
-    verify_namespace_edit_contract(manager,registry,authority,&result.resource_id,namespace,root,profile).await;
+    Box::pin(verify_namespace_edit_contract(manager,registry,authority,&result.resource_id,namespace,root,profile)).await;
     *manager.owner.0.account_logins.executable.lock().unwrap()=None;
 }
 

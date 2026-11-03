@@ -8,7 +8,8 @@ async fn consent(
     let proof = VerifiedManagementEnrollment::new(a.clone(), format!("enrollment_{round}"),
         "contribution_a".into(), resource.into(), revision, "@coordinator:a.test".into(),
         "device_a".into(), 1, Instant::now() + Duration::from_secs(30)).unwrap();
-    registry.prepare_capacity_grant(proof, OwnerGrantSelection {
+    registry.prepare_capacity_grant(proof, OwnerGrantSelection { per_request_tokens: None,
+        calendar: None,
         command_id: format!("consent_{id}"), grant_id: id.into(),
         coordinator_mxid: "@coordinator:a.test".into(), delegation_expires_at_ms: expires,
         allow_self_approval: false, eligible_managers: vec!["@manager:a.test".into()], allocated_tokens: tokens,

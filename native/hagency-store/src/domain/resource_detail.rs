@@ -32,6 +32,7 @@ impl DomainRepository {
         let config = self.resource_configuration(id)?;
         let profile = config.profile();
         let detail = ResourceDetail {
+            calendar: resource_ceiling::calendar(&self.db, id)?,
             protocol: PROTOCOL,
             observed_at_ms: at,
             resource: self.management_resource(id, at)?,

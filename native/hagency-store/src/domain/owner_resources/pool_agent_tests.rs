@@ -22,11 +22,12 @@ fn proof(p: &ProfileAuthority, g: &NativeGrantReceipt) -> VerifiedManagementEnro
     .with_admission_request(g.admission_request_id.clone().unwrap())
     .unwrap()
 }
-async fn pool_fixture() -> PoolFixture {
+async fn pool_fixture() -> PoolFixture { pool_fixture_limits(700, None).await }
+async fn pool_fixture_limits(total: u64, limit: Option<u64>) -> PoolFixture {
     let temp = tempfile::tempdir().unwrap();
     let registry = OwnerResourceRegistry::open_root(&temp.path().join("owner")).unwrap();
     let profile = authority('a');
-    let resource = enroll(&registry, &profile, "enroll").await;
+    let resource = registry.prepare_enrollment(profile.clone(), "enroll".into(), provider(), "gpt-5.6-sol".into(), Some("medium".into()), total.max(1000), Instant::now()+Duration::from_secs(30)).unwrap().approve().await.unwrap();
     let resource_revision = registry
         .resource(&profile, resource.resource_id.clone())
         .await
@@ -47,14 +48,15 @@ async fn pool_fixture() -> PoolFixture {
     let grant = registry
         .prepare_capacity_grant(
             e,
-            OwnerGrantSelection {
+            OwnerGrantSelection { per_request_tokens: limit,
+                calendar: None,
                 command_id: "pool_consent".into(),
                 grant_id: "pool_grant".into(),
                 coordinator_mxid: profile.account.clone(),
                 delegation_expires_at_ms: graphs::now_ms().unwrap() + 60_000,
                 allow_self_approval: false,
                 eligible_managers: vec!["@manager:a.test".into()],
-                allocated_tokens: 700,
+                allocated_tokens: total,
             },
             Instant::now() + Duration::from_secs(30),
         )
@@ -483,7 +485,7 @@ async fn pool_agent_schema_upgrade_preserves_populated_legacy_holds_and_rolls_ba
                 .unwrap();
         }
     }
-    db.execute_batch("DROP TABLE IF EXISTS owner_shared_decrypted_inputs;DROP TRIGGER IF EXISTS owner_resource_amended_ceiling_retained;DROP TABLE IF EXISTS owner_resource_ceiling_amendments;DROP TABLE IF EXISTS owner_shared_unstarted_attempts;DROP TABLE IF EXISTS owner_shared_budget_demand_terminals;DROP TABLE IF EXISTS owner_shared_tool_policies;PRAGMA user_version=99;CREATE INDEX owner_managed_pool_children ON owner_capacity_grants(id);").unwrap();
+    db.execute_batch("DROP TABLE IF EXISTS owner_shared_unstarted_runtimes;DROP TABLE IF EXISTS owner_shared_decrypted_inputs;DROP TRIGGER IF EXISTS owner_resource_amended_ceiling_retained;DROP TABLE IF EXISTS owner_resource_ceiling_amendments;DROP TABLE IF EXISTS owner_shared_unstarted_attempts;DROP TABLE IF EXISTS owner_shared_budget_demand_terminals;DROP TABLE IF EXISTS owner_shared_tool_policies;PRAGMA user_version=99;CREATE INDEX owner_managed_pool_children ON owner_capacity_grants(id);").unwrap();
     drop(db);
     assert!(OwnerResourceRegistry::open_root(&root).is_err());
     let db = Connection::open(root.join("domain.sqlite3")).unwrap();
@@ -602,4 +604,44 @@ async fn shared_agent_execution_policy_web_switch_is_independent_durable_and_own
         Ok(())
     }).await.unwrap();
     reopened.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn split_pool_limits_reserve_four_agents_reject_over_limit_and_preserve_replay() {
+    let f = pool_fixture_limits(20_000_000, Some(5_000_000)).await;
+    assert_eq!(f.grant.version, 5);
+    assert_eq!(f.grant.allocated_tokens, 20_000_000);
+    assert_eq!(f.grant.request_limit(), 5_000_000);
+    let over = pool_reserve(&f, pool_command(&f, "over_request_limit", 5_000_001)).await;
+    assert_eq!(over.reason.as_deref(), Some("insufficient_capacity"));
+    let first_command = pool_command(&f, "first_of_four", 5_000_000);
+    let first = pool_reserve(&f, first_command.clone()).await;
+    assert_eq!(first.state, "reserved");
+    for id in ["second", "third", "fourth"] {
+        assert_eq!(pool_reserve(&f, pool_command(&f, id, 5_000_000)).await.state, "reserved");
+    }
+    assert_eq!(pool_reserve(&f, first_command).await.ledger_revision, first.ledger_revision);
+    let fifth = pool_reserve(&f, pool_command(&f, "fifth", 1)).await;
+    assert_eq!(fifth.reason.as_deref(), Some("insufficient_capacity"));
+    f.registry.0.store.call(1024, |db| {
+        assert_eq!(db.db.query_row("SELECT SUM(allocated_tokens) FROM owner_managed_agents", [], |r|r.get::<_,u64>(0))?,20_000_000);
+        Ok(())
+    }).await.unwrap();
+}
+
+#[test]
+fn split_pool_limits_wire_rejects_invalid_caps_and_preserves_legacy_bytes() {
+    let v: serde_json::Value = serde_json::from_str(include_str!("pool-grant-calendar-v4.json")).unwrap();
+    let raw = &v[0]["receipt"];
+    let mut grant: NativeGrantReceipt = serde_json::from_value(raw.clone()).unwrap();
+    assert!(grant.supported_shape());
+    assert!(!serde_json::to_value(&grant).unwrap().as_object().unwrap().contains_key("perRequestTokens"));
+    grant.version = 5;
+    grant.allocated_tokens = 20_000_000;
+    grant.per_request_tokens = Some(5_000_000);
+    assert!(grant.supported_shape());
+    for bad in [None, Some(0), Some(20_000_001), Some(u64::MAX)] {
+        grant.per_request_tokens = bad;
+        assert!(!grant.supported_shape());
+    }
 }

@@ -87,7 +87,7 @@ async fn schema92_resources_never_gain_creation_proof_from_reenrollment() {
     // Construct the exact previous schema, preserving the existing resource,
     // provider/seat identity and original receipt. Only this synthetic DB changes.
     let db = Connection::open(root.join("domain.sqlite3")).unwrap();
-    db.execute_batch("DROP TABLE IF EXISTS owner_shared_decrypted_inputs;DROP TABLE IF EXISTS owner_web_catalog_settings; DROP TABLE IF EXISTS owner_operator_graph_recipients; DROP TABLE IF EXISTS owner_operator_graph_outbox; DROP TABLE IF EXISTS owner_operator_graph_commands; DROP TABLE IF EXISTS owner_operator_graphs; DROP TABLE IF EXISTS owner_operator_graph_archive_chunks; DROP TABLE IF EXISTS owner_operator_graph_archives; DROP TABLE owned_dispatch_execution_policies; DROP TABLE approval_binding_incarnations; DROP TRIGGER owner_resource_provenance_immutable; DROP TRIGGER owner_resource_provenance_retained; DROP TABLE owner_resource_provenance; DROP TRIGGER IF EXISTS owner_resource_amended_ceiling_retained;DROP TABLE IF EXISTS owner_resource_ceiling_amendments;DROP TABLE IF EXISTS owner_shared_unstarted_attempts;DROP TABLE IF EXISTS owner_shared_budget_demand_terminals;DROP TABLE IF EXISTS owner_shared_tool_policies;PRAGMA user_version=92;").unwrap();
+    db.execute_batch("DROP TABLE IF EXISTS owner_shared_unstarted_runtimes;DROP TABLE IF EXISTS owner_shared_decrypted_inputs;DROP TABLE IF EXISTS owner_web_catalog_settings; DROP TABLE IF EXISTS owner_operator_graph_recipients; DROP TABLE IF EXISTS owner_operator_graph_outbox; DROP TABLE IF EXISTS owner_operator_graph_commands; DROP TABLE IF EXISTS owner_operator_graphs; DROP TABLE IF EXISTS owner_operator_graph_archive_chunks; DROP TABLE IF EXISTS owner_operator_graph_archives; DROP TABLE owned_dispatch_execution_policies; DROP TABLE approval_binding_incarnations; DROP TRIGGER owner_resource_provenance_immutable; DROP TRIGGER owner_resource_provenance_retained; DROP TABLE owner_resource_provenance; DROP TRIGGER IF EXISTS owner_resource_amended_ceiling_retained;DROP TABLE IF EXISTS owner_resource_ceiling_amendments;DROP TABLE IF EXISTS owner_shared_unstarted_attempts;DROP TABLE IF EXISTS owner_shared_budget_demand_terminals;DROP TABLE IF EXISTS owner_shared_tool_policies;PRAGMA user_version=92;").unwrap();
     drop(db);
     let registry = OwnerResourceRegistry::open_root(&root).unwrap();
     let id = &first.resource_id;
@@ -231,7 +231,8 @@ async fn capacity_grant_exposure_commits_with_receipt_and_rolls_back_on_failure(
     assert_eq!(saved[6], receipt.resource_revision);
     let replay = registry.prepare_capacity_grant(
         enrollment(&registry, &a, id, 1).await,
-        OwnerGrantSelection {
+        OwnerGrantSelection { per_request_tokens: None,
+            calendar: None,
             command_id: "consent_approved".into(),
             grant_id: receipt.grant_id.clone(),
             coordinator_mxid: receipt.coordinator_mxid.clone(),

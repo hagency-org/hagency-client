@@ -66,7 +66,7 @@ fn call_liability(db: &Connection, child: &str) -> Result<(u64, u64, bool, bool)
 // A lost process claim or an explicit unknown observation can hide an effect.
 // Keep its ceiling held until the same process supplies qualified/stopped
 // evidence. Do not confuse this uncertainty with a qualified idle process.
-fn process_unknown(db: &Connection, child: &str) -> Result<bool, Error> {
+pub(in super::super) fn process_unknown(db: &Connection, child: &str) -> Result<bool, Error> {
     Ok(db.query_row(
         "SELECT EXISTS(SELECT 1 FROM owner_shared_runtime_lifetimes l WHERE l.child_id=?1 AND COALESCE((SELECT json_extract(o.payload,'$.state') FROM owner_shared_process_observations o WHERE o.child_id=l.child_id ORDER BY o.ledger_revision DESC LIMIT 1),'unknown') NOT IN('qualified','stopped')) OR EXISTS(SELECT 1 FROM owner_shared_successor_attempts a WHERE a.child_id=?1 AND COALESCE((SELECT json_extract(o.payload,'$.state') FROM owner_shared_successor_observations o WHERE o.attempt_id=a.id ORDER BY o.ledger_revision DESC LIMIT 1),'unknown') NOT IN('qualified','stopped'))",
         [child], |r| r.get(0),
@@ -92,6 +92,23 @@ impl OwnerResourceRegistry {
                     return Err(Error::LocalAuthority);
                 }
                 authority::original(&db.db, &e, &child, true)?;
+                if periods::enabled(&db.db, &child)? {
+                    let current = periods::current(&db.db, &child, graphs::now_ms()?)?;
+                    let usage = periods::usage(&db.db, &child, current.as_ref().map(|p|p.id.as_str()))?;
+                    let original: u64 = db.db.query_row("SELECT allocated_tokens FROM owner_managed_agents WHERE id=?1",[&child],|r|r.get(0))?;
+                    let unknown = process_unknown(&db.db,&child)?;
+                    let ceiling = current.as_ref().map_or(0,|p|p.tokens);
+                    let held = if unknown { usage.held.max(ceiling) } else { usage.held };
+                    let value = AgentBudgetSnapshot {
+                        budget_revision: current.as_ref().map_or(0,|p|p.revision),
+                        budget_digest: current.as_ref().map_or_else(String::new,|p|p.digest.clone()),
+                        original_ceiling_tokens:original,effective_ceiling_tokens:ceiling,
+                        known_consumed_tokens:usage.consumed,retained_tokens:held,
+                        remaining_tokens:ceiling.saturating_sub(held),usage_complete:usage.complete&&!unknown,
+                        execution_supported:true,
+                    };
+                    e.check()?;after(&e.profile,&fence,e.expires)?;return Ok(value);
+                }
                 let h = journal::head(&db.db, &child)?;
                 let (known, held, complete, unrepresentable) = call_liability(&db.db, &child)?;
                 if unrepresentable {

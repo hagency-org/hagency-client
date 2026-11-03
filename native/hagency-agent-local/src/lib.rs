@@ -48,6 +48,7 @@ fn unreported_usage() -> Usage {
         input: 0,
         output: 0,
         cached_input: 0,
+        cache_write_input: None,
         reasoning_output: 0,
         accounting_version: UNREPORTED_ZERO.into(),
     }
@@ -159,13 +160,28 @@ pub struct Usage {
     pub input: u64,
     pub output: u64,
     pub cached_input: u64,
+    /// Included in `input`, just like cached_input. Historical records did
+    /// not retain this category, so absence must remain unknown, not zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_input: Option<u64>,
     pub reasoning_output: u64,
     pub accounting_version: String,
 }
 impl Usage {
+    /// Provider-measured categories for analytics. Reservations and historical
+    /// records without cache-write evidence must never become measured zeros.
+    pub fn category_counts(&self) -> (Option<u64>, Option<u64>, Option<u64>, Option<u64>) {
+        if self.accounting_version == UNREPORTED_ZERO {
+            return (None, None, None, None);
+        }
+        let fresh = self.cache_write_input.and_then(|write|
+            self.input.checked_sub(self.cached_input)?.checked_sub(write));
+        (fresh, Some(self.cached_input), self.cache_write_input, Some(self.output))
+    }
     fn total(&self) -> Result<u64> {
         key(&self.accounting_version)?;
-        if self.cached_input > self.input || self.reasoning_output > self.output {
+        if self.cached_input > self.input || self.reasoning_output > self.output
+            || self.cache_write_input.is_some_and(|write| write > self.input - self.cached_input) {
             return Err(Error::Invalid("usage subcategory exceeds total"));
         }
         bounded(

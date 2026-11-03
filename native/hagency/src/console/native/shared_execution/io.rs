@@ -180,6 +180,10 @@ pub(super) struct Bound {
     namespace: Option<Arc<hagency_store::owner_resources::ResourceNamespace>>,
 }
 impl Io {
+    pub(super) fn hosting_admission(&self) -> Result<Arc<crate::console::hosting::Admission>, NativeError> {
+        let manager = self.manager.upgrade().ok_or_else(|| failure(409, "shared_execution_closed"))?;
+        Ok(manager.owner.0.host.console.hosting_admission())
+    }
     pub(super) fn crypto_directory(&self) -> Result<std::path::PathBuf, NativeError> {
         let manager=self.manager.upgrade().ok_or_else(||failure(409,"shared_execution_closed"))?;
         let root=manager.owner.0.host.console.0.server_login.state_directory().ok_or_else(||failure(409,"shared_crypto_storage_unavailable"))?.join("shared-matrix-devices");

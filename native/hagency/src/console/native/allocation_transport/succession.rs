@@ -9,7 +9,7 @@ fn predecessor(grant: &NativeGrantReceipt) -> Result<&GrantSuccession, NativeErr
     grant
         .succession
         .as_ref()
-        .filter(|_| grant.version == 3 && grant.supported_shape())
+        .filter(|_| matches!(grant.version, 3 | 4 | 5) && grant.supported_shape())
         .ok_or_else(|| failure(409, "native_grant_receipt_required"))
 }
 
@@ -320,6 +320,7 @@ pub(super) fn successor_not_published(code: &str) -> bool {
             | "management_revision_changed"
             | "resource_grant_binding_mismatch"
             | "contribution_executor_changed"
+            | "grant_publication_expired"
             | "invalid_grant_period"
             | "invalid_grant_succession"
             | "grant_succession_window_closed"
@@ -330,4 +331,62 @@ pub(super) fn successor_not_published(code: &str) -> bool {
             | "resource_grant_already_exists"
             | "pool_grant_succession_unavailable"
     )
+}
+
+
+#[derive(Deserialize)]
+#[serde(rename_all="camelCase", deny_unknown_fields)]
+struct ExpiredPublication {
+    status: String,
+    command_id: String,
+    publication_digest: String,
+    receipt_digest: String,
+    grant: Option<ResourceGrantView>,
+    observed_at_ms: u64,
+}
+impl AllocationTransport {
+    /// An expired original can still have committed. Only the authenticated,
+    /// serialized server tombstone is proof it never published; wall-clock
+    /// expiry or a missing response alone never release the native hold.
+    pub(in crate::console::native) async fn expire_successor_publication(
+        &self, registry: &OwnerResourceRegistry, command_id: &str, grant_id: &str,
+        contribution_revision: u64, predecessor_revision: u64,
+    ) -> Result<PublicationObservation, NativeError> {
+        key(command_id)?;
+        positive(contribution_revision)?;
+        positive(predecessor_revision)?;
+        let _lane = self.manager.owner.0.management.mutations.lock().await;
+        let scope = self.scope(Permission::PublishGrants).await?;
+        let grant = self.original_grant(&scope,registry,grant_id).await?;
+        let link = predecessor(&grant)?;
+        if grant.calendar.is_none() {return Err(invalid());}
+        let target = link.predecessor_grant_id.clone();
+        let input = SuccessorPublication {command_id:command_id.into(),expected_contribution_revision:contribution_revision,
+            expected_predecessor_revision:predecessor_revision,receipt:grant.clone()};
+        let body=serde_json::to_value(&input).map_err(|_|invalid())?;
+        let mut intent=Intent::new(IntentOperation::PublishGrantSuccessor,command_id.into(),&input).map_err(storage)?;
+        if self.require_unused_publication {intent=intent.require_unused_grant_publication();}
+        let saved=scope.session.prepare_intent(&scope.context,intent.clone()).await.map_err(storage)?;
+        let reply:ExpiredPublication=self.request(&scope,Operation::ExpirePublication{command_id:command_id.into(),operation:"grant.succeed".into(),target_id:target,publication:body.clone()},true).await?;
+        self.check_scope(&scope,true).await?;
+        if reply.command_id!=command_id || reply.publication_digest!=digest(&body)?
+            || reply.receipt_digest!=digest(&grant)? || reply.observed_at_ms<grant.period_end_ms {return Err(invalid());}
+        match (reply.status.as_str(),reply.grant) {
+            ("published",Some(view)) => {
+                positive(view.revision)?;
+                positive(view.observed_at_ms)?;
+                if view.id!=grant.grant_id || view.receipt_digest!=digest(&grant)? || digest(&view.receipt)?!=digest(&grant)? {return Err(invalid());}
+                if saved.reply.is_none() {scope.session.record_intent_reply(&scope.context,intent,IntentReply::Success(serde_json::to_value(&view).map_err(|_|invalid())?)).await.map_err(storage)?;}
+                self.check_scope(&scope,true).await?;
+                Ok(PublicationObservation::ServerObserved(Box::new(view)))
+            }
+            ("expired_unpublished",None) => {
+                if matches!(saved.reply,Some(IntentReply::Success(_))) {return Err(failure(409,"grant_publication_receipt_missing"));}
+                if saved.reply.is_none() {scope.session.record_intent_reply(&scope.context,intent,IntentReply::Failure{status:409,code:"grant_publication_expired".into()}).await.map_err(storage)?;}
+                self.check_scope(&scope,true).await?;
+                Ok(PublicationObservation::Rejected)
+            }
+            _ => Err(invalid()),
+        }
+    }
 }

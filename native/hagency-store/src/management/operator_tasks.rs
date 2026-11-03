@@ -101,7 +101,7 @@ impl OperatorBoardQuery {
         Ok(())
     }
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OperatorTaskSummary {
     pub id: String,
@@ -131,34 +131,40 @@ impl From<OperatorTask> for OperatorTaskSummary {
         }
     }
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OperatorTaskPage {
     pub write_supported: bool,
-    pub write_operations: Vec<&'static str>,
+    #[serde(deserialize_with = "crate::management::wire_static::many")]
+    pub write_operations: Vec<crate::management::wire_static::Label>,
     pub supported: bool,
-    pub reason: Option<&'static str>,
+    #[serde(deserialize_with = "crate::management::wire_static::optional")]
+    pub reason: Option<crate::management::wire_static::Label>,
     pub tasks: Vec<OperatorTaskSummary>,
     pub next_offset: Option<u64>,
     pub observed_at_ms: u64,
-    pub unavailable: Vec<&'static str>,
+    #[serde(deserialize_with = "crate::management::wire_static::many")]
+    pub unavailable: Vec<crate::management::wire_static::Label>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OperatorTaskDetail {
     pub write_supported: bool,
-    pub write_operations: Vec<&'static str>,
+    #[serde(deserialize_with = "crate::management::wire_static::many")]
+    pub write_operations: Vec<crate::management::wire_static::Label>,
     pub revision: Option<u64>,
     pub supported: bool,
-    pub reason: Option<&'static str>,
+    #[serde(deserialize_with = "crate::management::wire_static::optional")]
+    pub reason: Option<crate::management::wire_static::Label>,
     pub task: Option<OperatorTask>,
     pub next: Vec<String>,
     pub comment_count: usize,
     pub next_comment_offset: Option<usize>,
     pub observed_at_ms: u64,
-    pub unavailable: Vec<&'static str>,
+    #[serde(deserialize_with = "crate::management::wire_static::many")]
+    pub unavailable: Vec<crate::management::wire_static::Label>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OperatorBoardProject {
     pub id: String,
@@ -168,11 +174,12 @@ pub struct OperatorBoardProject {
     pub next_agent_after: Option<String>,
     pub task_lanes: BTreeMap<String, u64>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OperatorBoardPage {
     pub supported: bool,
-    pub reason: Option<&'static str>,
+    #[serde(deserialize_with = "crate::management::wire_static::optional")]
+    pub reason: Option<crate::management::wire_static::Label>,
     pub projects: Vec<OperatorBoardProject>,
     pub next_after: Option<String>,
     pub project_count: u64,
@@ -180,7 +187,8 @@ pub struct OperatorBoardPage {
     pub task_totals: BTreeMap<String, u64>,
     pub observed_at_ms: u64,
     pub stale_after_ms: u64,
-    pub unavailable: Vec<&'static str>,
+    #[serde(deserialize_with = "crate::management::wire_static::many")]
+    pub unavailable: Vec<crate::management::wire_static::Label>,
 }
 fn now() -> u64 {
     std::time::SystemTime::now()

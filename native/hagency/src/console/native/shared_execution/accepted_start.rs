@@ -2,7 +2,7 @@
 use super::*;
 use std::sync::Weak;
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SharedSuccessorReview {
     pub agent_name: String,
@@ -18,21 +18,21 @@ pub struct SharedSuccessorReview {
 }
 /// Immutable display context from the original native reservation. This is not
 /// a start permission and contains no provider identity or credential.
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SharedSuccessorDescription {
     pub agent_name: String,
     pub project_id: String,
     pub assignment_id: String,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SharedSuccessorBlockReason {
     Exhausted,
     UsageUnresolved,
 }
 /// Read-only evidence. A blocked assessment never contains a Start handle.
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SharedSuccessorBudgetReview {
     #[serde(flatten)]

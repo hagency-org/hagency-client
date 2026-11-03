@@ -94,6 +94,8 @@ async fn prepared_with_budget_lifetime(
         tool_mode: "none".into(),
     };
     let c = ManagedAgentReserveCommand {
+            renewal_mode: None,
+            allocation_generation: None,
         version: 1,
         pool_grant: None,
         capability: AGENT_CAPABILITY.into(),

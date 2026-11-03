@@ -12,6 +12,11 @@ mod managed_runtime;
 mod managed_runtime_transport;
 mod shared_execution;
 mod shutdown;
+pub mod telemetry;
+pub use telemetry::{
+    AttachReport, ExecutionPath, OwnerTelemetry, ResourceTelemetry, RuntimeCapability, Support,
+    TelemetryError, TelemetryParts, TelemetryStatus,
+};
 pub use managed_agent_matrix_transport::{ManagedAgentMatrixTransport, ManagedMatrixProgress};
 pub use managed_agent_transport::{ManagedAgentProgress, ManagedAgentTransport};
 pub use managed_runtime_transport::{ManagedRuntimeProgress, ManagedRuntimeTransport};
@@ -111,7 +116,7 @@ pub use reconciliation_sources::{
     SourceRootObservation,
 };
 #[cfg(all(feature = "resource-adoption", any(test, feature = "test-support")))]
-pub use resource_activation::initialize_resource_activation_fixture;
+pub use resource_activation::{initialize_resource_activation_fixture, resource_activation_fixture_root};
 #[cfg(feature = "resource-adoption")]
 pub use resource_activation::{
     ResourceActivationContext, ResourceActivationResource, ResourceActivationReview,
@@ -867,6 +872,9 @@ enum MatrixStartup {
     },
 }
 impl NativeOwner {
+    pub(crate) fn set_hosting_admission(&self, admission: Arc<super::hosting::Admission>) {
+        *self.0.host.console.0.hosting.lock().unwrap_or_else(|p| p.into_inner()) = admission;
+    }
     fn require_regular_mode(&self) -> Result<(), NativeError> {
         #[cfg(feature = "resource-adoption")]
         if self.0.adoption_recovery.get().is_some() {
@@ -1258,6 +1266,25 @@ impl NativeOwner {
             owner: d.owner_mxid().into(),
         })
     }
+    /// Observation for hosting dashboards: shared-execution tasks this owner
+    /// currently retains. `None` when the count cannot be read.
+    pub fn active_shared_executions(&self) -> Option<u64> {
+        self.0.shared_execution.live()
+    }
+    /// Owner telemetry handle (usage ledger and provider quota windows) fed
+    /// by this owner's verified shared-execution observations. Attach
+    /// persistence with [`OwnerTelemetry::attach_store`].
+    pub fn telemetry(&self) -> OwnerTelemetry {
+        let telemetry = self.0.shared_execution.telemetry();
+        *self.0.host.console.0.dashboard_telemetry.lock().unwrap_or_else(|e| e.into_inner()) = Some(telemetry.clone());
+        telemetry
+    }
+    /// The existing public OAuth registration, for an independent daemon login.
+    /// Does not return tokens, acquire execution, or change native device IDs.
+    pub fn matrix_resume_client_id(state: &Path, origin: &str, owner: &str) -> Result<String, NativeError> {
+        super::server_login::ServerLogin::resume_client_id(state, origin, owner)
+            .map_err(|code| failure(409, code))
+    }
     pub fn retire(&self) {
         self.0.account_logins.close();
         self.0.shared_execution.close();
@@ -1332,6 +1359,18 @@ impl NativeOwner {
             return configuration::remote(self, command).await;
         }
         let _guard = self.0.calls.lock().await;
+        self.execute_locked(command).await
+    }
+    /// Per-controller admission without retiring the shared owner. A queued
+    /// call rechecks its lease after acquiring the ordinary owner command lock.
+    pub async fn execute_guarded(&self, command: Command, admitted: Arc<dyn Fn() -> bool + Send + Sync>) -> Result<Value, NativeError> {
+        self.require_regular_mode()?;
+        if configuration::is_wrapper(&command) {
+            if !admitted() { return Err(failure(401, "management_scope_changed")); }
+            return configuration::remote(self, command).await;
+        }
+        let _guard = self.0.calls.lock().await;
+        if !admitted() { return Err(failure(401, "management_scope_changed")); }
         self.execute_locked(command).await
     }
     async fn execute_locked(&self, command: Command) -> Result<Value, NativeError> {

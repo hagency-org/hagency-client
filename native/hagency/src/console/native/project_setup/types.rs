@@ -102,7 +102,7 @@ pub struct SetupCandidates {
     pub space_id: Option<String>,
     pub room_id: Option<String>,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SetupProgress {
     pub readiness: ProjectReadiness,
@@ -113,13 +113,13 @@ pub struct SetupProgress {
     pub failed_commands: Vec<FailedCommand>,
     pub blocker: Option<String>,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StageProgress {
     pub state: String,
     pub room_id: Option<String>,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FailedCommand {
     pub command_id: String,

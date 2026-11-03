@@ -251,7 +251,7 @@ impl DomainRepository {
             return Ok(old);
         }
         verify_original(&tx, e, original, d.project.as_ref())?;
-        let old:Option<(String,String,u64)>=tx.query_row("SELECT original_command_digest,original_command,fence_revision FROM owner_managed_fences WHERE profile=?1 AND (agent_id=?2 OR request_id=?3)",params![e.profile.digest,original.proposed_agent_id,original.request_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+        let old:Option<(String,String,u64)>=tx.query_row("SELECT original_command_digest,original_command,fence_revision FROM owner_managed_fences WHERE profile=?1 AND (agent_id=?2 AND request_id=?3)",params![e.profile.digest,original.proposed_agent_id,original.request_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
         let encoded = canonical::encode(&serde_json::to_value(original)?)?;
         if old
             .as_ref()
@@ -259,7 +259,7 @@ impl DomainRepository {
         {
             return Err(Error::Conflict);
         }
-        let child:Option<(String,String,String)>=tx.query_row("SELECT id,original_command_digest,original_command FROM owner_managed_agents WHERE profile=?1 AND (agent_id=?2 OR request_id=?3)",params![e.profile.digest,original.proposed_agent_id,original.request_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+        let child:Option<(String,String,String)>=tx.query_row("SELECT id,original_command_digest,original_command FROM owner_managed_agents WHERE profile=?1 AND (agent_id=?2 AND request_id=?3)",params![e.profile.digest,original.proposed_agent_id,original.request_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
         if child
             .as_ref()
             .is_some_and(|(_, digest, raw)| digest != &c.reserve_command_digest || raw != &encoded)
@@ -277,7 +277,7 @@ impl DomainRepository {
                 100_000,
             )?;
             tx.execute(
-                "INSERT INTO owner_managed_fences(profile,agent_id,request_id,original_command_id,original_command_digest,original_command,project_reservation_id,executor_device_id,fence_revision,pool_grant_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                "INSERT INTO owner_managed_fences(profile,agent_id,request_id,original_command_id,original_command_digest,original_command,project_reservation_id,executor_device_id,fence_revision,pool_grant_id,allocation_generation) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
                 params![
                     e.profile.digest,
                     original.proposed_agent_id,
@@ -288,7 +288,8 @@ impl DomainRepository {
                     original.pool_grant.is_none().then_some(&original.allocation_id),
                     e.executor_device_id,
                     fence_revision,
-                    original.pool_grant.as_ref().map(|g| &g.grant_id)
+                    original.pool_grant.as_ref().map(|g| &g.grant_id),
+                    original.allocation_generation()
                 ],
             )?;
         }

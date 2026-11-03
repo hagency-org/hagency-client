@@ -3,6 +3,10 @@ use salvo::http::Method;
 use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
 
+#[cfg(unix)]
+#[path = "daemon_lifecycle.rs"]
+mod daemon_lifecycle;
+
 #[derive(Clone)]
 struct OAuthFixture {
     origin: String,

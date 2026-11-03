@@ -20,6 +20,7 @@ include!("admission_guard_tests.rs");
 include!("publication_tests.rs");
 include!("publication_observation_tests.rs");
 include!("succession_tests.rs");
+include!("recurring_tests.rs");
 #[cfg(feature = "resource-adoption")]
 include!("adoption_tests.rs");
 #[cfg(feature = "resource-adoption")]
@@ -160,6 +161,7 @@ async fn server() -> (
                         } else if state.admission_receipts {
                             vec!["admission-bound-grants-v2"]
                         } else { vec!["project-reservations-v1"] };
+                        if state.calendar && !state.allocations_disabled { features.push("calendar-grants-v1"); }
                         if state.succession && !state.allocations_disabled {
                             features.push("pool-grant-succession-v1");
                         }
@@ -308,7 +310,8 @@ impl Fixture {
         }
     }
     fn choices() -> OwnerGrantChoices {
-        OwnerGrantChoices {
+        OwnerGrantChoices { per_request_tokens: None,
+            calendar: None,
             coordinator_mxid: "@owner:test".into(),
             delegation_expires_at_ms: now_ms().unwrap() + 60000,
             allow_self_approval: false,
@@ -713,7 +716,8 @@ async fn native_owner_grant_intent_writer_guard_rechecks_history_after_review() 
         .registry
         .prepare_capacity_grant(
             f.enrollment().await,
-            OwnerGrantSelection {
+            OwnerGrantSelection { per_request_tokens: None,
+                calendar: None,
                 command_id: "concurrent_native_command".into(),
                 grant_id: "concurrent_native_grant".into(),
                 coordinator_mxid: choices.coordinator_mxid,
@@ -1121,7 +1125,8 @@ async fn native_owner_grant_review_snapshot_changed_budget_requires_same_intent_
     f.registry
         .prepare_capacity_grant(
             other,
-            OwnerGrantSelection {
+            OwnerGrantSelection { per_request_tokens: None,
+                calendar: None,
                 command_id: "competing_review_budget".into(),
                 grant_id: "competing_review_budget".into(),
                 coordinator_mxid: "@owner:test".into(),

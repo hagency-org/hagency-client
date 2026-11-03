@@ -215,7 +215,7 @@ impl History {
             r.state != State::Declined
                 && !void.contains(&r.original.selection.grant_id)
                 && r.original.binding.contribution_id == original.binding.contribution_id
-                && !(original.receipt_version == 2
+                && !(original.receipt_version >= 2
                     && r.state == State::Recorded
                     && prior.contains(&r.original.selection.grant_id)
                     && (r.original.admission.as_ref().map(|a| &a.request_id)

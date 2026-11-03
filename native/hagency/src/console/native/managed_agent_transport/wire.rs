@@ -4,24 +4,28 @@ use super::*;
 pub(super) enum Command {
     Reserve(ManagedAgentReserveCommand),
     Fence(ManagedAgentFenceCommand),
+    RenewPeriod(ManagedAgentPeriodRenewCommand),
 }
 impl Command {
     pub fn id(&self) -> &str {
         match self {
             Self::Reserve(c) => &c.command_id,
             Self::Fence(c) => &c.command_id,
+            Self::RenewPeriod(c) => &c.command_id,
         }
     }
     pub fn reserve(&self) -> &ManagedAgentReserveCommand {
         match self {
             Self::Reserve(c) => c,
             Self::Fence(c) => &c.reserve_command,
+            Self::RenewPeriod(c) => &c.reserve_command,
         }
     }
     pub fn validate(&self, owner: &str) -> Result<(), NativeError> {
         match self {
             Self::Reserve(c) => c.validate(owner),
             Self::Fence(c) => c.validate(owner),
+            Self::RenewPeriod(c) => c.validate(owner),
         }
         .map_err(|_| invalid())
     }
@@ -31,12 +35,14 @@ impl Command {
 pub(super) enum Receipt {
     Reserve(ManagedAgentReservationReceipt),
     Fence(ManagedAgentFenceReceipt),
+    RenewPeriod(ManagedAgentPeriodReceipt),
 }
 impl Receipt {
     pub fn revision(&self) -> u64 {
         match self {
             Self::Reserve(r) => r.ledger_revision,
             Self::Fence(r) => r.ledger_revision,
+            Self::RenewPeriod(r) => r.ledger_revision,
         }
     }
     pub fn validate(&self, c: &Command) -> Result<(), NativeError> {
@@ -111,6 +117,7 @@ impl Receipt {
                         _ => false,
                     }
             }
+            (Self::RenewPeriod(r), Command::RenewPeriod(c)) => r.validate_for(c).is_ok(),
             _ => false,
         };
         if !valid || self.revision() == 0 || self.revision() > hagency_core::JSON_SAFE_MAX {

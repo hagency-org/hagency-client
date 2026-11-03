@@ -4,7 +4,7 @@ use crate::operator_graphs::{GraphError, reader};
 use hagency_store::owner_resources::graph_archives::OperatorGraphArchiveReceipt;
 use serde::Serialize;
 
-#[derive(Serialize)]
+#[derive(Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphHistoryArchives {
     pub supported: bool,

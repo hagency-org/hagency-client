@@ -6,7 +6,7 @@ use hagency_store::management::{
 };
 use serde::Serialize;
 
-#[derive(Serialize)]
+#[derive(Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreparedOperatorTask {
     pub command_id: String,

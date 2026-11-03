@@ -93,10 +93,9 @@ impl OwnerGrantIntents {
             let now = now_ms()?;
             let r = &head.effective;
             if !head.open
-                || !matches!(r.version, 2 | 3)
+                || !matches!(r.version, 2 | 3 | 4 | 5)
                 || now < r.period_start_ms
-                || now >= r.period_end_ms
-                || now >= r.delegation_expires_at_ms
+                || (r.calendar.is_none() && (now >= r.period_end_ms || now >= r.delegation_expires_at_ms))
             {
                 return Err(predecessor_required());
             }
@@ -232,7 +231,9 @@ impl OwnerGrantIntents {
         }
         let _lane = self.manager.owner.0.management.mutations.lock().await;
         io.check().await?;
-        let selection = OwnerGrantSelection {
+        if choices.per_request_tokens.is_some() && !Box::pin(self.supports_split_limits(&io)).await? { return Err(failure(409,"management_pool_limits_required")); }
+        let selection = OwnerGrantSelection { per_request_tokens: choices.per_request_tokens,
+            calendar: choices.calendar,
             command_id: random_id()?,
             grant_id: random_id()?,
             coordinator_mxid: choices.coordinator_mxid,
@@ -263,7 +264,7 @@ impl OwnerGrantIntents {
             intent_id: random_id()?,
             binding,
             admission: Some(admission.clone()),
-            receipt_version: 3,
+            receipt_version: if consent.selection().per_request_tokens.is_some() { 5 } else if p.calendar.is_some() { 4 } else { 3 },
             selection: Selection::from_native(consent.selection()),
             period: Period::from_native(consent.period()),
             succession: Some(OriginalSuccession {

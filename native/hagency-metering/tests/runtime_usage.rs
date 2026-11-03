@@ -88,6 +88,45 @@ fn native_metering_runtime_pinned_categories() {
 }
 
 #[test]
+fn native_metering_runtime_optional_capacity_and_unknown_history() {
+    let mut usage = pinned();
+    usage.context_window = None;
+    let observation = UsageObservation::codex_runtime(usage).unwrap();
+    assert!(
+        !observation
+            .runtime_evidence()
+            .unwrap()
+            .usage()
+            .diagnostics
+            .missing
+    );
+    assert_eq!(
+        observation.counts().unwrap().display_volume().unwrap(),
+        Some(110)
+    );
+    assert!(observation.incomplete());
+    assert!(observation.runtime_evidence().unwrap().stream_incomplete());
+
+    // Only the live protocol decoder knows omission means the schema default.
+    // Generic DTOs, including historic observations, retain unknown cache writes.
+    usage.total.cache_write_input_tokens = None;
+    let observation = UsageObservation::codex_runtime(usage).unwrap();
+    let counts = observation.counts().unwrap();
+    assert_eq!(counts.cache_write, None);
+    assert_eq!(counts.input, None);
+    assert_eq!(counts.output, Some(10));
+    assert!(
+        observation
+            .runtime_evidence()
+            .unwrap()
+            .usage()
+            .diagnostics
+            .missing
+    );
+    assert!(observation.incomplete());
+}
+
+#[test]
 fn native_metering_runtime_unknown_and_invalid() {
     let empty = UsageObservation::codex_runtime(CodexUsage::default()).unwrap();
     assert_eq!(

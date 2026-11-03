@@ -21,10 +21,13 @@ impl ResourceDetailQuery {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceDetail {
-    pub protocol: &'static str,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar: Option<hagency_core::recurring_quota::Calendar>,
+    #[serde(deserialize_with = "crate::management::wire_static::one")]
+    pub protocol: crate::management::wire_static::Label,
     pub observed_at_ms: u64,
     pub resource: ResourceSummary,
     pub ceiling: Option<Ceiling>,
@@ -43,7 +46,7 @@ pub struct ResourceDetail {
 
 /// Current readback for a monthly-maximum amendment, never authority: the
 /// native writer repeats every check when it records the amendment.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CeilingAmendment {
     pub allowed: bool,
@@ -61,7 +64,7 @@ pub struct CeilingAmendment {
     pub per_request_tokens: Option<u64>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CeilingAmendmentBlocker {
     /// Never offered, published or committed: change the definition (or
@@ -73,7 +76,7 @@ pub enum CeilingAmendmentBlocker {
     ReadOnly,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceEditing {
     pub allowed: bool,
@@ -81,7 +84,7 @@ pub struct ResourceEditing {
     pub reason: Option<ResourceEditBlocker>,
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResourceEditBlocker {
     ContributionHistoryNotProven,

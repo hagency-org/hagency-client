@@ -1,5 +1,5 @@
-//! Received counters only. Normalization and execution attribution belong above
-//! runtime; these values do not prove provider billing or arithmetic consistency.
+//! Protocol-decoded counters only. Normalization and execution attribution belong
+//! above runtime; these values do not prove billing or arithmetic consistency.
 use serde_json::{Map, Value};
 
 const MAX_COUNTER: u64 = 9_007_199_254_740_991;
@@ -89,8 +89,13 @@ fn object<'a>(
             diagnostics.unsupported |= fields.keys().any(|key| !allowed.contains(&key.as_str()));
             Some(fields)
         }
-        None | Some(Value::Null) => {
+        None => {
             diagnostics.missing = true;
+            None
+        }
+        Some(Value::Null) => {
+            diagnostics.missing = true;
+            diagnostics.invalid = true;
             None
         }
         _ => {
@@ -101,8 +106,13 @@ fn object<'a>(
 }
 fn counter(value: Option<&Value>, diagnostics: &mut UsageDiagnostics) -> Option<u64> {
     match value {
-        None | Some(Value::Null) => {
+        None => {
             diagnostics.missing = true;
+            None
+        }
+        Some(Value::Null) => {
+            diagnostics.missing = true;
+            diagnostics.invalid = true;
             None
         }
         Some(value) => match value.as_u64().filter(|&n| n <= MAX_COUNTER) {
@@ -116,7 +126,18 @@ fn counter(value: Option<&Value>, diagnostics: &mut UsageDiagnostics) -> Option<
 }
 fn breakdown(value: Option<&Value>, diagnostics: &mut UsageDiagnostics) -> UsageBreakdown {
     let fields = object(value, &COUNTERS, diagnostics);
-    UsageBreakdown(COUNTERS.map(|key| counter(fields.and_then(|v| v.get(key)), diagnostics)))
+    UsageBreakdown(COUNTERS.map(|key| {
+        // Codex 0.166.0's generated v2 TokenUsageBreakdown schema declares
+        // cacheWriteInputTokens optional with default 0 (integer, not null).
+        // Apply that wire default only to an omitted member of an actual
+        // breakdown object. Missing objects and explicit invalid values remain
+        // unknown. Generic normalized DTOs and stored history get no default.
+        if key == "cacheWriteInputTokens" && fields.is_some_and(|v| !v.contains_key(key)) {
+            Some(0)
+        } else {
+            counter(fields.and_then(|v| v.get(key)), diagnostics)
+        }
+    }))
 }
 pub(super) fn project(params: &Value) -> UsageEvidence {
     let mut diagnostics = UsageDiagnostics::default();
@@ -132,10 +153,12 @@ pub(super) fn project(params: &Value) -> UsageEvidence {
     );
     let total = breakdown(usage.and_then(|v| v.get("total")), &mut diagnostics);
     let last = breakdown(usage.and_then(|v| v.get("last")), &mut diagnostics);
-    let context_window = counter(
-        usage.and_then(|v| v.get("modelContextWindow")),
-        &mut diagnostics,
-    );
+    // The same schema makes modelContextWindow optional and nullable. Capacity
+    // absence is not missing consumption evidence; malformed capacity is invalid.
+    let context_window = match usage.and_then(|v| v.get("modelContextWindow")) {
+        None | Some(Value::Null) => None,
+        value => counter(value, &mut diagnostics),
+    };
     UsageEvidence {
         total,
         last,

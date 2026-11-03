@@ -596,6 +596,7 @@ impl Counters {
             input: sub(self.input, before.input)?,
             output: sub(self.output, before.output)?,
             cached_input: sub(self.cached, before.cached)?,
+            cache_write_input: Some(0),
             reasoning_output: sub(self.reasoning, before.reasoning)?,
             accounting_version: "codex-app-server-0.160/cumulative-input-output-v1".into(),
         })
@@ -1050,6 +1051,22 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Session<R, W> {
         queue: &ApprovalQueue,
         started: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<Completed> {
+        self.run_with_started_observed(ledger, owner, scope, call, dispatch, input, mode, queue, started, None).await
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_with_started_observed(
+        &mut self,
+        ledger: &mut Ledger,
+        owner: &str,
+        scope: &Scope,
+        call: &str,
+        dispatch: &str,
+        input: &str,
+        mode: BudgetMode,
+        queue: &ApprovalQueue,
+        started: Option<tokio::sync::oneshot::Sender<()>>,
+        observer: Option<&(dyn Fn(&Usage) + Send + Sync)>,
+    ) -> Result<Completed> {
         ledger.owner(owner)?;
         if self.bound_scope.as_ref() != Some(scope) {
             return Err(Error::Protocol("run scope differs from opened context"));
@@ -1115,6 +1132,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Session<R, W> {
             .and_then(|v| v);
         match result {
             Ok((completed, counters)) => {
+                if let Some(observer) = observer { observer(&completed.usage); }
                 // usage and baseline must commit atomically: otherwise a crash after
                 // settle could count the prior turn again on the next resume.
                 if let Err(error) = charge.ledger.settle_codex(

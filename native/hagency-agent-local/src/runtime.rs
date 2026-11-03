@@ -519,10 +519,26 @@ impl Session {
         queue: &ApprovalQueue,
         started: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<Completed> {
+        self.run_with_started_observed(ledger, owner, scope, call, dispatch, input, mode, queue, started, None).await
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_with_started_observed(
+        &mut self,
+        ledger: &mut Ledger,
+        owner: &str,
+        scope: &Scope,
+        call: &str,
+        dispatch: &str,
+        input: &str,
+        mode: BudgetMode,
+        queue: &ApprovalQueue,
+        started: Option<tokio::sync::oneshot::Sender<()>>,
+        observer: Option<&(dyn Fn(&Usage) + Send + Sync)>,
+    ) -> Result<Completed> {
         if let Self::Codex(session) = self {
             return session
-                .run_with_started(
-                    ledger, owner, scope, call, dispatch, input, mode, queue, started,
+                .run_with_started_observed(
+                    ledger, owner, scope, call, dispatch, input, mode, queue, started, observer,
                 )
                 .await;
         }
@@ -629,6 +645,10 @@ impl Session {
                         .cached_input
                         .checked_sub(prior.cached_input)
                         .ok_or(Error::Unknown)?;
+                    usage.cache_write_input = match (usage.cache_write_input, prior.cache_write_input) {
+                        (Some(current), Some(prior)) => Some(current.checked_sub(prior).ok_or(Error::Unknown)?),
+                        _ => None,
+                    };
                 }
                 absolute
             } else {
@@ -646,12 +666,17 @@ impl Session {
                         .cached_input
                         .checked_add(prior.cached_input)
                         .ok_or(Error::Unknown)?;
+                    absolute.cache_write_input = match (absolute.cache_write_input, prior.cache_write_input) {
+                        (Some(current), Some(prior)) => Some(current.checked_add(prior).ok_or(Error::Unknown)?),
+                        _ => None,
+                    };
                 }
                 serde_json::to_string(&absolute)?
             }
         } else {
             String::new()
         };
+        if let Some(observer) = observer { observer(&usage); }
         charge
             .ledger
             .settle_external(scope, call, &usage, context, session, &counters)?;
@@ -874,6 +899,7 @@ async fn run_claude(
                                 .ok_or(Error::Unknown)?,
                             output,
                             cached_input: cache,
+                            cache_write_input: Some(write),
                             reasoning_output: 0,
                             accounting_version: "claude-reported-v1".into(),
                         },
@@ -1058,6 +1084,7 @@ async fn run_octos(
                             .ok_or(Error::Unknown)?,
                         output,
                         cached_input: cache,
+                        cache_write_input: Some(write),
                         reasoning_output: 0,
                         accounting_version: "octos-reported-v1".into(),
                     },

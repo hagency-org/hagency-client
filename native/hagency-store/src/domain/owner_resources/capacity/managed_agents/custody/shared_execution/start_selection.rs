@@ -136,7 +136,7 @@ impl OwnerResourceRegistry {
         let expires = p.expires;
         let result=self.0.store.call(64*1024,move|db|{
             profile.check()?;
-            let id:Option<String>=db.db.query_row("SELECT s.id FROM owner_shared_start_intents s JOIN owner_shared_runtime_lifetimes l ON l.child_id=s.child_id WHERE s.profile=?1 AND l.profile=?1 AND l.assignment_id=?2 AND NOT EXISTS(SELECT 1 FROM owner_shared_demand_decisions d WHERE d.start_intent_id=s.id) ORDER BY s.ledger_revision DESC LIMIT 1",params![profile.digest,assignment],|r|r.get(0)).optional()?;
+            let id:Option<String>=db.db.query_row("SELECT s.id FROM owner_shared_start_intents s JOIN owner_shared_runtime_lifetimes l ON l.child_id=s.child_id WHERE s.profile=?1 AND l.profile=?1 AND l.assignment_id=?2 AND (NOT EXISTS(SELECT 1 FROM owner_managed_periods p WHERE p.child_id=s.child_id) OR s.period_id=(SELECT p.id FROM owner_managed_periods p WHERE p.child_id=s.child_id AND p.start_ms<=?3 AND p.end_ms>?3)) AND NOT EXISTS(SELECT 1 FROM owner_shared_demand_decisions d WHERE d.start_intent_id=s.id) ORDER BY s.ledger_revision DESC LIMIT 1",params![profile.digest,assignment,graphs::now_ms()?],|r|r.get(0)).optional()?;
             let result=id.map(|id|saved_start(&db.db,&profile,&id)).transpose()?;
             profile.check()?;Ok(result)
         }).await?;

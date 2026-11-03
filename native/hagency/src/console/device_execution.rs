@@ -392,7 +392,15 @@ impl DeviceOperation {
         }
         let (path, body) = match self {
             Self::E2eeCandidates {lease,binding_id} => { id(binding_id)?; ("e2ee-candidates",json!({"lease":lease,"bindingId":binding_id})) },
-            Self::E2eeConfirm {lease,binding_id,event_id,mentions,thread_root} => { id(binding_id)?;matrix(event_id,'$')?; ("e2ee-confirm",json!({"lease":lease,"bindingId":binding_id,"eventId":event_id,"mentions":mentions,"threadRoot":thread_root})) },
+            Self::E2eeConfirm {lease,binding_id,event_id,mentions,thread_root} => {
+                id(binding_id)?;
+                // Room version 3+ event IDs are opaque hashes, not Matrix user
+                // or room IDs with a server suffix. Rejecting them here leaves
+                // encrypted group candidates permanently unconfirmed.
+                self::event_id(event_id)?;
+                if let Some(root) = thread_root { self::event_id(root)?; }
+                ("e2ee-confirm",json!({"lease":lease,"bindingId":binding_id,"eventId":event_id,"mentions":mentions,"threadRoot":thread_root}))
+            },
             Self::History {
                 agent_id,
                 cursor,
@@ -1037,6 +1045,25 @@ impl Console {
 #[cfg(test)]
 mod processing_tests {
     use super::*;
+    #[test]
+    fn encrypted_candidate_confirmation_accepts_real_matrix_event_ids() {
+        let operation = |event: &str, root: Option<&str>| DeviceOperation::E2eeConfirm {
+            lease: LeaseRef { agent_id: "agent-a".into(), epoch: 1 },
+            binding_id: "binding-a".into(), event_id: event.into(),
+            mentions: vec!["@agent:example.test".into()], thread_root: root.map(str::to_owned),
+        };
+        for event in ["$sFSDgP24phmdQkrcSXwQWTZM7-QArRju-59jc9-uNIY", "$legacy:example.test"] {
+            let (route, bytes) = operation(event, Some("$opaque_thread_root")).request().unwrap();
+            assert_eq!(route, "e2ee-confirm");
+            let body: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(body["eventId"], event);
+            assert_eq!(body["threadRoot"], "$opaque_thread_root");
+        }
+        for invalid in ["", "$", "!room:example.test", "$has space", "$line\nfeed"] {
+            assert!(operation(invalid, None).request().is_err());
+            assert!(operation("$valid", Some(invalid)).request().is_err());
+        }
+    }
     #[test]
     fn processing_route_is_closed_and_receipt_pins_execution() {
         let op = DeviceOperation::Processing {

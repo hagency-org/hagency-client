@@ -9,7 +9,7 @@ use std::time::Instant;
 
 /// Native-only review. A recorded original result is not the current resource
 /// definition and must be presented as recovery, never another configuration.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub enum LocalResourceEditReview {
     Editable(Box<hagency_store::management::ResourceDetail>),
     Recorded(ResourceConfigurationResult),
@@ -21,8 +21,10 @@ pub enum LocalResourceEditReview {
 }
 
 /// Exactly what the native confirmation shows and the writer re-checks.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CeilingAmendmentReview {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar: Option<hagency_core::recurring_quota::Calendar>,
     pub resource_id: String,
     /// The owner's local name for the resource, when one is set.
     pub name: Option<String>,
@@ -48,6 +50,7 @@ fn ceiling_amendment_review(
     let current = detail.ceiling.as_ref().and_then(|c| c.tokens).map(u64::from);
     let (previous_tokens, tokens) = checked_amendment(input, &detail.ceiling_amendment, current)?;
     Ok(CeilingAmendmentReview {
+        calendar: detail.calendar.clone(),
         resource_id: detail.resource.id.clone(),
         name: detail
             .resource

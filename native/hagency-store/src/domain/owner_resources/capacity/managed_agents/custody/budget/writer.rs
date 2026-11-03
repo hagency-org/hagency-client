@@ -83,6 +83,9 @@ fn live(db: &Connection, d: &VerifiedAgentBudgetDelivery) -> Result<Binding, Err
     let e = &d.enrollment;
     let c = &d.command;
     let binding = authority::original(db, e, c.child()?, false)?;
+    // A periodic allowance is fixed by owner consent. Additive legacy top-ups
+    // cannot refill an exhausted period or change future credits implicitly.
+    if periods::recurring(&binding.command) { return Err(Error::LocalAuthority); }
     let now = graphs::now_ms()?;
     if now < c.issued_at_ms
         || now >= c.expires_at_ms

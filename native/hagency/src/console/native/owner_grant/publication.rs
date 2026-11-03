@@ -13,7 +13,7 @@ pub(super) struct PublicationIntent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_predecessor_revision: Option<u64>,
 }
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OwnerGrantPublicationState {
     OutcomeUnknown,
@@ -21,7 +21,7 @@ pub enum OwnerGrantPublicationState {
     ServerObserved,
 }
 /// Public descriptive projection only. No raw native receipt or provider ID.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OwnerGrantPublicationProgress {
     pub summary: OwnerGrantSummary,
@@ -412,5 +412,31 @@ impl OwnerGrantAccess {
         id: String,
     ) -> Result<OwnerGrantPublicationResult, NativeError> {
         self.review_publication(id).await
+    }
+}
+
+
+impl OwnerGrantIntents {
+    pub(super) async fn expire_recurring_publication(&self,registry:&OwnerResourceRegistry,id:&str)->Result<(),NativeError>{
+        use super::super::allocation_transport::PublicationObservation;
+        let cookie=self.cookie().await?;
+        let io=self.io(&cookie,Permission::PublishGrants).await?;
+        let original = {
+            let _lane=self.manager.owner.0.management.mutations.lock().await;
+            let history=History::load(&io.path,io.identity.clone())?;
+            let record=&history.data.records[history.index(id)?];
+            let publication=record.publication.clone().filter(|p|p.confirmed).ok_or_else(history_error)?;
+            if record.original.selection.calendar.is_none() || now_ms()?<record.original.period.end_ms || !io.accepts(&record.original.binding,registry) {return Err(history_error());}
+            (record.original.clone(),publication)
+        };
+        let (record,publication)=original;
+        let predecessor=publication.expected_predecessor_revision.ok_or_else(history_error)?;
+        let result=self.publication_transport().expire_successor_publication(registry,&publication.command_id,&record.selection.grant_id,publication.expected_contribution_revision,predecessor).await?;
+        match result {
+            PublicationObservation::ServerObserved(_) => self.settle_succession(&io,registry,&record,true).await?,
+            PublicationObservation::Rejected => self.settle_succession(&io,registry,&record,false).await?,
+            PublicationObservation::Unconfirmed => return Err(failure(409,"management_outcome_unknown")),
+        }
+        io.check().await
     }
 }

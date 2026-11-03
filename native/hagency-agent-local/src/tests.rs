@@ -104,6 +104,7 @@ fn usage(n: u64) -> Usage {
         input: n,
         output: 0,
         cached_input: 0,
+        cache_write_input: None,
         reasoning_output: 0,
         accounting_version: "codex/v1-input-output".into(),
     }
@@ -906,4 +907,19 @@ fn model_profile_checked_edit_is_atomic_scoped_and_survives_restart() {
     assert_eq!(ledger.agent_model_profile(OWNER,"a1").unwrap(),Some(changed.clone()));
     drop(ledger);drop(second_handle);
     assert_eq!(Ledger::open(&path,OWNER).unwrap().agent_model_profile(OWNER,"a1").unwrap(),Some(changed));
+}
+
+#[test]
+fn analytics_preserves_cache_writes_without_changing_budget_charge() {
+    let measured = Usage { input: 17, output: 3, cached_input: 5, cache_write_input: Some(2),
+        reasoning_output: 0, accounting_version: "claude-reported-v1".into() };
+    assert_eq!(measured.total().unwrap(), 20);
+    assert_eq!(measured.category_counts(), (Some(10), Some(5), Some(2), Some(3)));
+    let historical: Usage = serde_json::from_str(r#"{"input":17,"output":3,"cached_input":5,"reasoning_output":0,"accounting_version":"octos-reported-v1"}"#).unwrap();
+    assert_eq!(historical.total().unwrap(), 20);
+    assert_eq!(historical.category_counts(), (None, Some(5), None, Some(3)));
+    assert_eq!(unreported_usage().category_counts(), (None, None, None, None));
+    let invalid = Usage { cache_write_input: Some(13), ..measured };
+    assert!(invalid.total().is_err());
+    assert_eq!(invalid.category_counts().0, None);
 }

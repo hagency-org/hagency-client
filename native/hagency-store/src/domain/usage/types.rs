@@ -29,12 +29,14 @@ impl UsageSource {
 #[serde(rename_all = "snake_case")]
 pub enum UsagePeriodKind {
     Daily,
+    Weekly,
     Monthly,
 }
 impl UsagePeriodKind {
     pub(super) fn name(self) -> &'static str {
         match self {
             Self::Daily => "daily",
+            Self::Weekly => "weekly",
             Self::Monthly => "monthly",
         }
     }
@@ -134,7 +136,7 @@ pub struct UsageCeiling {
     /// min of the non-null limits (ceiling after draw, seat quota, pool).
     pub remaining_tokens: Option<u64>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UsageEvidence {
     HostAttributedUntrustedUsage,
@@ -149,7 +151,7 @@ pub enum UsageEvidence {
 /// observations and confer no allocation authority in this slice. An absent
 /// period bucket is `None` — unknown, not zero — so the commitment figure
 /// stands alone.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 pub struct CeilingReport {
     /// Ceiling granularity in force; defaults to monthly like the JavaScript.
     pub period: UsagePeriodKind,

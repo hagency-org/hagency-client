@@ -134,3 +134,53 @@ pub(in crate::console) async fn inspect_resource(
     if deadline <= std::time::Instant::now() { return Err(failure(409,"provider_identity_unavailable")); }
     result
 }
+
+/// Read current plan/quota in the attested resource namespace, without login
+/// or a model turn. Keep child custody until termination is observed.
+pub(in crate::console) async fn inspect_quota(
+    launch: &ManagedLaunch, provider: &OwnerProvider, executable: &Path,
+    deadline: std::time::Instant,
+) -> Result<(identity::ObservedQuota, hagency_store::owner_resources::VerifiedProviderAccount), ProviderError> {
+    let paths=namespace_paths(launch)?;
+    launch.check().map_err(|_|failure(409,"provider_namespace_unavailable"))?;
+    let result=inspect_quota_inner(&paths,provider,executable,deadline,
+        || launch.check().map_err(|_|failure(409,"provider_namespace_unavailable"))).await;
+    launch.check().map_err(|_|failure(409,"provider_namespace_unavailable"))?;
+    result
+}
+
+/// The caller supplies the original authenticated profile selection and checks
+/// it again after this probe. This function never discovers an ambient home.
+pub(in crate::console) async fn inspect_original_quota(
+    paths: &ProviderPaths, provider: &OwnerProvider, executable: &Path,
+    deadline: std::time::Instant,
+) -> Result<(identity::ObservedQuota, hagency_store::owner_resources::VerifiedProviderAccount), ProviderError> {
+    inspect_quota_inner(paths,provider,executable,deadline,
+        || selected_reference(&paths.codex_home,paths.shared).map(|_|())).await
+}
+
+async fn inspect_quota_inner(
+    paths: &ProviderPaths, provider: &OwnerProvider, executable: &Path,
+    deadline: std::time::Instant,
+    check: impl Fn() -> Result<(),ProviderError>,
+) -> Result<(identity::ObservedQuota, hagency_store::owner_resources::VerifiedProviderAccount), ProviderError> {
+    let tasks=&provider.tasks;
+    let _activity=tasks.enter().map_err(|_|failure(409,"provider_closing"))?;
+    if deadline<=std::time::Instant::now() {return Err(failure(409,"provider_identity_unavailable"));}
+    selected_reference(&paths.codex_home,paths.shared)?;
+    let remaining=deadline.saturating_duration_since(std::time::Instant::now()).min(Duration::from_secs(25));
+    let mut process=tokio::time::timeout(remaining,Process::spawn_inner(paths,executable,true,tasks))
+        .await.map_err(|_|failure(504,"provider_identity_timeout"))??;
+    let remaining=deadline.saturating_duration_since(std::time::Instant::now()).min(Duration::from_secs(25));
+    let result=tokio::time::timeout(remaining,async {
+        check()?;
+        let report=identity::observe_bound_quota(&mut process,paths,deadline).await?;
+        check()?;
+        Ok(report)
+    })
+        .await.map_err(|_|failure(504,"provider_identity_timeout")).and_then(|v|v);
+    process.child.kill().await.map_err(|_|failure(409,"provider_stop_unknown"))?;
+    selected_reference(&paths.codex_home,paths.shared)?;
+    if deadline<=std::time::Instant::now() {return Err(failure(409,"provider_identity_unavailable"));}
+    result
+}

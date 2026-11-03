@@ -431,6 +431,7 @@ pub(in crate::console::native) fn known_failure(e: &NativeError) -> bool {
         ) | (
             409,
             "management_revision_changed"
+                | "agent_period_allowance_fixed"
                 | "agent_topup_pending"
                 | "agent_topup_capacity"
                 | "agent_topup_closed"

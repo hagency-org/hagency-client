@@ -150,6 +150,20 @@ impl OwnedSession {
     pub fn observation_source(&self) -> Result<session::ObservationSource, session::Error> {
         self.session.observation_source()
     }
+    /// Read-only account quota metadata this actual process received from
+    /// its own `account/rateLimits/read` or `account/rateLimits/updated`.
+    /// Account-wide; never per-turn usage and never authority.
+    pub fn provider_rate_limits(&self) -> Option<&session::RateLimitSnapshot> {
+        self.session.provider_rate_limits()
+    }
+    /// Digest of the provider account subject this process reported
+    /// (`{"provider":"openai.chatgpt","subject":accountId}`); raw ID not kept.
+    pub fn provider_account_digest(&self) -> Option<&str> {
+        self.session.provider_account_digest()
+    }
+    /// The host's canonical resource model, checked by the actual upstream
+    /// thread response before the running turn was accepted.
+    pub fn running_model(&self)->Option<&str> {self.session.running_model()}
     pub fn matches_observation_source(&self, source: &session::ObservationSource) -> bool {
         self.session.matches_observation_source(source)
     }

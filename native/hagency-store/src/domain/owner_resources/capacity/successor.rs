@@ -88,9 +88,17 @@ fn ended(value: &managed_agents::Liability) -> u64 {
 }
 
 /// The successor's period and the window it may be confirmed in.
-fn target(kind: &str, predecessor: &NativeGrantReceipt) -> Result<(OwnerGrantPeriod, u64, u64), Error> {
+fn target(kind: &str, predecessor: &NativeGrantReceipt, now: u64) -> Result<(OwnerGrantPeriod, u64, u64), Error> {
     let own = OwnerGrantPeriod::of_receipt(predecessor)?;
     Ok(if kind == SUCCESSION_RENEWAL {
+        if let Some(calendar) = &predecessor.calendar {
+            // No pre-funding or backfilling: only the current natural period,
+            // after the preceding authorization ended, receives new credit.
+            let current = OwnerGrantPeriod::at_calendar(now, calendar)?;
+            let opens = predecessor.period_end_ms.max(current.period_start_ms);
+            let closes = current.period_end_ms;
+            return Ok((current, opens, closes));
+        }
         let end = own.period_end_ms;
         (own.next()?, end.saturating_sub(RENEWAL_WINDOW_MS), end)
     } else {
@@ -133,6 +141,12 @@ fn transition(
             after_without_successor: 0,
             at: now,
         })
+    } else if predecessor.calendar.is_some() {
+        let at = period.period_start_ms;
+        let previous = managed_agents::accounted_floor(db, id, at)?;
+        let retained = ended(&previous.total);
+        Ok(Transition { floor: 0, carried_children: 0, current: retained,
+            after_without_successor: retained, at })
     } else {
         // Next month: only live Agents move; fenced ones stay in the ended
         // month and keep its unresolved liability there.
@@ -180,10 +194,11 @@ impl OwnerResourceRegistry {
         now: u64,
     ) -> Result<OwnerGrantConsent, Error> {
         let kind = self::kind(kind)?;
-        if !matches!(predecessor.version, 2 | 3)
+        if !matches!(predecessor.version, 2 | 3 | 4 | 5)
             || !predecessor.supported_shape()
             || predecessor.capability != CAPABILITY
             || !enrollment.matches(&predecessor)
+            || selection.calendar != predecessor.calendar
             || selection.coordinator_mxid != predecessor.coordinator_mxid
             || selection.allow_self_approval != predecessor.allow_self_approval
             || selection.grant_id == predecessor.grant_id
@@ -194,7 +209,7 @@ impl OwnerResourceRegistry {
         {
             return Err(Error::LocalAuthority);
         }
-        let (period, opens, closes) = target(kind, &predecessor)?;
+        let (period, opens, closes) = target(kind, &predecessor, now)?;
         if now < opens || now >= closes {
             return Err(Error::LocalAuthority);
         }
@@ -277,7 +292,7 @@ impl OwnerResourceRegistry {
                 return Err(Error::LocalAuthority);
             }
             let now = graphs::now_ms()?;
-            let (period, opens, closes) = target(kind, &predecessor)?;
+            let (period, opens, closes) = target(kind, &predecessor, now)?;
             let tokens: u64 = db.query_row(
                 "SELECT COALESCE(p.retained_tokens,g.allocated_tokens) FROM owner_capacity_grants g LEFT JOIN owner_parent_settlements p ON p.grant_id=g.id WHERE g.id=?1",
                 [&predecessor.grant_id],
@@ -393,7 +408,7 @@ impl OwnerResourceRegistry {
         Ok(result)
     }
 
-    async fn read<T: Send + 'static>(
+    pub(super) async fn read<T: Send + 'static>(
         &self,
         profile: ProfileAuthority,
         f: impl FnOnce(&Connection, &ProfileAuthority) -> Result<T, Error> + Send + 'static,
@@ -546,7 +561,7 @@ impl DomainRepository {
         }
         let resource = read_resource(&tx, &e.resource_id)?;
         let now = now_ms()?;
-        let (period, opens, closes) = target(&plan.kind, p)?;
+        let (period, opens, closes) = target(&plan.kind, p, now)?;
         if period != consent.period || now < opens || now >= closes {
             return Err(Error::LocalAuthority);
         }
@@ -577,8 +592,7 @@ impl DomainRepository {
                 .is_some_and(|r| r.state != State::Effective || r.effective_from_ms > now)
             || succession::live_successor(&tx, &p.grant_id)?.is_some()
             || now < p.period_start_ms
-            || now >= p.period_end_ms
-            || now >= p.delegation_expires_at_ms
+            || (p.calendar.is_none() && (now >= p.period_end_ms || now >= p.delegation_expires_at_ms))
         {
             return Err(Error::OwnerGrantReviewChanged);
         }
@@ -594,7 +608,7 @@ impl DomainRepository {
             return Err(Error::LocalAuthority);
         }
         // The monthly maximum in force, including an owner's native amendment.
-        if serde_json::to_value(
+        if s.calendar.is_none() && serde_json::to_value(
             crate::domain::resource_ceiling::effective_ceiling(&tx, &resource)?
                 .ok_or(Error::NoCeiling)?
                 .period,
@@ -620,8 +634,9 @@ impl DomainRepository {
         if ledger_revision <= p.ledger_revision {
             return Err(Error::Conflict);
         }
-        let result = NativeGrantReceipt {
-            version: 3,
+        let result = NativeGrantReceipt { per_request_tokens: s.per_request_tokens,
+            version: if s.per_request_tokens.is_some() { 5 } else if s.calendar.is_some() { 4 } else { 3 },
+            calendar: s.calendar.clone(),
             capability: CAPABILITY.into(),
             admission_request_id: e.admission_request_id.clone(),
             enrollment_id: e.enrollment_id.clone(),

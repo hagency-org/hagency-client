@@ -61,7 +61,7 @@ impl SavePersonalModel {
         Ok(())
     }
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersonalModelView {
     pub runtime: String,
@@ -69,7 +69,7 @@ pub struct PersonalModelView {
     pub reasoning_effort: String,
     pub web_search: bool,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersonalModelChoice {
     pub runtime: String,
@@ -77,7 +77,7 @@ pub struct PersonalModelChoice {
     pub display_name: String,
     pub reasoning_efforts: Vec<String>,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersonalModelChoices {
     pub agent_id: String,
@@ -88,7 +88,7 @@ pub struct PersonalModelChoices {
     pub workspace_configured: bool,
     pub can_choose_workspace: bool,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersonalModelSummary {
     pub agent_id: String,

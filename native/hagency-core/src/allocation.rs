@@ -106,7 +106,7 @@ impl Commitment {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Budget {
     pub scope: Scope,
@@ -115,19 +115,19 @@ pub struct Budget {
     pub reserved: Tokens,
     pub remaining_tokens: Option<Tokens>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Scope {
     Resource,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 pub struct PoolBudget {
     pub ceiling: Option<Tokens>,
     pub period: Option<String>,
     pub committed: Tokens,
     pub remaining: Option<Tokens>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 pub struct SeatBudget {
     pub quota: Option<Tokens>,
     pub period: Option<String>,
@@ -135,7 +135,7 @@ pub struct SeatBudget {
     pub remaining: Option<Tokens>,
     pub status: SeatStatus,
 }
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SeatStatus {
     Undeclared,

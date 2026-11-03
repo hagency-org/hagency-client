@@ -227,7 +227,10 @@ impl OwnerGrantIntents {
         if resource.revision != c.resource_revision || resource.framework != c.runtime {
             return Err(failure(409, "management_enrollment_changed"));
         }
+        let calendar = registry.resource_calendar(io.profile.clone(), c.resource_id.clone()).await.map_err(storage)?;
+        io.check().await?;
         Ok(OwnerGrantForm {
+            calendar,
             contribution_id, resource_id: c.resource_id, label: c.label,
             context: OwnerGrantReviewContext {
                 server_origin: io.identity.origin.clone(), profile_id: profile_digest(&io.identity)?,

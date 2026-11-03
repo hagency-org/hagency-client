@@ -57,7 +57,7 @@ fn eligibility(
         Some(_) => return Ok(Some(CeilingAmendmentBlocker::ContributionHistoryNotProven)),
     }
     let monthly = match resource_ceiling::effective_ceiling(db, resource)? {
-        Some(ceiling) if serde_json::to_value(&ceiling.period)? == json!("monthly") => {
+        Some(ceiling) if serde_json::to_value(&ceiling.period)? == json!("monthly") || resource_ceiling::calendar(db, &resource.id())?.is_some() => {
             ceiling.tokens.is_some()
         }
         _ => false,
@@ -96,7 +96,7 @@ fn minimum(db: &Connection, resource: &Resource, now: u64) -> Result<Option<u64>
 fn per_request(db: &Connection, resource_id: &str, now: u64) -> Result<Option<u64>, Error> {
     let live = db
         .prepare(
-            "SELECT allocated_tokens FROM owner_capacity_grants WHERE resource_id=?1 AND active=1 AND json_valid(receipt) AND json_extract(receipt,'$.periodStartMs')<=?2 AND json_extract(receipt,'$.periodEndMs')>?2 AND json_extract(receipt,'$.delegationExpiresAtMs')>?2 LIMIT 2",
+            "SELECT COALESCE(json_extract(receipt,'$.perRequestTokens'),allocated_tokens) FROM owner_capacity_grants WHERE resource_id=?1 AND active=1 AND json_valid(receipt) AND json_extract(receipt,'$.periodStartMs')<=?2 AND json_extract(receipt,'$.periodEndMs')>?2 AND json_extract(receipt,'$.delegationExpiresAtMs')>?2 LIMIT 2",
         )?
         .query_map(params![resource_id, now], |r| r.get::<_, u64>(0))?
         .collect::<Result<Vec<_>, _>>()?;

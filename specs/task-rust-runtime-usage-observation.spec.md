@@ -15,7 +15,7 @@ turning protocol metadata into provider billing or canonical allocation authorit
 ### Must
 - Mint usage only after exact real driver thread turn and lifecycle validation.
 - Keep the existing default Update stream and approval refusal behavior unchanged.
-- Preserve missing null invalid and unsupported evidence without filling in zero.
+- Preserve missing required null invalid and unsupported evidence without filling in zero; apply only the live Codex protocol's documented omitted optional cache-write default.
 - Bound each counter to an exact nonnegative JSON-safe integer.
 - Retain cumulative and last-response counters separately without summing them.
 - Keep source receipts tied to actual driver identity sequence and retirement.
@@ -36,6 +36,7 @@ turning protocol metadata into provider billing or canonical allocation authorit
 - native/hagency-runtime/src/codex/session/usage.rs
 - native/hagency-runtime/tests/session.rs
 - native/hagency-runtime/tests/session/usage.rs
+- native/hagency-runtime/tests/fixtures/codex-token-usage-schema-0.166.0.json
 - native/hagency-progress-runtime/src/lib.rs
 - native/hagency-progress-runtime/tests/attachment.rs
 - knowledge/decisions/adr-069-native-runtime-usage-observation.md
@@ -53,11 +54,18 @@ Scenario: Real scoped notifications retain separate counters
   Then cumulative last response and context window counters retain exact optional values
   And ordinary Update stays Progress without advancing canonical work
 
-Scenario: Missing and invalid counters never become zero
+Scenario: Missing required and invalid counters never become zero
   Test: native_codex_usage_observation_uncertainty
   Given missing null negative unsafe fractional boolean string or future field metadata
   When the actual reader projects the notification
   Then fixed diagnostics retain uncertainty while valid independent fields survive
+
+Scenario: Optional fields follow the supported typed Codex wire contract
+  Test: native_codex_usage_observation_schema_defaults_only_omitted_optional_fields
+  Given the locally generated Codex0.166.0 schema and actual scoped five-counter notifications
+  When cache-write input and nullable model context capacity are omitted
+  Then only omitted cache-write input decodes to its protocol default zero
+  And omitted or null capacity remains unknown metadata without missing-consumption diagnostics
 
 Scenario: Usage evidence cannot impersonate another session
   Test: native_codex_usage_observation_scope

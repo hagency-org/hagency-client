@@ -151,6 +151,8 @@ impl NativeManagement {
                 saved.operation,
                 IntentOperation::PoolAgentRequest
                     | IntentOperation::PoolAgentDecide
+                    | IntentOperation::PoolAgentReallocate
+                    | IntentOperation::PoolAgentRenew
                     | IntentOperation::PoolAgentStop
                     | IntentOperation::ProjectRequest
                     | IntentOperation::ProjectDecide

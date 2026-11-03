@@ -299,7 +299,21 @@ pub(super) fn reconcile(tx: &Transaction<'_>, now: u64) -> Result<(), Error> {
     }
     Ok(())
 }
+#[cfg(test)]
+thread_local! {
+    static TEST_CLOCK: std::cell::RefCell<Option<std::sync::Weak<std::sync::atomic::AtomicU64>>> = const { std::cell::RefCell::new(None) };
+}
+/// Test-only thread-local clock; dropping its owner immediately restores real
+/// time, including on a dedicated SQLite worker after a failed async test.
+#[cfg(test)]
+pub(crate) fn install_test_clock(clock: &std::sync::Arc<std::sync::atomic::AtomicU64>) {
+    TEST_CLOCK.with(|slot| *slot.borrow_mut()=Some(std::sync::Arc::downgrade(clock)));
+}
 pub(super) fn now_ms() -> Result<u64, Error> {
+    #[cfg(test)]
+    if let Some(now)=TEST_CLOCK.with(|slot| slot.borrow().as_ref().and_then(std::sync::Weak::upgrade).map(|clock|clock.load(std::sync::atomic::Ordering::SeqCst))) {
+        clock(now)?;return Ok(now);
+    }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()

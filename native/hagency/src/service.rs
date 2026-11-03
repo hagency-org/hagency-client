@@ -42,6 +42,22 @@ pub fn default_state_dir() -> Result<PathBuf, String> {
     })
 }
 
+/// Owner daemon home (ADR 0012): `~/Library/Application Support/HagencyOwnerDaemon`
+/// on macOS, else `$XDG_STATE_HOME/hagency-owner-daemon` or
+/// `~/.local/state/hagency-owner-daemon`. Separate from the owner-client state
+/// directory, whose entries are a closed set.
+pub fn default_daemon_dir() -> Result<PathBuf, String> {
+    if let Some(path) = std::env::var_os("HAGENCY_OWNER_DAEMON_HOME") { return Ok(PathBuf::from(path)); }
+    let home = home()?;
+    if cfg!(target_os = "macos") {
+        return Ok(home.join("Library/Application Support/Hagency/owner-daemon"));
+    }
+    Ok(match std::env::var_os("XDG_STATE_HOME") {
+        Some(dir) if !dir.is_empty() => PathBuf::from(dir).join("hagency/owner-daemon"),
+        _ => home.join(".local/state/hagency/owner-daemon"),
+    })
+}
+
 fn home() -> Result<PathBuf, String> {
     std::env::var_os("HOME")
         .filter(|h| !h.is_empty())
@@ -319,6 +335,169 @@ fn uninstall_systemd() -> Result<String, String> {
     Ok("Hagency service removed; its state directory was kept.".into())
 }
 
+/// LaunchAgent label of the owner daemon. Distinct from the console service.
+pub const DAEMON_LABEL: &str = "io.hagency.owner-daemon";
+
+/// Per-user service definition for `hagency daemon run`. KeepAlive restarts
+/// it after a crash; a clean exit (owner stop of the whole service) stays down.
+pub fn daemon_launchd_plist(exe: &Path, home_dir: &Path, path: &str, log: &Path) -> String {
+    daemon_launchd_plist_with_installation(exe, home_dir, path, log, None)
+}
+
+fn daemon_arguments(exe: &Path, home_dir: &Path, installation: Option<&Path>) -> Vec<String> {
+    let mut args = vec![exe.to_string_lossy().into_owned()];
+    if let Some(root) = installation {
+        args.extend([
+            "--hagency-isolated-installation-root".into(),
+            root.to_string_lossy().into_owned(),
+        ]);
+    }
+    args.extend([
+        "daemon".into(),
+        "run".into(),
+        "--home".into(),
+        home_dir.to_string_lossy().into_owned(),
+    ]);
+    args
+}
+
+fn daemon_launchd_plist_with_installation(exe: &Path, home_dir: &Path, path: &str, log: &Path, installation: Option<&Path>) -> String {
+    let args = daemon_arguments(exe, home_dir, installation);
+    let args: String = args
+        .iter()
+        .map(|a| format!("    <string>{}</string>\n", xml(a)))
+        .collect();
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>{DAEMON_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+{args}  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>{path}</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>{log}</string>
+  <key>StandardErrorPath</key>
+  <string>{log}</string>
+</dict>
+</plist>
+"#,
+        path = xml(path),
+        log = xml(&log.to_string_lossy()),
+    )
+}
+
+pub fn daemon_systemd_unit(exe: &Path, home_dir: &Path, path: &str) -> String {
+    daemon_systemd_unit_with_installation(exe, home_dir, path, None)
+}
+
+fn daemon_systemd_unit_with_installation(exe: &Path, home_dir: &Path, path: &str, installation: Option<&Path>) -> String {
+    let quote = |p: &str| format!("\"{}\"", p.replace('\\', "\\\\").replace('"', "\\\""));
+    let prefix = if let Some(root) = installation {
+        format!("{} --hagency-isolated-installation-root {}", quote(&exe.to_string_lossy()), quote(&root.to_string_lossy()))
+    } else {
+        quote(&exe.to_string_lossy())
+    };
+    format!(
+        "[Unit]\nDescription=Hagency owner daemon\nAfter=network-online.target\n\n[Service]\nExecStart={} daemon run --home {}\nEnvironment={}\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n",
+        prefix,
+        quote(&home_dir.to_string_lossy()),
+        quote(&format!("PATH={path}")),
+    )
+}
+
+/// Register and start the owner daemon for this user. Explicit owner action
+/// only; nothing in the daemon installs itself.
+pub fn install_daemon(home_dir: &Path) -> Result<String, String> {
+    if !home_dir.is_absolute() {
+        return Err("--home must be absolute".into());
+    }
+    let exe = std::env::current_exe()
+        .and_then(|p| p.canonicalize())
+        .map_err(|e| format!("this binary's path: {e}"))?;
+    let path = std::env::var("PATH").unwrap_or_default();
+    #[cfg(not(all(feature = "test-support", feature = "resource-adoption")))]
+    let installation: Option<PathBuf> = None;
+    #[cfg(all(feature = "test-support", feature = "resource-adoption"))]
+    let installation = crate::native_owner::resource_activation_fixture_root();
+    if cfg!(target_os = "macos") {
+        let logs = home()?.join("Library/Logs/Hagency");
+        std::fs::create_dir_all(&logs).map_err(|e| format!("{}: {e}", logs.display()))?;
+        let plist = home()?.join(format!("Library/LaunchAgents/{DAEMON_LABEL}.plist"));
+        if let Some(parent) = plist.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        let domain = format!("gui/{}", uid());
+        let _ = launchctl(&["bootout", &format!("{domain}/{DAEMON_LABEL}")]);
+        std::fs::write(
+            &plist,
+            daemon_launchd_plist_with_installation(&exe, home_dir, &path, &logs.join("owner-daemon.log"), installation.as_deref()),
+        )
+        .map_err(|e| format!("{}: {e}", plist.display()))?;
+        let out = launchctl(&["bootstrap", &domain, &plist.to_string_lossy()])?;
+        if !out.status.success() {
+            return Err(format!(
+                "launchctl bootstrap failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+    } else {
+        let config = match std::env::var_os("XDG_CONFIG_HOME") {
+            Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+            _ => home()?.join(".config"),
+        };
+        let unit = config.join("systemd/user/hagency-owner-daemon.service");
+        if let Some(parent) = unit.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        std::fs::write(&unit, daemon_systemd_unit_with_installation(&exe, home_dir, &path, installation.as_deref()))
+            .map_err(|e| format!("{}: {e}", unit.display()))?;
+        systemctl(&["daemon-reload"])?;
+        systemctl(&["enable", "--now", "hagency-owner-daemon.service"])?;
+        systemctl(&["restart", "hagency-owner-daemon.service"])?;
+    }
+    Ok(format!("Hagency owner daemon installed (home: {}).", home_dir.display()))
+}
+
+/// Remove the daemon service. Its home, enrollment and owner root are kept.
+pub fn uninstall_daemon() -> Result<String, String> {
+    if cfg!(target_os = "macos") {
+        let plist = home()?.join(format!("Library/LaunchAgents/{DAEMON_LABEL}.plist"));
+        let _ = launchctl(&["bootout", &format!("gui/{}/{DAEMON_LABEL}", uid())]);
+        if plist.exists() {
+            std::fs::remove_file(&plist).map_err(|e| format!("{}: {e}", plist.display()))?;
+        }
+    } else {
+        let _ = systemctl(&["disable", "--now", "hagency-owner-daemon.service"]);
+        let config = match std::env::var_os("XDG_CONFIG_HOME") {
+            Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+            _ => home()?.join(".config"),
+        };
+        let unit = config.join("systemd/user/hagency-owner-daemon.service");
+        if unit.exists() {
+            std::fs::remove_file(&unit).map_err(|e| format!("{}: {e}", unit.display()))?;
+        }
+        let _ = systemctl(&["daemon-reload"]);
+    }
+    Ok("Hagency owner daemon service removed; its home and enrollment were kept.".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -357,5 +536,48 @@ mod tests {
         ));
         assert!(unit.contains("Environment=\"PATH=/usr/bin:/bin\""));
         assert!(unit.contains("WantedBy=default.target"));
+    }
+
+    #[test]
+    fn daemon_service_runs_daemon_with_its_own_label_and_escaped_home() {
+        let plist = daemon_launchd_plist(
+            Path::new("/opt/h & co/hagency"),
+            Path::new("/Users/a/Library/Application Support/HagencyOwnerDaemon"),
+            "/usr/bin:/bin",
+            Path::new("/Users/a/Library/Logs/Hagency/owner-daemon.log"),
+        );
+        assert!(plist.contains(&format!("<string>{DAEMON_LABEL}</string>")));
+        assert!(!plist.contains("<string>io.hagency</string>"));
+        assert!(plist.contains("<string>/opt/h &amp; co/hagency</string>"));
+        assert!(plist.contains("<string>daemon</string>\n    <string>run</string>"));
+        assert!(plist.contains("<string>/Users/a/Library/Application Support/HagencyOwnerDaemon</string>"));
+        assert!(plist.contains("<key>SuccessfulExit</key>"));
+        let unit = daemon_systemd_unit(
+            Path::new("/opt/hagency/hagency"),
+            Path::new("/home/a/.local/state/hagency-owner-daemon"),
+            "/usr/bin",
+        );
+        assert!(unit.contains(
+            "ExecStart=\"/opt/hagency/hagency\" daemon run --home \"/home/a/.local/state/hagency-owner-daemon\""
+        ));
+        let dir = default_daemon_dir().unwrap();
+        assert!(dir.is_absolute());
+        assert_ne!(dir, default_state_dir().unwrap());
+    }
+
+    #[test]
+    fn isolated_daemon_service_preserves_the_explicit_installation_on_restart() {
+        let exe = Path::new("/Applications/Hagency Hosting.app/Contents/Helpers/hagency");
+        let home = Path::new("/Users/a/Library/Application Support/Hagency/owner-daemon");
+        let root = Path::new("/Users/a/isolated & original");
+        let args = daemon_arguments(exe, home, Some(root));
+        assert_eq!(&args[1..3], &["--hagency-isolated-installation-root", "/Users/a/isolated & original"]);
+        assert_eq!(&args[3..], &["daemon", "run", "--home", home.to_str().unwrap()]);
+        let plist = daemon_launchd_plist_with_installation(exe, home, "/usr/bin", Path::new("/tmp/daemon.log"), Some(root));
+        assert!(plist.contains("<string>--hagency-isolated-installation-root</string>\n    <string>/Users/a/isolated &amp; original</string>"));
+        let unit = daemon_systemd_unit_with_installation(exe, home, "/usr/bin", Some(root));
+        assert!(unit.contains("--hagency-isolated-installation-root \"/Users/a/isolated & original\" daemon run"));
+        assert!(!daemon_launchd_plist(exe, home, "/usr/bin", Path::new("/tmp/daemon.log")).contains("isolated-installation"));
+        assert!(!daemon_systemd_unit(exe, home, "/usr/bin").contains("isolated-installation"));
     }
 }

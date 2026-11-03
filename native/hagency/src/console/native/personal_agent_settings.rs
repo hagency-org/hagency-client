@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
 const MAX_NUMBER: u64 = 9_007_199_254_740_991;
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PersonalAgentQuery {
     pub after: Option<String>,

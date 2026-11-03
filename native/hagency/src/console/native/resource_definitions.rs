@@ -7,7 +7,7 @@ use hagency_store::management::{
 };
 use serde::Serialize;
 
-#[derive(Serialize)]
+#[derive(Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreparedResourceTemplate {
     pub command_id: String,

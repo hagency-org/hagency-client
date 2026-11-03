@@ -34,20 +34,28 @@ pub(super) fn validate_domain(
     deadline: Instant,
     archived: bool,
 ) -> Result<(), Error> {
-    let expected = Connection::open_in_memory()?;
-    expected.progress_handler(1000, Some(move || Instant::now() >= deadline))?;
-    expected.execute_batch(include_str!("../../../domain.sql"))?;
-    for &(next, sql) in crate::domain::DOMAIN_MIGRATIONS {
-        if next <= version {
-            expected.execute_batch(sql)?;
+    // The expected side depends only on this binary's trusted migrations.
+    // Replaying every migration on every source inspection makes unchanged
+    // inventories time out as the schema grows. Never cache source objects:
+    // tampered tables/triggers must still fail on every individual read.
+    type Objects = std::sync::Arc<Vec<[String;3]>>;
+    static EXPECTED: std::sync::OnceLock<std::sync::Mutex<std::collections::BTreeMap<(i32,bool),Objects>>> = std::sync::OnceLock::new();
+    let cache=EXPECTED.get_or_init(Default::default);
+    let key=(version,archived);
+    let cached=cache.lock().map_err(|_|Error::Busy)?.get(&key).cloned();
+    let expected=if let Some(cached)=cached {cached} else {
+        let expected = Connection::open_in_memory()?;
+        expected.progress_handler(1000, Some(move || Instant::now() >= deadline))?;
+        expected.execute_batch(include_str!("../../../domain.sql"))?;
+        for &(next, sql) in crate::domain::DOMAIN_MIGRATIONS {
+            if next <= version { expected.execute_batch(sql)?; }
         }
-    }
-    if archived {
-        expected.execute_batch(super::archives::DOMAIN_ARCHIVE_SCHEMA)?;
-    }
-    if objects(domain)? != objects(&expected)? {
-        return Err(Error::Schema);
-    }
+        if archived {expected.execute_batch(super::archives::DOMAIN_ARCHIVE_SCHEMA)?;}
+        let expected=std::sync::Arc::new(objects(&expected)?);
+        cache.lock().map_err(|_|Error::Busy)?.insert(key,expected.clone());
+        expected
+    };
+    if objects(domain)? != *expected { return Err(Error::Schema); }
     if Instant::now() >= deadline {
         return Err(Error::Busy);
     }

@@ -138,7 +138,8 @@ async fn admission_v2_late_original_hold_is_a_known_refusal_and_keeps_review_can
     f.publications.lock().unwrap().admission_receipts = true;
     let review = f.review().await;
     let id = review.summary().intent_id;
-    f.registry.prepare_capacity_grant(f.enrollment().await, OwnerGrantSelection {
+    f.registry.prepare_capacity_grant(f.enrollment().await, OwnerGrantSelection { per_request_tokens: None,
+        calendar: None,
         command_id: "racing_old_consent".into(), grant_id: "racing_old_grant".into(),
         coordinator_mxid: "@owner:test".into(), delegation_expires_at_ms: now_ms().unwrap() + 60000,
         allow_self_approval: false, eligible_managers: vec!["@manager:test".into()], allocated_tokens: 100,

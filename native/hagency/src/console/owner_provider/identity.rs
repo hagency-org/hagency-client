@@ -83,29 +83,90 @@ impl QuotaIdentity {
             .map_err(|_| unavailable())
     }
 }
+/// Sanitized, native-only provider report. It is never a credential or an
+/// authority proof. Missing public account identity stays resource-scoped.
+pub(in crate::console) struct ObservedQuota {
+    pub(in crate::console) subject_digest: Option<String>,
+    pub(in crate::console) plan: String,
+    pub(in crate::console) limits: hagency_metering::dashboard::quota::CodexRateLimitsRead,
+}
+fn quota_identity(value: &Value) -> Result<Option<QuotaIdentity>, ProviderError> {
+    if value.get("accountId").is_none_or(Value::is_null) {
+        return Ok(None);
+    }
+    QuotaIdentity::read(value).map(Some)
+}
+fn observed_quota(account: AccountSnapshot, value: &Value) -> Result<ObservedQuota, ProviderError> {
+    if !value["rateLimits"].is_object() { return Err(unavailable()); }
+    let subject_digest = quota_identity(value)?.map(|id| {
+        // Identical to the execution driver's RateLimitTracker digest; idle
+        // and running Terra/Astra resources must group under the same account.
+        hagency_runtime::codex::session::quota_account_digest(&id.0).ok_or_else(unavailable)
+    }).transpose()?;
+    let limits: hagency_metering::dashboard::quota::CodexRateLimitsRead =
+        serde_json::from_value(value.clone()).map_err(|_| unavailable())?;
+    if limits.rate_limits_by_limit_id.as_ref().is_some_and(|m|m.len()>32)
+        || serde_json::to_vec(&limits).map_err(|_|unavailable())?.len()>16*1024 {
+        return Err(unavailable());
+    }
+    Ok(ObservedQuota {subject_digest, plan:account.plan, limits})
+}
+/// Five read-only RPCs bracket the quota with unchanged account metadata.
+/// No credential data or private account metadata escapes this function.
+pub(super) async fn observe_quota(
+    process: &mut Process,
+    paths: &ProviderPaths,
+    deadline: Instant,
+) -> Result<ObservedQuota, ProviderError> {
+    observe_quota_with_identity(process, paths, deadline).await.map(|(report, _)| report)
+}
+
+/// A canonical resource must match the public quota identity recorded at
+/// enrollment. The report and proof come from the same bracketed observation.
+pub(super) async fn observe_bound_quota(
+    process: &mut Process,
+    paths: &ProviderPaths,
+    deadline: Instant,
+) -> Result<(ObservedQuota, VerifiedProviderAccount), ProviderError> {
+    let (report, proof) = observe_quota_with_identity(process, paths, deadline).await?;
+    Ok((report, proof.ok_or_else(unavailable)?))
+}
+
+async fn observe_quota_with_identity(
+    process: &mut Process,
+    paths: &ProviderPaths,
+    deadline: Instant,
+) -> Result<(ObservedQuota, Option<VerifiedProviderAccount>), ProviderError> {
+    selected_reference(&paths.codex_home, paths.shared)?;
+    let first = snapshot(&process.rpc("account/read", json!({"refreshToken":false})).await?)?;
+    let quota = process.rpc("account/rateLimits/read", json!({})).await?;
+    let identity = quota_identity(&quota)?;
+    let middle = snapshot(&process.rpc("account/read", json!({"refreshToken":false})).await?)?;
+    let repeated = process.rpc("account/rateLimits/read", json!({})).await?;
+    let repeated_identity = quota_identity(&repeated)?;
+    let last = snapshot(&process.rpc("account/read", json!({"refreshToken":false})).await?)?;
+    selected_reference(&paths.codex_home, paths.shared)?;
+    if first != middle || first != last
+        || identity.as_ref().map(|id|&id.0) != repeated_identity.as_ref().map(|id|&id.0) {
+        return Err(failure(409, "provider_account_changed"));
+    }
+    if Instant::now() >= deadline { return Err(unavailable()); }
+    let proof = repeated_identity.map(|identity| identity.proof(deadline)).transpose()?;
+    Ok((observed_quota(last, &repeated)?, proof))
+}
 async fn observe(
     process: &mut Process,
     paths: &ProviderPaths,
     deadline: Instant,
 ) -> Result<VerifiedProviderAccount, ProviderError> {
+    // Keep proof issuance stricter than telemetry: quota reports without a
+    // public stable subject can be displayed but never enroll capacity.
     selected_reference(&paths.codex_home, paths.shared)?;
-    let first = snapshot(
-        &process
-            .rpc("account/read", json!({"refreshToken":false}))
-            .await?,
-    )?;
+    let first = snapshot(&process.rpc("account/read", json!({"refreshToken":false})).await?)?;
     let quota = QuotaIdentity::read(&process.rpc("account/rateLimits/read", json!({})).await?)?;
-    let middle = snapshot(
-        &process
-            .rpc("account/read", json!({"refreshToken":false}))
-            .await?,
-    )?;
+    let middle = snapshot(&process.rpc("account/read", json!({"refreshToken":false})).await?)?;
     let repeated = QuotaIdentity::read(&process.rpc("account/rateLimits/read", json!({})).await?)?;
-    let last = snapshot(
-        &process
-            .rpc("account/read", json!({"refreshToken":false}))
-            .await?,
-    )?;
+    let last = snapshot(&process.rpc("account/read", json!({"refreshToken":false})).await?)?;
     selected_reference(&paths.codex_home, paths.shared)?;
     if first != middle || first != last || quota.0 != repeated.0 {
         return Err(failure(409, "provider_account_changed"));

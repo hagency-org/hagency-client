@@ -59,6 +59,9 @@ fn live_call(db: &Connection, b: &Binding, child: &str) -> Result<(), Error> {
     if p.state != "qualified" {
         return Err(Error::LocalAuthority);
     }
+    if periods::recurring(&b.command) {
+        return shared_execution::check_period_account(db,child,b);
+    }
     if unsettled_resource(db, &read_resource(db, &b.command.resource_id)?)? {
         return Err(Error::Capacity);
     }
@@ -83,6 +86,7 @@ impl OwnerResourceRegistry {
                 if unknown || a.estimated_tokens>b.allocated.saturating_sub(held) {return Err(Error::Capacity);}
                 bounded_row(&tx,"owner_managed_calls","id",&id,100_000)?;
                 tx.execute("INSERT INTO owner_managed_calls(id,child_id,execution_id,immutable_digest,assignment_generation,state,reserved_tokens,known_consumed_tokens,usage_complete) VALUES(?1,?2,?3,?4,?5,'prepared',?6,0,0)",params![id,a.assignment.child,a.execution,digest,a.assignment.generation,a.estimated_tokens])?;
+                periods::pin_call(&tx,&a.assignment.child,&id)?;
                 let revision=revision(&tx)?;
                 tx.execute("INSERT INTO owner_managed_call_pins VALUES(?1,?2,?3,?4,NULL)",params![id,binding,a.execution_digest,revision])?;
             }
@@ -108,6 +112,7 @@ impl OwnerResourceRegistry {
             let h=history(&tx,&a.assignment.child,&id)?;
             if h.state!="prepared" {a.check(&r)?;return Ok(ManagedCallClaim::History(h));}
             live_call(&tx,&b,&a.assignment.child)?;
+            periods::require_call_current(&tx,&a.assignment.child,&id)?;
             let (held,unknown)=call_budget(&tx,&a.assignment.child)?;
             if unknown || held>b.allocated {return Err(Error::Capacity);}
             let revision=revision(&tx)?;

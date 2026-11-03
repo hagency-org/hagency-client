@@ -2,6 +2,21 @@ use super::*;
 use crate::{Budget, Layer, Limit, Period, Policy, RequestPolicy};
 use std::os::unix::fs::{PermissionsExt, symlink};
 const OWNER: &str = "@alice:example.org";
+#[test]
+fn chat_directories_preserve_base_and_reject_linked_room_storage() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path().canonicalize().unwrap();
+    std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let first = chat_directory(&base, OWNER, &scope()).unwrap();
+    assert_eq!(std::fs::metadata(&base).unwrap().permissions().mode() & 0o777, 0o755);
+    assert_eq!(std::fs::metadata(&first).unwrap().permissions().mode() & 0o777, 0o700);
+    let mut same_room = scope(); same_room.requester = "@another:example.org".into(); same_room.thread = "$other".into();
+    assert_eq!(first, chat_directory(&base, OWNER, &same_room).unwrap());
+    assert_ne!(first, chat_directory(&base, "@another:example.org", &scope()).unwrap());
+    std::fs::remove_dir(&first).unwrap();
+    symlink(&base, &first).unwrap();
+    assert!(matches!(chat_directory(&base, OWNER, &scope()), Err(FileError::Boundary)));
+}
 fn scope() -> Scope {
     Scope {
         agent: "agent-a".into(),

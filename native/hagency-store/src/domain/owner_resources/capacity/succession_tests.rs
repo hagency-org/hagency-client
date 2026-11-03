@@ -4,6 +4,32 @@ use {AGENT_MATRIX_CAPABILITY as MATRIX, ManagedAgentMatrixChallenge as Challenge
 const OWNER: &str = "@owner:c.test";
 const MANAGER: &str = "@manager:c.test";
 
+#[test]
+fn calendar_v4_receipt_vectors_preserve_zone_boundaries_and_digests() {
+    let vectors: Vec<serde_json::Value> = serde_json::from_str(include_str!("../pool-grant-calendar-v4.json")).unwrap();
+    for vector in vectors {
+        let receipt: NativeGrantReceipt = serde_json::from_value(vector["receipt"].clone()).unwrap();
+        assert!(receipt.supported_shape());
+        assert_eq!(canonical::digest(&serde_json::to_value(&receipt).unwrap()).unwrap(), vector["digest"]);
+        let period = OwnerGrantPeriod::of_receipt(&receipt).unwrap();
+        period.require_current(receipt.period_start_ms).unwrap();
+        period.require_current(receipt.period_end_ms - 1).unwrap();
+        assert!(period.require_current(receipt.period_end_ms).is_err());
+        let next = period.next().unwrap();
+        assert_eq!(next.calendar, receipt.calendar);
+        assert_eq!(next.period_start_ms, receipt.period_end_ms);
+        let mut bad = receipt.clone();
+        bad.period_end_ms += 1;
+        assert!(!bad.supported_shape());
+        bad = receipt.clone();
+        bad.version = 2;
+        assert!(!bad.supported_shape(), "legacy versions must not smuggle a calendar");
+        bad = receipt;
+        bad.calendar = None;
+        assert!(!bad.supported_shape(), "V4 must pin its owner calendar");
+    }
+}
+
 struct Chain {
     temp: tempfile::TempDir,
     registry: OwnerResourceRegistry,
@@ -40,7 +66,8 @@ fn month_end() -> u64 {
     month(graphs::now_ms().unwrap()).unwrap().2
 }
 fn selection(id: &str, tokens: u64, managers: &[&str], delegation: u64) -> OwnerGrantSelection {
-    OwnerGrantSelection {
+    OwnerGrantSelection { per_request_tokens: None,
+        calendar: None,
         command_id: format!("{id}_consent"),
         grant_id: id.into(),
         coordinator_mxid: OWNER.into(),

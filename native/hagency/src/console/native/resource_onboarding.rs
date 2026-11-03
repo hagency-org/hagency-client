@@ -6,7 +6,7 @@ use hagency_store::management::{
 };
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ManagementRuntime {
     Codex,

@@ -56,6 +56,7 @@ pub fn seed_owned_state(state: &Path) {
                 input: 20,
                 output: 5,
                 cached_input: 0,
+                cache_write_input: None,
                 reasoning_output: 0,
                 accounting_version: "release-fixture".into(),
             },

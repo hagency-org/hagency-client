@@ -1,7 +1,7 @@
 //! Local execution history, never current readiness or permission to start.
 use super::*;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SharedSuccessorSummary {
     pub assignment_id: String,
@@ -15,7 +15,7 @@ pub struct SharedSuccessorSummary {
     pub saved_start: bool,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SharedSuccessorPage {
     pub items: Vec<SharedSuccessorSummary>,
@@ -115,9 +115,10 @@ fn summary(
             .transpose()?;
         (original.command_id.clone(), 1, state)
     };
+    let period_id=periods::current(db,&child,graphs::now_ms()?)?.map(|p|p.id);
     let saved_id: Option<String> = db.query_row(
-        "SELECT id FROM owner_shared_start_intents WHERE child_id=?1 AND profile=?2 AND device_id=?3 AND device_generation=?4 AND NOT EXISTS(SELECT 1 FROM owner_shared_demand_decisions d WHERE d.start_intent_id=owner_shared_start_intents.id) ORDER BY ledger_revision DESC LIMIT 1",
-        params![child,profile.digest,device,generation], |r| r.get(0),
+        "SELECT id FROM owner_shared_start_intents WHERE child_id=?1 AND profile=?2 AND device_id=?3 AND device_generation=?4 AND period_id IS ?5 AND NOT EXISTS(SELECT 1 FROM owner_shared_demand_decisions d WHERE d.start_intent_id=owner_shared_start_intents.id) ORDER BY ledger_revision DESC LIMIT 1",
+        params![child,profile.digest,device,generation,period_id], |r| r.get(0),
     ).optional()?;
     if let Some(id) = &saved_id {
         let saved = start_selection::saved_start(db, profile, id)?;

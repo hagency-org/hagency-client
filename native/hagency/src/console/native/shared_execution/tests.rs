@@ -148,7 +148,7 @@ pub(crate) fn management(path: &str, body: &Value, s: &mut super::State) -> Opti
             None
         };
         return Some(
-            json!({"observationId":r.observation_id,"receiptDigest":digest(&r).unwrap(),"activity":active,"state":r.state,"observedAtMs":at}),
+            json!({"observationId":r.observation_id,"receiptDigest":digest(&r).unwrap(),"activity":active,"state":if r.state=="not_started" {"stopped"} else {&r.state},"observedAtMs":at}),
         );
     }
     #[cfg(feature = "shared-successors")]
@@ -274,6 +274,52 @@ async fn fixture() -> (Fixture, SharedExecutionTransport, SharedRuntimeCommand) 
         prepared_with(Fixture::with_provider("openai.chatgpt", "fixture_account").await).await;
     runtime_fixture(f, t, c).await
 }
+
+#[tokio::test]
+async fn native_shared_recurring_expired_initial_command_uploads_exact_nonissuance_proof() {
+    use hagency_core::recurring_quota::{Cadence, Calendar, RenewalMode};
+    let f = Fixture::with_provider_budget_calendar("openai.chatgpt", "fixture_account", 1000, 700, 60000,
+        Some(Calendar {cadence:Cadence::Daily,time_zone:"America/Los_Angeles".into()})).await;
+    let g = f.state.lock().unwrap().grant.clone().unwrap();
+    let model = hagency_core::qualification::ModelProfile {framework:"codex".into(), model:"gpt-5.6-sol".into(),provider:None,reasoning:Some("medium".into())};
+    let role = hagency_core::qualification::roles().find(|r|hagency_core::qualification::qualifies(&model,r,None)).unwrap();
+    let definition = ManagedAgentDefinition {name:"Recurring fixture".into(),capability:role.into(),description:"Offline proof".into(),tool_mode:"none".into()};
+    let c = ManagedAgentReserveCommand {
+        version:2,renewal_mode:Some(RenewalMode::Automatic),allocation_generation:None,pool_grant:Some(g.clone()),
+        capability:"hagency.pool_agents.v1".into(),operation:"agent.reserve".into(),
+        command_id:"recurring_reserve".into(),request_id:"recurring_request".into(),request_revision:2,
+        proposed_agent_id:"recurring_agent".into(),manager_mxid:"@manager:test".into(),
+        project_id:String::new(),project_revision:0,setup_id:String::new(),setup_binding_revision:0,domain_project_id:String::new(),
+        room_id:"!discussion:test".into(),authority_revision:g.grant_revision,decision_actor_mxid:g.owner_mxid.clone(),decision_digest:"d".repeat(64),
+        allocation_id:"recurring_request".into(),allocation_receipt_digest:String::new(),grant_receipt_digest:digest(&g).unwrap(),
+        enrollment_id:g.enrollment_id.clone(),executor_device_id:g.executor_device_id.clone(),executor_generation:g.executor_generation,
+        resource_id:g.resource_id.clone(),resource_revision:g.resource_revision.clone(),definition_digest:digest(&definition).unwrap(),definition,
+        requested_tokens:100,period_key:g.period_key.clone(),issued_at_ms:now()-100,expires_at_ms:now()+60000,
+    };
+    c.validate("@owner:test").unwrap();
+    f.state.lock().unwrap().agent=Some(serde_json::to_value(&c).unwrap());
+    let transport = ManagedAgentTransport::new(f.owner.management(package(1)).await.unwrap());
+    let (f,t,mut command)=runtime_fixture(f,transport,c).await;
+    command.issued_at_ms=now()-50;
+    command.expires_at_ms=now()-1;
+    {
+        let mut s=f.state.lock().unwrap();
+        s.shared.command=Some(command.clone());
+        s.shared.cleanup=true;
+    }
+    for _ in 0..2 {
+        assert!(matches!(t.poll(&f.registry,None).await.unwrap(),SharedExecutionProgress::Recorded{process_state:Some(ref state),..} if state=="not_started"));
+    }
+    assert_eq!(rows(&f,"owner_shared_runtime_lifetimes"),0);
+    assert_eq!(rows(&f,"owner_shared_unstarted_runtimes"),1);
+    let receipt=f.state.lock().unwrap().shared.processes.values().next().unwrap().clone();
+    assert_eq!(f.state.lock().unwrap().shared.process_writes,1);
+    assert!(receipt.process_digest.is_none());
+    assert!(matches!(t.recover(&f.registry,command.command_id.clone(),digest(&command).unwrap(),Some(receipt.observation_id)).await.unwrap(),SharedExecutionProgress::Recorded{process_state:Some(ref state),..} if state=="not_started"));
+    assert_eq!(f.state.lock().unwrap().shared.starts,0);
+    f.stop().await;
+}
+
 async fn runtime_fixture(
     f: Fixture,
     t: ManagedAgentTransport,

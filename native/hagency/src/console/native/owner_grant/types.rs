@@ -2,6 +2,9 @@
 /// accounting month or raw receipt may be supplied by a script.
 #[derive(Clone)]
 pub struct OwnerGrantChoices {
+    pub per_request_tokens: Option<u64>,
+
+    pub calendar: Option<hagency_core::recurring_quota::Calendar>,
     pub coordinator_mxid: String,
     pub delegation_expires_at_ms: u64,
     pub allow_self_approval: bool,
@@ -28,7 +31,7 @@ impl OwnerGrantSuccessionKind {
 /// Native state of a successor record: pending until the server's acceptance
 /// is observed, then effective; rejected or (a never-started renewal)
 /// cancelled successors never held capacity.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OwnerGrantSuccessionState {
     Pending,
@@ -48,7 +51,7 @@ impl OwnerGrantSuccessionState {
     }
 }
 /// The predecessor a successor record names, with the hold it carries.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OwnerGrantSuccessionSummary {
     pub kind: OwnerGrantSuccessionKind,
@@ -58,14 +61,14 @@ pub struct OwnerGrantSuccessionSummary {
     pub carried_retained_tokens: u64,
 }
 /// Live Agents a successor carries and the hold its amount must cover.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OwnerGrantFloor {
     pub children: u64,
     pub retained_tokens: u64,
 }
 /// Read-only facts for the native successor form. Creates nothing.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OwnerGrantSuccessionForm {
     pub kind: OwnerGrantSuccessionKind,
     pub contribution_id: String,
@@ -86,9 +89,14 @@ pub struct OwnerGrantSuccessionForm {
 
 /// Safe native confirmation summary; the proof and private identity stay in
 /// the opaque review handle. The period is the registry's frozen UTC month.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OwnerGrantSummary {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub per_request_tokens: Option<u64>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar: Option<hagency_core::recurring_quota::Calendar>,
     pub intent_id: String,
     /// The original grant id this intent reserves or reserved.
     pub grant_id: String,
@@ -107,7 +115,7 @@ pub struct OwnerGrantSummary {
     pub succession: Option<OwnerGrantSuccessionSummary>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OwnerGrantState {
     ReviewRequired,
@@ -116,7 +124,7 @@ pub enum OwnerGrantState {
     Declined,
     ReviewExpired,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OwnerGrantProgress {
     pub summary: OwnerGrantSummary,
@@ -129,7 +137,7 @@ pub struct OwnerGrantProgress {
 }
 
 /// Descriptive canonical settlement; it grants no authority to reserve again.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OwnerGrantClosure {
     pub retained_tokens: u64,
@@ -140,7 +148,7 @@ pub struct OwnerGrantClosure {
 
 /// Native-derived facts captured with a review. They are descriptive, not a
 /// credential. Available capacity is rechecked inside the grant transaction.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OwnerGrantReviewContext {
     pub server_origin: String,
@@ -178,8 +186,10 @@ fn capacity_blocker(budget: &hagency_core::allocation::Budget) -> Option<String>
 
 /// Read-only facts for a native publication form. Opening the form creates no
 /// reservation, grant intent, provider login or server publication.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OwnerGrantForm {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar: Option<hagency_core::recurring_quota::Calendar>,
     pub contribution_id: String,
     pub resource_id: String,
     pub label: String,
@@ -260,6 +270,11 @@ impl Period {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Selection {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    per_request_tokens: Option<u64>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    calendar: Option<hagency_core::recurring_quota::Calendar>,
     command_id: String,
     grant_id: String,
     coordinator_mxid: String,
@@ -270,7 +285,8 @@ struct Selection {
 }
 impl Selection {
     fn native(&self) -> OwnerGrantSelection {
-        OwnerGrantSelection {
+        OwnerGrantSelection { per_request_tokens: self.per_request_tokens,
+            calendar: self.calendar.clone(),
             command_id: self.command_id.clone(),
             grant_id: self.grant_id.clone(),
             coordinator_mxid: self.coordinator_mxid.clone(),
@@ -282,6 +298,8 @@ impl Selection {
     }
     fn from_native(value: &OwnerGrantSelection) -> Self {
         Self {
+            per_request_tokens: value.per_request_tokens,
+            calendar: value.calendar.clone(),
             command_id: value.command_id.clone(),
             grant_id: value.grant_id.clone(),
             coordinator_mxid: value.coordinator_mxid.clone(),
@@ -360,7 +378,8 @@ fn legacy_receipt_version() -> u16 { 1 }
 fn is_legacy_receipt(version: &u16) -> bool { *version == 1 }
 impl Original {
     fn summary(&self) -> OwnerGrantSummary {
-        OwnerGrantSummary {
+        OwnerGrantSummary { per_request_tokens: self.selection.per_request_tokens,
+            calendar: self.selection.calendar.clone(),
             intent_id: self.intent_id.clone(),
             grant_id: self.selection.grant_id.clone(),
             owner_mxid: self.binding.owner_mxid.clone(),
@@ -384,9 +403,12 @@ impl Original {
         }
     }
     fn validate(&self, identity: &Identity) -> Result<(), NativeError> {
-        if !matches!(self.receipt_version, 1 | 2 | 3)
+        if !matches!(self.receipt_version, 1 | 2 | 3 | 4 | 5)
             || (self.receipt_version >= 2 && self.admission.is_none())
-            || (self.receipt_version == 3) != self.succession.is_some()
+            || (self.receipt_version < 3 && self.succession.is_some())
+            || (self.receipt_version == 3 && self.succession.is_none())
+            || (self.receipt_version < 5 && (self.receipt_version == 4) != self.selection.calendar.is_some())
+            || (self.receipt_version == 5) != self.selection.per_request_tokens.is_some()
         {
             return Err(history_error());
         }
@@ -426,9 +448,14 @@ impl Original {
         if let Some(value) = &b.verified_resource_binding {
             hash(value)?;
         }
-        self.period.validate()?;
+        if let Some(calendar) = &s.calendar {
+            calendar.validate_period(&hagency_core::recurring_quota::Period { key: self.period.key.clone(), start_ms: self.period.start_ms, end_ms: self.period.end_ms }).map_err(|_| history_error())?;
+        } else {
+            self.period.validate()?;
+        }
         positive(b.executor_generation)?;
         positive(s.allocated_tokens)?;
+        if let Some(limit) = s.per_request_tokens { positive(limit)?; if limit > s.allocated_tokens { return Err(history_error()); } }
         positive(s.delegation_expires_at_ms)?;
         if b.owner_mxid != identity.owner
             || b.executor_device_id != identity.device
@@ -460,6 +487,7 @@ impl Original {
             _ => false,
         };
         succession
+            && receipt.calendar == s.calendar
             && receipt.version == self.receipt_version
             && receipt.admission_request_id.as_deref() == if self.receipt_version >= 2 {
                 self.admission.as_ref().map(|a| a.request_id.as_str())
@@ -479,6 +507,7 @@ impl Original {
             && receipt.allow_self_approval == s.allow_self_approval
             && receipt.eligible_managers == s.eligible_managers
             && receipt.allocated_tokens == s.allocated_tokens
+            && receipt.per_request_tokens == s.per_request_tokens
             && receipt.period_key == self.period.key
             && receipt.period_start_ms == self.period.start_ms
             && receipt.period_end_ms == self.period.end_ms

@@ -138,6 +138,10 @@ impl ManagedAgentTransport {
                 .await
                 .map_err(storage)?
                 .map(Receipt::Fence),
+            Command::RenewPeriod(c) => {
+                let enrollment = self.transport.enrollment(&scope, &c.current_grant, false).await?;
+                registry.recover_managed_agent_period(enrollment, c.clone()).await.map_err(storage)?.map(Receipt::RenewPeriod)
+            }
         };
         self.transport.check_scope(&scope, false).await?;
         let receipt = if let Some(old) = old {
@@ -151,7 +155,7 @@ impl ManagedAgentTransport {
                     command_id: command.id().into(),
                 });
             }
-            let active = matches!(command, Command::Reserve(_));
+            let active = matches!(command, Command::Reserve(_) | Command::RenewPeriod(_));
             if active && original.executor_generation != scope.device.generation() {
                 return Err(failure(409, "managed_agent_enrollment_changed"));
             }
@@ -164,7 +168,10 @@ impl ManagedAgentTransport {
                 )
                 .await
                 .map_err(storage)?) };
-            let grant = original.pool_grant.as_ref().or_else(|| project.as_ref().map(|p| &p.grant_receipt)).ok_or_else(invalid)?;
+            let grant = match command {
+                Command::RenewPeriod(c) => &c.current_grant,
+                _ => original.pool_grant.as_ref().or_else(|| project.as_ref().map(|p| &p.grant_receipt)).ok_or_else(invalid)?,
+            };
             self.transport.check_scope(&scope, false).await?;
             let enrollment = self
                 .transport
@@ -184,6 +191,11 @@ impl ManagedAgentTransport {
                         )
                         .await
                         .map_err(storage)?,
+                ),
+                Command::RenewPeriod(c) => Receipt::RenewPeriod(
+                    registry.renew_managed_agent_period(VerifiedManagedAgentPeriodDelivery::new(
+                        enrollment, c.clone(), delivery.command_digest.clone(), true, until,
+                    ).map_err(storage)?).await.map_err(storage)?,
                 ),
                 Command::Fence(c) => Receipt::Fence(
                     registry

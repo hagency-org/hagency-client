@@ -72,7 +72,7 @@ pub(super) fn account_budget(db: &Connection, child: &str, binding: &Binding) ->
             )?;
             if generation != Some(1)
                 || saved != expected
-                || successor::calls(db, &id, &saved)?.unrepresentable
+                || successor::calls_all(db, &id, &saved)?.unrepresentable
             {
                 return Err(Error::Capacity);
             }
@@ -88,7 +88,7 @@ pub(super) fn account_budget(db: &Connection, child: &str, binding: &Binding) ->
         .is_none_or(|n| budget.pool.committed > n)
         || budget.seat.quota.is_some_and(|n| budget.seat.committed > n)
         || budget.seat.status == allocation::SeatStatus::PeriodMismatch
-        || budget.pool.period.as_deref() != Some("monthly")
+        || (!periods::recurring(&binding.command) && budget.pool.period.as_deref() != Some("monthly"))
     {
         return Err(Error::Capacity);
     }
@@ -160,6 +160,7 @@ pub(super) async fn prepare(
         if prior.is_none() {
             bounded_row(&tx,"owner_managed_calls","id",&id,100_000)?;
             tx.execute("INSERT INTO owner_managed_calls(id,child_id,execution_id,immutable_digest,assignment_generation,state,reserved_tokens,known_consumed_tokens,usage_complete) VALUES(?1,?2,?3,?4,1,'prepared',?5,0,0)",params![id,a.sink.child(),w.execution_id,digest,tokens])?;
+            periods::pin_call(&tx,a.sink.child(),&id)?;
             let rev=revision(&tx)?;
             tx.execute("INSERT INTO owner_managed_call_pins VALUES(?1,?2,?3,?4,NULL)",params![id,binding,input,rev])?;
             tx.execute("INSERT INTO owner_shared_successor_call_pins VALUES(?1,?2,?3,?4)",params![id,a.sink.command_id(),w.id,input])?;
@@ -222,6 +223,7 @@ pub(super) async fn issue(
                 return Err(Error::LocalAuthority);
             }
             exact_pin(&tx, &a, &w, &attempt.call.call_id)?;
+            periods::require_call_current(&tx,a.sink.child(),&attempt.call.call_id)?;
             context::require_call(&tx,&w,&attempt.call.call_id,attempt.input.as_ref())?;
             let (_, binding, _) = budget(&tx, &a)?;
             let h = calls::history(&tx, a.sink.child(), &attempt.call.call_id)?;

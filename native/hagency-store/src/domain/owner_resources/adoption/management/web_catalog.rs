@@ -28,8 +28,44 @@ fn revision(db:&Connection,profile:&ProfileAuthority,resource:&str)->Result<Stri
 fn retire_blocker(db:&Connection,id:&str)->Result<Option<String>,Error>{
     let templates:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM agent_definitions WHERE resource_id=?1)",[id],|r|r.get(0))?;
     if templates{return Ok(Some("agent_templates_exist".into()))}
-    let used:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM engagements WHERE resource_id=?1 AND state IN('pending','reserved','active') UNION ALL SELECT 1 FROM owner_capacity_grants WHERE resource_id=?1 AND active=1)",[id],|r|r.get(0))?;
-    Ok((used||unsettled_exact_resource(db,id)?).then(||"resource_in_use".into()))
+    let used:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM engagements WHERE resource_id=?1 AND state IN('pending','reserved','active'))",[id],|r|r.get(0))?;
+    if used {return Ok(Some("active_agents".into()))}
+    // Retirement removes the owner's listing, not its accounting history.
+    // An expired legacy grant can remain active in the settlement ledger;
+    // that flag alone does not mean it can authorize new work. Recurring and
+    // future grants still protect their owner's outstanding authorization.
+    let now=graphs::now_ms()?;
+    let mut grants=db.prepare("SELECT receipt FROM owner_capacity_grants WHERE resource_id=?1 AND active=1")?;
+    for raw in grants.query_map([id],|r|r.get::<_,String>(0))? {
+        let Ok(grant)=serde_json::from_str::<NativeGrantReceipt>(&raw?) else {
+            return Ok(Some("grant_state_unknown".into()));
+        };
+        if grant.resource_id!=id {return Ok(Some("grant_state_unknown".into()))}
+        if grant.calendar.is_some() || (grant.period_end_ms>now && grant.delegation_expires_at_ms>now) {
+            return Ok(Some("active_grant".into()));
+        }
+    }
+    let mut children=db.prepare("SELECT a.id,a.state,a.permanent_fence FROM owner_managed_agents a WHERE a.pool_grant_id IN(SELECT id FROM owner_capacity_grants WHERE resource_id=?1) OR a.project_reservation_id IN(SELECT p.id FROM owner_project_reservations p JOIN owner_capacity_grants g ON g.id=p.grant_id WHERE g.resource_id=?1)")?;
+    for row in children.query_map([id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,bool>(2)?)))? {
+        let (child,state,fenced)=row?;
+        if !fenced || state!="fenced" {return Ok(Some("active_agents".into()))}
+        // Provider usage may arrive after the process stopped. Keep that
+        // liability intact, while requiring actual supervisor exit evidence
+        // for every original process and successor before hiding the pool.
+        let uncertain:bool=db.query_row("SELECT EXISTS(
+            SELECT 1 FROM owner_managed_effects WHERE child_id=?1 AND state IN('issued','unknown')
+            UNION ALL SELECT 1 FROM owner_shared_runtime_lifetimes l WHERE l.child_id=?1 AND NOT EXISTS(SELECT 1 FROM owner_shared_process_observations o WHERE o.child_id=l.child_id AND json_extract(o.payload,'$.state')='stopped')
+            UNION ALL SELECT 1 FROM owner_shared_successor_attempts a WHERE a.child_id=?1 AND NOT EXISTS(SELECT 1 FROM owner_shared_successor_observations o WHERE o.attempt_id=a.id AND json_extract(o.payload,'$.state')='stopped')
+            UNION ALL SELECT 1 FROM owner_managed_runtime_lifetimes l WHERE l.child_id=?1 AND l.issued_revision IS NOT NULL AND NOT EXISTS(SELECT 1 FROM owner_managed_runtime_observations o WHERE o.child_id=l.child_id AND json_extract(o.payload,'$.record.state')='stopped')
+        )",[&child],|r|r.get(0))?;
+        if uncertain {return Ok(Some("runtime_not_stopped".into()))}
+        let without_custody:bool=db.query_row("SELECT (
+            EXISTS(SELECT 1 FROM owner_managed_effects WHERE child_id=?1 AND state='qualified')
+            OR EXISTS(SELECT 1 FROM owner_managed_calls WHERE child_id=?1 AND state IN('issued','unknown'))
+        ) AND NOT EXISTS(SELECT 1 FROM owner_shared_runtime_lifetimes WHERE child_id=?1 UNION ALL SELECT 1 FROM owner_managed_runtime_lifetimes WHERE child_id=?1 AND issued_revision IS NOT NULL)",[&child],|r|r.get(0))?;
+        if without_custody {return Ok(Some("runtime_not_stopped".into()))}
+    }
+    Ok(None)
 }
 fn agents(db:&Connection,profile:&ProfileAuthority,after:Option<&str>)->Result<(Vec<WebCatalogAgent>,Option<String>),Error>{
     let mut rows=db.prepare("SELECT e.id,e.name,e.resource_id FROM engagements e JOIN owner_resource_grants g ON g.resource_id=e.resource_id WHERE g.profile=?1 AND g.active=1 AND COALESCE(e.preset_id,'')='' AND e.state='pending' AND e.id>?2 AND NOT EXISTS(SELECT 1 FROM effects f WHERE f.engagement_id=e.id) ORDER BY e.id LIMIT 17")?.query_map(params![profile.digest,after.unwrap_or("")],|r|Ok(WebCatalogAgent{id:r.get(0)?,name:r.get(1)?,resource_id:r.get(2)?}))?.collect::<Result<Vec<_>,_>>()?;

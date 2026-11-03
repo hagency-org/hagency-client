@@ -12,14 +12,14 @@ use hagency_store::{
 };
 use std::time::{Duration, Instant};
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceActivationResource {
     pub id: String,
     pub model: String,
     pub framework: String,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceActivationContext {
     pub kind: DeviceSetupKind,
@@ -71,6 +71,12 @@ impl ResourceActivationReview {
 }
 #[cfg(any(test, feature = "test-support"))]
 static FIXTURE_INSTALLATION: StdMutex<Option<std::path::PathBuf>> = StdMutex::new(None);
+/// Preserve explicit development startup selection when installing its service.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn resource_activation_fixture_root() -> Option<std::path::PathBuf> {
+    FIXTURE_INSTALLATION.lock().unwrap_or_else(|p| p.into_inner()).clone()
+}
 /// Explicit test binary startup only. Never accepts environment configuration.
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]

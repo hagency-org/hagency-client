@@ -52,6 +52,29 @@ provider-authenticated billing or completed M7 parity.
 
 Opaque evidence retains optional total and last counters under the original session source and sequence. Counters remain untrusted observations, and their presence proves neither complete capture nor quota authority.
 
+### 2026-11-01 protocol compatibility amendment
+
+The installed codex-cli 0.166.0 schema, generated locally with
+`codex app-server generate-json-schema --out <directory>`, confirms that
+`TokenUsageBreakdown.cacheWriteInputTokens` is an optional integer with default
+zero. The exact `v2/ThreadTokenUsageUpdatedNotification.json` is retained in
+`native/hagency-runtime/tests/fixtures/codex-token-usage-schema-0.166.0.json`.
+The live scoped decoder now applies that documented default only when the member
+is omitted from an actual breakdown object. This supersedes the earlier explicit
+choice above to preserve that wire omission as unknown. An explicit null,
+negative, noninteger, unsafe or malformed value remains invalid and unknown;
+missing breakdown objects do not acquire a zero. The other five counters and
+both `total` and `last` objects remain required.
+
+The same schema makes `modelContextWindow` optional and nullable. Its absence
+stays `None` without marking consumption evidence missing; a malformed supplied
+capacity remains invalid. Normalization still requires actual known categories,
+and settlement now checks missing required-field diagnostics in addition to the
+existing invalid, unsupported, contradiction and complete-capture guards.
+Generic metering DTOs receive no default, stored observations are not rewritten,
+and unknown historical cache-write metrics remain unknown. This change does not
+grant stream completeness or replace host source, sequence and terminal proof.
+
 ## Alternatives Considered
 
 Adding total and last counters or treating context-window capacity as consumption would invent arithmetic. Fabricating transcript input or deriving authority from textual IDs would lose the original runtime evidence boundary.

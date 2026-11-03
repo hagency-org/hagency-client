@@ -81,7 +81,7 @@ impl Manifest {
 }
 
 /// No document contents, principal names, message tokens or source paths.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OperatorGraphArchiveReceipt {
     pub command_id: String,

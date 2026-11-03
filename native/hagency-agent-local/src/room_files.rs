@@ -127,6 +127,34 @@ pub struct Workspace {
     owner: String,
     binding: (String, String, String),
 }
+
+/// A chat-only provider's stable room directory beneath the owner's configured
+/// workspace. This grants no host file capability and never relocates existing
+/// files. An existing flat workspace remains untouched beside this new child.
+pub fn chat_directory(base: &Path, owner: &str, scope: &Scope) -> Result<PathBuf> {
+    if !base.is_absolute() || base.canonicalize().ok().as_deref() != Some(base) {
+        return Err(FileError::Boundary);
+    }
+    scope.validate().map_err(|_| FileError::Invalid)?;
+    crate::key(owner).map_err(|_| FileError::Invalid)?;
+    let mut directory_handle = File::from(
+        fs::open("/", directory_flags(), Mode::empty()).map_err(|_| FileError::Io)?,
+    );
+    for part in base.components() {
+        match part {
+            Component::RootDir => {},
+            Component::Normal(name) => directory_handle = directory(&directory_handle, name)?,
+            _ => return Err(FileError::Boundary),
+        }
+    }
+    let work = child_directory(&directory_handle, ".hagency-room-workspaces")?;
+    let key = digest(&serde_json::to_vec(&(owner, &scope.agent, &scope.binding, &scope.room))
+        .map_err(|_| FileError::Invalid)?);
+    let name = format!("binding_{key}");
+    let _room = child_directory(&work, &name)?;
+    Ok(base.join(".hagency-room-workspaces").join(name))
+}
+
 impl Workspace {
     /// Generates the binding root beneath a host-owned owner_<sha256> directory.
     /// Symlink ancestors, group/world access and provider/home roots are refused.

@@ -1,0 +1,626 @@
+//! Native allocation and shared-execution workers owned by the daemon.
+//!
+//! Ported from Hagency Desktop's `allocation_worker`, `shared_worker`,
+//! `shared_intake`, `shared_budget` and `shared_successors`. The native engine
+//! still owns every journal, receipt, fence and process; these loops only
+//! drive the existing executor operations in their established order with
+//! independent original-command cursors.
+//!
+//! Pausing closes admission. Steps that can begin a *new* model turn (new or
+//! saved demand intake, budget demand intake, saved successor starts) are
+//! skipped while admission is closed. Stop recovery, budget ledger deltas,
+//! Agent reserve/fence, Matrix observation, runtime delivery and cleanup,
+//! successor process polling and settlement continue, so running work is
+//! fenced, finishes and settles normally.
+use crate::native_owner::NativeError;
+use std::{
+    collections::HashMap,
+    future::Future,
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
+
+pub type StepFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Option<String>, NativeError>> + Send + 'a>>;
+
+pub use crate::console::hosting::Admission;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Step {
+    DemandStop,
+    BudgetDelta,
+    BudgetDemandRecover,
+    BudgetProcess,
+    BudgetDemand,
+    IntakeDemandRecover,
+    IntakeDemand,
+    Agent,
+    Matrix,
+    Runtime,
+    SuccessorResume,
+    SuccessorPoll,
+    Settlement,
+}
+
+impl Step {
+    /// Steps that can begin a new model turn.
+    pub fn admits_work(self) -> bool {
+        matches!(
+            self,
+            Self::BudgetDemandRecover
+                | Self::BudgetDemand
+                | Self::IntakeDemandRecover
+                | Self::IntakeDemand
+                | Self::SuccessorResume
+        )
+    }
+}
+
+/// Desktop's order: stop recovery precedes every launch path; reserve/fence
+/// and Matrix readiness precede runtime delivery; settlement observes last.
+pub const ORDER: [Step; 13] = [
+    Step::DemandStop,
+    Step::BudgetDelta,
+    Step::BudgetDemandRecover,
+    Step::BudgetProcess,
+    Step::BudgetDemand,
+    Step::IntakeDemandRecover,
+    Step::IntakeDemand,
+    Step::Agent,
+    Step::Matrix,
+    Step::Runtime,
+    Step::SuccessorResume,
+    Step::SuccessorPoll,
+    Step::Settlement,
+];
+
+/// One executor operation per step. `run` returns the next cursor for that
+/// step's own journal; an error keeps the previous cursor.
+pub trait PassIo: Send + Sync {
+    fn enabled(&self, step: Step) -> bool;
+    fn run(&self, step: Step, after: Option<String>) -> StepFuture<'_>;
+}
+
+#[derive(Default, Debug)]
+pub struct Cursors(HashMap<Step, Option<String>>);
+
+impl Cursors {
+    pub fn get(&self, step: Step) -> Option<String> {
+        self.0.get(&step).cloned().flatten()
+    }
+}
+
+/// Outcome of one pass, for health reporting only.
+#[derive(Default, Debug, PartialEq, Eq)]
+pub struct PassReport {
+    pub ran: usize,
+    pub failed: usize,
+    pub skipped_for_admission: usize,
+    pub last_error: Option<String>,
+}
+
+pub async fn pass(
+    io: &(impl PassIo + ?Sized),
+    cursors: &mut Cursors,
+    live: impl Fn() -> bool,
+    admission: &Admission,
+) -> PassReport {
+    let mut report = PassReport::default();
+    for step in ORDER {
+        if !live() {
+            return report;
+        }
+        if !io.enabled(step) {
+            continue;
+        }
+        let guard = if step.admits_work() {
+            match admission.enter() {
+                Some(guard) => Some(guard),
+                None => {
+                    report.skipped_for_admission += 1;
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
+        let result = io.run(step, cursors.get(step)).await;
+        drop(guard);
+        report.ran += 1;
+        // A retired host records nothing from a late reply.
+        if !live() {
+            return report;
+        }
+        match result {
+            Ok(next) => {
+                cursors.0.insert(step, next);
+            }
+            Err(error) => {
+                tracing::debug!(?step, status = error.status, code = %error.code, "Owner daemon executor step awaits recovery");
+                report.failed += 1;
+                report.last_error = Some(error.code);
+            }
+        }
+    }
+    report
+}
+
+/// Retire/wake control and retained task custody for one worker.
+#[derive(Default)]
+pub struct Control {
+    pub retired: AtomicBool,
+    pub wake: tokio::sync::Notify,
+}
+
+#[derive(Default)]
+pub struct Worker {
+    pub control: Arc<Control>,
+    task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+
+impl Worker {
+    pub fn retire(&self) {
+        self.control.retired.store(true, Ordering::Release);
+        self.control.wake.notify_one();
+    }
+    pub fn retired(&self) -> bool {
+        self.control.retired.load(Ordering::Acquire)
+    }
+    pub fn wake(&self) {
+        self.control.wake.notify_one();
+    }
+    pub async fn install(&self, task: tokio::task::JoinHandle<()>) {
+        *self.task.lock().await = Some(task);
+    }
+    /// A cancelled waiter leaves the original handle for the next drain;
+    /// in-flight receipt transactions finish before the root is released.
+    pub async fn drain(&self) {
+        let mut task = self.task.lock().await;
+        if let Some(handle) = task.as_mut() {
+            let _ = handle.await;
+        }
+        task.take();
+    }
+}
+
+pub async fn idle(control: &Control, period: Duration) {
+    tokio::select! {
+        _ = control.wake.notified() => {},
+        _ = tokio::time::sleep(period) => {},
+    }
+}
+
+#[cfg(feature = "resource-adoption")]
+pub mod native {
+    //! Real executor bindings. Compiled with the adopted-resource features
+    //! that Hagency Desktop already uses for pool hosting.
+    use super::*;
+    use crate::native_owner::{
+        AdoptedAllocationExecutor, AdoptedManagementSelection, AdoptedSharedExecutor,
+        AgentSettlementProgress, AllocationProgress, ManagedAgentProgress, ManagedMatrixProgress,
+        ManagementPackage, NativeOwner, SharedExecutionProgress,
+    };
+
+    fn progress(after: Option<String>, p: SharedExecutionProgress) -> Option<String> {
+        match p {
+            SharedExecutionProgress::Running { command_id }
+            | SharedExecutionProgress::Stopping { command_id }
+            | SharedExecutionProgress::HistoricalEvidenceMissing { command_id }
+            | SharedExecutionProgress::Recorded { command_id, .. } => Some(command_id),
+            SharedExecutionProgress::Idle => after,
+        }
+    }
+
+    impl PassIo for AdoptedSharedExecutor {
+        fn enabled(&self, step: Step) -> bool {
+            match step {
+                Step::DemandStop | Step::IntakeDemandRecover | Step::IntakeDemand => {
+                    cfg!(feature = "shared-intake")
+                }
+                Step::BudgetDelta
+                | Step::BudgetDemandRecover
+                | Step::BudgetProcess
+                | Step::BudgetDemand => cfg!(feature = "shared-budget-execution"),
+                Step::SuccessorResume | Step::SuccessorPoll => cfg!(feature = "shared-successors"),
+                Step::Agent | Step::Matrix | Step::Runtime | Step::Settlement => true,
+            }
+        }
+        fn run(&self, step: Step, after: Option<String>) -> StepFuture<'_> {
+            Box::pin(async move {
+                match step {
+                    Step::DemandStop => self
+                        .resume_next_demand_stop(after)
+                        .await
+                        .map(|s| s.map(|v| v.command_id)),
+                    Step::IntakeDemandRecover => self
+                        .resume_next_demand(after)
+                        .await
+                        .map(|s| s.map(|v| v.demand_id)),
+                    Step::IntakeDemand => self.poll_demand(after).await.map(|s| s.next_after),
+                    #[cfg(feature = "shared-budget-execution")]
+                    Step::BudgetDelta => self.poll_budget(after).await.map(|s| {
+                        use crate::native_owner::AgentBudgetProgress as B;
+                        match s {
+                            B::Idle => None,
+                            B::HistoricalReceiptMissing { command_id }
+                            | B::Recorded { command_id, .. } => Some(command_id),
+                        }
+                    }),
+                    #[cfg(feature = "shared-budget-execution")]
+                    Step::BudgetDemandRecover => self
+                        .resume_next_budget_demand(after)
+                        .await
+                        .map(|s| s.map(|v| v.demand_id)),
+                    #[cfg(feature = "shared-budget-execution")]
+                    Step::BudgetProcess => self
+                        .poll_budget_successor(after.clone())
+                        .await
+                        .map(|p| match p {
+                            SharedExecutionProgress::Idle => None,
+                            p => progress(None, p),
+                        }),
+                    #[cfg(feature = "shared-budget-execution")]
+                    Step::BudgetDemand => self.poll_budget_demand(after).await.map(|s| s.next_after),
+                    #[cfg(not(feature = "shared-budget-execution"))]
+                    Step::BudgetDelta
+                    | Step::BudgetDemandRecover
+                    | Step::BudgetProcess
+                    | Step::BudgetDemand => Ok(after),
+                    Step::Agent => self.poll_agent(after.clone()).await.map(|p| match p {
+                        ManagedAgentProgress::HistoricalReceiptMissing { command_id }
+                        | ManagedAgentProgress::Recorded { command_id, .. } => Some(command_id),
+                        ManagedAgentProgress::Idle => after,
+                    }),
+                    Step::Matrix => self.poll_matrix(after.clone()).await.map(|p| match p {
+                        ManagedMatrixProgress::HistoricalObservationMissing { command_id }
+                        | ManagedMatrixProgress::Observed { command_id, .. } => Some(command_id),
+                        ManagedMatrixProgress::Idle => after,
+                    }),
+                    Step::Runtime => self.poll(after.clone()).await.map(|p| progress(after, p)),
+                    Step::SuccessorResume => match self.resume_next_successor(after).await {
+                        Ok(Some(result)) => Ok(Some(result.intent_id)),
+                        Ok(None) => Ok(None),
+                        Err(e) => Err(e),
+                    },
+                    Step::SuccessorPoll => self
+                        .poll_successor(after.clone())
+                        .await
+                        .map(|p| progress(after, p)),
+                    Step::Settlement => {
+                        self.poll_settlement(after.clone()).await.map(|p| match p {
+                            AgentSettlementProgress::HistoricalReceiptMissing { command_id }
+                            | AgentSettlementProgress::Recorded { command_id, .. } => {
+                                Some(command_id)
+                            }
+                            AgentSettlementProgress::Idle => after,
+                        })
+                    }
+                }
+            })
+        }
+    }
+
+    pub type Gate = Arc<dyn Fn() -> bool + Send + Sync>;
+
+    fn package(digest: &[u8], epoch: u64) -> ManagementPackage {
+        use sha2::{Digest, Sha256};
+        ManagementPackage {
+            digest: format!("{:x}", Sha256::digest(digest)),
+            instance: 1,
+            account_epoch: epoch,
+            // Each sealed factory installs exactly its own native permission.
+            permissions: vec![],
+        }
+    }
+
+    /// Shared-execution loop. Mirrors Desktop's `shared_worker::run`.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_shared(
+        owner: NativeOwner,
+        selection: AdoptedManagementSelection,
+        control: Arc<Control>,
+        gate: Gate,
+        admission: Arc<Admission>,
+        epoch: u64,
+        health: Arc<std::sync::Mutex<Option<String>>>,
+        executor_slot: Arc<tokio::sync::Mutex<Option<Arc<AdoptedSharedExecutor>>>>,
+    ) {
+        let live = || !control.retired.load(Ordering::Acquire) && gate();
+        let mut cursors = Cursors::default();
+        let mut grant_access: Option<crate::native_owner::OwnerGrantAccess> = None;
+        let mut next_renewal = std::time::Instant::now();
+        let mut renewal_error = None;
+        while live() {
+            if std::time::Instant::now() >= next_renewal {
+                if let Some(_admission) = admission.enter() {
+                    if grant_access.as_ref().is_none_or(|a| a.retired()) {
+                        let control = Arc::downgrade(&control);
+                        let gate = gate.clone();
+                        grant_access = match selection.grant_access(&owner, package(b"hagency-owner-daemon-calendar-worker-v1", epoch)).await {
+                            Ok(access) => access.restrict_to_host(move || control.upgrade().is_some_and(|c| !c.retired.load(Ordering::Acquire)) && gate()).ok(),
+                            Err(error) => { renewal_error = Some(error.code); None }
+                        };
+                    }
+                    if let Some(access) = &grant_access {
+                        renewal_error = match access.renew_recurring().await {
+                            Ok(_) => None,
+                            Err(error) => {
+                                tracing::debug!(code=%error.code,"Recurring capacity awaits authorization or settlement");
+                                Some(error.code)
+                            }
+                        };
+                    }
+                }
+                next_renewal = std::time::Instant::now() + Duration::from_secs(30);
+            }
+            let executor = {
+                let mut slot = executor_slot.lock().await;
+                if slot.is_none() && live() {
+                    let worker_gate: Gate = {
+                        let control = Arc::downgrade(&control);
+                        let gate = gate.clone();
+                        Arc::new(move || {
+                            control
+                                .upgrade()
+                                .is_some_and(|c| !c.retired.load(Ordering::Acquire))
+                                && gate()
+                        })
+                    };
+                    match selection
+                        .shared_executor(
+                            &owner,
+                            package(b"hagency-owner-daemon-shared-worker-v1", epoch),
+                            worker_gate,
+                        )
+                        .await
+                    {
+                        Ok(executor) if live() => *slot = Some(Arc::new(executor)),
+                        Ok(executor) => executor.retire(),
+                        Err(error) => {
+                            *health.lock().unwrap_or_else(|p| p.into_inner()) = Some(error.code);
+                        }
+                    }
+                }
+                slot.clone()
+            };
+            if let Some(executor) = executor.as_ref() {
+                let report = pass(executor.as_ref(), &mut cursors, live, &admission).await;
+                *health.lock().unwrap_or_else(|p| p.into_inner()) = report.last_error.or_else(|| renewal_error.clone());
+            }
+            if !live() {
+                break;
+            }
+            idle(&control, Duration::from_secs(5)).await;
+        }
+        if let Some(access) = grant_access { access.retire(); }
+        if let Some(executor) = executor_slot.lock().await.take() {
+            executor.retire();
+        }
+    }
+
+    /// Allocation loop. Mirrors Desktop's `allocation_worker::run`. Inventory
+    /// and receipts continue while admission is paused.
+    pub async fn run_allocation(
+        owner: NativeOwner,
+        selection: AdoptedManagementSelection,
+        control: Arc<Control>,
+        gate: Gate,
+        epoch: u64,
+        health: Arc<std::sync::Mutex<Option<String>>>,
+    ) {
+        let live = || !control.retired.load(Ordering::Acquire) && gate();
+        let mut allocation: Option<String> = None;
+        let mut settlement: Option<String> = None;
+        let mut executor: Option<AdoptedAllocationExecutor> = None;
+        let advance = |cursor: &mut Option<String>, r: Result<AllocationProgress, NativeError>| {
+            match r {
+                Ok(
+                    AllocationProgress::Recorded { command_id, .. }
+                    | AllocationProgress::HistoricalReceiptMissing { command_id },
+                ) => *cursor = Some(command_id),
+                Ok(AllocationProgress::Idle) => {}
+                Err(_) => {}
+            }
+        };
+        while live() {
+            if executor.is_none() {
+                match selection
+                    .allocation_executor(
+                        &owner,
+                        package(b"hagency-owner-daemon-allocation-worker-v1", epoch),
+                        gate.clone(),
+                    )
+                    .await
+                {
+                    Ok(e) => executor = Some(e),
+                    Err(error) => {
+                        *health.lock().unwrap_or_else(|p| p.into_inner()) = Some(error.code);
+                    }
+                }
+            }
+            if let Some(executor) = executor.as_ref() {
+                let result = executor.poll_allocation(allocation.clone()).await;
+                let failed = result.as_ref().err().map(|e| e.code.clone());
+                advance(&mut allocation, result);
+                if live() {
+                    let result = executor.poll_parent_settlement(settlement.clone()).await;
+                    advance(&mut settlement, result);
+                }
+                *health.lock().unwrap_or_else(|p| p.into_inner()) = failed;
+            }
+            if !live() {
+                break;
+            }
+            idle(&control, Duration::from_secs(5)).await;
+        }
+        if let Some(executor) = executor {
+            executor.retire();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    struct Fixture {
+        live: AtomicBool,
+        calls: Mutex<Vec<(Step, Option<String>)>>,
+        fail: Option<Step>,
+        retire_at: Option<Step>,
+        hold: Option<(Step, Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
+    }
+    impl Fixture {
+        fn new() -> Self {
+            Self {
+                live: AtomicBool::new(true),
+                calls: Mutex::new(Vec::new()),
+                fail: None,
+                retire_at: None,
+                hold: None,
+            }
+        }
+        fn steps(&self) -> Vec<Step> {
+            self.calls.lock().unwrap().iter().map(|(s, _)| *s).collect()
+        }
+    }
+    impl PassIo for Fixture {
+        fn enabled(&self, _step: Step) -> bool {
+            true
+        }
+        fn run(&self, step: Step, after: Option<String>) -> StepFuture<'_> {
+            Box::pin(async move {
+                self.calls.lock().unwrap().push((step, after));
+                if let Some((s, entered, release)) = &self.hold
+                    && *s == step
+                {
+                    entered.notify_one();
+                    release.notified().await;
+                }
+                if self.retire_at == Some(step) {
+                    self.live.store(false, Ordering::Release);
+                }
+                if self.fail == Some(step) {
+                    return Err(NativeError {
+                        status: 503,
+                        code: "server_unavailable".into(),
+                    });
+                }
+                Ok(Some(format!("{step:?}-cursor")))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn open_admission_runs_every_step_in_desktop_order_with_own_cursors() {
+        let io = Fixture::new();
+        let admission = Admission::default();
+        admission.open();
+        let mut cursors = Cursors::default();
+        let live = || io.live.load(Ordering::Acquire);
+        pass(&io, &mut cursors, live, &admission).await;
+        assert_eq!(io.steps(), ORDER.to_vec());
+        pass(&io, &mut cursors, live, &admission).await;
+        let calls = io.calls.lock().unwrap();
+        for (step, after) in &calls[ORDER.len()..] {
+            assert_eq!(after.as_deref(), Some(format!("{step:?}-cursor").as_str()));
+        }
+    }
+
+    #[tokio::test]
+    async fn paused_admission_skips_only_new_work_and_keeps_recovery_and_settlement() {
+        let io = Fixture::new();
+        let admission = Admission::default();
+        let mut cursors = Cursors::default();
+        let report = pass(&io, &mut cursors, || true, &admission).await;
+        let expected: Vec<Step> = ORDER.into_iter().filter(|s| !s.admits_work()).collect();
+        assert_eq!(io.steps(), expected);
+        assert_eq!(report.skipped_for_admission, 5);
+        for step in [Step::DemandStop, Step::Runtime, Step::Settlement, Step::Agent, Step::SuccessorPoll] {
+            assert!(io.steps().contains(&step));
+        }
+        for step in [Step::IntakeDemand, Step::IntakeDemandRecover, Step::BudgetDemand, Step::SuccessorResume] {
+            assert!(!io.steps().contains(&step));
+            assert!(cursors.get(step).is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn failure_keeps_previous_cursor_and_retirement_records_nothing_late() {
+        let mut io = Fixture::new();
+        io.fail = Some(Step::Runtime);
+        let admission = Admission::default();
+        admission.open();
+        let mut cursors = Cursors::default();
+        cursors.0.insert(Step::Runtime, Some("original".into()));
+        let report = pass(&io, &mut cursors, || true, &admission).await;
+        assert_eq!(cursors.get(Step::Runtime).as_deref(), Some("original"));
+        assert_eq!(report.last_error.as_deref(), Some("server_unavailable"));
+        for (index, step) in ORDER.into_iter().enumerate() {
+            let mut io = Fixture::new();
+            io.retire_at = Some(step);
+            let mut cursors = Cursors::default();
+            pass(&io, &mut cursors, || io.live.load(Ordering::Acquire), &admission).await;
+            assert_eq!(io.steps().len(), index + 1, "{step:?}");
+            assert!(cursors.get(step).is_none(), "{step:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn closing_admission_waits_for_in_flight_admission_without_cancelling_it() {
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let mut io = Fixture::new();
+        io.hold = Some((Step::IntakeDemand, entered.clone(), release.clone()));
+        let io = Arc::new(io);
+        let admission = Arc::new(Admission::default());
+        admission.open();
+        let task = {
+            let (io, admission) = (io.clone(), admission.clone());
+            tokio::spawn(async move {
+                let mut cursors = Cursors::default();
+                pass(io.as_ref(), &mut cursors, || true, &admission).await;
+                cursors
+            })
+        };
+        entered.notified().await;
+        // In flight: a bounded close reports that quiescence was not reached.
+        assert!(!admission.close(Duration::from_millis(30)).await);
+        assert!(!admission.is_open());
+        release.notify_one();
+        let cursors = task.await.unwrap();
+        // The in-flight operation completed and kept its cursor; later
+        // admission steps in the same pass were skipped.
+        assert_eq!(cursors.get(Step::IntakeDemand).as_deref(), Some("IntakeDemand-cursor"));
+        assert!(!io.steps().contains(&Step::SuccessorResume));
+        assert!(admission.close(Duration::from_millis(30)).await);
+        assert!(admission.enter().is_none());
+        admission.open();
+        assert!(admission.enter().is_some());
+    }
+
+    #[tokio::test]
+    async fn cancelled_drain_retains_the_original_task() {
+        let worker = Worker::default();
+        let release = Arc::new(tokio::sync::Notify::new());
+        let finished = Arc::new(AtomicBool::new(false));
+        let (r, f) = (release.clone(), finished.clone());
+        worker
+            .install(tokio::spawn(async move {
+                r.notified().await;
+                f.store(true, Ordering::Release);
+            }))
+            .await;
+        worker.retire();
+        assert!(tokio::time::timeout(Duration::from_millis(20), worker.drain()).await.is_err());
+        assert!(!finished.load(Ordering::Acquire));
+        release.notify_one();
+        tokio::time::timeout(Duration::from_secs(1), worker.drain()).await.unwrap();
+        assert!(finished.load(Ordering::Acquire));
+    }
+}

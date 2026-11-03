@@ -27,6 +27,7 @@ pub(super) use capacity::unsettled_resource_except;
 #[cfg(feature = "resource-adoption")]
 pub(super) use capacity::unsettled_exact_resource;
 pub use capacity::{
+    ManagedAgentPeriodRenewCommand, ManagedAgentPeriodReceipt, VerifiedManagedAgentPeriodDelivery,
     AGENT_SETTLEMENT_CAPABILITY, ManagedAgentSettlementCommand, ManagedAgentSettlementReceipt,
     VerifiedManagedAgentSettlement, AGENT_CAPABILITY, AGENT_FENCE_CAPABILITY,
     AGENT_MATRIX_CAPABILITY, AGENT_RUNTIME_CAPABILITY, AllocationCommand, CapacityGrantChainHead,

@@ -4,7 +4,7 @@ use super::*;
 use crate::console::native::source_quiescence::EmptyDeviceObservation;
 use hagency_store::owner_resources::adoption::EmptyDeviceInitializationSummary;
 
-#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeviceSetupKind {
     ExistingResources,

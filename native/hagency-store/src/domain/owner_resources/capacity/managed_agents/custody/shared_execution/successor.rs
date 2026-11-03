@@ -48,10 +48,17 @@ fn add(value: u64, next: u64) -> Result<u64, Error> {
 // A supported incomplete call keeps at least its original hold. In particular,
 // settled-with-incomplete-usage is not evidence that its reservation is free.
 pub(super) fn calls(db: &Connection, child: &str, binding: &str) -> Result<Calls, Error> {
+    let period = periods::current_id(db, child)?;
+    calls_scoped(db,child,binding,period.as_deref())
+}
+pub(super) fn calls_all(db: &Connection, child: &str, binding: &str) -> Result<Calls, Error> {
+    calls_scoped(db,child,binding,None)
+}
+fn calls_scoped(db: &Connection, child: &str, binding: &str, period:Option<&str>) -> Result<Calls, Error> {
     let mut query = db.prepare(
-        "SELECT c.id,c.execution_id,c.immutable_digest,c.assignment_generation,c.state,c.reserved_tokens,c.known_consumed_tokens,c.usage_complete,c.unrepresentable_usage,p.assignment_digest,p.execution_digest,p.prepare_revision,p.issue_revision FROM owner_managed_calls c LEFT JOIN owner_managed_call_pins p ON p.call_id=c.id WHERE c.child_id=?1 ORDER BY c.id",
+        "SELECT c.id,c.execution_id,c.immutable_digest,c.assignment_generation,c.state,c.reserved_tokens,c.known_consumed_tokens,c.usage_complete,c.unrepresentable_usage,p.assignment_digest,p.execution_digest,p.prepare_revision,p.issue_revision FROM owner_managed_calls c LEFT JOIN owner_managed_call_pins p ON p.call_id=c.id WHERE c.child_id=?1 AND (?2 IS NULL OR c.id IN(SELECT call_id FROM owner_managed_call_periods WHERE period_id=?2)) ORDER BY c.id",
     )?;
-    let mut rows = query.query([child])?;
+    let mut rows = query.query(params![child,period])?;
     let mut result = Calls {
         consumed: 0,
         retained: 0,
@@ -60,6 +67,9 @@ pub(super) fn calls(db: &Connection, child: &str, binding: &str) -> Result<Calls
         digest: String::new(),
     };
     let mut digest = Sha256::new();
+    if let Some(period)=period {
+        digest.update(canonical::encode(&json!({"periodAuthorization":period}))?.as_bytes());
+    }
     digest.update(b"[");
     let mut count = 0;
     while let Some(row) = rows.next()? {

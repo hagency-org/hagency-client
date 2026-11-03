@@ -149,6 +149,7 @@ impl Approvals {
         until: Instant,
         process: &mut OwnedSession,
         capture: &mut SharedCallSink,
+        usage: &mut crate::console::native::telemetry::TurnTelemetry,
     ) -> Result<Option<SharedWorkReceipt>, NativeError> {
         let mut i = 0;
         while i < self.pending.len() {
@@ -261,7 +262,13 @@ impl Approvals {
                         let next = event.approval().cloned();
                         let ended =
                             matches!(event.observation().kind(), ObservationKind::TurnEnded(_));
-                        let receipt = capture.observe(event).await.map_err(store)?;
+                        let pending = usage.pending(&event);
+                        let receipt = capture.observe(event).await.map_err(|e| {
+                            usage.abandon();
+                            store(e)
+                        })?;
+                        usage.accept(pending);
+                        usage.quota(process);
                         if ended {
                             return Ok(Some(receipt.ok_or_else(invalid)?));
                         }

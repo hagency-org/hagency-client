@@ -66,7 +66,7 @@ impl GraphHistoryNodeQuery {
             .map_err(|e| e.code.into())
     }
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphHistorySummary {
     id: String,
@@ -88,14 +88,14 @@ impl From<&Graph> for GraphHistorySummary {
         }
     }
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphHistoryPage {
     archive_id: String,
     graphs: Vec<GraphHistorySummary>,
     next_after: Option<String>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphHistoryNodeSummary {
     id: String,
@@ -103,7 +103,7 @@ pub struct GraphHistoryNodeSummary {
     status: String,
     dependency_count: usize,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphHistoryDetail {
     archive_id: String,
@@ -111,7 +111,7 @@ pub struct GraphHistoryDetail {
     nodes: Vec<GraphHistoryNodeSummary>,
     next_after: Option<String>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphHistoryNode {
     archive_id: String,

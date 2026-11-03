@@ -193,10 +193,20 @@ impl Registry {
 
 #[derive(Default)]
 struct PackageSessions {
+    /// The embedding package's fixed lifetime, independent of renewable SDK tokens.
+    deadline: Option<Instant>,
     current: Option<(service::HostContext, service::Session)>,
     issued: Vec<service::WeakManagementAuthority>,
 }
 impl PackageSessions {
+    fn restrict_deadline(&mut self, until: Instant) -> Instant {
+        let deadline = self.deadline.map_or(until, |prior| prior.min(until));
+        if self.deadline != Some(deadline) {
+            self.retire();
+            self.deadline = Some(deadline);
+        }
+        deadline
+    }
     fn retire(&mut self) {
         if let Some((_, current)) = self.current.take() {
             current.retire();
@@ -216,6 +226,7 @@ pub struct NativeManagement {
     // Session renewal is serialized but resource reads/writes remain on the
     // bounded domain worker. The UI thread never opens or queries SQLite.
     session: Mutex<PackageSessions>,
+    controller_lifetime: Mutex<Option<Arc<dyn Fn() -> Option<Instant> + Send + Sync>>>,
 }
 impl Drop for NativeManagement {
     fn drop(&mut self) {
@@ -318,6 +329,7 @@ impl NativeOwner {
             profile,
             retired: AtomicBool::new(false),
             session: Default::default(),
+            controller_lifetime: Default::default(),
         });
         manager.authorized().await?;
         Ok(manager)
@@ -325,6 +337,53 @@ impl NativeOwner {
 }
 
 impl NativeManagement {
+    /// Keep a read-only provider selection bound to the already authorized
+    /// management context without exposing package or profile internals.
+    #[cfg(feature="resource-adoption")]
+    pub(super) fn check_observation_device(
+        &self, context:&service::HostContext, device:&crate::console::AuthorizedDevice,
+    )->Result<(),NativeError> {
+        let expected=service::HostContext::new(device.owner_mxid().into(),
+            self.package.account_epoch,self.package.digest.clone(),self.package.instance,
+            device.device_id().into(),device.generation()).map_err(store_error)?;
+        if self.is_retired() || &expected!=context
+            || device.origin()!=self.owner.0.expected_origin
+            || profile_identity(device.origin(),device.issuer(),device.subject(),device.owner_mxid())
+                .map_err(|_|failure(401,"management_profile_mismatch"))?!=self.profile {
+            return Err(failure(401,"management_scope_changed"));
+        }
+        Ok(())
+    }
+
+    /// Bind once to the hosting controller. Renewal only affects future
+    /// sessions; issued writer authorities retain their original deadlines.
+    pub fn bind_controller_lifetime(&self, lifetime: Arc<dyn Fn() -> Option<Instant> + Send + Sync>) -> Result<(), NativeError> {
+        let mut bound = self.controller_lifetime.lock().map_err(|_| failure(503,"management_unavailable"))?;
+        if bound.is_some() || lifetime().is_none_or(|until| until <= Instant::now()) {
+            return Err(failure(401,"management_scope_changed"));
+        }
+        *bound = Some(lifetime);
+        Ok(())
+    }
+
+    fn controller_deadline(&self) -> Result<Option<Instant>, NativeError> {
+        let bound = self.controller_lifetime.lock().map_err(|_| failure(503,"management_unavailable"))?;
+        match bound.as_ref() {
+            None => Ok(None),
+            Some(lifetime) => lifetime().filter(|until| *until > Instant::now()).map(Some)
+                .ok_or_else(|| failure(401,"management_scope_changed")),
+        }
+    }
+    /// Only shortens authority. Existing queued scopes are fenced before any
+    /// later operation can receive a session with this package deadline.
+    pub fn restrict_to_deadline(&self, until: Instant) -> Result<(), NativeError> {
+        let mut current = self.session.lock().map_err(|_| failure(503, "management_unavailable"))?;
+        let deadline = current.restrict_deadline(until);
+        if deadline <= Instant::now() || self.retired.load(Ordering::Acquire) {
+            return Err(failure(401, "management_scope_changed"));
+        }
+        Ok(())
+    }
     pub(super) fn account_enrollment_ready(&self)->bool {
         #[cfg(feature="resource-adoption")]
         {matches!(&self.store,ManagementStore::Adopted(_))}
@@ -384,7 +443,9 @@ impl NativeManagement {
     /// not retirement, and a false result does not replace current authorization.
     pub fn is_retired(&self) -> bool {
         self.retired.load(Ordering::Acquire)
+            || self.controller_deadline().is_err()
             || self.owner.0.management.retired.load(Ordering::Acquire)
+            || self.session.lock().map_or(true, |current| current.deadline.is_some_and(|until| Instant::now() >= until))
     }
     pub(super) async fn authorized(
         &self,
@@ -473,9 +534,11 @@ impl NativeManagement {
         current
             .issued
             .retain(service::WeakManagementAuthority::is_live);
-        let expires = device
+        let mut expires = device
             .valid_until()
             .min(Instant::now() + Duration::from_secs(60));
+        if let Some(deadline) = current.deadline { expires = expires.min(deadline); }
+        if let Some(deadline) = self.controller_deadline()? { expires = expires.min(deadline); }
         if let Some((_, session)) = &current.current
             && session.is_live()
             && session.valid_until() == expires
@@ -738,5 +801,22 @@ impl NativeManagement {
                 registry,
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod package_deadline_tests {
+    use super::*;
+    #[test]
+    fn shortening_host_deadline_fences_previously_queued_writer_authority_and_cannot_extend() {
+        let context = service::HostContext::new("@owner:test".into(), 1, "a".repeat(64), 1, "device".into(), 1).unwrap();
+        let authority = service::ManagementAuthority::new(context.clone(), [service::Permission::ReadResources], Instant::now()+Duration::from_secs(60)).unwrap();
+        let mut sessions = PackageSessions { issued:vec![authority.downgrade()], ..Default::default() };
+        assert!(authority.authorize(&context, service::Permission::ReadResources).is_ok());
+        let deadline=Instant::now()+Duration::from_secs(10);
+        assert_eq!(sessions.restrict_deadline(deadline),deadline);
+        assert!(authority.authorize(&context, service::Permission::ReadResources).is_err());
+        assert_eq!(sessions.restrict_deadline(deadline+Duration::from_secs(60)),deadline);
+        assert_eq!(sessions.deadline,Some(deadline));
     }
 }

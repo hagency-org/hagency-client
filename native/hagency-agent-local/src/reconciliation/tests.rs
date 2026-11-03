@@ -25,6 +25,7 @@ fn usage(version: &str, input: u64) -> String {
         input,
         output: 0,
         cached_input: 0,
+        cache_write_input: None,
         reasoning_output: 0,
         accounting_version: version.into(),
     })

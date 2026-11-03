@@ -22,6 +22,7 @@ pub(in super::super) use managed_agents::unsettled_resource_except;
 #[cfg(feature = "resource-adoption")]
 pub(in super::super) use managed_agents::unsettled_exact_resource;
 pub use managed_agents::{
+    ManagedAgentPeriodRenewCommand, ManagedAgentPeriodReceipt, VerifiedManagedAgentPeriodDelivery,
     AGENT_SETTLEMENT_CAPABILITY, ManagedAgentSettlementCommand, ManagedAgentSettlementReceipt,
     VerifiedManagedAgentSettlement, AGENT_CAPABILITY, AGENT_FENCE_CAPABILITY,
     AGENT_MATRIX_CAPABILITY, AGENT_RUNTIME_CAPABILITY, ManagedAgentDefinition,
@@ -47,6 +48,9 @@ pub const CAPABILITY: &str = "hagency.project_reservations.v1";
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NativeGrantReceipt {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub per_request_tokens: Option<u64>,
+
     pub version: u16,
     pub capability: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -74,6 +78,9 @@ pub struct NativeGrantReceipt {
     /// stored v1/v2 receipt keeps its canonical digest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub succession: Option<GrantSuccession>,
+    /// V4 owner calendar. Absent from every historical v1–v3 digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar: Option<hagency_core::recurring_quota::Calendar>,
 }
 pub const SUCCESSION_RENEWAL: &str = "renewal";
 pub const SUCCESSION_AMENDMENT: &str = "amendment";
@@ -91,16 +98,33 @@ pub struct GrantSuccession {
     pub carried_retained_tokens: u64,
 }
 impl NativeGrantReceipt {
-    /// The `(version, admission, succession)` shapes shared with the server:
-    /// v1 without admission, v2 with one, v3 with one and a valid succession.
+    /// Maximum new Agent allocation, independent of the pool total.
+    pub fn request_limit(&self) -> u64 { self.per_request_tokens.unwrap_or(self.allocated_tokens) }
+    /// Closed version shapes shared with the server. V4 also binds an exact
+    /// owner calendar; old receipt digests never contain that field.
     pub fn supported_shape(&self) -> bool {
+        if (self.version < 5 && (self.version == 4) != self.calendar.is_some())
+            || (self.version == 5) != self.per_request_tokens.is_some()
+            || self.per_request_tokens.is_some_and(|n| n == 0 || n > self.allocated_tokens || n > JSON_SAFE_MAX) {
+            return false;
+        }
+        if let Some(calendar) = &self.calendar {
+            let period = hagency_core::recurring_quota::Period {
+                key: self.period_key.clone(),
+                start_ms: self.period_start_ms,
+                end_ms: self.period_end_ms,
+            };
+            if calendar.validate_period(&period).is_err() {
+                return false;
+            }
+        }
         match (
             self.version,
             self.admission_request_id.as_ref(),
             self.succession.as_ref(),
         ) {
-            (1, None, None) | (2, Some(_), None) => true,
-            (3, Some(_), Some(s)) => {
+            (1, None, None) | (2 | 4 | 5, Some(_), None) => true,
+            (3 | 4 | 5, Some(_), Some(s)) => {
                 matches!(s.kind.as_str(), SUCCESSION_RENEWAL | SUCCESSION_AMENDMENT)
                     && identifier(&s.predecessor_grant_id, 128).is_ok()
                     && s.predecessor_grant_id != self.grant_id
@@ -312,6 +336,11 @@ impl VerifiedManagementEnrollment {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OwnerGrantSelection {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub per_request_tokens: Option<u64>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calendar: Option<hagency_core::recurring_quota::Calendar>,
     pub command_id: String,
     pub grant_id: String,
     pub coordinator_mxid: String,
@@ -320,7 +349,8 @@ pub struct OwnerGrantSelection {
     pub eligible_managers: Vec<String>,
     pub allocated_tokens: u64,
 }
-/// Frozen UTC accounting period shown by the native owner confirmation.
+/// Frozen accounting period shown by native owner confirmation. Historical
+/// grants use UTC months; V4 receipts bind their owner's calendar explicitly.
 /// Constructed by the registry clock, never accepted from script input.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -328,8 +358,11 @@ pub struct OwnerGrantPeriod {
     period_key: String,
     period_start_ms: u64,
     period_end_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    calendar: Option<hagency_core::recurring_quota::Calendar>,
 }
 impl OwnerGrantPeriod {
+    pub fn calendar(&self) -> Option<&hagency_core::recurring_quota::Calendar> { self.calendar.as_ref() }
     pub fn period_key(&self) -> &str {
         &self.period_key
     }
@@ -345,17 +378,37 @@ impl OwnerGrantPeriod {
             period_key,
             period_start_ms,
             period_end_ms,
+            calendar: None,
+        })
+    }
+    fn at_calendar(now: u64, calendar: &hagency_core::recurring_quota::Calendar) -> Result<Self, Error> {
+        let period = calendar.period_at(now).map_err(|_| Error::LocalAuthority)?;
+        Ok(Self {
+            period_key: period.key,
+            period_start_ms: period.start_ms,
+            period_end_ms: period.end_ms,
+            calendar: Some(calendar.clone()),
         })
     }
     fn require_current(&self, now: u64) -> Result<(), Error> {
-        if self != &Self::at(now)? {
+        let current = match &self.calendar {
+            Some(calendar) => Self::at_calendar(now, calendar)?,
+            None => Self::at(now)?,
+        };
+        if self != &current {
             return Err(Error::LocalAuthority);
         }
         Ok(())
     }
-    /// The UTC month a receipt covers, rechecked against the calendar.
+    /// The exact period a receipt covers, rechecked against its calendar.
     fn of_receipt(receipt: &NativeGrantReceipt) -> Result<Self, Error> {
-        let period = Self::at(receipt.period_start_ms)?;
+        if !receipt.supported_shape() {
+            return Err(Error::LocalAuthority);
+        }
+        let period = match &receipt.calendar {
+            Some(calendar) => Self::at_calendar(receipt.period_start_ms, calendar)?,
+            None => Self::at(receipt.period_start_ms)?,
+        };
         if period.period_key != receipt.period_key
             || period.period_start_ms != receipt.period_start_ms
             || period.period_end_ms != receipt.period_end_ms
@@ -364,9 +417,12 @@ impl OwnerGrantPeriod {
         }
         Ok(period)
     }
-    /// The UTC month that starts when this one ends.
+    /// The next natural period in the same calendar.
     fn next(&self) -> Result<Self, Error> {
-        Self::at(self.period_end_ms)
+        match &self.calendar {
+            Some(calendar) => Self::at_calendar(self.period_end_ms, calendar),
+            None => Self::at(self.period_end_ms),
+        }
     }
 }
 /// A renewal may be scheduled during the last 7 days of the current month.
@@ -542,6 +598,15 @@ impl OwnerGrantConsent {
     }
 }
 impl OwnerResourceRegistry {
+    /// Read-only owner-calendar projection for native publication forms.
+    pub async fn resource_calendar(&self, profile: ProfileAuthority, resource_id: String) -> Result<Option<hagency_core::recurring_quota::Calendar>, Error> {
+        identifier(&resource_id,128)?;
+        self.read(profile, move |db, profile| {
+            authorize_resource(db, profile, &resource_id)?;
+            crate::domain::resource_ceiling::calendar(db, &resource_id)
+        }).await
+    }
+
     /// Read-only history check for native pre-consent custody. A positive
     /// result is not a current capacity or execution-authority projection.
     pub async fn has_capacity_grant_for_contribution(
@@ -654,6 +719,7 @@ impl OwnerResourceRegistry {
         identifier(&selection.command_id, 128)?;
         identifier(&selection.grant_id, 128)?;
         exact(selection.allocated_tokens)?;
+        if selection.per_request_tokens.is_some_and(|n| n == 0 || n > selection.allocated_tokens || n > JSON_SAFE_MAX) { return Err(Error::LocalAuthority); }
         exact(selection.delegation_expires_at_ms)?;
         local_user(&selection.coordinator_mxid, &enrollment.profile.account)?;
         if selection.coordinator_mxid != enrollment.admitted_coordinator {
@@ -671,11 +737,15 @@ impl OwnerResourceRegistry {
         if expires > Instant::now() + Duration::from_secs(60) {
             return Err(Error::LocalAuthority);
         }
+        let period = match &selection.calendar {
+            Some(calendar) => OwnerGrantPeriod::at_calendar(now, calendar)?,
+            None => OwnerGrantPeriod::at(now)?,
+        };
         let consent = OwnerGrantConsent {
             registry: self.clone(),
             enrollment,
             selection,
-            period: OwnerGrantPeriod::at(now)?,
+            period,
             expires,
             require_unissued_contribution: false,
             closed_prior_admissions: false,
@@ -835,34 +905,17 @@ fn revision(db: &Connection) -> Result<u64, Error> {
     Ok(old + 1)
 }
 fn month(now: u64) -> Result<(String, u64, u64), Error> {
-    let at = time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(now) * 1_000_000)
-        .map_err(|_| Error::LocalAuthority)?;
-    if !(1970..=9998).contains(&at.year()) {
-        return Err(Error::LocalAuthority);
+    // Legacy receipts remain UTC monthly. New recurring authorizations use the
+    // same calendar implementation with their explicitly approved owner zone.
+    let period = hagency_core::recurring_quota::Calendar {
+        cadence: hagency_core::recurring_quota::Cadence::Monthly,
+        time_zone: "UTC".into(),
     }
-    let start = time::Date::from_calendar_date(at.year(), at.month(), 1)
-        .map_err(|_| Error::LocalAuthority)?
-        .midnight()
-        .assume_utc();
-    let next = if at.month() == time::Month::December {
-        (at.year() + 1, time::Month::January)
-    } else {
-        (at.year(), at.month().next())
-    };
-    let end = time::Date::from_calendar_date(next.0, next.1, 1)
-        .map_err(|_| Error::LocalAuthority)?
-        .midnight()
-        .assume_utc();
-    Ok((
-        format!("{:04}-{:02}", at.year(), at.month() as u8),
-        (start.unix_timestamp_nanos() / 1_000_000)
-            .try_into()
-            .map_err(|_| Error::LocalAuthority)?,
-        (end.unix_timestamp_nanos() / 1_000_000)
-            .try_into()
-            .map_err(|_| Error::LocalAuthority)?,
-    ))
+    .period_at(now)
+    .map_err(|_| Error::LocalAuthority)?;
+    Ok((period.key, period.start_ms, period.end_ms))
 }
+
 fn resource_revision(db: &Connection, id: &str) -> Result<String, Error> {
     resource_publication_revision(&read_resource(db, id)?)
 }
@@ -1015,9 +1068,11 @@ impl DomainRepository {
         {
             return Err(Error::LocalAuthority);
         }
+        if (s.calendar.is_some() || s.per_request_tokens.is_some()) && e.admission_request_id.is_none() { return Err(Error::LocalAuthority); }
+        crate::domain::resource_ceiling::bind_calendar(&tx, &e.resource_id, &e.profile.digest, &s.grant_id, s.calendar.as_ref(), now)?;
         check_grant(&tx, &resource, &s.grant_id, s.allocated_tokens, now)?;
         // The monthly maximum in force, including an owner's native amendment.
-        if serde_json::to_value(
+        if s.calendar.is_none() && serde_json::to_value(
             crate::domain::resource_ceiling::effective_ceiling(&tx, &resource)?
                 .ok_or(Error::NoCeiling)?
                 .period,
@@ -1026,8 +1081,9 @@ impl DomainRepository {
             return Err(Error::NoCeiling);
         }
         let ledger_revision = revision(&tx)?;
-        let result = NativeGrantReceipt {
-            version: if e.admission_request_id.is_some() { 2 } else { 1 },
+        let result = NativeGrantReceipt { per_request_tokens: s.per_request_tokens,
+            version: if s.per_request_tokens.is_some() { 5 } else if s.calendar.is_some() { 4 } else if e.admission_request_id.is_some() { 2 } else { 1 },
+            calendar: s.calendar.clone(),
             capability: CAPABILITY.into(),
             admission_request_id: e.admission_request_id.clone(),
             enrollment_id: e.enrollment_id.clone(),

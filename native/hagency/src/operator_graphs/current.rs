@@ -53,7 +53,7 @@ impl OperatorGraphNodeQuery {
         exact_id(&self.node_id)
     }
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OperatorGraphSummary {
     pub id: String,
@@ -63,33 +63,35 @@ pub struct OperatorGraphSummary {
     pub status: String,
     pub node_count: usize,
     pub complete_count: usize,
-    pub delivery_state: &'static str,
+    #[serde(deserialize_with = "hagency_store::management::wire_static::one")]
+    pub delivery_state: hagency_store::management::wire_static::Label,
     pub runtime_delivery_authorized: bool,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OperatorGraphPage {
     pub supported: bool,
     pub graphs: Vec<OperatorGraphSummary>,
     pub next_after: Option<String>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OperatorGraphNodeSummary {
     pub id: String,
     pub assignee: String,
     pub status: String,
     pub dependency_count: usize,
-    pub delivery_state: &'static str,
+    #[serde(deserialize_with = "hagency_store::management::wire_static::one")]
+    pub delivery_state: hagency_store::management::wire_static::Label,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OperatorGraphDetail {
     pub graph: OperatorGraphSummary,
     pub nodes: Vec<OperatorGraphNodeSummary>,
     pub next_after: Option<String>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OperatorGraphNode {
     pub graph_id: String,
@@ -107,7 +109,8 @@ pub struct OperatorGraphNode {
     pub dispatched_at: Option<String>,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
-    pub delivery_state: &'static str,
+    #[serde(deserialize_with = "hagency_store::management::wire_static::one")]
+    pub delivery_state: hagency_store::management::wire_static::Label,
     pub runtime_delivery_authorized: bool,
 }
 fn decode(record: &GraphJournalRecord, id: &str, owner: &str) -> Result<Graph, Error> {

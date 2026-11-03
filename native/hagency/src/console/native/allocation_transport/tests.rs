@@ -556,6 +556,18 @@ impl Fixture {
     async fn with_provider_budget_lifetime(
         provider: &str, subject: &str, total: u64, grant_tokens: u64, lifetime_ms: u64,
     ) -> Self {
+        Self::with_provider_budget_calendar(provider, subject, total, grant_tokens, lifetime_ms, None).await
+    }
+    async fn with_provider_budget_calendar(
+        provider: &str, subject: &str, total: u64, grant_tokens: u64, lifetime_ms: u64,
+        calendar: Option<hagency_core::recurring_quota::Calendar>,
+    ) -> Self {
+        Self::with_provider_budget_limits(provider, subject, total, grant_tokens, lifetime_ms, calendar, None).await
+    }
+    async fn with_provider_budget_limits(
+        provider: &str, subject: &str, total: u64, grant_tokens: u64, lifetime_ms: u64,
+        calendar: Option<hagency_core::recurring_quota::Calendar>, per_request_tokens: Option<u64>,
+    ) -> Self {
         let state = Arc::new(Mutex::new(State::default()));
         let (origin, task) = server(state.clone()).await;
         let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
@@ -598,26 +610,30 @@ impl Fixture {
             .await
             .unwrap()
             .revision;
-        let enrollment = VerifiedManagementEnrollment::new(
+        let coordinator = if calendar.is_some() { "@owner:test" } else { "@coordinator:test" };
+        let mut enrollment = VerifiedManagementEnrollment::new(
             scope.profile.clone(),
             "enrollment_fixture".into(),
             "con_fixture".into(),
             resource.resource_id,
             revision,
-            "@coordinator:test".into(),
+            coordinator.into(),
             "device".into(),
             1,
             scope.deadline,
         )
         .unwrap();
+        if calendar.is_some() || per_request_tokens.is_some() { enrollment = enrollment.with_admission_request("admission_request".into()).unwrap(); }
+        let delegation_end = calendar.as_ref().map(|c|c.period_at(now()).unwrap().end_ms).unwrap_or_else(||now()+lifetime_ms);
         let grant = registry
             .prepare_capacity_grant(
                 enrollment,
-                OwnerGrantSelection {
+                OwnerGrantSelection { per_request_tokens,
+                    calendar,
                     command_id: "grant_consent".into(),
                     grant_id: "grant_fixture".into(),
-                    coordinator_mxid: "@coordinator:test".into(),
-                    delegation_expires_at_ms: now() + lifetime_ms,
+                    coordinator_mxid: coordinator.into(),
+                    delegation_expires_at_ms: delegation_end,
                     allow_self_approval: false,
                     eligible_managers: vec!["@manager:test".into()],
                     allocated_tokens: grant_tokens,
@@ -709,6 +725,27 @@ async fn publication_intent(f: &Fixture, id: &str) -> hagency_store::management:
     );
     let scope = f.transport.scope(Permission::ReadIntents).await.unwrap();
     scope.session.intent(&scope.context, id.into()).await.unwrap().unwrap()
+}
+
+#[tokio::test]
+async fn native_allocation_transport_split_pool_limits_publication_recovers_original() {
+    use hagency_core::recurring_quota::{Calendar, Cadence};
+    for calendar in [None, Some(Calendar { cadence: Cadence::Monthly, time_zone: "America/Los_Angeles".into() })] {
+        let f = Fixture::with_provider_budget_limits(
+            "https://provider.test", "split-pool-account", 20_000_000, 20_000_000,
+            60_000, calendar, Some(5_000_000),
+        ).await;
+        f.state.lock().unwrap().lose_publication = true;
+        assert!(f.transport.publish_grant(&f.registry, "publish_split".into(), "grant_fixture".into(), 1).await.is_err());
+        assert_eq!(f.state.lock().unwrap().publication_writes, 1);
+        let recovered = f.transport.retry_publication(&f.registry, "publish_split".into()).await.unwrap();
+        assert_eq!(recovered.receipt.version, 5);
+        assert_eq!(recovered.receipt.allocated_tokens, 20_000_000);
+        assert_eq!(recovered.receipt.per_request_tokens, Some(5_000_000));
+        assert_eq!(f.state.lock().unwrap().publication_writes, 1);
+        assert!(publication_intent(&f, "publish_split").await.reply.is_some());
+        f.stop().await;
+    }
 }
 
 #[tokio::test]

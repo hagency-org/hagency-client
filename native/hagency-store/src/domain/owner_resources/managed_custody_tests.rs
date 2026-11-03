@@ -573,6 +573,142 @@ async fn managed_custody_usage_failure_rolls_back_and_exact_evidence_is_retained
 }
 
 #[tokio::test]
+async fn managed_custody_codex_required_fields_and_capture_keep_reservation() {
+    // Missing required fields in either total or last must not release the
+    // original 6-token reservation, even when all chargeable categories exist.
+    for case in 0..20 {
+        let f = fixture().await;
+        let child = native_child(&f).await;
+        qualify(&f, &child).await;
+        let id = format!("required_{case}");
+        let scope = issue(&f, &child, &id, 6).await;
+        let counters = CounterBreakdown {
+            total_tokens: Some(5),
+            input_tokens: Some(3),
+            cached_input_tokens: Some(0),
+            cache_write_input_tokens: Some(0),
+            output_tokens: Some(2),
+            reasoning_output_tokens: Some(0),
+        };
+        let mut raw = CodexUsage {
+            total: counters,
+            last: counters,
+            context_window: None,
+            diagnostics: ProjectionDiagnostics::default(),
+        };
+        let mut terminal = true;
+        let mut captured = true;
+        if case < 12 {
+            let c = if case < 6 {
+                &mut raw.total
+            } else {
+                &mut raw.last
+            };
+            match case % 6 {
+                0 => c.total_tokens = None,
+                1 => c.input_tokens = None,
+                2 => c.cached_input_tokens = None,
+                3 => c.cache_write_input_tokens = None,
+                4 => c.output_tokens = None,
+                _ => c.reasoning_output_tokens = None,
+            }
+        } else {
+            match case {
+                12 => raw.diagnostics.invalid = true,
+                13 => raw.diagnostics.unsupported = true,
+                14 => raw.total.total_tokens = Some(100_000), // context reset shape
+                15 => raw.last.reasoning_output_tokens = Some(3),
+                16 => raw.total.cache_write_input_tokens = Some(4),
+                17 => terminal = false,
+                18 => captured = false,
+                _ => raw.diagnostics.missing = true,
+            }
+        }
+        let usage = UsageObservation::codex_runtime(raw).unwrap();
+        let receipt = f
+            .registry
+            .record_managed_usage(
+                &scope,
+                ManagedUsageObservation::fixture(&id, Some(usage), terminal, captured, false),
+            )
+            .await
+            .unwrap();
+        assert!(
+            !receipt.usage_complete,
+            "incomplete case {case} released its reservation"
+        );
+        let history = f
+            .registry
+            .managed_call_history(clean(&f, &child, 1), scope.call_id().into())
+            .await
+            .unwrap();
+        assert!(!history.usage_complete);
+        assert_eq!(history.reserved_tokens, 6);
+        assert!(matches!(
+            f.registry.prepare_managed_call(call(&f, &child, "blocked_successor", 1)).await,
+            Err(Error::Capacity)
+        ));
+        f.registry.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn managed_custody_codex_optional_capacity_settles_and_reset_stays_unknown() {
+    let f = fixture().await;
+    let child = native_child(&f).await;
+    qualify(&f, &child).await;
+    let scope = issue(&f, &child, "defaulted_protocol", 100).await;
+    // Values here are already decoded by the runtime; the real five-field wire
+    // payload is exercised by runtime and pooled-daemon integration fixtures.
+    let counters = CounterBreakdown {
+        total_tokens: Some(5),
+        input_tokens: Some(3),
+        cached_input_tokens: Some(0),
+        cache_write_input_tokens: Some(0),
+        output_tokens: Some(2),
+        reasoning_output_tokens: Some(0),
+    };
+    let usage = UsageObservation::codex_runtime(CodexUsage {
+        total: counters,
+        last: counters,
+        context_window: None,
+        diagnostics: ProjectionDiagnostics::default(),
+    })
+    .unwrap();
+    assert!(usage.incomplete()); // Numerical shape cannot grant stream authority.
+    let receipt = f
+        .registry
+        .record_managed_usage(
+            &scope,
+            ManagedUsageObservation::fixture("protocol_complete", Some(usage), true, true, false),
+        )
+        .await
+        .unwrap();
+    assert_eq!(receipt.known_consumed_tokens, 5);
+    assert!(receipt.usage_complete);
+    let second = issue(&f, &child, "after_defaulted_protocol", 100).await;
+    f.registry
+        .record_managed_usage(&second, reported("high_water", 10, false, false))
+        .await
+        .unwrap();
+    let reset = f
+        .registry
+        .record_managed_usage(&second, reported("reset_terminal", 5, true, true))
+        .await
+        .unwrap();
+    assert_eq!(reset.known_consumed_tokens, 10);
+    assert!(!reset.usage_complete);
+    let history = f
+        .registry
+        .managed_call_history(clean(&f, &child, 1), second.call_id().into())
+        .await
+        .unwrap();
+    assert_eq!(history.reserved_tokens, 100);
+    assert!(!history.usage_complete);
+    f.registry.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn managed_custody_codex_cache_input_uses_existing_ceiling_codec_once() {
     let f = fixture().await;
     let child = native_child(&f).await;
@@ -663,7 +799,7 @@ async fn managed_custody_schema76_migration_is_atomic_and_keeps_schema75_agent_h
     let root = f._temp.path().join("owner");
     f.registry.shutdown().await.unwrap();
     let db = Connection::open(root.join("domain.sqlite3")).unwrap();
-    db.execute_batch("DROP TABLE IF EXISTS owner_shared_decrypted_inputs;DROP TABLE IF EXISTS owner_web_catalog_settings; DROP TABLE IF EXISTS owner_operator_graph_recipients; DROP TABLE IF EXISTS owner_operator_graph_outbox; DROP TABLE IF EXISTS owner_operator_graph_commands; DROP TABLE IF EXISTS owner_operator_graphs; DROP TABLE IF EXISTS owner_operator_graph_archive_chunks; DROP TABLE IF EXISTS owner_operator_graph_archives; DROP TABLE IF EXISTS owned_dispatch_execution_policies;DROP TABLE IF EXISTS approval_binding_incarnations;DROP TRIGGER IF EXISTS owner_resource_provenance_immutable;DROP TRIGGER IF EXISTS owner_resource_provenance_retained;DROP TABLE IF EXISTS owner_resource_provenance;DROP TABLE IF EXISTS owner_namespace_enrollments;DROP TABLE IF EXISTS owner_resource_namespaces;DROP TABLE IF EXISTS management_account_profiles;DROP TABLE IF EXISTS owner_shared_budget_demand_decisions;DROP TABLE IF EXISTS owner_shared_budget_work_refusals;DROP TABLE IF EXISTS owner_shared_budget_start_intents;DROP TABLE IF EXISTS owner_managed_budget_deltas;DROP TABLE IF EXISTS owner_managed_budget_commands;DROP TABLE IF EXISTS owner_operator_task_transfer_comments;DROP TABLE IF EXISTS owner_operator_task_transfer_tasks;DROP TABLE IF EXISTS owner_shared_context_call_pins;DROP TABLE IF EXISTS owner_shared_reply_deliveries;DROP TABLE IF EXISTS owner_shared_contexts;DROP TABLE IF EXISTS owner_shared_input_modes;DROP TABLE IF EXISTS owner_shared_stop_receipts;DROP TABLE IF EXISTS owner_shared_stop_intents;DROP TABLE IF EXISTS owner_shared_demand_bindings;DROP TABLE IF EXISTS owner_shared_demand_decisions;DROP TABLE IF EXISTS owner_shared_demands;DROP TABLE IF EXISTS owner_shared_demand_controls;DROP TABLE IF EXISTS owner_operator_task_comments;DROP TABLE IF EXISTS owner_operator_tasks;DROP TABLE IF EXISTS owner_operator_task_histories;DROP TABLE IF EXISTS owner_resource_display_names;DROP TABLE IF EXISTS owner_shared_start_intents;DROP TABLE IF EXISTS owner_shared_successor_fences;DROP TABLE IF EXISTS owner_shared_successor_call_pins;DROP TABLE IF EXISTS owner_shared_successor_observations;DROP TABLE IF EXISTS owner_shared_successor_attempts;DROP TABLE IF EXISTS owner_shared_activity_renewals;DROP TABLE IF EXISTS owner_shared_work_observations;DROP TABLE IF EXISTS owner_shared_work_events;DROP TABLE IF EXISTS owner_shared_work_inbox;DROP TABLE IF EXISTS owner_shared_process_observations;DROP TABLE IF EXISTS owner_shared_runtime_lifetimes;DROP TRIGGER IF EXISTS owner_metadata_excludes_shared;DROP TABLE IF EXISTS owner_managed_runtime_observations;DROP TABLE IF EXISTS owner_managed_runtime_stops;DROP TABLE IF EXISTS owner_managed_runtime_lifetimes;DROP TABLE IF EXISTS owner_resource_adoptions;DROP TABLE owner_managed_fences;DROP TABLE owner_managed_observations;DROP TABLE owner_managed_call_pins;DROP TABLE owner_managed_assignment_pins;DROP TRIGGER IF EXISTS owner_resource_amended_ceiling_retained;DROP TABLE IF EXISTS owner_resource_ceiling_amendments;DROP TABLE IF EXISTS owner_shared_unstarted_attempts;DROP TABLE IF EXISTS owner_shared_budget_demand_terminals;DROP TABLE IF EXISTS owner_shared_tool_policies;PRAGMA user_version=75;CREATE TABLE owner_managed_call_pins(collision INTEGER);").unwrap();
+    db.execute_batch("DROP TABLE IF EXISTS owner_shared_unstarted_runtimes;DROP TABLE IF EXISTS owner_shared_decrypted_inputs;DROP TABLE IF EXISTS owner_web_catalog_settings; DROP TABLE IF EXISTS owner_operator_graph_recipients; DROP TABLE IF EXISTS owner_operator_graph_outbox; DROP TABLE IF EXISTS owner_operator_graph_commands; DROP TABLE IF EXISTS owner_operator_graphs; DROP TABLE IF EXISTS owner_operator_graph_archive_chunks; DROP TABLE IF EXISTS owner_operator_graph_archives; DROP TABLE IF EXISTS owned_dispatch_execution_policies;DROP TABLE IF EXISTS approval_binding_incarnations;DROP TRIGGER IF EXISTS owner_resource_provenance_immutable;DROP TRIGGER IF EXISTS owner_resource_provenance_retained;DROP TABLE IF EXISTS owner_resource_provenance;DROP TABLE IF EXISTS owner_namespace_enrollments;DROP TABLE IF EXISTS owner_resource_namespaces;DROP TABLE IF EXISTS management_account_profiles;DROP TABLE IF EXISTS owner_shared_budget_demand_decisions;DROP TABLE IF EXISTS owner_shared_budget_work_refusals;DROP TABLE IF EXISTS owner_shared_budget_start_intents;DROP TABLE IF EXISTS owner_managed_budget_deltas;DROP TABLE IF EXISTS owner_managed_budget_commands;DROP TABLE IF EXISTS owner_operator_task_transfer_comments;DROP TABLE IF EXISTS owner_operator_task_transfer_tasks;DROP TABLE IF EXISTS owner_shared_context_call_pins;DROP TABLE IF EXISTS owner_shared_reply_deliveries;DROP TABLE IF EXISTS owner_shared_contexts;DROP TABLE IF EXISTS owner_shared_input_modes;DROP TABLE IF EXISTS owner_shared_stop_receipts;DROP TABLE IF EXISTS owner_shared_stop_intents;DROP TABLE IF EXISTS owner_shared_demand_bindings;DROP TABLE IF EXISTS owner_shared_demand_decisions;DROP TABLE IF EXISTS owner_shared_demands;DROP TABLE IF EXISTS owner_shared_demand_controls;DROP TABLE IF EXISTS owner_operator_task_comments;DROP TABLE IF EXISTS owner_operator_tasks;DROP TABLE IF EXISTS owner_operator_task_histories;DROP TABLE IF EXISTS owner_resource_display_names;DROP TABLE IF EXISTS owner_shared_start_intents;DROP TABLE IF EXISTS owner_shared_successor_fences;DROP TABLE IF EXISTS owner_shared_successor_call_pins;DROP TABLE IF EXISTS owner_shared_successor_observations;DROP TABLE IF EXISTS owner_shared_successor_attempts;DROP TABLE IF EXISTS owner_shared_activity_renewals;DROP TABLE IF EXISTS owner_shared_work_observations;DROP TABLE IF EXISTS owner_shared_work_events;DROP TABLE IF EXISTS owner_shared_work_inbox;DROP TABLE IF EXISTS owner_shared_process_observations;DROP TABLE IF EXISTS owner_shared_runtime_lifetimes;DROP TRIGGER IF EXISTS owner_metadata_excludes_shared;DROP TABLE IF EXISTS owner_managed_runtime_observations;DROP TABLE IF EXISTS owner_managed_runtime_stops;DROP TABLE IF EXISTS owner_managed_runtime_lifetimes;DROP TABLE IF EXISTS owner_resource_adoptions;DROP TABLE owner_managed_fences;DROP TABLE owner_managed_observations;DROP TABLE owner_managed_call_pins;DROP TABLE owner_managed_assignment_pins;DROP TRIGGER IF EXISTS owner_resource_amended_ceiling_retained;DROP TABLE IF EXISTS owner_resource_ceiling_amendments;DROP TABLE IF EXISTS owner_shared_unstarted_attempts;DROP TABLE IF EXISTS owner_shared_budget_demand_terminals;DROP TABLE IF EXISTS owner_shared_tool_policies;PRAGMA user_version=75;CREATE TABLE owner_managed_call_pins(collision INTEGER);").unwrap();
     drop(db);
     assert!(OwnerResourceRegistry::open_root(&root).is_err());
     let db = Connection::open(root.join("domain.sqlite3")).unwrap();

@@ -68,6 +68,7 @@ async fn management_package_retirement_fences_old_inflight_scope_after_cache_rep
     let old = session(&store, 1);
     let latest = session(&store, 1);
     let mut cache = PackageSessions {
+        deadline:None,
         current: Some((context(1), latest.clone())),
         issued: vec![old.authority().downgrade(), latest.authority().downgrade()],
     };

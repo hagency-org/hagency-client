@@ -97,6 +97,19 @@ impl EditLocalResource {
 
 #[cfg(feature = "resource-adoption")]
 impl Session {
+    /// Trusted native read-only provider observation. No generic JSON command
+    /// receives this registry or authority; it cannot authorize an edit.
+    pub fn resource_observation_registry(
+        &self, context: &HostContext,
+    ) -> Result<(crate::owner_resources::OwnerResourceRegistry, crate::owner_resources::ProfileAuthority), Error> {
+        self.check(context, Permission::ReadResources)?;
+        self.check(context, Permission::ReadProviders)?;
+        let SessionStore::Adopted(store)=&self.store else {return Err(Error::LocalAuthority);};
+        let profile=self.adopted_profile(store)?;
+        let registry=store.enrollment_registry(&profile)?;
+        self.check(context, Permission::ReadProviders)?;
+        Ok((registry,profile))
+    }
     /// Current native writer selection, never a serialized mini-app capability.
     pub fn local_resource_editor_registry(
         &self,

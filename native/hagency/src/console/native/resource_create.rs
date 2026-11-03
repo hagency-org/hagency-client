@@ -9,7 +9,7 @@ use hagency_store::{
 use hagency_store::management::{Intent, IntentOperation, Permission};
 use std::time::Instant;
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub enum ResourceConfigurationReview {
     Available(Box<ResourceDetail>),
     Recorded(ResourceConfigurationResult),

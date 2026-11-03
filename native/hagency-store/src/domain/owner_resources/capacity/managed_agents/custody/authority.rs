@@ -95,6 +95,13 @@ pub(super) fn original(
             return Err(Error::LocalAuthority);
         }
         authorize_resource(db, &e.profile, &c.resource_id)?;
+        if periods::recurring(&c) {
+            let period = periods::current(db, child, now)?.ok_or(Error::LocalAuthority)?;
+            if period.tokens != allocated || period.period.key != g.period_key
+                || period.period.start_ms != g.period_start_ms || period.period.end_ms != g.period_end_ms {
+                return Err(Error::LocalAuthority);
+            }
+        }
     }
     Ok(Binding {
         command: c,
@@ -107,6 +114,10 @@ pub(super) fn original(
 /// continues (phase 1b): the chain lifetime replaces its reserve command's
 /// expiry. A project child keeps its original command's expiry.
 pub(super) fn lifetime(db: &Connection, b: &Binding, now: u64) -> Result<u64, Error> {
+    if periods::recurring(&b.command) {
+        let child = format!("mar_{}", &b.digest[..40]);
+        return Ok(periods::current(db, &child, now)?.ok_or(Error::LocalAuthority)?.period.end_ms);
+    }
     match &b.command.pool_grant {
         Some(grant) => super::super::super::succession::chain_until(db, &grant.grant_id, now),
         None => Ok(b.command.expires_at_ms),
@@ -121,13 +132,21 @@ pub(super) fn assignment(
     insert: bool,
 ) -> Result<(Binding, String), Error> {
     let b = original(db, &a.enrollment, &a.child, false)?;
+    pin_assignment(db,b,&a.child,&a.assignment,a.generation,insert)
+}
+pub(super) fn assignment_for_period(db:&Connection,e:&VerifiedManagementEnrollment,child:&str,assignment:&str,generation:u64)->Result<(),Error>{
+    let b=original(db,e,child,false)?;
+    pin_assignment(db,b,child,assignment,generation,true)?;
+    Ok(())
+}
+fn pin_assignment(db:&Connection,b:Binding,child:&str,assignment:&str,generation:u64,insert:bool)->Result<(Binding,String),Error>{
     let digest = canonical::digest(
-        &json!({"child":a.child,"assignmentId":a.assignment,"assignmentGeneration":a.generation,"commandDigest":b.digest,"providerDigest":b.provider}),
+        &json!({"child":child,"assignmentId":assignment,"assignmentGeneration":generation,"commandDigest":b.digest,"providerDigest":b.provider}),
     )?;
-    let stored:Option<(String,u64,String,String)>=db.query_row("SELECT assignment_id,assignment_generation,binding_digest,provider_digest FROM owner_managed_assignment_pins WHERE child_id=?1",[&a.child],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
-    if let Some((id, generation, binding, provider)) = stored {
-        if id != a.assignment
-            || generation != a.generation
+    let stored:Option<(String,u64,String,String)>=db.query_row("SELECT assignment_id,assignment_generation,binding_digest,provider_digest FROM owner_managed_assignment_pins WHERE child_id=?1",[&child],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
+    if let Some((id, saved_generation, binding, provider)) = stored {
+        if id != assignment
+            || saved_generation != generation
             || binding != digest
             || provider != b.provider
         {
@@ -136,7 +155,7 @@ pub(super) fn assignment(
     } else if insert {
         db.execute(
             "INSERT INTO owner_managed_assignment_pins VALUES(?1,?2,?3,?4,?5)",
-            params![a.child, a.assignment, a.generation, digest, b.provider],
+            params![child, assignment, generation, digest, b.provider],
         )?;
     } else {
         return Err(Error::LocalAuthority);
@@ -144,8 +163,15 @@ pub(super) fn assignment(
     Ok((b, digest))
 }
 pub(super) fn call_budget(db: &Connection, child: &str) -> Result<(u64, bool), Error> {
-    let mut q=db.prepare("SELECT state,reserved_tokens,known_consumed_tokens,usage_complete,unrepresentable_usage FROM owner_managed_calls WHERE child_id=?1")?;
-    let mut rows = q.query([child])?;
+    let period = periods::current_id(db, child)?;
+    call_budget_scoped(db,child,period.as_deref())
+}
+pub(super) fn call_budget_all(db: &Connection, child: &str) -> Result<(u64, bool), Error> {
+    call_budget_scoped(db,child,None)
+}
+fn call_budget_scoped(db:&Connection,child:&str,period:Option<&str>)->Result<(u64,bool),Error>{
+    let mut q=db.prepare("SELECT state,reserved_tokens,known_consumed_tokens,usage_complete,unrepresentable_usage FROM owner_managed_calls WHERE child_id=?1 AND (?2 IS NULL OR id IN(SELECT call_id FROM owner_managed_call_periods WHERE period_id=?2))")?;
+    let mut rows = q.query(params![child,period])?;
     let mut held = 0_u64;
     let mut unknown = false;
     let mut count = 0;

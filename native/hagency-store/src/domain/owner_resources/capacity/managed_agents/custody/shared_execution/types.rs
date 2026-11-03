@@ -100,7 +100,8 @@ impl SharedProcessReceipt {
             || self.assignment_id != c.assignment_id
             || self.agent_reservation_id != c.agent_reservation_id
             || !exact(self.ledger_revision)
-            || !matches!(self.state.as_str(), "qualified" | "stopped" | "unknown")
+            || !matches!(self.state.as_str(), "qualified" | "stopped" | "unknown" | "not_started")
+            || self.state=="not_started" && (!c.reserve_command.pool_grant.as_ref().is_some_and(|g|g.calendar.is_some()) || c.reserve_command.renewal_mode.is_none() || self.process_digest.is_some() || self.policy_digest.is_some())
             || self
                 .process_digest
                 .as_deref()

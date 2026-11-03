@@ -165,6 +165,10 @@ pub(super) fn live(db: &Connection, a: &VerifiedSharedActivity) -> Result<(), Er
     Ok(())
 }
 pub(super) fn exact_work(db: &Connection, child: &str, w: &SharedWorkItem) -> Result<bool, Error> {
+    if periods::enabled(db,child)? {
+        let period=periods::current(db,child,graphs::now_ms()?)?.ok_or(Error::LocalAuthority)?;
+        if w.created_at_ms<period.period.start_ms || w.created_at_ms>=period.period.end_ms {return Err(Error::LocalAuthority);}
+    }
     demand::check_work_control(db, child, w)?;
     let digest = canonical::digest(&serde_json::to_value(w)?)?;
     let saved: Option<(String, String)> = db

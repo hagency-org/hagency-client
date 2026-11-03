@@ -31,6 +31,8 @@ struct State {
 pub(in crate::console::native) struct Manager {
     state: Arc<Mutex<State>>,
     custody: TaskCustody,
+    /// Owner telemetry fed by verified turn observations (never budget).
+    telemetry: crate::console::native::telemetry::OwnerTelemetry,
 }
 /// Not constructible by a caller. Its identity pins one bounded pending slot;
 /// stale cleanup can never install into another entry with the same command ID.
@@ -75,6 +77,9 @@ fn unknown() -> NativeError {
     failure(409, "shared_execution_outcome_unknown")
 }
 impl Manager {
+    pub(in crate::console::native) fn telemetry(&self) -> crate::console::native::telemetry::OwnerTelemetry {
+        self.telemetry.clone()
+    }
     pub fn close(&self) {
         self.custody.close();
         match self.state.lock() {
@@ -90,6 +95,12 @@ impl Manager {
     pub async fn drain(&self) -> Result<(), DrainFailure> {
         self.close();
         self.custody.drain().await
+    }
+    /// Observation only: retained shared-execution tasks still running in
+    /// this process. Not evidence that any assignment or model turn is live.
+    pub(in crate::console::native) fn live(&self) -> Option<u64> {
+        let s = self.state.lock().ok()?;
+        Some(s.entries.values().filter(|e| !e.task.is_finished()).count() as u64)
     }
     pub(super) fn running(&self, id: &str, digest: &str) -> Result<bool, NativeError> {
         let s = self
@@ -253,6 +264,7 @@ impl Manager {
         started: Instant,
         until: Instant,
     ) -> Result<oneshot::Receiver<Result<SharedExecutionProgress, NativeError>>, NativeError> {
+        let telemetry = self.telemetry.clone();
         self.admit(
             delivery.command.command_id.clone(),
             delivery.command_digest.clone(),
@@ -285,7 +297,7 @@ impl Manager {
                 }
                 run::run(
                     registry, *custody, launch, io, delivery, observed, started, until, cancel,
-                    sender,
+                    sender, telemetry,
                 )
                 .await
             },
@@ -303,6 +315,7 @@ impl Manager {
         started: Instant,
         until: Instant,
     ) -> Result<oneshot::Receiver<Result<SharedExecutionProgress, NativeError>>, NativeError> {
+        let telemetry = self.telemetry.clone();
         self.admit(
             delivery.command.command_id.clone(),
             delivery.command_digest.clone(),
@@ -336,7 +349,7 @@ impl Manager {
                 }
                 super::attempt_run::run(
                     registry, *custody, launch, io, delivery, observed, started, until, cancel,
-                    sender,
+                    sender, telemetry,
                 )
                 .await
             },
@@ -355,6 +368,7 @@ impl Manager {
         started: Instant,
         until: Instant,
     ) -> Result<oneshot::Receiver<Result<SharedExecutionProgress, NativeError>>, NativeError> {
+        let telemetry = self.telemetry.clone();
         self.admit(
             delivery.command.command_id.clone(),
             delivery.command_digest.clone(),
@@ -388,7 +402,7 @@ impl Manager {
                 }
                 super::budget_run::run(
                     registry, *custody, launch, io, delivery, observed, started, until, cancel,
-                    sender,
+                    sender, telemetry,
                 )
                 .await
             },

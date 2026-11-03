@@ -212,6 +212,20 @@ struct CurrentDevice {
     valid_until_ms: u64,
 }
 impl ServerLogin {
+    /// Public OAuth registration only. This is a migration hint, never a
+    /// credential or proof of authority. Normal renewal/current-device proof
+    /// must still succeed before the existing native root can run.
+    pub(in crate::console) fn resume_client_id(
+        state: &Path, expected_origin: &str, expected_owner: &str,
+    ) -> Result<String, &'static str> {
+        let journal = Journal::open(Some(state)).map_err(|_| "native_resume_unavailable")?;
+        let record = journal.snapshot()?.ok_or("native_resume_missing")?;
+        if record.binding.origin != expected_origin || record.binding.owner.as_deref() != Some(expected_owner) {
+            return Err("matrix_account_mismatch");
+        }
+        if record.state != State::Active { return Err("native_resume_revoked"); }
+        Ok(record.binding.client_id)
+    }
     pub(in crate::console) fn preserves_sdk_resume(code: &str) -> bool {
         matches!(
             code,

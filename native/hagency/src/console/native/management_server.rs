@@ -29,6 +29,8 @@ pub enum ManagementCommand {
     PoolAgent { id: String },
     PoolAgentRequest { command_id: String, pool_id: String, request: pools::PoolAgentInput },
     PoolAgentDecide { command_id: String, request_id: String, expected_revision: i64, approve: bool },
+    PoolAgentReallocate { command_id: String, request_id: String, expected_revision: i64, expected_grant_revision: i64, renewal_mode: hagency_core::recurring_quota::RenewalMode },
+    PoolAgentRenew { command_id: String, request_id: String, expected_revision: i64, expected_period_key: String },
     PoolAgentStop { command_id: String, request_id: String, expected_revision: i64 },
     Session {},
     Recover {
@@ -193,6 +195,8 @@ impl ManagementCommand {
             Self::ProjectRevoke { command_id, .. } => (Op::ProjectRevoke, command_id),
             Self::PoolAgentRequest { command_id, .. } => (Op::PoolAgentRequest, command_id),
             Self::PoolAgentDecide { command_id, .. } => (Op::PoolAgentDecide, command_id),
+            Self::PoolAgentReallocate { command_id, .. } => (Op::PoolAgentReallocate, command_id),
+            Self::PoolAgentRenew { command_id, .. } => (Op::PoolAgentRenew, command_id),
             Self::PoolAgentStop { command_id, .. } => (Op::PoolAgentStop, command_id),
             Self::AgentRequest { command_id, .. } => (Op::AgentRequest, command_id),
             Self::AgentDecide { command_id, .. } => (Op::AgentDecide, command_id),
@@ -240,6 +244,8 @@ impl ManagementCommand {
                 }
                 hagency_store::management::IntentOperation::PoolAgentRequest => Permission::RequestAgents,
                 hagency_store::management::IntentOperation::PoolAgentDecide => Permission::DecideAgentRequests,
+                hagency_store::management::IntentOperation::PoolAgentReallocate => Permission::DecideAgentRequests,
+                hagency_store::management::IntentOperation::PoolAgentRenew => Permission::DecideAgentRequests,
                 hagency_store::management::IntentOperation::PoolAgentStop => Permission::CancelAgentRequests,
                 hagency_store::management::IntentOperation::AgentRequest => {
                     Permission::RequestAgents
@@ -264,6 +270,8 @@ impl ManagementCommand {
             Self::PoolAgent { .. } | Self::PoolAgents { .. } => Permission::ReadAgentRequests,
             Self::PoolAgentRequest { .. } => Permission::RequestAgents,
             Self::PoolAgentDecide { .. } => Permission::DecideAgentRequests,
+            Self::PoolAgentReallocate { .. } => Permission::DecideAgentRequests,
+            Self::PoolAgentRenew { .. } => Permission::DecideAgentRequests,
             Self::PoolAgentStop { .. } => Permission::CancelAgentRequests,
             Self::AgentBudget { .. } | Self::AgentTopUp { .. } | Self::AgentTopUps { .. } => Permission::ReadAgentBudget,
             Self::AgentTopUpRequest { .. } => Permission::RequestAgentTopUps,
@@ -299,7 +307,7 @@ impl ManagementCommand {
             Self::Resume { .. } => Permission::ResumeConnections,
         }
     }
-    fn mutation(&self) -> bool {
+    pub(crate) fn mutation(&self) -> bool {
         matches!(
             self,
             Self::SharedApprovalDecide {..} | Self::Contribute { .. }
@@ -313,6 +321,8 @@ impl ManagementCommand {
                 | Self::ProjectRevoke { .. }
                 | Self::PoolAgentRequest { .. }
                 | Self::PoolAgentDecide { .. }
+                | Self::PoolAgentReallocate { .. }
+                | Self::PoolAgentRenew { .. }
                 | Self::PoolAgentStop { .. }
                 | Self::AgentRequest { .. }
                 | Self::AgentDecide { .. }
@@ -361,7 +371,7 @@ impl ServerOperation {
                 (Method::POST,"shared-execution/approvals/decide".into(),Some(json!({"id":id,"digest":digest,"decision":decision})))
             },
             ManagementCommand::Pools { .. } | ManagementCommand::PoolAgents { .. } | ManagementCommand::PoolAgent { .. }
-            | ManagementCommand::PoolAgentRequest { .. } | ManagementCommand::PoolAgentDecide { .. } | ManagementCommand::PoolAgentStop { .. } => return pools::prepare(command),
+            | ManagementCommand::PoolAgentRequest { .. } | ManagementCommand::PoolAgentDecide { .. } | ManagementCommand::PoolAgentStop { .. } | ManagementCommand::PoolAgentRenew { .. } | ManagementCommand::PoolAgentReallocate { .. } => return pools::prepare(command),
             ManagementCommand::AgentSettlement { .. } | ManagementCommand::AgentSettlementRequest { .. } => return agent_settlement::prepare(command),
             ManagementCommand::AgentBudget { .. } | ManagementCommand::AgentTopUp { .. } | ManagementCommand::AgentTopUps { .. }
             | ManagementCommand::AgentTopUpRequest { .. } | ManagementCommand::AgentTopUpDecide { .. } | ManagementCommand::AgentTopUpCancel { .. } => return agent_budget::prepare(command),
@@ -402,6 +412,8 @@ impl ServerOperation {
                     Op::ProjectRevoke => "project.revoke",
                     Op::PoolAgentRequest => "pool_agent.request",
                     Op::PoolAgentDecide => "pool_agent.decide",
+                    Op::PoolAgentReallocate => "pool_agent.reallocate",
+                    Op::PoolAgentRenew => "pool_agent.renew",
                     Op::PoolAgentStop => "pool_agent.stop",
                     Op::AgentRequest => "agent.request",
                     Op::AgentDecide => "agent.decide",

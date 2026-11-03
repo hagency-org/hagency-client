@@ -1797,3 +1797,22 @@ async fn metadata_qualification_reads_accept_each_policy_only_before_thread_star
         assert_eq!(session.qualification_read(QualificationRead::Configuration).await,Err(Error::Policy));
     }
 }
+
+#[tokio::test]
+async fn running_model_requires_actual_thread_identity_and_accepted_turn() {
+    let (mut session,mut peer)=fixture(false);
+    assert_eq!(session.running_model(),None);
+    initialize(&mut session,&mut peer).await;
+    assert_eq!(session.running_model(),None);
+    let (opened,_)=tokio::join!(session.start_thread(),exchange(&mut peer,thread_result(false),vec![]));
+    opened.unwrap();
+    assert_eq!(session.running_model(),None);
+    start(&mut session,&mut peer,vec![]).await.unwrap();
+    assert_eq!(session.running_model(),Some("fixture-model"));
+    let (mut wrong,mut peer)=fixture(false);
+    initialize(&mut wrong,&mut peer).await;
+    let mut response=thread_result(false);response["model"]="wrong-model".into();
+    let (opened,_)=tokio::join!(wrong.start_thread(),exchange(&mut peer,response,vec![]));
+    assert!(opened.is_err());
+    assert_eq!(wrong.running_model(),None);
+}

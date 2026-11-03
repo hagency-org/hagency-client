@@ -216,16 +216,18 @@ fn pool_authority(db: &Connection, d: &VerifiedManagedAgentDelivery, now: u64) -
     if !verified || !hagency_core::qualification::qualifies(&resource.profile(),&c.definition.capability,None) {
         return Ok(Some("resource_unavailable"));
     }
-    if unsettled_resource(db,&resource)? { return Ok(Some("unsettled_usage")); }
+    let unsettled = if periods::recurring(c) {
+        accounting::unsettled_resource_except(db,&resource,&super::super::succession::chain(db,&grant.grant_id)?)?
+    } else { unsettled_resource(db,&resource)? };
+    if unsettled { return Ok(Some("unsettled_usage")); }
     if let Some(reason) = crate::domain::web_catalog::managed_offer_refusal(db,&e.profile.digest,&c.definition.capability,c.requested_tokens)? {
         return Ok(Some(reason));
     }
-    let duplicate: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM owner_managed_agents WHERE profile=?1 AND (request_id=?2 OR agent_id=?3))",
-        params![e.profile.digest,c.request_id,c.proposed_agent_id], |r| r.get(0))?;
-    if duplicate { return Ok(Some("request_conflict")); }
+    if let Some(reason) = generation_authority(db, &e.profile.digest, c)? { return Ok(Some(reason)); }
     // Every hold of this month's chain stays inside the governing grant.
     let floor = accounting::period_floor(db, &grant.grant_id, now)?;
-    if c.requested_tokens > grant.allocated_tokens.saturating_sub(floor.total.retained) {
+    if c.requested_tokens > grant.request_limit()
+        || c.requested_tokens > grant.allocated_tokens.saturating_sub(floor.total.retained) {
         return Ok(Some("insufficient_capacity"));
     }
     // With a pending amendment or a scheduled renewal the new Agent must also
@@ -254,6 +256,11 @@ impl DomainRepository {
         d: VerifiedManagedAgentDelivery,
         fence: Arc<Inner>,
     ) -> Result<ManagedAgentReservationReceipt, Error> {
+        self.owner_managed_agent_reserve_at(d,fence,graphs::now_ms()?)
+    }
+    pub(super) fn owner_managed_agent_reserve_at(
+        &mut self, d:VerifiedManagedAgentDelivery, fence:Arc<Inner>, now:u64,
+    ) -> Result<ManagedAgentReservationReceipt, Error> {
         d.check(&fence)?;
         let tx = self
             .db
@@ -270,11 +277,11 @@ impl DomainRepository {
             d.check(&fence)?;
             return Ok(old);
         }
-        let fenced:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM owner_managed_fences WHERE profile=?1 AND (agent_id=?2 OR request_id=?3))",params![e.profile.digest,c.proposed_agent_id,c.request_id],|r|r.get(0))?;
+        let fenced:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM owner_managed_fences WHERE profile=?1 AND ((agent_id=?2 AND allocation_generation=?4) OR request_id=?3))",params![e.profile.digest,c.proposed_agent_id,c.request_id,c.allocation_generation()],|r|r.get(0))?;
         let reason = if fenced {
             Some("authority_changed")
         } else {
-            authority(&tx, &d, graphs::now_ms()?)?
+            authority(&tx, &d, now)?
         };
         let mut result = ManagedAgentReservationReceipt {
             version: 1,
@@ -304,7 +311,7 @@ impl DomainRepository {
                 save_project_authority(&tx, original, &original_digest)?;
                 (Some(c.allocation_id.as_str()), None, &original.grant_receipt)
             };
-            tx.execute("INSERT INTO owner_managed_agents(id,profile,agent_id,request_id,project_reservation_id,pool_grant_id,original_command_id,original_command_digest,original_command,definition_digest,allocated_tokens,budget_revision,state) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,1,'reserved')",params![id,e.profile.digest,c.proposed_agent_id,c.request_id,project,pool,c.command_id,d.digest,canonical::encode(&serde_json::to_value(c)?)?,c.definition_digest,c.requested_tokens])?;
+            tx.execute("INSERT INTO owner_managed_agents(id,profile,agent_id,request_id,project_reservation_id,pool_grant_id,original_command_id,original_command_digest,original_command,definition_digest,allocated_tokens,budget_revision,state,allocation_generation) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,1,'reserved',?12)",params![id,e.profile.digest,c.proposed_agent_id,c.request_id,project,pool,c.command_id,d.digest,canonical::encode(&serde_json::to_value(c)?)?,c.definition_digest,c.requested_tokens,c.allocation_generation()])?;
             tx.execute("INSERT INTO owner_managed_effects(id,child_id,kind,state,fence,payload_digest) VALUES(?1,?2,'provision','pending',0,?3)",params![format!("{id}_provision"),id,d.digest])?;
             tx.execute(
                 "UPDATE owner_project_reservations SET accounting_mode=?2 WHERE id=?1",
@@ -321,6 +328,9 @@ impl DomainRepository {
             result.retained_tokens = c.requested_tokens;
         }
         result.ledger_revision = revision(&tx)?;
+        if let Some(child) = &result.agent_reservation_id {
+            periods::initial(&tx, child, c, &d.digest, result.ledger_revision)?;
+        }
         save(
             &tx,
             &e.profile.digest,
@@ -333,5 +343,29 @@ impl DomainRepository {
         tx.commit()?;
         d.check(&fence).map_err(|_| Error::OutcomeUnknown)?;
         Ok(result)
+    }
+}
+
+// Recovery appends an allocation generation; old immutable rows, effects and
+// fences remain untouched and continue to account for their actual liabilities.
+fn generation_authority(db: &Connection, profile: &str, c: &ManagedAgentReserveCommand) -> Result<Option<&'static str>, Error> {
+    let duplicate:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM owner_managed_agents WHERE profile=?1 AND request_id=?2)",params![profile,c.request_id],|r|r.get(0))?;
+    if duplicate {return Ok(Some("request_conflict"));}
+    let prior:Option<(u64,bool,String)>=db.query_row("SELECT allocation_generation,permanent_fence,original_command FROM owner_managed_agents WHERE profile=?1 AND agent_id=?2 ORDER BY allocation_generation DESC LIMIT 1",params![profile,c.proposed_agent_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+    match prior {
+        None if c.allocation_generation()==1 => Ok(None),
+        Some((generation,true,raw)) if generation.checked_add(1)==Some(c.allocation_generation()) && periods::recurring(c) => {
+            let old:ManagedAgentReserveCommand=serde_json::from_str(&raw)?;
+            let grant=c.pool_grant.as_ref().ok_or(Error::LocalAuthority)?;
+            let funded:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM owner_managed_periods p JOIN owner_managed_agents a ON a.id=p.child_id WHERE a.profile=?1 AND a.agent_id=?2 AND p.start_ms<?4 AND p.end_ms>?3)",params![profile,c.proposed_agent_id,grant.period_start_ms,grant.period_end_ms],|r|r.get(0))?;
+            if funded {return Ok(Some("period_already_authorized"));}
+            if old.manager_mxid!=c.manager_mxid || old.room_id!=c.room_id || old.resource_id!=c.resource_id
+                || old.requested_tokens!=c.requested_tokens
+                || old.definition_digest!=c.definition_digest || c.decision_actor_mxid!=c.pool_grant.as_ref().ok_or(Error::LocalAuthority)?.owner_mxid {
+                return Ok(Some("authority_changed"));
+            }
+            Ok(None)
+        }
+        _=>Ok(Some("request_conflict")),
     }
 }

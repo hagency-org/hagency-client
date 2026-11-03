@@ -14,6 +14,8 @@ base64 = { version = "=0.22.1" }
 cap-fs-ext = { version = "=4.0.3" }
 cap-std = { version = "=4.0.3" }
 clap = { version = "4.5.54" }
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+chrono-tz = { version = "=0.10.4", default-features = false, features = ["std"] }
 getrandom = { version = "=0.3.4" }
 hagency-core = { path = "native/hagency-core" }
 hagency-execution = { path = "native/hagency-execution" }

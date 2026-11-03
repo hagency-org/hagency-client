@@ -35,6 +35,12 @@ survive. Contradictory total arithmetic or reasoning breakdowns remain visible.
 Checked known normalized cumulative category overflow returns Overflow and no
 observation; the caller must retain original evidence and report bounded refusal.
 
+The 2026-11-01 ADR069 protocol amendment distinguishes optional context capacity:
+an absent `context_window` remains unknown metadata without setting missing usage.
+The generic counter DTO still preserves every absent consumption category as
+unknown; only the live runtime decoder applies the protocol's documented omitted
+cache-write default. Historical evidence and transcript normalization are unchanged.
+
 The pinned protocol's TokenUsageInfo::fill_to_context_window can replace cumulative
 components with zero while setting total to capacity. Core recompute_token_usage
 can estimate last.total with zero components. Thus total/last/context never serve

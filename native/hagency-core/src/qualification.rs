@@ -88,7 +88,7 @@ static POLICY: LazyLock<Policy> = LazyLock::new(|| {
 
 /// A selectable model/reasoning pair from the original embedded policy.
 /// These roles describe model qualification, never live role or runtime readiness.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigurationChoice {
     pub model: String,

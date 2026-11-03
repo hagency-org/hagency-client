@@ -15,6 +15,7 @@ pub(in crate::console::native) enum Operation {
     RecoverPublication(String),
     PublishSuccessor(SuccessorPublication),
     RecoverSuccession(String),
+    ExpirePublication { command_id: String, operation: String, target_id: String, publication: Value },
     Grant(String),
     Contribution(String),
     Poll {
@@ -50,6 +51,10 @@ impl ServerOperation {
             | Operation::ManagedAgent(_)
             | Operation::ManagedMatrix(_)
             | Operation::ManagedRuntime(_) => {}
+            Operation::ExpirePublication { command_id, operation, target_id, publication } => {
+                key(command_id)?; key(target_id)?;
+                if !matches!(operation.as_str(),"grant.publish"|"grant.succeed") || publication["commandId"].as_str()!=Some(command_id) {return Err(super::invalid());}
+            }
             Operation::Publish(p) => {
                 key(&p.command_id)?;
                 key(&p.receipt.contribution_id)?;
@@ -120,6 +125,10 @@ impl ServerOperation {
             Operation::ManagedAgent(_) => unreachable!("managed agent handled above"),
             Operation::ManagedMatrix(_) => unreachable!("managed Matrix handled above"),
             Operation::ManagedRuntime(_) => unreachable!("managed runtime handled above"),
+            Operation::ExpirePublication { command_id, operation, target_id, publication } => (
+                reqwest::Method::POST, format!("grant-publications/{command_id}/expire"),
+                Some(json!({"operation":operation,"targetId":target_id,"publication":publication})),
+            ),
             Operation::Publish(p) => (
                 reqwest::Method::POST,
                 format!("contributions/{}/grants", p.receipt.contribution_id),

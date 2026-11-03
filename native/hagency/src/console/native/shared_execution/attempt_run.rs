@@ -7,22 +7,11 @@ use super::io::{AckReply, ActivityReply, TicketReply, WorkReply};
 use super::*;
 use crate::console::lifecycle::DrainFailure;
 use hagency_runtime::owned::{ManagedProcessState, OwnedSession, SharedTextActivityControl};
-use std::future::Future;
 use tokio::sync::{oneshot, watch};
 struct Activity {
     lease: SharedActivityLease,
     until: Instant,
     maximum: Instant,
-}
-async fn guarded<T>(
-    cancel: &mut watch::Receiver<bool>,
-    until: Instant,
-    future: impl Future<Output = Result<T, NativeError>>,
-) -> Result<T, NativeError> {
-    if *cancel.borrow() || Instant::now() >= until {
-        return Err(failure(409, "shared_execution_closed"));
-    }
-    tokio::select! {biased;_ = cancel.changed()=>Err(failure(409,"shared_execution_closed")),_ = tokio::time::sleep_until(until.into())=>Err(failure(409,"shared_execution_expired")),result=future=>result}
 }
 pub(super) async fn upload_process(
     b: &Bound,
@@ -175,6 +164,7 @@ pub(super) async fn run(
     until: Instant,
     mut cancel: watch::Receiver<bool>,
     sender: oneshot::Sender<Result<SharedExecutionProgress, NativeError>>,
+    telemetry: crate::console::native::telemetry::OwnerTelemetry,
 ) -> Result<(), DrainFailure> {
     let mut sender = Some(sender);
     let mut process = match launch.spawn(until) {
@@ -192,7 +182,7 @@ pub(super) async fn run(
             return Err(DrainFailure::Unknown);
         }
     };
-    let result = guarded(&mut cancel, until, async {
+    let result = guarded(&mut cancel, until, || async {
         io.check(&d.command.original_runtime_command).await?;
         process
             .initialize()
@@ -244,6 +234,7 @@ pub(super) async fn run(
                         &mut active,
                         &mut process,
                         &mut cancel,
+                        &telemetry,
                     )
                     .await
                 }
@@ -290,14 +281,23 @@ async fn work_loop(
     a: &mut Activity,
     process: &mut OwnedSession,
     cancel: &mut watch::Receiver<bool>,
+    telemetry: &crate::console::native::telemetry::OwnerTelemetry,
 ) -> Result<(), NativeError> {
-    let work = loop {
-        guarded(cancel, a.until, maybe_renew(io, r, sink, control, a)).await?;
+    let admission = io.hosting_admission()?;
+    let (work, mut turn) = loop {
+        guarded(cancel, a.until, || maybe_renew(io, r, sink, control, a)).await?;
+        let Some(turn) = admission.enter_turn() else {
+            guarded(cancel, a.until, || async {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                Ok(())
+            }).await?;
+            continue;
+        };
         let (b, verified) = proof(io, r, sink, a).await?;
         let reply: Timed<WorkReply> = guarded(
             cancel,
             a.until,
-            b.upload(Action::WorkPoll(a.lease.authority.clone()), a.until),
+            || b.upload(Action::WorkPoll(a.lease.authority.clone()), a.until),
         )
         .await?;
         if let Some(w) = reply.value.work {
@@ -330,13 +330,14 @@ async fn work_loop(
                 work_digest: digest(&w)?,
             };
             let ack: Timed<AckReply> =
-                guarded(cancel, a.until, b.upload(Action::WorkAck(input), a.until)).await?;
+                guarded(cancel, a.until, || b.upload(Action::WorkAck(input), a.until)).await?;
             if !ack.value.acknowledged {
                 return Err(invalid());
             }
-            break w;
+            break (w, turn);
         }
-        guarded(cancel, a.until, async {
+        drop(turn);
+        guarded(cancel, a.until, || async {
             tokio::time::sleep(Duration::from_millis(500)).await;
             Ok(())
         })
@@ -344,14 +345,15 @@ async fn work_loop(
     };
     let (b,p)=proof(io,r,sink,a).await?;
     let input=if cfg!(feature="shared-context") {
-        Some(guarded(cancel,a.until,super::context_io::prepare(io,&b,r,p,&work,a.lease.authority.clone(),a.until)).await?)
+        Some(guarded(cancel,a.until,|| super::context_io::prepare(io,&b,r,p,&work,a.lease.authority.clone(),a.until)).await?)
     }else{None};
     let (_,p)=proof(io,r,sink,a).await?;
     let call=if let Some(input)=&input {r.prepare_shared_input_call(p,work.clone(),input.clone()).await} else {r.prepare_shared_call(p,work.clone()).await}.map_err(store)?;
+    let call_id = call.call_id.clone();
     let (b,p)=proof(io,r,sink,a).await?;
     let attempt=if let Some(input)=&input {r.begin_shared_input_start(p,work.clone(),call.call_id,input.clone()).await} else {r.begin_shared_start(p,work.clone(),call.call_id).await}.map_err(store)?;
-    let issued=guarded(cancel,a.until,super::context_io::start(&b,r,attempt,&work,input.as_ref(),a.lease.authority.clone(),a.until)).await?;
-    guarded(cancel, a.until, async {
+    let issued=guarded(cancel,a.until,|| super::context_io::start(&b,r,attempt,&work,input.as_ref(),a.lease.authority.clone(),a.until)).await?;
+    guarded(cancel, a.until, || async {
         io.check(&sink.command().original_runtime_command).await?;
         issued.check().map_err(store)?;
         process
@@ -364,7 +366,9 @@ async fn work_loop(
         Ok(())
     })
     .await?;
+    turn.started();
     let mut capture = issued.bind_turn(process).map_err(store)?;
+    let mut usage = telemetry.shared_turn(&sink.command().original_runtime_command, &work, &call_id, process);
     let approvals_enabled=sink.command().tool_policy.as_ref().is_some_and(|p|p.mode=="standard");
     let mut approvals=super::approvals::Approvals::default();
     if approvals_enabled {super::approvals::enable(process)?;}
@@ -381,7 +385,7 @@ async fn work_loop(
                 let event = tokio::select! {biased;
                     _ = cancel.changed()=>break Err(failure(409,"shared_execution_closed")),
                     _ = tokio::time::sleep_until(a.until.into())=>break Err(failure(409,"shared_execution_expired")),
-                    _ = tokio::time::sleep_until(wake.into())=>{guarded(cancel,a.until,maybe_renew(io,r,sink,control,a)).await}
+                    _ = tokio::time::sleep_until(wake.into())=>{guarded(cancel,a.until,|| maybe_renew(io,r,sink,control,a)).await}
                     event=&mut read=>break event.map_err(|_|failure(409,"shared_execution_event_unknown")),
                 };
                 if let Err(e) = event {
@@ -397,9 +401,9 @@ async fn work_loop(
             }
         };
         let Some(event)=event else {
-            guarded(cancel,a.until,maybe_renew(io,r,sink,control,a)).await?;
+            guarded(cancel,a.until,|| maybe_renew(io,r,sink,control,a)).await?;
             let b=io.bound().await?;
-            if let Some(receipt)=guarded(cancel,a.until,approvals.poll(io,&b,&work,&a.lease.authority,a.until,process,&mut capture)).await? {break receipt;}
+            if let Some(receipt)=guarded(cancel,a.until,|| approvals.poll(io,&b,&work,&a.lease.authority,a.until,process,&mut capture,&mut usage)).await? {break receipt;}
             continue;
         };
         let approval=event.approval().cloned();
@@ -407,29 +411,34 @@ async fn work_loop(
             event.observation().kind(),
             hagency_runtime::codex::session::ObservationKind::TurnEnded(_)
         );
+        let pending = usage.pending(&event);
         let recorded = match capture.observe(event).await {
             Ok(v) => v,
             Err(e) => {
+                usage.abandon();
                 let _ = capture.record_unknown().await;
                 return Err(store(e));
             }
         };
+        // Only after the sink verified source and contiguous sequence.
+        usage.accept(pending);
+        usage.quota(process);
         if ended {
             break recorded.ok_or_else(invalid)?;
         }
         if let Some(request)=approval {
             let b=io.bound().await?;
-            guarded(cancel,a.until,approvals.register(io,&b,&work,&a.lease.authority,a.until,process,request)).await?;
+            guarded(cancel,a.until,|| approvals.register(io,&b,&work,&a.lease.authority,a.until,process,request)).await?;
         }
     };
     // Reply delivery uses the central durable Matrix transaction. Keep this same
     // process/activity alive while it is pending; do not make a successor turn.
     loop {
-        guarded(cancel, a.until, maybe_renew(io, r, sink, control, a)).await?;
+        guarded(cancel, a.until, || maybe_renew(io, r, sink, control, a)).await?;
         let status = match guarded(
             cancel,
             a.until,
-            report_work(io, r, sink.command(), &work, &terminal),
+            || report_work(io, r, sink.command(), &work, &terminal),
         )
         .await
         {
@@ -453,7 +462,7 @@ async fn work_loop(
         if matches!(status.as_deref(), Some("sent" | "blocked")) {
             return Ok(());
         }
-        guarded(cancel, a.until, async {
+        guarded(cancel, a.until, || async {
             tokio::time::sleep(Duration::from_millis(500)).await;
             Ok(())
         })

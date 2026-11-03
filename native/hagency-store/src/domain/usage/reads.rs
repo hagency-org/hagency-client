@@ -179,6 +179,7 @@ impl DomainRepository {
         identifier(engagement, 128)?;
         let (day, month) = period_keys(at)?;
         let key = match kind {
+            UsagePeriodKind::Weekly => hagency_core::recurring_quota::Calendar { cadence: hagency_core::recurring_quota::Cadence::Weekly, time_zone: "UTC".into() }.period_at(at).map_err(|_| Error::LocalAuthority)?.key,
             UsagePeriodKind::Daily => day,
             UsagePeriodKind::Monthly => month,
         };
@@ -229,16 +230,22 @@ pub(crate) fn ceiling_report(
         .map(|c| serde_json::to_value(&c.period))
         .transpose()?
         .unwrap_or(serde_json::Value::Null);
-    let period = if period_value == serde_json::json!("daily") {
+    let period = if period_value == serde_json::json!("weekly") {
+        UsagePeriodKind::Weekly
+    } else if period_value == serde_json::json!("daily") {
         UsagePeriodKind::Daily
     } else {
         UsagePeriodKind::Monthly
     };
     let ceiling_tokens = ceiling.as_ref().and_then(|c| c.tokens).map(u64::from);
-    let key = match period {
+    let calendar = super::super::resource_ceiling::calendar(db, resource_id)?;
+    let key = if let Some(calendar) = &calendar {
+        calendar.period_at(at).map_err(|_| Error::LocalAuthority)?.key
+    } else { match period {
         UsagePeriodKind::Daily => period_keys(at)?.0,
         UsagePeriodKind::Monthly => period_keys(at)?.1,
-    };
+        UsagePeriodKind::Weekly => return Err(Error::LocalAuthority),
+    }};
     // Commitments aggregated in SQLite like budget() (domain.rs:293): SUM
     // over the resource's holding engagements, never a store scan in Rust.
     // Each holds its granted amount when one is set (ADR-186 §A4).
@@ -266,26 +273,24 @@ pub(crate) fn ceiling_report(
     // bounds of every holding engagement's bucket, folded with the same
     // JSON-safe addition the summary uses. No bucket at all is unknown —
     // not zero — so the commitment figure stands alone (backend-v2.js:14050).
-    let mut statement = db.prepare(
-            "SELECT p.known_growth FROM usage_periods p JOIN engagements e ON e.id=p.engagement_id \
-             WHERE e.resource_id=?1 AND e.state IN ('reserved','active') AND p.granularity=?2 AND p.period_key=?3",
-        )?;
-    let rows = statement.query_map(params![resource_id, period.name(), key], |r| {
-        r.get::<_, String>(0)
-    })?;
     let mut known = KnownTokens::default();
     let mut measured = false;
-    for row in rows {
-        let growth: KnownTokens = serde_json::from_str(&row?)?;
-        known = known.adding(counts_from([
-            Some(growth.input),
-            Some(growth.output),
-            Some(growth.cache_write),
-            Some(growth.cache_read),
-        ]))?;
-        measured = true;
+    if let Some(calendar) = &calendar {
+        let window = calendar.period_at(at).map_err(|_| Error::LocalAuthority)?;
+        let mut query = db.prepare("SELECT r.response FROM usage_receipts r JOIN usage_sources s ON s.id=r.source_id JOIN engagements e ON e.id=s.engagement_id WHERE e.resource_id=?1 AND e.state IN ('reserved','active') AND CAST(json_extract(r.response,'$.observed_at') AS INTEGER)>=?2 AND CAST(json_extract(r.response,'$.observed_at') AS INTEGER)<?3")?;
+        for row in query.query_map(params![resource_id,window.start_ms,window.end_ms], |r| r.get::<_,String>(0))? {
+            let receipt: UsageReceipt = serde_json::from_str(&row?)?;
+            known = known.adding(receipt.delta)?;
+            measured = true;
+        }
+    } else {
+        let mut query = db.prepare("SELECT p.known_growth FROM usage_periods p JOIN engagements e ON e.id=p.engagement_id WHERE e.resource_id=?1 AND e.state IN ('reserved','active') AND p.granularity=?2 AND p.period_key=?3")?;
+        for row in query.query_map(params![resource_id,period.name(),key], |r| r.get::<_,String>(0))? {
+            let growth: KnownTokens = serde_json::from_str(&row?)?;
+            known = known.adding(counts_from([Some(growth.input),Some(growth.output),Some(growth.cache_write),Some(growth.cache_read)]))?;
+            measured = true;
+        }
     }
-    drop(statement);
     let (spent, consumed) = if measured {
         (
             Some(known.observed_fresh_lower_bound()?),

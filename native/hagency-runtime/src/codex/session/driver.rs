@@ -54,6 +54,8 @@ pub struct SessionDriver<R, W, E> {
     /// resolution is not an owner callback and never reaches the coordinator.
     policy_declined: BTreeSet<RequestId>,
     policy_declines: usize,
+    /// Read-only account quota metadata from this process (never usage).
+    rate_limits: super::rate_limits::RateLimitTracker,
 }
 
 impl<R, W, E> SessionDriver<R, W, E> {
@@ -90,10 +92,30 @@ impl<R, W, E> SessionDriver<R, W, E> {
             mcp: crate::codex::approval::McpTracker::default(),
             policy_declined: BTreeSet::new(),
             policy_declines: 0,
+            rate_limits: super::rate_limits::RateLimitTracker::default(),
         })
     }
     pub fn settings(&self) -> &Settings {
         &self.settings
+    }
+    /// Model accepted by the thread/start scope check for the running turn.
+    /// Metadata-only or failed/unstarted sessions have no measured model.
+    pub fn running_model(&self)->Option<&str> {
+        (self.phase()==Phase::Running).then(||self.settings.model())
+    }
+    /// Latest sanitized `account/rateLimits/*` metadata seen on this process.
+    pub fn provider_rate_limits(&self) -> Option<&super::RateLimitSnapshot> {
+        self.rate_limits.latest()
+    }
+    /// Digest of the runtime-reported provider account subject, if read.
+    pub fn provider_account_digest(&self) -> Option<&str> {
+        self.rate_limits.account_digest()
+    }
+    fn observe_rate_limits(&mut self, method: &str, params: &Value) {
+        if method == "account/rateLimits/updated" {
+            self.rate_limits
+                .observe(super::RateLimitOrigin::Updated, params);
+        }
     }
     /// Shared execution chooses a room only after work admission. Keep model,
     /// permissions and activity custody fixed; cwd also drives turn sandbox
@@ -450,6 +472,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> SessionD
                     params: Some(params),
                 } => {
                     self.state.notification(&method, &params)?;
+                    self.observe_rate_limits(&method, &params);
                 }
                 Event::Notification { method, .. } => {
                     tracing::debug!(
@@ -500,6 +523,14 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> SessionD
         } else {
             result
         };
+        if method == "account/rateLimits/read"
+            && let Ok(value) = &result
+        {
+            operation
+                .session
+                .rate_limits
+                .observe(super::RateLimitOrigin::Read, value);
+        }
         operation.finish(result)
     }
     pub async fn start_thread(&mut self) -> Result<String, Error> {
@@ -549,6 +580,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> SessionD
             } = event
             {
                 self.state.notification(&method, &params)?;
+                self.observe_rate_limits(&method, &params);
             }
         }
         Ok(id)
@@ -825,6 +857,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> SessionD
         let mut update = self.state.notification(&method, &params).inspect_err(|_| {
             self.refused_notification = Some(notification_shape(&method, &params));
         })?;
+        self.observe_rate_limits(&method, &params);
         self.mcp.observe(&method, &params)?;
         if self.approvals_enabled && method == "serverRequest/resolved" {
             let id =

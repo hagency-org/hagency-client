@@ -3,6 +3,8 @@ mod drain;
 pub(in crate::console) mod e2ee;
 mod provider_custody;
 mod service;
+#[cfg(unix)]
+mod working_directory;
 use super::lifecycle::{RetainedTask, TaskCustody};
 use super::{
     AuthorizedDevice, Console,
@@ -1912,6 +1914,14 @@ async fn execution_loop_with_gate<T: Transport>(
             if local(ledger.inbox_available_bytes(owner))? < 65_536 {
                 return Err(RuntimeError::Profile);
             }
+            let admission = console.approval_host().map(|host| host.console.hosting_admission());
+            let turn = match admission.as_ref() {
+                Some(gate) => match gate.enter_turn() {
+                    Some(turn) => Some(turn),
+                    None => continue,
+                },
+                None => None,
+            };
             let prepared = local(ledger.prepare_execution(owner, &record.dispatch.id))?;
             let start = operation(
                 console,
@@ -1942,6 +1952,7 @@ async fn execution_loop_with_gate<T: Transport>(
                             owner,
                             config,
                             permit.into_prepared(),
+                            turn,
                             cancel,
                             status,
                         ),
@@ -2273,6 +2284,7 @@ async fn run_turn<T: Transport>(
     owner: &str,
     config: &StartConfig,
     prepared: inbox::Prepared,
+    mut admission: Option<super::hosting::TurnAdmission>,
     cancel: &mut watch::Receiver<bool>,
     status: &watch::Sender<RuntimeStatus>,
 ) -> Result<Option<Finish>, RuntimeError> {
@@ -2294,19 +2306,10 @@ async fn run_turn<T: Transport>(
             }
         },
     };
+    #[cfg(not(unix))]
     let profile = config.profile.clone();
     #[cfg(unix)]
-    let mut profile = profile;
-    #[cfg(unix)]
-    let workspace = if config.host_files {
-        let directory = profile.home.parent().ok_or(RuntimeError::Profile)?;
-        let workspace = hagency_agent_local::room_files::Workspace::open(directory, owner, &scope)
-            .map_err(|_| RuntimeError::Profile)?;
-        profile.cwd = workspace.canonical_directory().to_path_buf();
-        Some(workspace)
-    } else {
-        None
-    };
+    let (profile, workspace) = working_directory::for_turn(&config.profile, owner, &scope, config.host_files)?;
     let provider_tasks = transport
         .approval_host()
         .map(|host| host.console.0.owned_runtime.tasks.clone())
@@ -2399,6 +2402,35 @@ async fn run_turn<T: Transport>(
     .with_capabilities(config);
     executing.binding_id = Some(config.binding_id.clone());
     status.send_replace(executing);
+    // The launch/dispatch has already passed owner, room and provider gates.
+    // Keep this identity with the observer, including failed terminal turns.
+    let telemetry = transport.approval_host().as_ref().and_then(|host| host.console.0.dashboard_telemetry
+        .lock().unwrap_or_else(|e| e.into_inner()).clone());
+    let binding = hagency_metering::dashboard::ledger::ExecutionBinding {
+        execution_id: prepared.execution_id.clone(),
+        resource_id: format!("personal-agent:{}", config.agent_id),
+        account_id: None,
+        allocation_id: None,
+        agent_id: Some(config.agent_id.clone()),
+        requester_id: Some(scope.requester.clone()),
+        room_id: Some(scope.room.clone()),
+        runtime: match runtime::kind(&config.credential_ref) {
+            runtime::Kind::Codex => hagency_metering::dashboard::ledger::Runtime::Codex,
+            runtime::Kind::Claude => hagency_metering::dashboard::ledger::Runtime::Claude,
+            runtime::Kind::Octos => hagency_metering::dashboard::ledger::Runtime::Octos,
+        },
+        runtime_version: None,
+        model: Some(profile.model.clone()),
+        parent_execution_id: None,
+        started_at_ms: super::native::telemetry::now_ms(),
+    };
+    let usage_observer = |usage: &hagency_agent_local::Usage| {
+        if let Some(telemetry) = &telemetry {
+            if telemetry.personal_usage(&binding, usage).is_err() {
+                tracing::warn!(code="personal_usage_unavailable", "Personal runtime measurement could not be recorded");
+            }
+        }
+    };
     let mut pre_model_cancel = cancel.clone();
     let permission_cancel = cancel.clone();
     let (started_tx, started_rx) = tokio::sync::oneshot::channel();
@@ -2409,12 +2441,19 @@ async fn run_turn<T: Transport>(
         provider.session.require_local_account().await.inspect_err(|error|{provider_failure("provider_account", error);})?;
         provider.session.open_context(ledger,&scope,&profile).await.inspect_err(|error|{provider_failure("provider_context", error);})?;
         if !fresh_running(transport,lease,&prepared.dispatch,&prepared.execution_id,&mut pre_model_cancel).await {return Err(codex::Error::Protocol("running dispatch authorization lost"));}
-        provider.session.run_with_started(ledger,owner,&scope,&prepared.execution_id,&prepared.dispatch.id,&input,config.mode.clone(),&queue,Some(started_tx)).await.inspect_err(|error|{provider_failure("provider_turn", error);})
+        provider.session.run_with_started_observed(ledger,owner,&scope,&prepared.execution_id,&prepared.dispatch.id,&input,config.mode.clone(),&queue,Some(started_tx),Some(&usage_observer)).await.inspect_err(|error|{provider_failure("provider_turn", error);})
         };
         let notice = async {
-            match &device {
-                Some(device) => if started_rx.await.is_ok() {device.mark_processing(&prepared.dispatch).await},
-                None => processing_notice(transport,lease,&prepared,started_rx).await,
+            if started_rx.await.is_ok() {
+                if let Some(turn) = admission.as_mut() { turn.started(); }
+                match &device {
+                    Some(device) => device.mark_processing(&prepared.dispatch).await,
+                    None => {
+                        let (send, receive) = tokio::sync::oneshot::channel();
+                        let _ = send.send(());
+                        processing_notice(transport,lease,&prepared,receive).await;
+                    }
+                }
             }
         };
         let (result, ()) = tokio::join!(model, notice);
@@ -2648,6 +2687,7 @@ mod tests {
             input: 15,
             output: 5,
             cached_input: 3,
+            cache_write_input: None,
             reasoning_output: 1,
             accounting_version: "fixture-v1".into(),
         };
@@ -4650,6 +4690,7 @@ for raw in sys.stdin:
                 input: 10,
                 output: 2,
                 cached_input: 0,
+                cache_write_input: None,
                 reasoning_output: 0,
                 accounting_version: "fixture".into(),
             },

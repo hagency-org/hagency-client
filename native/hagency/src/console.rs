@@ -13,6 +13,7 @@ pub mod device_execution;
 mod engagements;
 mod exec_policy;
 mod graphs;
+pub(crate) mod hosting;
 mod invites;
 mod lifecycle;
 mod matrix_diag;
@@ -77,11 +78,16 @@ struct Inner {
     server_login: server_login::ServerLogin,
     owned_runtime: owned_runtime::OwnedRuntime,
     owner_provider: owner_provider::OwnerProvider,
+    hosting: std::sync::Mutex<Arc<hosting::Admission>>,
+    dashboard_telemetry: std::sync::Mutex<Option<native::OwnerTelemetry>>,
 }
 /// Clones retain the same finite authority and original immutable asset proofs.
 #[derive(Clone)]
 pub struct Console(Arc<Inner>);
 impl Console {
+    pub(crate) fn hosting_admission(&self) -> Arc<hosting::Admission> {
+        self.0.hosting.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    }
     /// Synchronous startup only; no filesystem access occurs in HTTP handlers.
     pub fn load(path: &Path) -> Result<Self, Error> {
         Self::load_with_state(path, None)
@@ -107,6 +113,8 @@ impl Console {
             server_login: server_login::ServerLogin::new(state_dir)?,
             owned_runtime: owned_runtime::OwnedRuntime::default(),
             owner_provider: owner_provider::OwnerProvider::default(),
+            hosting: std::sync::Mutex::new(Arc::new(hosting::Admission::running())),
+            dashboard_telemetry: std::sync::Mutex::new(None),
             authority: match state_dir {
                 Some(dir) => Authority::persistent(dir),
                 None => Authority::new(),
@@ -141,6 +149,8 @@ impl Console {
             server_login: server_login::ServerLogin::new(Some(state))?,
             owned_runtime: owned_runtime::OwnedRuntime::default(),
             owner_provider: owner_provider::OwnerProvider::default(),
+            hosting: std::sync::Mutex::new(Arc::new(hosting::Admission::running())),
+            dashboard_telemetry: std::sync::Mutex::new(None),
         }));
         if tokio::runtime::Handle::try_current().is_ok() {
             server_login::ServerLogin::start_worker(&console);

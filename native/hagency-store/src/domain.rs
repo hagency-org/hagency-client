@@ -145,7 +145,7 @@ pub struct DomainRepository {
     _legacy_writer: Option<hagency_platform::legacy_writer::LegacyWriterAdmission>,
 }
 /// Current domain schema version (the last sequential migration).
-pub const DOMAIN_SCHEMA_VERSION: i32 = 106;
+pub const DOMAIN_SCHEMA_VERSION: i32 = 110;
 const DOMAIN_MIGRATIONS: &[(i32, &str)] = &[
     (2, include_str!("migrations/002-role-publication.sql")),
     (3, include_str!("migrations/003-task-dispatch.sql")),
@@ -400,6 +400,10 @@ const DOMAIN_MIGRATIONS: &[(i32, &str)] = &[
     // Board migration number 107 (track C) lands as the next sequential tuple 105.
     (105, include_str!("migrations/107-owner-resource-ceiling-amendments.sql")),
     (106, include_str!("migrations/108-owner-shared-decrypted-inputs.sql")),
+    (107, include_str!("migrations/109-owner-agent-periods.sql")),
+    (108, include_str!("migrations/110-owner-resource-calendars.sql")),
+    (109, include_str!("migrations/111-owner-period-starts.sql")),
+    (110, include_str!("migrations/112-owner-unstarted-runtimes.sql")),
 ];
 
 impl DomainRepository {
@@ -1041,6 +1045,12 @@ fn budget_with_options(
     succession: Option<&std::collections::BTreeSet<String>>,
 ) -> Result<Budget, Error> {
     let declaration = account_ceiling::declaration(db, &resource.seat_id)?;
+    let account_calendars_match = resource_ceiling::shared_account_calendars_match(
+        db,
+        &resource.seat_id,
+        declaration.as_ref(),
+        None,
+    )?;
     // Aggregate in SQLite, not by cloning or scanning the whole lifetime store in Rust.
     // SQLite SUM fails rather than wrapping; Tokens also enforces JSON-safe precision.
     // ADR-186 §A4: an engagement holds its granted amount when one is set.
@@ -1081,6 +1091,11 @@ fn budget_with_options(
         exclude_engagement_id: exclude_engagement_id.map(str::to_owned),
         for_auto_join,
     })?;
+    if !account_calendars_match {
+        result.seat.status = allocation::SeatStatus::PeriodMismatch;
+        result.seat.remaining = None;
+        result.remaining_tokens = None;
+    }
     if unsettled_for(db, resource, succession)? {
         result.remaining_tokens = None;
         result.pool.remaining = None;
@@ -1221,6 +1236,7 @@ fn check_grant_within(
         let period_name = match report.period {
             UsagePeriodKind::Daily => "daily",
             UsagePeriodKind::Monthly => "monthly",
+            UsagePeriodKind::Weekly => "weekly",
         };
         let message = ceiling_wording::over_commit_message(
             agent,

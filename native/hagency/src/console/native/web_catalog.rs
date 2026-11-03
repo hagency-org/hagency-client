@@ -3,7 +3,7 @@ use super::{NativeManagement,NativeError,failure,management::store_error};
 use hagency_store::management::{Intent,IntentOperation,IntentReply,PendingIntent,WebCatalogQuery,WebCatalogView,WebCatalogPrepare,WebCatalogChange,WebCatalogCommand,WebCatalogResult,WebOfferPage,WebTrustPage};
 use serde::Serialize;
 
-#[derive(Debug,Serialize)]
+#[derive(Debug,Serialize, serde::Deserialize)]
 #[serde(rename_all="camelCase")]
 pub struct PreparedWebCatalog {
     pub command_id:String,pub resource_id:String,pub expected_revision:String,pub change:WebCatalogChange,

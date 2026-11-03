@@ -276,3 +276,59 @@ async fn resource_proof_rejects_signed_out_unsupported_identity_and_expiry(){
     assert!(resource_fixture(resource_rows(),true).await.0.is_err());
     let mut rows=resource_rows();rows[4]=json!({"data":[{"id":"incomplete"}],"nextCursor":null});assert!(resource_fixture(rows,false).await.0.is_err());
 }
+
+#[test]
+fn quota_report_drops_private_fields_and_shares_execution_account_digest() {
+    let raw=json!({"accountId":"acct_original","email":"private@example.test","accessToken":"secret",
+        "rateLimits":{"primary":{"usedPercent":27,"windowDurationMins":300},"credits":{"balance":"private"}}});
+    let report=observed_quota(snapshot(&account("private@example.test")).unwrap(),&raw).unwrap();
+    assert_eq!(report.subject_digest,hagency_runtime::codex::session::quota_account_digest("acct_original"));
+    let public=serde_json::to_string(&report.limits).unwrap();
+    for private in ["private@example.test","secret","acct_original","credits","balance"] {
+        assert!(!public.contains(private));
+    }
+    let unknown=observed_quota(snapshot(&account("private@example.test")).unwrap(),&json!({"rateLimits":{}})).unwrap();
+    assert_eq!(unknown.subject_digest,None);
+    assert!(unknown.limits.rate_limits.unwrap().primary.is_none());
+    assert!(observed_quota(snapshot(&account("same@example.test")).unwrap(),&usage("same@example.test")).is_err());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn idle_quota_probe_only_reads_metadata_and_drains_child_even_on_account_change() {
+    use std::os::unix::fs::PermissionsExt;
+    for changed in [false,true] {
+        let temp=hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
+        let root=temp.path().canonicalize().unwrap();
+        let paths=super::super::paths(&root.join("state"),"https://server.example/","https://server.example/auth/","test-subject","@owner:example").unwrap();
+        let executable=root.join("quota-fixture");
+        let rows=vec![account("a@example.test"),usage("acct_original"),account("a@example.test"),usage(if changed {"acct_replacement"} else {"acct_original"}),account("a@example.test")];
+        std::fs::write(paths.home.join("fixture.json"),serde_json::to_vec(&rows).unwrap()).unwrap();
+        std::fs::write(&executable,r#"#!/usr/bin/env python3
+import json,pathlib,sys
+home=pathlib.Path.cwd(); rows=json.loads((home/'fixture.json').read_text()); offset=0
+expected=['account/read','account/rateLimits/read','account/read','account/rateLimits/read','account/read']
+for line in sys.stdin:
+ r=json.loads(line); m=r.get('method'); i=r.get('id')
+ if i is None:
+  assert m=='initialized'; continue
+ with (home/'methods.jsonl').open('a') as f:f.write(json.dumps(m)+'\n')
+ if m=='initialize':v={}
+ elif m=='config/read':v={'config':{'model_provider':'openai','chatgpt_base_url':'https://chatgpt.com/backend-api','model_providers':{}}}
+ else:
+  assert m==expected[offset], 'idle refresh cannot login or perform inference'
+  if m=='account/read':assert r['params']=={'refreshToken':False}
+  v=rows[offset]; offset+=1
+ print(json.dumps({'id':i,'result':v}),flush=True)
+"#).unwrap();
+        std::fs::set_permissions(&executable,std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut process=Process::spawn_identity(&paths,&executable).await.unwrap();
+        let report=tokio::time::timeout(Duration::from_secs(3),observe_quota(&mut process,&paths,Instant::now()+Duration::from_secs(3))).await.unwrap();
+        process.child.kill().await.unwrap();
+        if changed {assert!(matches!(report,Err(error) if error.code=="provider_account_changed"));}
+        else {assert_eq!(report.unwrap().subject_digest,hagency_runtime::codex::session::quota_account_digest("acct_original"));}
+        let methods:Vec<String>=std::fs::read_to_string(paths.home.join("methods.jsonl")).unwrap().lines().map(|line|serde_json::from_str(line).unwrap()).collect();
+        assert_eq!(methods,["initialize","config/read","account/read","account/rateLimits/read","account/read","account/rateLimits/read","account/read"]);
+        assert!(!paths.codex_home.join("auth.json").exists());
+    }
+}

@@ -119,7 +119,18 @@ impl OwnerResourceRegistry {
                     .db
                     .transaction_with_behavior(TransactionBehavior::Deferred)?;
                 let now = graphs::now_ms()?;
-                let period = OwnerGrantPeriod::at(now)?;
+                // The contribution's original resource owns its calendar.
+                // Reading a UTC month here would reject daily/weekly history
+                // even though the atomic V4 writer accepts the new period.
+                let resources = tx.prepare("SELECT DISTINCT resource_id FROM owner_capacity_grants WHERE profile=?1 AND json_extract(receipt,'$.contributionId')=?2 LIMIT 2")?
+                    .query_map(params![profile.digest,contribution],|r|r.get::<_,String>(0))?
+                    .collect::<Result<Vec<_>,_>>()?;
+                if resources.len()>1 {return Err(Error::Conflict);}
+                let calendar=resources.first().map(|resource|crate::domain::resource_ceiling::calendar(&tx,resource)).transpose()?.flatten();
+                let period = match calendar {
+                    Some(calendar) => OwnerGrantPeriod::at_calendar(now,&calendar)?,
+                    None => OwnerGrantPeriod::at(now)?,
+                };
                 let result = prior_periods_ended(
                     &tx,
                     &profile,

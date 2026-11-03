@@ -134,7 +134,7 @@ impl OwnerResourceRegistry {
             if binding.digest!=original.reserve_command_digest{return Err(Error::LocalAuthority)}
             let original_digest=canonical::digest(&serde_json::to_value(&original)?)?;
             let predecessor_digest=predecessor.as_ref().map(|c| -> Result<String,Error>{c.validate(&authority.enrollment.profile.account)?;if c.original_runtime_digest!=original_digest{return Err(Error::Conflict)}Ok(canonical::digest(&serde_json::to_value(c)?)?)}).transpose()?.unwrap_or_else(||original_digest.clone());
-            let row:Option<(String,String,String,String)>=db.db.query_row("SELECT profile,original_runtime_digest,input_payload,input_digest FROM owner_shared_start_intents WHERE child_id=?1 AND predecessor_digest=?2 AND NOT EXISTS(SELECT 1 FROM owner_shared_demand_decisions d WHERE d.start_intent_id=owner_shared_start_intents.id)",params![authority.child,predecessor_digest],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
+            let row:Option<(String,String,String,String)>=db.db.query_row("SELECT profile,original_runtime_digest,input_payload,input_digest FROM owner_shared_start_intents WHERE child_id=?1 AND predecessor_digest=?2 AND period_id IS ?3 AND NOT EXISTS(SELECT 1 FROM owner_shared_demand_decisions d WHERE d.start_intent_id=owner_shared_start_intents.id)",params![authority.child,predecessor_digest,periods::current(&db.db,&authority.child,graphs::now_ms()?)?.map(|p|p.id)],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
             let Some((profile,saved_original,payload,digest))=row else {return Ok(None)};
             let input:SharedAttemptStartInput=serde_json::from_str(&payload)?;
             if profile!=authority.enrollment.profile.digest||saved_original!=original_digest||input.assignment_id!=original.assignment_id||input.predecessor.command_digest!=predecessor_digest||canonical::digest(&serde_json::to_value(&input)?)?!=digest{return Err(Error::Conflict)}
@@ -188,6 +188,7 @@ pub(super) fn prepare_in_transaction(
         .transpose()?
         .unwrap_or_else(|| original_digest.clone());
     let b = authority::original(tx, enrollment, &original.agent_reservation_id, false)?;
+    let period=periods::current_id(tx,&original.agent_reservation_id)?;
     if b.digest != original.reserve_command_digest {
         return Err(Error::LocalAuthority);
     }
@@ -261,7 +262,7 @@ pub(super) fn prepare_in_transaction(
     let input_digest = canonical::digest(&serde_json::to_value(&input)?)?;
     bounded_row(tx, "owner_shared_start_intents", "id", &start_id, 100_000)?;
     tx.execute(
-        "INSERT INTO owner_shared_start_intents VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+        "INSERT INTO owner_shared_start_intents VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
         params![
             start_id,
             original.agent_reservation_id,
@@ -278,7 +279,8 @@ pub(super) fn prepare_in_transaction(
                 .transpose()?,
             payload,
             input_digest,
-            rev
+            rev,
+            period
         ],
     )?;
     enrollment.check()?;

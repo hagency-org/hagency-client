@@ -20,6 +20,7 @@ pub(super) mod reoffer;
 mod cancellation;
 pub use cancellation::{OwnerGrantCancellationReview, OwnerGrantCancellationResult};
 mod succession;
+mod recurring;
 mod publication;
 pub use publication::{OwnerGrantPublicationProgress, OwnerGrantPublicationReview, OwnerGrantPublicationResult, OwnerGrantPublicationState};
 use publication::PublicationIntent;
@@ -362,7 +363,7 @@ impl OwnerGrantIntents {
         {
             return Err(failure(409, "owner_grant_review_changed"));
         }
-        let context = OwnerGrantReviewContext {
+        let mut context = OwnerGrantReviewContext {
             server_origin: io.identity.origin.clone(),
             profile_id: binding.profile_digest,
             resource_revision: resource.revision,
@@ -374,6 +375,19 @@ impl OwnerGrantIntents {
             capacity_blocker: capacity_blocker(&resource.budget),
             observed_at_ms: now_ms()?,
         };
+        if let Some(calendar) = &consent.selection().calendar {
+            let cadence = match calendar.cadence {
+                hagency_core::recurring_quota::Cadence::Daily => "daily",
+                hagency_core::recurring_quota::Cadence::Weekly => "weekly",
+                hagency_core::recurring_quota::Cadence::Monthly => "monthly",
+            };
+            if resource.budget.seat.quota.is_some()
+                && (resource.budget.seat.period.as_deref()!=Some(cadence) || calendar.time_zone != "UTC")
+            {
+                context.remaining_tokens=None;
+                context.capacity_blocker=Some("account_period_mismatch".into());
+            }
+        }
         let consent = consent
             .with_reviewed_budget(&resource.budget)
             .map_err(storage)?;
@@ -393,7 +407,8 @@ impl OwnerGrantIntents {
         if choices.coordinator_mxid != io.identity.owner {
             return Err(failure(409, "resource_owner_is_coordinator"));
         }
-        let selection = OwnerGrantSelection {
+        let selection = OwnerGrantSelection { per_request_tokens: choices.per_request_tokens,
+            calendar: choices.calendar,
             command_id: random_id()?,
             grant_id: random_id()?,
             coordinator_mxid: choices.coordinator_mxid,
@@ -413,9 +428,15 @@ impl OwnerGrantIntents {
         // Keep the transport future out of the enclosing adoption/consent
         // state machine, which also runs on ordinary small worker stacks.
         let admission = Box::pin(self.observe_grant_admission(&io, &binding)).await?;
-        let receipt_version = if Box::pin(self.supports_admission_receipts(&io)).await? { 2 } else { 1 };
+        let receipt_version = if consent.selection().per_request_tokens.is_some() {
+            if !Box::pin(self.supports_split_limits(&io)).await? { return Err(failure(409,"management_pool_limits_required")); }
+            5
+        } else if consent.selection().calendar.is_some() {
+            if !Box::pin(self.supports_calendar(&io)).await? { return Err(failure(409,"management_calendar_grants_required")); }
+            4
+        } else if Box::pin(self.supports_admission_receipts(&io)).await? { 2 } else { 1 };
         let void = Box::pin(self.void_successors(&io, registry, &binding.contribution_id)).await?;
-        let regrant = receipt_version == 2
+        let regrant = receipt_version >= 2
             && History::load(&io.path, io.identity.clone())?.admission_month_ended(
                 &binding.contribution_id,
                 &admission.request_id,
@@ -442,7 +463,7 @@ impl OwnerGrantIntents {
                     .map_err(storage)?,
                 prior,
             )
-        } else if receipt_version == 2 {
+        } else if receipt_version >= 2 {
             let closed = Box::pin(self.reconcile_prior_admission(&io, registry,
                 &binding.contribution_id, &admission.request_id)).await?;
             (consent.with_admission_request(admission.request_id.clone()).map_err(storage)?
@@ -574,14 +595,14 @@ impl OwnerGrantIntents {
         }
         let admission = Box::pin(self.check_grant_admission(&io, &original)).await?;
         let void = Box::pin(self.void_successors(&io, registry, &original.binding.contribution_id)).await?;
-        let regrant = original.receipt_version == 2
+        let regrant = original.receipt_version >= 2
             && history.admission_month_ended(
                 &original.binding.contribution_id,
                 &admission.request_id,
                 now_ms()?,
                 &void,
             );
-        let consent = if original.receipt_version == 2 {
+        let consent = if original.receipt_version >= 2 {
             if !Box::pin(self.supports_admission_receipts(&io)).await? {
                 return Err(failure(409, "management_admission_receipts_required"));
             }
@@ -686,11 +707,15 @@ impl OwnerGrantIntents {
         // Disabling fresh allocations fences pending v1 and v2 consent alike;
         // recovery above still returns an existing original receipt unchanged.
         let admission_receipts = Box::pin(self.supports_admission_receipts(&io)).await?;
-        if review.original.receipt_version == 2 && !admission_receipts {
+        if review.original.receipt_version >= 2 && !admission_receipts {
             return Err(failure(409, "management_admission_receipts_required"));
         }
         if review.regrant && !Box::pin(self.supports_monthly_regrant(&io)).await? {
             return Err(failure(409, "management_monthly_regrant_required"));
+        }
+        if review.original.receipt_version == 5 && !Box::pin(self.supports_split_limits(&io)).await? { return Err(failure(409,"management_pool_limits_required")); }
+        if review.original.receipt_version == 4 && !Box::pin(self.supports_calendar(&io)).await? {
+            return Err(failure(409,"management_calendar_grants_required"));
         }
         let successor = review.original.succession.is_some();
         if successor && !Box::pin(self.supports_succession(&io)).await? {
@@ -807,6 +832,15 @@ impl OwnerGrantIntents {
     }
 }
 impl OwnerGrantAccess {
+    pub(crate) fn bind_controller_lifetime(self, lifetime: Arc<dyn Fn()->Option<Instant>+Send+Sync>)->Result<Self,NativeError> {
+        self.manager.bind_controller_lifetime(lifetime)?;
+        Ok(self)
+    }
+    /// The native host's package lifetime also fences queued grant writes.
+    pub fn restrict_to_deadline(self, until: Instant) -> Result<Self, NativeError> {
+        self.manager.restrict_to_deadline(until)?;
+        self.restrict_to_host(move || Instant::now() < until)
+    }
     /// Inspect exactly the admitted resource before the owner chooses how much
     /// to publish. The actual write still re-verifies provider custody and budget.
     pub async fn publication_form(&self, contribution: String) -> Result<OwnerGrantForm, NativeError> {

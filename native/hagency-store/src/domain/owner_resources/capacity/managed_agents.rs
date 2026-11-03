@@ -23,6 +23,8 @@ pub use settlement::{
     VerifiedManagedAgentSettlement,
 };
 mod reserve;
+mod periods;
+pub use periods::{AGENT_PERIOD_CAPABILITY, ManagedAgentPeriodRenewCommand, ManagedAgentPeriodReceipt, VerifiedManagedAgentPeriodDelivery};
 mod types;
 pub(in crate::domain) use accounting::unsettled_resource;
 #[cfg(feature = "resource-adoption")]
@@ -42,6 +44,36 @@ pub use types::{
     ManagedAgentReserveCommand,
 };
 
+#[cfg(any(test, feature = "resource-adoption"))]
+struct UsageReadback {
+    period: String, allocated: u64, prior: u64, call_count:u64,
+    value: accounting::ChildLiability,
+}
+#[cfg(any(test, feature = "resource-adoption"))]
+fn usage_readback(db:&Connection,id:&str,command:&ManagedAgentReserveCommand,original:u64)->Result<UsageReadback,Error>{
+    let mut value=accounting::child(db,id)?;
+    if !periods::recurring(command) {
+        return Ok(UsageReadback{period:command.period_key.clone(),allocated:custody::budget::effective_ceiling(db,id,original)?,prior:0,
+            call_count:db.query_row("SELECT COUNT(*) FROM owner_managed_calls WHERE child_id=?1",[id],|r|r.get(0))?,value});
+    }
+    let now=graphs::now_ms()?;
+    let current=periods::current(db,id,now)?;
+    let usage=periods::usage(db,id,current.as_ref().map(|p|p.id.as_str()))?;
+    let allocated=current.as_ref().map_or(0,|p|p.tokens);
+    let period=command.pool_grant.as_ref().and_then(|g|g.calendar.as_ref()).ok_or(Error::LocalAuthority)?.period_at(now).map_err(|_|Error::LocalAuthority)?.key;
+    let mut old_grants=std::collections::BTreeSet::new();
+    let grants=db.prepare("SELECT DISTINCT grant_id FROM owner_managed_periods WHERE child_id=?1 AND end_ms<=?2")?.query_map(params![id,now],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
+    for grant in grants {old_grants.insert(periods::funding_grant(db,&grant,now)?);}
+    let mut prior=0u64;
+    for grant in old_grants {prior=prior.checked_add(periods::grant_usage(db,id,&grant,now)?.0).filter(|n|*n<=JSON_SAFE_MAX).ok_or(Error::Capacity)?;}
+    let unknown=custody::budget::process_unknown(db,id)?;
+    value.retained=if unknown {usage.held.max(allocated)} else {usage.held};
+    value.consumed=usage.consumed;
+    value.complete=usage.complete&&!unknown&&prior==0;
+    let call_count=db.query_row("SELECT COUNT(*) FROM owner_managed_calls c JOIN owner_managed_call_periods p ON p.call_id=c.id WHERE c.child_id=?1 AND p.period_id IS ?2",params![id,current.map(|p|p.id)],|r|r.get(0))?;
+    Ok(UsageReadback{period,allocated,prior,call_count,value})
+}
+
 impl DomainRepository {
     #[cfg(test)]
     pub(crate) fn management_web_managed_usage(&self, profile: &str) -> Result<crate::management::WebManagedUsage, Error> {
@@ -50,17 +82,17 @@ impl DomainRepository {
     #[cfg(any(test, feature = "resource-adoption"))]
     pub(crate) fn management_web_managed_usage_page(&self, profile: &str, after: &str, limit: usize) -> Result<crate::management::WebManagedUsage, Error> {
         if !(1..=256).contains(&limit) { return Err(Error::Capacity); }
-        let mut statement = self.db.prepare("SELECT a.id,a.original_command,a.allocated_tokens FROM owner_managed_agents a JOIN owner_project_reservations p ON p.id=a.project_reservation_id JOIN owner_capacity_grants g ON g.id=p.grant_id WHERE a.profile=?1 AND g.profile=?1 AND a.request_id>?2 AND EXISTS(SELECT 1 FROM owner_resource_grants r WHERE r.resource_id=g.resource_id AND r.profile=?1 AND r.active=1) ORDER BY a.request_id LIMIT ?3")?;
+        let mut statement = self.db.prepare("SELECT a.id,a.original_command,a.allocated_tokens FROM owner_managed_agents a LEFT JOIN owner_project_reservations p ON p.id=a.project_reservation_id JOIN owner_capacity_grants g ON g.id=COALESCE(a.pool_grant_id,p.grant_id) WHERE a.profile=?1 AND g.profile=?1 AND a.request_id>?2 AND EXISTS(SELECT 1 FROM owner_resource_grants r WHERE r.resource_id=g.resource_id AND r.profile=?1 AND r.active=1) ORDER BY a.request_id LIMIT ?3")?;
         let rows = statement.query_map(params![profile,after,limit+1],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,u64>(2)?)))?.collect::<Result<Vec<_>,_>>()?;
         drop(statement);
         let complete = rows.len()<=limit;
         let mut items = Vec::new();
         for (id, raw, original) in rows.into_iter().take(limit) {
             let command: ManagedAgentReserveCommand = serde_json::from_str(&raw)?;
-            let usage = accounting::child(&self.db,&id)?;
-            let call_count = self.db.query_row("SELECT COUNT(*) FROM owner_managed_calls WHERE child_id=?1",[&id],|r|r.get(0))?;
+            let usage = usage_readback(&self.db,&id,&command,original)?;
+            let call_count = usage.call_count;
             let state = self.db.query_row("SELECT state FROM owner_managed_agents WHERE id=?1",[&id],|r|r.get(0))?;
-            items.push(crate::management::WebManagedUsageRow {request_id:command.request_id,agent_id:command.proposed_agent_id,name:command.definition.name,capability:command.definition.capability,manager_mxid:command.manager_mxid,state,project_id:command.project_id,allocation_id:command.allocation_id,resource_id:command.resource_id,period_key:command.period_key,allocated_tokens:custody::budget::effective_ceiling(&self.db,&id,original)?,retained_tokens:usage.retained,known_consumed_tokens:usage.consumed,usage_complete:usage.complete,call_count});
+            items.push(crate::management::WebManagedUsageRow {request_id:command.request_id,agent_id:command.proposed_agent_id,name:command.definition.name,capability:command.definition.capability,manager_mxid:command.manager_mxid,state,project_id:command.project_id,allocation_id:command.allocation_id,resource_id:command.resource_id,period_key:usage.period,allocated_tokens:usage.allocated,retained_tokens:usage.value.retained,prior_retained_tokens:usage.prior,known_consumed_tokens:usage.value.consumed,usage_complete:usage.value.complete,call_count});
         }
         Ok(crate::management::WebManagedUsage { supported:true,complete,items })
     }
@@ -68,7 +100,7 @@ impl DomainRepository {
     /// profile/resource grant can join this to a provider-account alias.
     #[cfg(any(test, feature = "resource-adoption"))]
     pub(crate) fn management_web_managed_link(&self, profile: &str, request: &str) -> Result<Option<crate::management::WebWorkforceLink>, Error> {
-        let row: Option<(String, String, u64)> = self.db.query_row("SELECT a.id,a.original_command,a.allocated_tokens FROM owner_managed_agents a JOIN owner_project_reservations p ON p.id=a.project_reservation_id JOIN owner_capacity_grants g ON g.id=p.grant_id WHERE a.profile=?1 AND a.request_id=?2 AND g.profile=?1 AND EXISTS(SELECT 1 FROM owner_resource_grants r WHERE r.resource_id=g.resource_id AND r.profile=?1 AND r.active=1)", params![profile,request], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+        let row: Option<(String, String, u64)> = self.db.query_row("SELECT a.id,a.original_command,a.allocated_tokens FROM owner_managed_agents a LEFT JOIN owner_project_reservations p ON p.id=a.project_reservation_id JOIN owner_capacity_grants g ON g.id=COALESCE(a.pool_grant_id,p.grant_id) WHERE a.profile=?1 AND a.request_id=?2 AND g.profile=?1 AND EXISTS(SELECT 1 FROM owner_resource_grants r WHERE r.resource_id=g.resource_id AND r.profile=?1 AND r.active=1)", params![profile,request], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
         let Some((id, raw, original)) = row else { return Ok(None); };
         let command: ManagedAgentReserveCommand = serde_json::from_str(&raw)?;
         let resource = self.resource_configuration(&command.resource_id)?;
@@ -77,16 +109,16 @@ impl DomainRepository {
             let bound: bool = self.db.query_row("SELECT EXISTS(SELECT 1 FROM owner_resource_accounts WHERE seat_id=?1)",[&resource.seat_id],|r|r.get(0))?;
             if bound { Some(format!("binding_{}", canonical::digest(&json!({"version":1,"profile":profile,"seat":resource.seat_id}))?)) } else { None }
         };
-        let usage = accounting::child(&self.db, &id)?;
+        let usage = usage_readback(&self.db,&id,&command,original)?;
         Ok(Some(crate::management::WebWorkforceLink {
             request_id: command.request_id, agent_id: command.proposed_agent_id,
             project_id: command.project_id, allocation_id: command.allocation_id,
             resource_id: command.resource_id, account_id,
             model_revision_matches: crate::resource_publication_revision(&resource)? == command.resource_revision,
-            model: resource.model, reasoning: resource.reasoning, period_key: command.period_key,
-            allocated_tokens: custody::budget::effective_ceiling(&self.db, &id, original)?,
-            retained_tokens: usage.retained, known_consumed_tokens: usage.consumed,
-            usage_complete: usage.complete, process_state: usage.process_state.into(),
+            model: resource.model, reasoning: resource.reasoning, period_key: usage.period,
+            allocated_tokens: usage.allocated,
+            retained_tokens: usage.value.retained, prior_retained_tokens:usage.prior, known_consumed_tokens: usage.value.consumed,
+            usage_complete: usage.value.complete, process_state: usage.value.process_state.into(),
         }))
     }
 }

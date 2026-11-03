@@ -175,7 +175,10 @@ pub(super) async fn pump_candidates<T: Transport>(
             .await
         {
             Ok(m) => m,
-            Err(_) => continue,
+            Err(error) => {
+                tracing::debug!(stage = "encrypted_candidate", room_id = %c.room_id, event_id = %c.event_id, %error, "Encrypted candidate is not ready; preserving it for retry");
+                continue;
+            },
         };
         let (mentions, thread_root) = message
             .map(|m| (m.mentions.into_iter().collect(), m.thread_root))
@@ -247,14 +250,17 @@ impl AgentDevice {
     ) -> Result<Option<DecryptedRequest>, RuntimeError> {
         let room_id = OwnedRoomId::try_from(room).map_err(|_| RuntimeError::Request)?;
         let event_id = OwnedEventId::try_from(event).map_err(|_| RuntimeError::Request)?;
-        let room = self
-            .client
-            .get_room(&room_id)
-            .ok_or(RuntimeError::Transport)?;
+        let room = self.client.get_room(&room_id).ok_or_else(|| {
+            tracing::debug!(stage = "encrypted_candidate_room", room_id = %room_id, "Agent device has not synchronized the candidate room");
+            RuntimeError::Transport
+        })?;
         let event = room
             .event(&event_id, None)
             .await
-            .map_err(|_| RuntimeError::Transport)?;
+            .map_err(|error| {
+                tracing::debug!(stage = "encrypted_candidate_event", room_id = %room_id, event_id = %event_id, %error, "Agent device could not read the encrypted candidate");
+                RuntimeError::Transport
+            })?;
         match &event.kind {
             TimelineEventKind::Decrypted(d) => Ok(request_message(d, requester)),
             _ => Err(RuntimeError::Transport), // Keys can arrive later; retain the candidate.

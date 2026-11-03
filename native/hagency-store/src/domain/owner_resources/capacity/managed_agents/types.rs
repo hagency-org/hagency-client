@@ -17,6 +17,10 @@ pub struct ManagedAgentDefinition {
 pub struct ManagedAgentReserveCommand {
     pub version: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renewal_mode: Option<hagency_core::recurring_quota::RenewalMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allocation_generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pool_grant: Option<NativeGrantReceipt>,
     pub capability: String,
     pub operation: String,
@@ -89,7 +93,9 @@ fn wire_key(s: &str) -> Result<(), Error> {
 }
 fn zero_revision(value: &u64) -> bool { *value == 0 }
 impl ManagedAgentReserveCommand {
+    pub fn allocation_generation(&self) -> u64 { self.allocation_generation.unwrap_or(1) }
     pub fn validate(&self, owner: &str) -> Result<(), Error> {
+        exact(self.allocation_generation())?;
         for value in [&self.command_id, &self.request_id, &self.proposed_agent_id,
             &self.allocation_id, &self.enrollment_id, &self.executor_device_id, &self.resource_id] { wire_key(value)?; }
         for value in [self.request_revision, self.authority_revision, self.executor_generation,
@@ -99,7 +105,7 @@ impl ManagedAgentReserveCommand {
         local_user(&self.decision_actor_mxid, owner)?;
         match (self.version, &self.pool_grant) {
             (1, None) => {
-                if self.capability != AGENT_CAPABILITY { return Err(Error::LocalAuthority); }
+                if self.capability != AGENT_CAPABILITY || self.renewal_mode.is_some() || self.allocation_generation.is_some() { return Err(Error::LocalAuthority); }
                 for value in [&self.project_id, &self.setup_id, &self.domain_project_id] { wire_key(value)?; }
                 for value in [self.project_revision, self.setup_binding_revision] { exact(value)?; }
                 hash(&self.allocation_receipt_digest)?;
@@ -110,7 +116,9 @@ impl ManagedAgentReserveCommand {
                     || !self.project_id.is_empty() || !self.setup_id.is_empty()
                     || !self.domain_project_id.is_empty() || !self.allocation_receipt_digest.is_empty()
                     || self.project_revision != 0 || self.setup_binding_revision != 0
-                    || !matches!(grant.version, 2 | 3) || !grant.supported_shape()
+                    || !matches!(grant.version, 2 | 3 | 4 | 5) || !grant.supported_shape()
+                    || grant.calendar.is_some() != self.renewal_mode.is_some()
+                    || (self.allocation_generation.is_some() && grant.calendar.is_none())
                     || grant.admission_request_id.is_none()
                     || grant.capability != CAPABILITY || grant.owner_mxid != grant.coordinator_mxid
                     || self.decision_actor_mxid != grant.owner_mxid
@@ -131,7 +139,7 @@ impl ManagedAgentReserveCommand {
             _ => return Err(Error::LocalAuthority),
         }
         let d = &self.definition;
-        let valid_period = self.period_key.len() == 7 && self.period_key.as_bytes()[4] == b'-'
+        let valid_period = self.pool_grant.as_ref().is_some_and(|g| g.calendar.is_some() && g.supported_shape() && g.period_key == self.period_key) || self.period_key.len() == 7 && self.period_key.as_bytes()[4] == b'-'
             && self.period_key[..4].bytes().all(|c| c.is_ascii_digit())
             && self.period_key[5..].parse::<u8>().is_ok_and(|n| (1..=12).contains(&n));
         if self.operation != "agent.reserve" || self.expires_at_ms <= self.issued_at_ms || !valid_period

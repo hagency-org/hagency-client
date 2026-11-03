@@ -16,17 +16,19 @@ impl AccountInventoryQuery {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountSummary {
     pub id: String,
-    pub kind: &'static str,
+    #[serde(deserialize_with = "crate::management::wire_static::one")]
+    pub kind: crate::management::wire_static::Label,
     pub runtime: String,
     pub state: String,
     pub ordinal: Option<u8>,
     pub revision: Option<String>,
     pub profile: Option<String>,
-    pub readiness: &'static str,
+    #[serde(deserialize_with = "crate::management::wire_static::one")]
+    pub readiness: crate::management::wire_static::Label,
     /// Profile-scoped display grouping from recorded provider identity only.
     /// This is neither a current login observation nor an authorization key.
     pub identity_key: Option<String>,
@@ -34,10 +36,11 @@ pub struct AccountSummary {
     pub resource_count: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountInventory {
-    pub protocol: &'static str,
+    #[serde(deserialize_with = "crate::management::wire_static::one")]
+    pub protocol: crate::management::wire_static::Label,
     pub observed_at_ms: u64,
     pub accounts: Vec<AccountSummary>,
     pub account: Option<AccountSummary>,
