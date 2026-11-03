@@ -570,7 +570,7 @@ async fn shared_agent_execution_policy_is_per_agent_and_retains_original_reserva
     f.registry.0.store.call(64*1024,move|db|{
         let query=ExecutionPolicyQuery{resource_id:a.resource_id.clone(),engagement_id:a.proposed_agent_id.clone()};
         let original=db.management_execution_policy(&query, |_|Ok(()))?;
-        assert_eq!(original.shared_mode.as_deref(),Some("chat"));
+        assert_eq!(original.shared_mode.as_deref(),Some("standard"));
         let page=db.management_execution_policies(&ExecutionPolicyListQuery{resource_id:a.resource_id.clone(),after:String::new()},|_|Ok(()))?;
         assert_eq!(page.agents.len(),2);
         let input=EditExecutionPolicy{web_search:None,command_id:"shared_yolo".into(),resource_id:a.resource_id.clone(),engagement_id:a.proposed_agent_id.clone(),expected_revision:original.revision.clone(),execution_policy:ExecutionPolicyValue{yolo:true}};
@@ -581,7 +581,7 @@ async fn shared_agent_execution_policy_is_per_agent_and_retains_original_reserva
         assert_eq!(enabled.shared_mode.as_deref(),Some("yolo"));
         assert_eq!(db.management_edit_execution_policy(&input,receipt()?,|_|Ok(()))?,enabled);
         let other=db.management_execution_policy(&ExecutionPolicyQuery{resource_id:b.resource_id.clone(),engagement_id:b.proposed_agent_id.clone()},|_|Ok(()))?;
-        assert_eq!(other.shared_mode.as_deref(),Some("chat"));
+        assert_eq!(other.shared_mode.as_deref(),Some("standard"));
         let mut standard=input.clone();standard.command_id="shared_standard".into();standard.execution_policy.yolo=false;
         assert!(matches!(db.management_edit_execution_policy(&standard,CommandReceipt::new(&ctx,"edit_execution_policy",&standard.command_id,&standard)?,|_|Ok(())),Err(Error::Conflict)));
         standard.expected_revision=enabled.revision;
@@ -609,6 +609,10 @@ async fn shared_agent_execution_policy_web_switch_is_independent_durable_and_own
     crate::private::write_new(&root.join("owner-shared-tools.json"), &serde_json::to_vec(&json!({"version":1,"liveWebAgentIds":[a.proposed_agent_id]})).unwrap()).unwrap();
     let owner = f.profile.account.clone();
     let (input, enabled) = f.registry.0.store.call(64 * 1024, move |db| {
+        // Reconstruct Agents created before resource defaults were captured.
+        // Their file-based opt-in must survive until an explicit owner edit.
+        db.db.execute("DELETE FROM owner_shared_tool_policies", [])?;
+        db.db.execute("DELETE FROM owner_web_catalog_settings WHERE kind='agent_live_web'", [])?;
         let ctx = HostContext::new(owner, 1, "a".repeat(64), 1, "web_device".into(), 1)?;
         let original = db.management_execution_policy(&query, |_| Ok(()))?;
         assert_eq!(original.web_search, Some(true));
