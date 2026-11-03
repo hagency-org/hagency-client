@@ -1370,9 +1370,11 @@ impl Widget for RoomScreen {
         }
         let notice=self.view.agent_runtime_notice(cx,ids!(agent_runtime_notice));
         if let Some(app)=_scope.data.get::<crate::app::AppState>() {
-            let selected=app.selected_room.as_ref().is_some_and(|r|Some(r.room_id())==self.room_name_id.as_ref().map(|r|r.room_id()))
-                && matches!(app.selected_tab,crate::home::navigation_tab_bar::SelectedTab::Home | crate::home::navigation_tab_bar::SelectedTab::Space {..});
-            notice.set_active(cx,selected);
+            notice.set_active(cx, agent_runtime_notice_active(
+                &app.selected_tab,
+                app.selected_room.as_ref().map(|room| room.room_id().as_ref()),
+                self.room_name_id.as_ref().map(|room| room.room_id().as_ref()),
+            ));
         }
         notice.handle_event(cx,event,&mut Scope::empty());
         let board = self.view.action_room_board(cx, ids!(actions_board));
@@ -2288,6 +2290,20 @@ impl Widget for RoomScreen {
         self.sync_jump_to_latest_visibility(cx, &list);
         DrawStep::done()
     }
+}
+
+fn agent_runtime_notice_active(
+    tab: &super::navigation_tab_bar::SelectedTab,
+    selected_room: Option<&RoomId>,
+    displayed_room: Option<&RoomId>,
+) -> bool {
+    use super::navigation_tab_bar::SelectedTab;
+    // Direct chats have their own RoomScreen under Contacts.
+    matches!(
+        tab,
+        SelectedTab::Home | SelectedTab::Contacts | SelectedTab::Space { .. }
+    )
+        && selected_room.is_some_and(|room| Some(room) == displayed_room)
 }
 
 fn window_contains_latest<'a>(
@@ -8885,6 +8901,18 @@ mod hover_action_bar_tests {
 
 #[cfg(test)]
 pub(crate) mod skeleton_tests {
+    #[test]
+    fn agent_runtime_notice_polls_the_focused_contact_chat() {
+        use crate::home::navigation_tab_bar::SelectedTab;
+        use matrix_sdk::ruma::room_id;
+        let chat = room_id!("!agent:example.org");
+        let background = room_id!("!background:example.org");
+
+        assert!(super::agent_runtime_notice_active(&SelectedTab::Contacts, Some(chat), Some(chat)));
+        assert!(!super::agent_runtime_notice_active(&SelectedTab::Contacts, Some(chat), Some(background)));
+        assert!(!super::agent_runtime_notice_active(&SelectedTab::Settings, Some(chat), Some(chat)));
+    }
+
     #[test]
     fn latest_identity_can_precede_state_events_but_never_match_an_older_window() {
         use matrix_sdk::ruma::event_id;
