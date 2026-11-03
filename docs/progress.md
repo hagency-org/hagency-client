@@ -15679,3 +15679,7 @@ Ran two clean process restarts of the installed public macOS 0.6.3 against hagen
 Confirmed a client navigation bug in the private-chat runtime banner. The room in Contacts is focused, but RoomScreen accepted only Home and Space when determining whether to poll. Contact events canceled the next status refresh, allowing the original stopped label to remain after the Agent started. The fix includes Contacts and retains the exact selected room check. The focused regression fails under the old condition.
 
 The focused suite passed all four tests after the change. Validation covers foreground Contacts activation, background room exclusion, exact binding selection, and stable layout during polling. The installed public 0.6.3 remains the binary used for the cold-start observations.
+
+## 2026-11-03 — Fix the initial Agent roster loading message
+
+On published 0.6.3 a cold opening showed the roster error while the command journal was still loading. Both Agent rows appeared without Refresh. The roster now stays in the loading state during both the journal and roster requests. The existing read wait clears loading on completion, timeout or account/navigation changes. The focused regression fails on the previous source, and all 60 Hagency panel tests pass with the fix. The earlier Agent crypto error is still unclassified: the saved process sample shows Keychain reads, while the terminal status is a generic error with no causal linkage.

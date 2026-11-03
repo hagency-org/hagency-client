@@ -77,7 +77,7 @@ script_mod! {
                 projects_action_slot := View {width:32 height:32 projects_actions := RowActions {}}
             }
             agents_row := View {show_bg:true draw_bg.color:#0000 width: Fill height: 40 flow: Right align: Align{y: 0.5}
-                open_agents := DesktopNavButton {nav_icon.draw_icon.svg: ICON_ROBOT tooltip_text: #(crate::i18n::tr("Agents")) label.text: #(crate::i18n::tr("Agents")) label.i18n_text: "Agents"}
+                open_agents := DesktopNavButton {nav_icon.draw_icon.svg: ICON_ROBOT tooltip_text: #(crate::i18n::tr("My Agents")) label.text: #(crate::i18n::tr("My Agents")) label.i18n_text: "My Agents"}
                 agents_action_slot := View {width:32 height:32 agents_actions := RowActions {}}
             }
             group_chats_row := View {show_bg:true draw_bg.color:#0000 width: Fill height: 40 flow: Right align: Align{y: 0.5}
