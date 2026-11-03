@@ -93,9 +93,7 @@ impl Session {
         }
         let session = self.clone();
         let caller = context.clone();
-        let result = self
-            .store
-            .legacy()?
+        let result = self.local_store()?.legacy()?
             .call(32 * 1024, move |db| {
                 session.check(&caller, Permission::ReadResources)?;
                 let result = db.profile_ledger_audit(&profile_digest)?;

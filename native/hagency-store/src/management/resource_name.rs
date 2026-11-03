@@ -63,7 +63,7 @@ impl Session {
         }
         #[cfg(feature = "resource-adoption")]
         {
-            let result = match &self.store {
+            let result = match self.local_store()? {
                 SessionStore::Legacy(_) => {
                     return Err(hagency_core::InvalidInput(
                         "local naming requires canonical resource management",

@@ -72,6 +72,8 @@ pub use worker::Store;
 pub enum Error {
     #[error("local management session is expired or retired")]
     LocalAuthority,
+    #[error("local resources require device setup")]
+    ResourceSetupRequired,
     #[error("runner capability is missing, stale or outside the task scope")]
     RunnerAuthority,
     #[error("approval was already consumed")]

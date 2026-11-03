@@ -303,7 +303,7 @@ fn validate(db: &mut Connection, binding: &ArchiveJournalBinding) -> Result<(), 
     Ok(())
 }
 
-fn authorize_sql(context: AuthContext<'_>) -> Authorization {
+pub(super) fn authorize_sql(context: AuthContext<'_>) -> Authorization {
     if context.accessor.is_some() || context.database_name.is_some_and(|v| v != "main") {
         return Authorization::Deny;
     }

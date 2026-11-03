@@ -81,7 +81,7 @@ fn refusal_is_permanent_legacy_denial_and_never_a_new_registry_mapping() {
     drop(exclusive(&root).unwrap());
     let bytes = serde_json::to_vec(&serde_json::json!({"version":1,"registryId":"a".repeat(64),"migrationId":"migration_original","inventoryDigest":"b".repeat(64)})).unwrap();
     private::write_new(&root.join(REFUSAL), &bytes).unwrap();
-    assert!(matches!(shared(&root), Err(Error::LocalAuthority)));
+    assert!(matches!(shared(&root), Err(Error::ResourceSetupRequired)));
     let recovery = exclusive(&root).unwrap();
     recovery.check().unwrap();
     drop(recovery);

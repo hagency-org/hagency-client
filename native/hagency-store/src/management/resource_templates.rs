@@ -163,7 +163,7 @@ impl Session {
         }
         self.check(context, permission)?;
         #[cfg(feature = "resource-adoption")]
-        if let SessionStore::Adopted(store) = &self.store {
+        if let SessionStore::Adopted(store) = self.local_store()? {
             store.enrollment_registry(&self.adopted_profile(store)?)?;
             return self.check(context, permission);
         }
@@ -199,7 +199,7 @@ impl Session {
         }
         #[cfg(feature = "resource-adoption")]
         {
-            let SessionStore::Adopted(store) = &self.store else {
+            let SessionStore::Adopted(store) = self.local_store()? else {
                 return Err(Error::LocalAuthority);
             };
             let mut result = store
@@ -231,7 +231,7 @@ impl Session {
         }
         #[cfg(feature = "resource-adoption")]
         {
-            let SessionStore::Adopted(store) = &self.store else {
+            let SessionStore::Adopted(store) = self.local_store()? else {
                 return Err(Error::LocalAuthority);
             };
             let mut result = store
@@ -266,7 +266,7 @@ impl Session {
         }
         #[cfg(feature = "resource-adoption")]
         {
-            let SessionStore::Adopted(store) = &self.store else {
+            let SessionStore::Adopted(store) = self.local_store()? else {
                 return Err(Error::LocalAuthority);
             };
             let receipt = CommandReceipt::new(
@@ -306,7 +306,7 @@ impl Session {
         }
         #[cfg(feature = "resource-adoption")]
         {
-            let SessionStore::Adopted(store) = &self.store else {
+            let SessionStore::Adopted(store) = self.local_store()? else {
                 return Err(Error::LocalAuthority);
             };
             let receipt = CommandReceipt::new(

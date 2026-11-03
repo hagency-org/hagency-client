@@ -9,7 +9,7 @@ impl Session {
     ) -> Result<Option<Vec<OperatorGraphArchiveReceipt>>, Error> {
         self.check(context, Permission::ReadOperatorGraphHistory)?;
         let _pending = self.scope.pending.try_acquire().map_err(|_| Error::Busy)?;
-        let SessionStore::Adopted(store) = &self.store else {
+        let SessionStore::Adopted(store) = self.local_store()? else {
             return Ok(None);
         };
         let profile = self.adopted_profile(store)?;
@@ -29,7 +29,7 @@ impl Session {
     ) -> Result<Option<Vec<u8>>, Error> {
         self.check(context, Permission::ReadOperatorGraphHistory)?;
         let _pending = self.scope.pending.try_acquire().map_err(|_| Error::Busy)?;
-        let SessionStore::Adopted(store) = &self.store else {
+        let SessionStore::Adopted(store) = self.local_store()? else {
             return Err(Error::Unqualified);
         };
         let profile = self.adopted_profile(store)?;

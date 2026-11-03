@@ -104,7 +104,7 @@ impl Session {
         query.validate()?;
         let _pending = self.scope.pending.try_acquire().map_err(|_| Error::Busy)?;
         self.check(context, Permission::ReadApprovalBindings)?;
-        let result = match &self.store {
+        let result = match self.local_store()? {
             SessionStore::Legacy(store) => {
                 let session = self.clone();
                 let context = context.clone();
@@ -137,7 +137,7 @@ impl Session {
         let _pending = self.scope.pending.try_acquire().map_err(|_| Error::Busy)?;
         let _command = self.scope.commands.lock().await;
         self.check(context, Permission::RetireApprovalBindings)?;
-        let profile = match &self.store {
+        let profile = match self.local_store()? {
             SessionStore::Legacy(_) => "",
             #[cfg(feature = "resource-adoption")]
             SessionStore::Adopted(store) => store.identity().0,
@@ -148,7 +148,7 @@ impl Session {
             &input.command_id,
             &serde_json::json!({"profile":profile,"input":input}),
         )?;
-        let result = match &self.store {
+        let result = match self.local_store()? {
             SessionStore::Legacy(store) => {
                 let session = self.clone();
                 let context = context.clone();

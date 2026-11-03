@@ -26,7 +26,7 @@ impl Session {
             return Err(Error::LocalAuthority);
         }
         self.check(context, permission)?;
-        let SessionStore::Adopted(store) = &self.store else {
+        let SessionStore::Adopted(store) = self.local_store()? else {
             return Err(Error::Unqualified);
         };
         let profile = self.adopted_profile(store)?;

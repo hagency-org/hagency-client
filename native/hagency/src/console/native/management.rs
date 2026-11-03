@@ -11,6 +11,9 @@ use std::time::{Duration, Instant};
 #[cfg(test)]
 #[path = "management_shutdown_tests.rs"]
 mod shutdown_tests;
+#[cfg(all(test, feature = "resource-adoption"))]
+#[path = "management_server_only_tests.rs"]
+mod server_only_tests;
 
 /// The Rinx host constructs this from its reviewed package lease, never from
 /// Splash arguments. Each instance retains its exact permission set and epoch.
@@ -24,6 +27,7 @@ pub struct ManagementPackage {
 #[derive(Clone)]
 enum ManagementStore {
     Legacy(DomainStore),
+    Server(service::ServerManagementJournal),
     #[cfg(feature = "resource-adoption")]
     Adopted(Box<hagency_store::owner_resources::adoption::AdoptedManagementStore>),
 }
@@ -31,6 +35,7 @@ impl ManagementStore {
     async fn shutdown(&self) -> Result<(), hagency_store::Error> {
         match self {
             Self::Legacy(store) => store.shutdown().await,
+            Self::Server(journal) => journal.shutdown().await,
             #[cfg(feature = "resource-adoption")]
             Self::Adopted(store) => store.shutdown().await,
         }
@@ -44,6 +49,9 @@ impl ManagementStore {
         match self {
             Self::Legacy(store) => {
                 service::Session::new(store.clone(), context, permissions, expires)
+            }
+            Self::Server(journal) => {
+                service::Session::new_server(journal.clone(), context, permissions, expires)
             }
             #[cfg(feature = "resource-adoption")]
             Self::Adopted(store) => {
@@ -292,7 +300,7 @@ impl NativeOwner {
                 let issuer = device.issuer().to_owned();
                 let subject = device.subject().to_owned();
                 let owner = device.owner_mxid().to_owned();
-                let repository = tokio::task::spawn_blocking(move || {
+                let store = tokio::task::spawn_blocking(move || {
                     // Derive the same authenticated profile key as the owner
                     // engine. Resource reads must not initialize the unrelated
                     // personal-agent SQLite file or race its startup worker.
@@ -301,7 +309,24 @@ impl NativeOwner {
                     let owners = root.join("owned-agent-owners");
                     hagency_store::private::directory(&owners).map_err(store_error)?;
                     let directory = owners.join(format!("management_{profile}"));
-                    DomainRepository::open_managed(&directory, &profile).map_err(store_error)
+                    match DomainRepository::open_managed(&directory, &profile) {
+                        Ok(repository) => DomainStore::start(repository, 16)
+                            .map(ManagementStore::Legacy).map_err(store_error),
+                        Err(hagency_store::Error::ResourceSetupRequired) => {
+                            // A different account may already have initialized
+                            // this installation. Server administration needs
+                            // durable receipts, never a legacy resource writer.
+                            // Do not switch custody away from an existing ledger.
+                            match directory.join("domain.sqlite3").symlink_metadata() {
+                                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+                                Ok(_) => return Err(failure(409, "device_setup_required")),
+                                Err(_) => return Err(failure(503, "management_state_unavailable")),
+                            }
+                            service::ServerManagementJournal::open(&directory, &profile, &owner)
+                                .map(ManagementStore::Server).map_err(store_error)
+                        }
+                        Err(error) => Err(store_error(error)),
+                    }
                 })
                 .await
                 .map_err(|_| failure(503, "management_state_unavailable"))??;
@@ -309,9 +334,7 @@ impl NativeOwner {
                 device
                     .bearer()
                     .map_err(|_| failure(401, "owner_authorization_required"))?;
-                *current = Some(ManagementStore::Legacy(
-                    DomainStore::start(repository, 16).map_err(store_error)?,
-                ));
+                *current = Some(store);
             }
             let store = current.as_ref().unwrap();
             #[cfg(feature = "resource-adoption")]
@@ -697,6 +720,7 @@ pub(super) fn store_error(error: hagency_store::Error) -> NativeError {
     use hagency_store::Error;
     let (status, code) = match error {
         Error::LocalAuthority => (401, "management_access_required"),
+        Error::ResourceSetupRequired => (409, "device_setup_required"),
         Error::Invalid(_) => (400, "invalid_management_arguments"),
         Error::NotFound => (404, "management_not_found"),
         Error::Conflict => (409, "management_revision_conflict"),

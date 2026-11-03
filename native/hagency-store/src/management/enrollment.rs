@@ -139,9 +139,7 @@ impl Session {
         if let Some(lease) = lease {
             command = command.with_legacy_lease(lease)?;
         }
-        let result = self
-            .store
-            .legacy()?
+        let result = self.local_store()?.legacy()?
             .enroll_management_resource(command)
             .await?;
         self.check(context, Permission::EnrollResources)

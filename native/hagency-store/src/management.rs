@@ -197,7 +197,8 @@ impl Drop for Scope {
 /// host, never a caller-supplied file path. Clones share revocation and expiry.
 #[derive(Clone)]
 pub struct Session {
-    store: SessionStore,
+    store: Option<SessionStore>,
+    server_journal: Option<ServerManagementJournal>,
     scope: Arc<Scope>,
 }
 #[derive(Clone)]
@@ -216,6 +217,24 @@ impl SessionStore {
     }
 }
 impl Session {
+    fn local_store(&self) -> Result<&SessionStore, Error> {
+        self.store.as_ref().ok_or(Error::ResourceSetupRequired)
+    }
+    pub fn new_server(
+        journal: ServerManagementJournal,
+        context: HostContext,
+        permissions: impl IntoIterator<Item = Permission>,
+        expires: Instant,
+    ) -> Result<Self, Error> {
+        if context.account != journal.owner() || !journal.is_live() {
+            return Err(Error::LocalAuthority);
+        }
+        Ok(Self {
+            store: None,
+            server_journal: Some(journal),
+            scope: ManagementAuthority::new(context, permissions, expires)?.scope,
+        })
+    }
     pub fn new(
         store: DomainStore,
         context: HostContext,
@@ -223,7 +242,8 @@ impl Session {
         expires: Instant,
     ) -> Result<Self, Error> {
         Ok(Self {
-            store: SessionStore::Legacy(store),
+            store: Some(SessionStore::Legacy(store)),
+            server_journal: None,
             scope: ManagementAuthority::new(context, permissions, expires)?.scope,
         })
     }
@@ -238,7 +258,8 @@ impl Session {
             return Err(Error::LocalAuthority);
         }
         Ok(Self {
-            store: SessionStore::Adopted(Box::new(store)),
+            store: Some(SessionStore::Adopted(Box::new(store))),
+            server_journal: None,
             scope: ManagementAuthority::new(context, permissions, expires)?.scope,
         })
     }
@@ -260,7 +281,7 @@ impl Session {
     #[cfg(feature="resource-adoption")]
     pub fn namespace_enrollment_registry(&self,context:&HostContext)->Result<(crate::owner_resources::OwnerResourceRegistry,crate::owner_resources::ProfileAuthority),Error>{
         self.check(context,Permission::EnrollResources)?;
-        let SessionStore::Adopted(store)=&self.store else {return Err(Error::LocalAuthority)};
+        let SessionStore::Adopted(store) = self.local_store()? else {return Err(Error::LocalAuthority)};
         let profile=self.adopted_profile(store)?;
         let registry=store.enrollment_registry(&profile)?;
         self.check(context,Permission::EnrollResources)?;
@@ -274,7 +295,7 @@ impl Session {
     ) -> Result<crate::owner_resources::OwnerResourceRegistry, Error> {
         self.check(context, Permission::ContributeResources)?;
         self.check(context, Permission::ReadResources)?;
-        let SessionStore::Adopted(store) = &self.store else {
+        let SessionStore::Adopted(store) = self.local_store()? else {
             return Err(Error::LocalAuthority);
         };
         let profile = self.adopted_profile(store)?;
@@ -313,7 +334,7 @@ impl Session {
     ) -> Result<ResourceSummary, Error> {
         self.check(context, Permission::ReadResources)?;
         identifier(&id, 128)?;
-        let result = match &self.store {
+        let result = match self.local_store()? {
             SessionStore::Legacy(store) => store.management_resource(id).await?,
             #[cfg(feature = "resource-adoption")]
             SessionStore::Adopted(store) => {
@@ -330,7 +351,7 @@ impl Session {
     ) -> Result<ResourcePage, Error> {
         self.check(context, Permission::ReadResources)?;
         query.validate()?;
-        let result = match &self.store {
+        let result = match self.local_store()? {
             SessionStore::Legacy(store) => store.management_resources(query).await?,
             #[cfg(feature = "resource-adoption")]
             SessionStore::Adopted(store) => {
@@ -354,7 +375,7 @@ impl Session {
         self.check(context, Permission::ContributeResources)?;
         identifier(&resource_id, 128)?;
         identifier(&command_id, 128)?;
-        match &self.store {
+        match self.local_store()? {
             // Legacy resources never gain positive creation proof. Their
             // existing configuration/adoption fences remain in force.
             SessionStore::Legacy(store) => {
@@ -416,7 +437,7 @@ impl Session {
         if let Some(lease) = lease {
             command = command.with_legacy_lease(lease)?;
         }
-        let result = self.store.legacy()?.configure_resource(command).await?;
+        let result = self.local_store()?.legacy()?.configure_resource(command).await?;
         // A successful write whose authority retired before reply is uncertain
         // to this caller. Do not expose it to a different account or retry it.
         self.check(context, Permission::ConfigureResources)
@@ -451,7 +472,7 @@ impl Session {
         input.validate()?;
         let receipt = CommandReceipt::new(context, "resource.publish", &input.command_id, &input)?;
         #[cfg(feature = "resource-adoption")]
-        if let SessionStore::Adopted(store) = &self.store {
+        if let SessionStore::Adopted(store) = self.local_store()? {
             let result = store.publish_resource(&self.adopted_profile(store)?, input, receipt).await?;
             self.check(context, Permission::PublishResources).map_err(|_| Error::OutcomeUnknown)?;
             return Ok(result);
@@ -466,7 +487,7 @@ impl Session {
         if let Some(lease) = lease {
             command = command.with_legacy_lease(lease)?;
         }
-        let result = self.store.legacy()?.publish_resource(command).await?;
+        let result = self.local_store()?.legacy()?.publish_resource(command).await?;
         self.check(context, Permission::PublishResources)
             .map_err(|_| Error::OutcomeUnknown)?;
         Ok(result)
@@ -780,6 +801,8 @@ pub use reconciliation::{
 };
 
 mod authority;
+mod server_journal;
+pub use server_journal::ServerManagementJournal;
 #[cfg(test)]
 mod legacy_lease_tests;
 pub use authority::{ManagementAuthority, WeakManagementAuthority};

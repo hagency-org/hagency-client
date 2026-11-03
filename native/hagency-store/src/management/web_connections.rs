@@ -260,7 +260,7 @@ impl Session {
         };
         self.check(context, permission)?;
         #[cfg(feature = "resource-adoption")]
-        if let SessionStore::Adopted(store) = &self.store {
+        if let SessionStore::Adopted(store) = self.local_store()? {
             store.enrollment_registry(&self.adopted_profile(store)?)?;
             return self.check(context, permission);
         }
@@ -294,7 +294,7 @@ impl Session {
             web_server(id)?
         }
         #[cfg(feature = "resource-adoption")]
-        if let SessionStore::Adopted(store) = &self.store {
+        if let SessionStore::Adopted(store) = self.local_store()? {
             let result = store
                 .web_connections(&self.web_connection_profile(context, false, store)?, after)
                 .await?;
@@ -311,7 +311,7 @@ impl Session {
         self.web_connection_access(context, false)?;
         web_server(&id)?;
         #[cfg(feature = "resource-adoption")]
-        if let SessionStore::Adopted(store) = &self.store {
+        if let SessionStore::Adopted(store) = self.local_store()? {
             let result = store
                 .web_connection_private(&self.web_connection_profile(context, false, store)?, id)
                 .await?
@@ -329,7 +329,7 @@ impl Session {
         self.web_connection_access(context, true)?;
         web_server(&id)?;
         #[cfg(feature = "resource-adoption")]
-        if let SessionStore::Adopted(store) = &self.store {
+        if let SessionStore::Adopted(store) = self.local_store()? {
             let result = store
                 .web_connection_private(&self.web_connection_profile(context, true, store)?, id)
                 .await?;
@@ -348,7 +348,7 @@ impl Session {
         self.web_connection_access(context, true)?;
         input.validate()?;
         #[cfg(feature = "resource-adoption")]
-        if let SessionStore::Adopted(store) = &self.store {
+        if let SessionStore::Adopted(store) = self.local_store()? {
             let receipt = CommandReceipt::new(
                 context,
                 "web.connection",
@@ -376,7 +376,7 @@ impl Session {
         self.web_connection_access(context, true)?;
         identifier(&command_id, 128)?;
         #[cfg(feature = "resource-adoption")]
-        if let SessionStore::Adopted(store) = &self.store {
+        if let SessionStore::Adopted(store) = self.local_store()? {
             let scope = CommandReceipt::new(context, "web.connection", &command_id, &())?;
             let result = store
                 .web_connection_result(

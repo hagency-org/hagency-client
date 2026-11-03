@@ -104,7 +104,7 @@ impl Session {
     ) -> Result<ResourceDetail, Error> {
         self.check(context, Permission::ReadResources)?;
         query.validate()?;
-        let mut result = match &self.store {
+        let mut result = match self.local_store()? {
             super::SessionStore::Legacy(store) => {
                 store.management_resource_detail(query.id).await?
             }

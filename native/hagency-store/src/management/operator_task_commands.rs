@@ -264,7 +264,7 @@ pub struct OperatorTaskResult {
 impl Session {
     pub async fn operator_task_write_access(&self, context: &HostContext) -> Result<bool, Error> {
         self.check(context, Permission::ReadTasks)?;
-        let result = match &self.store {
+        let result = match self.local_store()? {
             SessionStore::Legacy(_) => false,
             #[cfg(feature = "resource-adoption")]
             SessionStore::Adopted(store) => {
@@ -293,7 +293,7 @@ impl Session {
         }
         #[cfg(feature = "resource-adoption")]
         {
-            let SessionStore::Adopted(store) = &self.store else {
+            let SessionStore::Adopted(store) = self.local_store()? else {
                 return Err(hagency_core::InvalidInput("canonical task history required").into());
             };
             let receipt = command_receipt(context, store.identity().0, &input)?;

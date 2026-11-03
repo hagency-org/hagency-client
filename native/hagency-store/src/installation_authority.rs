@@ -30,7 +30,7 @@ impl From<hagency_platform::legacy_writer::Error> for Error {
         match error {
             E::Io(e) => Self::Io(e),
             E::Private => Self::Private,
-            E::Refused => Self::LocalAuthority,
+            E::Refused => Self::ResourceSetupRequired,
             E::Quarantined => Self::Quarantined,
             E::Locked => Self::Locked,
             E::Unavailable => Self::PlatformUnavailable,

@@ -84,12 +84,12 @@ impl Session {
     pub async fn web_catalog(&self,context:&HostContext,query:WebCatalogQuery)->Result<WebCatalogView,Error>{
         self.web_catalog_access(context,false)?;query.validate()?;
         #[cfg(feature="resource-adoption")]
-        if let SessionStore::Adopted(store)=&self.store {let result=store.web_catalog(&self.web_profile(context,false,store)?,query).await?;self.web_catalog_access(context,false)?;return Ok(result)}
+        if let SessionStore::Adopted(store) = self.local_store()? {let result=store.web_catalog(&self.web_profile(context,false,store)?,query).await?;self.web_catalog_access(context,false)?;return Ok(result)}
         Err(Error::LocalAuthority)
     }
     pub async fn web_offers(&self,context:&HostContext,resource_id:String)->Result<WebOfferPage,Error>{
         self.web_catalog_access(context,false)?;identifier(&resource_id,128)?;
-        if let SessionStore::Legacy(store)=&self.store {
+        if let SessionStore::Legacy(store) = self.local_store()? {
             let authority=self.authority();let original=context.clone();
             let result=store.call(64*1024,move|db|{
                 authority.authorize(&original,Permission::ReadWebCatalog)?;
@@ -100,13 +100,13 @@ impl Session {
             self.web_catalog_access(context,false)?;return Ok(result)
         }
         #[cfg(feature="resource-adoption")]
-        if let SessionStore::Adopted(store)=&self.store {let result=store.web_offers(&self.web_profile(context,false,store)?,resource_id).await?;self.web_catalog_access(context,false)?;return Ok(result)}
+        if let SessionStore::Adopted(store) = self.local_store()? {let result=store.web_offers(&self.web_profile(context,false,store)?,resource_id).await?;self.web_catalog_access(context,false)?;return Ok(result)}
         Err(Error::LocalAuthority)
     }
     pub async fn web_trust(&self,context:&HostContext,query:WebCatalogQuery)->Result<WebTrustPage,Error>{
         self.web_catalog_access(context,false)?;query.validate()?;
         #[cfg(feature="resource-adoption")]
-        if let SessionStore::Adopted(store)=&self.store {let result=store.web_trust(&self.web_profile(context,false,store)?,query).await?;self.web_catalog_access(context,false)?;return Ok(result)}
+        if let SessionStore::Adopted(store) = self.local_store()? {let result=store.web_trust(&self.web_profile(context,false,store)?,query).await?;self.web_catalog_access(context,false)?;return Ok(result)}
         Err(Error::LocalAuthority)
     }
     /// Native original-ID cancellation. The canonical receipt arbitrates races
@@ -114,13 +114,13 @@ impl Session {
     pub async fn cancel_web_catalog(&self,context:&HostContext,input:WebCatalogCommand)->Result<Option<WebCatalogResult>,Error>{
         self.web_catalog_access(context,true)?;input.validate()?;let _pending=self.scope.pending.try_acquire().map_err(|_|Error::Busy)?;let _command=self.scope.commands.lock().await;
         #[cfg(feature="resource-adoption")]
-        if let SessionStore::Adopted(store)=&self.store {let receipt=CommandReceipt::new(context,"web.catalog",&input.command_id,&serde_json::json!({"profile":store.identity().0,"input":input}))?;let result=store.cancel_web_catalog(&self.web_profile(context,true,store)?,input,receipt).await?;self.web_catalog_access(context,true).map_err(|_|Error::OutcomeUnknown)?;return Ok(result)}
+        if let SessionStore::Adopted(store) = self.local_store()? {let receipt=CommandReceipt::new(context,"web.catalog",&input.command_id,&serde_json::json!({"profile":store.identity().0,"input":input}))?;let result=store.cancel_web_catalog(&self.web_profile(context,true,store)?,input,receipt).await?;self.web_catalog_access(context,true).map_err(|_|Error::OutcomeUnknown)?;return Ok(result)}
         Err(Error::LocalAuthority)
     }
     pub async fn apply_web_catalog(&self,context:&HostContext,input:WebCatalogCommand)->Result<WebCatalogResult,Error>{
         self.web_catalog_access(context,true)?;input.validate()?;let _pending=self.scope.pending.try_acquire().map_err(|_|Error::Busy)?;let _command=self.scope.commands.lock().await;
         #[cfg(feature="resource-adoption")]
-        if let SessionStore::Adopted(store)=&self.store {let receipt=CommandReceipt::new(context,"web.catalog",&input.command_id,&serde_json::json!({"profile":store.identity().0,"input":input}))?;let result=store.apply_web_catalog(&self.web_profile(context,true,store)?,input,receipt).await?;self.web_catalog_access(context,true).map_err(|_|Error::OutcomeUnknown)?;return Ok(result)}
+        if let SessionStore::Adopted(store) = self.local_store()? {let receipt=CommandReceipt::new(context,"web.catalog",&input.command_id,&serde_json::json!({"profile":store.identity().0,"input":input}))?;let result=store.apply_web_catalog(&self.web_profile(context,true,store)?,input,receipt).await?;self.web_catalog_access(context,true).map_err(|_|Error::OutcomeUnknown)?;return Ok(result)}
         Err(Error::LocalAuthority)
     }
 }

@@ -233,9 +233,7 @@ impl Session {
         let deadline = self
             .valid_until()
             .min(Instant::now() + Duration::from_secs(2));
-        let value = self
-            .store
-            .legacy()?
+        let value = self.local_store()?.legacy()?
             .call(4 * 1024 * 1024, move |db| {
                 authority.authorize(&pinned, Permission::PrepareSourceQuiescence)?;
                 let value = if alerts {
@@ -258,7 +256,7 @@ impl Session {
     ) -> Result<OperatorTaskPage, Error> {
         self.check(context, Permission::ReadTasks)?;
         query.validate()?;
-        let mut out = match &self.store {
+        let mut out = match self.local_store()? {
             SessionStore::Legacy(store) => {
                 store
                     .call(1024, move |db| {
@@ -297,7 +295,7 @@ impl Session {
     ) -> Result<OperatorTaskDetail, Error> {
         self.check(context, Permission::ReadTasks)?;
         query.validate()?;
-        let mut out = match &self.store {
+        let mut out = match self.local_store()? {
             SessionStore::Legacy(store) => {
                 store
                     .call(256, move |db| {
@@ -363,7 +361,7 @@ impl Session {
     ) -> Result<OperatorBoardPage, Error> {
         self.check(context, Permission::ReadTaskBoard)?;
         query.validate()?;
-        let out = match &self.store {
+        let out = match self.local_store()? {
             SessionStore::Legacy(store) => {
                 store
                     .call(1024, move |db| db.management_operator_board(query, now()))

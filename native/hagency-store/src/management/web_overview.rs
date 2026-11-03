@@ -113,7 +113,7 @@ impl Session {
             identifier(after, 128)?;
         }
         self.check(context, Permission::ReadResources)?;
-        let result = match &self.store {
+        let result = match self.local_store()? {
             SessionStore::Legacy(_) => WebManagedUsage {
                 supported: false,
                 complete: true,
@@ -131,7 +131,7 @@ impl Session {
     }
     pub async fn web_managed_usage(&self, context: &HostContext) -> Result<WebManagedUsage, Error> {
         self.check(context, Permission::ReadResources)?;
-        let result = match &self.store {
+        let result = match self.local_store()? {
             SessionStore::Legacy(_) => WebManagedUsage {
                 supported: false,
                 complete: false,
@@ -160,7 +160,7 @@ impl Session {
         }
         self.check(context, Permission::ReadResources)?;
         self.check(context, Permission::ReadAccounts)?;
-        let result = match &self.store {
+        let result = match self.local_store()? {
             SessionStore::Legacy(_) => Vec::new(),
             #[cfg(feature = "resource-adoption")]
             SessionStore::Adopted(store) => {
@@ -181,7 +181,7 @@ impl Session {
         query.validate()?;
         let _pending = self.scope.pending.try_acquire().map_err(|_| Error::Busy)?;
         self.check(context, Permission::ReadAlerts)?;
-        let result = match &self.store {
+        let result = match self.local_store()? {
             SessionStore::Legacy(store) => {
                 let authority = self.authority();
                 let original = context.clone();

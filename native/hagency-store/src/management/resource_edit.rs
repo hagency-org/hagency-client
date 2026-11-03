@@ -104,7 +104,7 @@ impl Session {
     ) -> Result<(crate::owner_resources::OwnerResourceRegistry, crate::owner_resources::ProfileAuthority), Error> {
         self.check(context, Permission::ReadResources)?;
         self.check(context, Permission::ReadProviders)?;
-        let SessionStore::Adopted(store)=&self.store else {return Err(Error::LocalAuthority);};
+        let SessionStore::Adopted(store) = self.local_store()? else {return Err(Error::LocalAuthority);};
         let profile=self.adopted_profile(store)?;
         let registry=store.enrollment_registry(&profile)?;
         self.check(context, Permission::ReadProviders)?;
@@ -122,7 +122,7 @@ impl Session {
         Error,
     > {
         self.check(context, Permission::ConfigureResources)?;
-        let SessionStore::Adopted(store) = &self.store else {
+        let SessionStore::Adopted(store) = self.local_store()? else {
             return Err(Error::LocalAuthority);
         };
         let profile = self.adopted_profile(store)?;
@@ -139,7 +139,7 @@ impl Session {
     ) -> Result<Option<ResourceConfigurationResult>, Error> {
         self.check(context, Permission::ConfigureResources)?;
         input.validate()?;
-        let SessionStore::Adopted(store) = &self.store else {
+        let SessionStore::Adopted(store) = self.local_store()? else {
             return Err(Error::LocalAuthority);
         };
         let receipt = input.receipt(context, store.identity().0)?;
@@ -169,7 +169,7 @@ impl Session {
         if !input.is_ceiling_amendment() {
             return Err(hagency_core::InvalidInput("not a ceiling amendment").into());
         }
-        let SessionStore::Adopted(store) = &self.store else {
+        let SessionStore::Adopted(store) = self.local_store()? else {
             return Err(Error::LocalAuthority);
         };
         let receipt = input.receipt(context, store.identity().0)?;
@@ -192,7 +192,7 @@ impl Session {
         let _command = self.scope.commands.lock().await;
         self.check(context, Permission::ConfigureResources)?;
         input.validate()?;
-        let SessionStore::Adopted(store) = &self.store else {
+        let SessionStore::Adopted(store) = self.local_store()? else {
             return Err(Error::LocalAuthority);
         };
         let receipt = input.receipt(context, store.identity().0)?;

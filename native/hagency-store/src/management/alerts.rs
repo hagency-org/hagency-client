@@ -100,7 +100,7 @@ impl Session {
         identifier(&resource_id, 128)?;
         let _pending = self.scope.pending.try_acquire().map_err(|_| Error::Busy)?;
         self.check(context, Permission::ObserveResourceAlerts)?;
-        let result = match &self.store {
+        let result = match self.local_store()? {
             SessionStore::Legacy(store) => {
                 let session = self.clone(); let context = context.clone();
                 store.call(4096, move |db| db.observe_resource_alert(&resource_id, now, |db| {
@@ -119,7 +119,7 @@ impl Session {
         query.validate()?;
         let _pending=self.scope.pending.try_acquire().map_err(|_|Error::Busy)?;
         self.check(context,Permission::ReadAlerts)?;
-        let result=match &self.store {
+        let result=match self.local_store()? {
             SessionStore::Legacy(store)=>{
                 let session=self.clone();let context=context.clone();
                 store.call(128*1024,move|db| db.management_resource_alerts(&query,|db|{
@@ -135,7 +135,7 @@ impl Session {
         query.validate()?;
         let _pending=self.scope.pending.try_acquire().map_err(|_|Error::Busy)?;
         self.check(context,Permission::ReadAlerts)?;
-        let result=match &self.store {
+        let result=match self.local_store()? {
             SessionStore::Legacy(store)=>{
                 let session=self.clone();let context=context.clone();
                 store.call(64*1024,move|db| db.management_resource_alert(&query,|db|{
@@ -152,10 +152,10 @@ impl Session {
         let _pending=self.scope.pending.try_acquire().map_err(|_|Error::Busy)?;
         let _command=self.scope.commands.lock().await;
         self.check(context,Permission::TriageAlerts)?;
-        let profile=match &self.store {SessionStore::Legacy(_)=>"", #[cfg(feature="resource-adoption")] SessionStore::Adopted(store)=>store.identity().0};
+        let profile=match self.local_store()? {SessionStore::Legacy(_)=>"", #[cfg(feature="resource-adoption")] SessionStore::Adopted(store)=>store.identity().0};
         let receipt=CommandReceipt::new(context,"alert.triage",&input.command_id,&serde_json::json!({"profile":profile,"input":input}))?;
         let actor=context.account.clone();
-        let result=match &self.store {
+        let result=match self.local_store()? {
             SessionStore::Legacy(store)=>{
                 let session=self.clone();let context=context.clone();
                 store.call(64*1024,move|db| db.management_triage_alert(&input,&actor,receipt,|db|{

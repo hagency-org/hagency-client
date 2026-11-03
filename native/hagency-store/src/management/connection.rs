@@ -68,7 +68,7 @@ impl Session {
     #[cfg(feature = "resource-adoption")]
     pub fn uses_canonical_resources(&self, context: &HostContext) -> Result<bool, Error> {
         self.check(context, Permission::ReadResources)?;
-        Ok(matches!(self.store, SessionStore::Adopted(_)))
+        Ok(matches!(self.store, Some(SessionStore::Adopted(_))))
     }
     /// Explicit reconnect/verify against the adopted canonical resource. The
     /// original central command still performs owner/device/generation/CAS
@@ -90,7 +90,7 @@ impl Session {
         self.check(context, Permission::ReadResources)?;
         self.check(context, permission)?;
         identifier(&id, 128)?;
-        let SessionStore::Adopted(store) = &self.store else {
+        let SessionStore::Adopted(store) = self.local_store()? else {
             return Err(Error::LocalAuthority);
         };
         let result = store
@@ -151,9 +151,7 @@ impl Session {
             return Err(Error::LocalAuthority);
         }
         let expires = proof.expires;
-        let result = self
-            .store
-            .legacy()?
+        let result = self.local_store()?.legacy()?
             .verify_management_resource(id, expected_revision, proof)
             .await?;
         self.check(context, permission)?;
@@ -199,7 +197,7 @@ impl Session {
         let permission=if resume {Permission::ResumeConnections} else {Permission::VerifyConnections};
         self.check(context, Permission::ReadResources)?;
         self.check(context, permission)?;
-        let SessionStore::Adopted(store)=&self.store else {return Err(Error::LocalAuthority)};
+        let SessionStore::Adopted(store) = self.local_store()? else {return Err(Error::LocalAuthority)};
         let result=store.resource_namespace(&self.adopted_profile(store)?,resource.id.clone(),resource.revision.clone()).await?;
         self.check(context, permission)?;
         Ok(result)

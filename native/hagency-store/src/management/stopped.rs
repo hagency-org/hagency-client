@@ -206,7 +206,7 @@ impl Session {
         query.validate()?;
         let _pending = self.scope.pending.try_acquire().map_err(|_| Error::Busy)?;
         self.check(context, Permission::ReadStoppedTasks)?;
-        let result = match &self.store {
+        let result = match self.local_store()? {
             SessionStore::Legacy(store) => {
                 let session = self.clone();
                 let context = context.clone();
@@ -236,7 +236,7 @@ impl Session {
         query.validate()?;
         let _pending = self.scope.pending.try_acquire().map_err(|_| Error::Busy)?;
         self.check(context, Permission::ReadStoppedTasks)?;
-        let result = match &self.store {
+        let result = match self.local_store()? {
             SessionStore::Legacy(store) => {
                 let session = self.clone();
                 let context = context.clone();
@@ -258,12 +258,12 @@ impl Session {
         self.check(context, Permission::ReadStoppedTasks)?;
         Ok(result)
     }
-    fn stopped_profile(&self) -> &str {
-        match &self.store {
+    fn stopped_profile(&self) -> Result<&str, Error> {
+        Ok(match self.local_store()? {
             SessionStore::Legacy(_) => "",
             #[cfg(feature = "resource-adoption")]
             SessionStore::Adopted(store) => store.identity().0,
-        }
+        })
     }
     pub async fn review_stopped(
         &self,
@@ -278,9 +278,9 @@ impl Session {
             context,
             "stopped.inspect",
             &input.command_id,
-            &serde_json::json!({"profile":self.stopped_profile(),"input":input}),
+            &serde_json::json!({"profile":self.stopped_profile()?,"input":input}),
         )?;
-        let result = match &self.store {
+        let result = match self.local_store()? {
             SessionStore::Legacy(store) => {
                 let session = self.clone();
                 let context = context.clone();
@@ -316,23 +316,23 @@ impl Session {
             context,
             "stopped.resolve",
             &input.command_id,
-            &serde_json::json!({"profile":self.stopped_profile(),"input":input}),
+            &serde_json::json!({"profile":self.stopped_profile()?,"input":input}),
         )?;
         let review = input.review();
         let inspected = CommandReceipt::new(
             context,
             "stopped.inspect",
             &review.command_id,
-            &serde_json::json!({"profile":self.stopped_profile(),"input":review}),
+            &serde_json::json!({"profile":self.stopped_profile()?,"input":review}),
         )?;
         let request_id = hagency_core::canonical::digest(&serde_json::json!([
             "native-stopped-resolution-v1",
             context.account,
             context.device,
-            self.stopped_profile(),
+            self.stopped_profile()?,
             input.command_id
         ]))?;
-        let result = match &self.store {
+        let result = match self.local_store()? {
             SessionStore::Legacy(store) => {
                 let session = self.clone();
                 let context = context.clone();

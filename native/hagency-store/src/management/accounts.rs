@@ -56,7 +56,7 @@ impl Session {
     ) -> Result<AccountInventory, Error> {
         self.check(context, Permission::ReadAccounts)?;
         query.validate()?;
-        let result = match &self.store {
+        let result = match self.local_store()? {
             SessionStore::Legacy(store) => {
                 let authority = self.authority();
                 let original = context.clone();
@@ -104,7 +104,7 @@ impl Session {
         input.validate()?;
         let authority = self.authority();
         let original = context.clone();
-        let result = match &self.store {
+        let result = match self.local_store()? {
             SessionStore::Legacy(store) => {
                 let receipt = CommandReceipt::new(context, "account.prepare", &input.command_id, &input)?;
                 store.call(4096, move |db| db.management_prepare_account("", receipt, || authority.authorize(&original, Permission::PrepareAccounts))).await?

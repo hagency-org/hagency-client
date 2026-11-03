@@ -61,7 +61,7 @@ impl Session {
     ) -> Result<Option<ResourceConfigurationResult>, Error> {
         self.check(context, Permission::ConfigureResources)?;
         input.validate()?;
-        let SessionStore::Adopted(store) = &self.store else {
+        let SessionStore::Adopted(store) = self.local_store()? else {
             return Err(Error::LocalAuthority);
         };
         let receipt = input.receipt(context, store.identity().0)?;
@@ -93,7 +93,7 @@ impl Session {
         {
             return Err(Error::LocalAuthority);
         }
-        let SessionStore::Adopted(store) = &self.store else {
+        let SessionStore::Adopted(store) = self.local_store()? else {
             return Err(Error::LocalAuthority);
         };
         let receipt = input.receipt(context, store.identity().0)?;

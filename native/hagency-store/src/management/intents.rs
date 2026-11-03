@@ -329,16 +329,20 @@ impl Session {
     ) -> Result<Vec<PendingIntent>, Error> {
         let _pending = self.scope.pending.try_acquire().map_err(|_| Error::Busy)?;
         self.check(context, permission)?;
-        if matches!(&self.store, SessionStore::Legacy(_))
+        if matches!(&self.store, Some(SessionStore::Legacy(_)))
             && matches!(&action, JournalAction::Prepare(intent) | JournalAction::Reply(intent, _) if intent.operation.is_graph())
         {
             return Err(Error::Unqualified);
         }
         let command = JournalCommand::new(self.authority(), context.clone(), action);
-        let result = match &self.store {
-            SessionStore::Legacy(store) => store.management_intent(command).await?,
-            #[cfg(feature = "resource-adoption")]
-            SessionStore::Adopted(store) => store.journal(command).await?,
+        let result = if let Some(journal) = &self.server_journal {
+            journal.command(command).await?
+        } else {
+            match self.local_store()? {
+                SessionStore::Legacy(store) => store.management_intent(command).await?,
+                #[cfg(feature = "resource-adoption")]
+                SessionStore::Adopted(store) => store.journal(command).await?,
+            }
         };
         self.check(context, permission).map_err(|error| {
             if mutation {
