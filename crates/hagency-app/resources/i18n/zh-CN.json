@@ -1,4 +1,5 @@
 {
+  "The server refused the Agent encryption request. Check server support and Hagency authorization.": "服务器拒绝了 Agent 加密请求。请检查服务端支持情况及 Hagency 授权。",
   "Restore your Matrix cross-signing keys before verifying an Agent.": "验证 Agent 前，请先恢复你的 Matrix 交叉签名密钥。",
   "Encrypted Agent tasks and files are not available yet.": "Agent 加密任务和文件功能暂未开放。",
   "I checked the complete master key and device fingerprints for this Agent.": "我已核对此 Agent 的完整主密钥和设备指纹。",

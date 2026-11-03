@@ -725,12 +725,15 @@ impl Registry {
     }
 }
 fn error_code(error: NativeError) -> String {
-    if error.code.starts_with("agent_crypto_")
+    if matches!(
+        error.code.as_str(),
+        "invalid_agent_crypto_response" | "invalid_agent_crypto_scope"
+    ) || (error.code.starts_with("agent_crypto_")
         && error.code.len() < 100
         && error
             .code
             .bytes()
-            .all(|c| c.is_ascii_lowercase() || c == b'_')
+            .all(|c| c.is_ascii_lowercase() || c == b'_'))
     {
         error.code
     } else {
@@ -1211,6 +1214,26 @@ pub(super) async fn automatic(native: &NativeOwner, command: &Command, result: &
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn agent_crypto_error_codes_keep_fixed_protocol_diagnostics_without_raw_errors() {
+        for code in [
+            "invalid_agent_crypto_response",
+            "invalid_agent_crypto_scope",
+        ] {
+            assert_eq!(error_code(failure(409, code)), code);
+        }
+        for code in [
+            "https://example.test/?access_token=secret",
+            "agent_crypto_failed: secret",
+            "server_error_with_private_context",
+        ] {
+            assert_eq!(
+                error_code(failure(409, code)),
+                "agent_crypto_prepare_failed"
+            );
+        }
+    }
 
     async fn owner(root: &Path) -> NativeOwner {
         NativeOwner::open_inner_with_credentials(

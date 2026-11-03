@@ -1,4 +1,5 @@
 {
+  "The server refused the Agent encryption request. Check server support and Hagency authorization.": "The server refused the Agent encryption request. Check server support and Hagency authorization.",
   "Restore your Matrix cross-signing keys before verifying an Agent.": "Restore your Matrix cross-signing keys before verifying an Agent.",
   "Encrypted Agent tasks and files are not available yet.": "Encrypted Agent tasks and files are not available yet.",
   "I checked the complete master key and device fingerprints for this Agent.": "I checked the complete master key and device fingerprints for this Agent.",

@@ -5969,3 +5969,8 @@ Integrated main cf7 + SDK95 credentials source has exact-CI App857/0/2 and own a
 
 
 - **Published0.6.2, 2026-11-03:** Latest https://github.com/hagency-org/hagency-client/releases/tag/v0.6.2, built/tagged at6874517354c3f6c9ba763b1cfde2c2ee967c220b from run41543120369;4targets/6installers/11unsigned assets. Every installer contains139exact desktop resource files in the runtime namespace. Full draft server-digest plus authenticated-byte and public download verification passed. Tag remains the actual build SHA even after documentation commits. Preserve unsigned/manual-install, missing real-host qualification and all earlier original failure limits.
+
+
+## 2026-11-03 — Agent identity support requires actual fixed-device provisioning
+
+A public native identity failure can be a broker refusal independently of local Codex login. Display only known fixed diagnostic codes, never raw SDK/server errors. Integrated Server registration must support fixed AS devices; a random device ID cannot satisfy the pinned identity manifest. AS provisioning must create device metadata without turning its service bearer into an ordinary user token, or later user_id namespace/disable checks can be bypassed by ordinary-token resolution. Preserve complete registration identity and disabled state under the same database row lock when upgrading the built-in device capability. These facts have original failing regressions and corrected isolated tests; public E2E qualification still requires deployed fixes and actual original-identity verification, not Service running alone.
