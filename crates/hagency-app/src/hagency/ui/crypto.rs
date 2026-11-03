@@ -1,6 +1,37 @@
 use super::*;
 use ::hagency::native_owner::AgentCryptoAction;
 
+// Never render arbitrary transport errors: they may contain credentials or URLs.
+fn failure_code(value: &Value) -> Option<&'static str> {
+    const KNOWN: &[&str] = &[
+        "agent_crypto_bootstrap_failed",
+        "agent_crypto_execution_device_changed",
+        "agent_crypto_identity_mismatch",
+        "agent_crypto_identity_unavailable",
+        "agent_crypto_initialization_interrupted",
+        "agent_crypto_keys_unavailable",
+        "agent_crypto_local_state_unavailable",
+        "agent_crypto_original_keys_missing",
+        "agent_crypto_original_secret_missing",
+        "agent_crypto_outcome_unknown",
+        "agent_crypto_prepare_failed",
+        "agent_crypto_request_refused",
+        "agent_crypto_response_too_large",
+        "agent_crypto_retired",
+        "agent_crypto_sdk_restore_failed",
+        "agent_crypto_sdk_store_unavailable",
+        "agent_crypto_store_in_use",
+        "agent_crypto_store_not_private",
+        "agent_crypto_store_scope_changed",
+        "agent_crypto_store_unavailable",
+        "agent_crypto_transport_unavailable",
+        "invalid_agent_crypto_response",
+        "invalid_agent_crypto_scope",
+    ];
+    let code = value.as_str()?;
+    KNOWN.iter().copied().find(|known| *known == code)
+}
+
 impl HagencyPanel {
     pub(super) fn apply_crypto(&mut self, cx: &mut Cx, value: &Value) {
         if self.agent(cx).as_deref() != value["agentId"].as_str() {
@@ -54,14 +85,25 @@ impl HagencyPanel {
                 "Identity shutdown is unconfirmed. Original work is still retained."
             }
             "stale" => "Execution device changed. Reopen this Agent.",
+            "failed" | "unavailable"
+                if self.agent_crypto["error"] == "agent_crypto_request_refused" =>
+            {
+                "The server refused the Agent encryption request. Check server support and Hagency authorization."
+            }
             "failed" | "unavailable" => {
                 "Identity unavailable. Refresh status or initialize the original store again."
             }
             _ => "Identity status has not been loaded on this device.",
         };
+        let status = match string(&self.agent_crypto, "phase") {
+            "failed" | "unavailable" => failure_code(&self.agent_crypto["error"])
+                .map(|code| format!("{}\n{code}", crate::i18n::tr(status))),
+            _ => None,
+        }
+        .unwrap_or_else(|| crate::i18n::tr(status).to_owned());
         self.view
             .label(cx, ids!(crypto_status))
-            .set_text(cx, crate::i18n::tr(status));
+            .set_text(cx, &status);
         let identity = &self.agent_crypto["identity"];
         let public = if identity.is_object() {
             format!(
@@ -192,6 +234,22 @@ impl HagencyPanel {
 mod tests {
     use super::*;
     #[test]
+    fn agent_crypto_diagnostics_only_display_known_fixed_codes() {
+        assert_eq!(
+            failure_code(&json!("agent_crypto_request_refused")),
+            Some("agent_crypto_request_refused")
+        );
+        for value in [
+            Value::Null,
+            json!({"error":"agent_crypto_request_refused"}),
+            json!("agent_crypto_secret_token"),
+            json!("https://example.test/?access_token=secret"),
+        ] {
+            assert!(failure_code(&value).is_none());
+        }
+    }
+
+    #[test]
     fn agent_crypto_ui_keeps_unverified_identity_scoped_and_disables_foreign_device_actions() {
         let mut cx = Cx::new(Box::new(|_, _| {}));
         let mut panel = cx.with_vm(|vm| {
@@ -318,6 +376,20 @@ mod tests {
                 .label(&cx, ids!(crypto_identity))
                 .text()
                 .is_empty()
+        );
+        panel.agent_crypto = json!({"phase":"failed","error":"agent_crypto_request_refused"});
+        panel.render_crypto(&mut cx);
+        let status = panel.view.label(&cx, ids!(crypto_status)).text();
+        assert!(status.contains("agent_crypto_request_refused"));
+        assert!(status.contains(crate::i18n::tr("The server refused the Agent encryption request. Check server support and Hagency authorization.")));
+        panel.agent_crypto["error"] = json!("agent_crypto_secret_token");
+        panel.render_crypto(&mut cx);
+        assert!(
+            !panel
+                .view
+                .label(&cx, ids!(crypto_status))
+                .text()
+                .contains("secret_token")
         );
     }
 }
