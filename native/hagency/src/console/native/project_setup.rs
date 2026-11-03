@@ -247,7 +247,9 @@ impl Io for NativeIo<'_> {
 pub struct ProjectSetupTransport {
     manager: Arc<NativeManagement>,
 }
-enum Action {
+enum Action<'a> {
+    RetryTerminal(String, &'a std::sync::atomic::AtomicBool),
+    ResumeBeginPinned(String, Box<dyn FnOnce(String) -> Result<(), NativeError> + Send + 'a>),
     Read(String),
     Apply(Command),
     ResumeBegin(String),
@@ -328,6 +330,14 @@ impl ProjectSetupTransport {
         key(&project)?;
         self.run(Action::ResumeBegin(project)).await
     }
+    pub(crate) async fn retry_command_terminal(&self, command:String, terminal:&std::sync::atomic::AtomicBool)->Result<SetupProgress,NativeError> {
+        key(&command)?;
+        self.run(Action::RetryTerminal(command,terminal)).await
+    }
+    pub(crate) async fn resume_begin_pinned(&self, project: String, pin: impl FnOnce(String) -> Result<(), NativeError> + Send) -> Result<SetupProgress, NativeError> {
+        key(&project)?;
+        self.run(Action::ResumeBeginPinned(project, Box::new(pin))).await
+    }
     pub async fn retry_command(&self, command: String) -> Result<SetupProgress, NativeError> {
         key(&command)?;
         self.run(Action::Retry(command)).await
@@ -338,7 +348,7 @@ impl ProjectSetupTransport {
         key(&command)?;
         self.run(Action::Acknowledge(command)).await
     }
-    async fn run(&self, action: Action) -> Result<SetupProgress, NativeError> {
+    async fn run(&self, action: Action<'_>) -> Result<SetupProgress, NativeError> {
         let (context, session) = self.manager.authorized().await?;
         session
             .authorize(&context, Permission::ReadProjectSetup)
@@ -399,7 +409,19 @@ impl ProjectSetupTransport {
             Action::Read(p) => driver.progress(&p).await,
             Action::Apply(c) => driver.apply(c).await,
             Action::ResumeBegin(p) => driver.resume_begin(&p).await,
+            Action::ResumeBeginPinned(p, pin) => {
+                let n = driver.history.index(&p).ok_or_else(history_error)?;
+                let k = driver.history.data.records[n].commands.iter().rposition(|c| matches!(c.mutation, Mutation::Begin { .. })).ok_or_else(history_error)?;
+                pin(driver.history.data.records[n].commands[k].id.clone())?;
+                driver.execute(n,k).await
+            },
             Action::Retry(c) => driver.retry(&c).await,
+            Action::RetryTerminal(c,terminal)=>{
+                let result=driver.retry(&c).await;
+                let failed=driver.history.data.records.iter().flat_map(|r|&r.commands).any(|command|command.id==c && matches!(command.outcome,Outcome::Failed{..}));
+                terminal.store(failed,std::sync::atomic::Ordering::Release);
+                result
+            },
             Action::Continue(p, c) => driver.continue_setup(&p, c).await,
             Action::Acknowledge(id) => {
                 let (n, k) = driver

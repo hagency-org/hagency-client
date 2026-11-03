@@ -8,7 +8,7 @@ pub enum Assignment {
 }
 /// Resolve symlink aliases through the nearest existing parent, without
 /// creating an owner root merely to inspect its assignment.
-fn identity(path: &Path) -> Result<PathBuf, &'static str> {
+pub(super) fn identity(path: &Path) -> Result<PathBuf, &'static str> {
     if !path.is_absolute() {
         return Err("daemon_owner_root_invalid");
     }
@@ -50,7 +50,7 @@ pub fn resolve(
     let adopted = identity(&enrolled.owner_root)?;
     let source = identity(root)?;
     let same_owner = enrolled.owner == owner
-        && enrolled.origin.trim_end_matches('/') == origin.trim_end_matches('/');
+        && super::same_origin(&enrolled.origin, origin);
     if !same_owner {
         return if source == adopted {
             Err("daemon_owner_scope_mismatch")

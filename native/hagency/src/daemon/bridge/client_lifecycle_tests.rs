@@ -11,6 +11,8 @@ struct Handles {
     active: HashMap<String, (String, u64)>,
     retired: Vec<String>,
     blocked: bool,
+    requests: Vec<String>,
+    mutation_error: Option<String>,
 }
 
 struct Fixture {
@@ -45,6 +47,7 @@ impl Fixture {
                             let protocol::Command::Bridge { call } = request.command else { panic!("unexpected command") };
                             let (result, blocked): (Result<Value, Failure>, bool) = {
                                 let mut state = handles.lock().unwrap();
+                                state.requests.push(request.request_id.clone());
                                 match call {
                                     Call::Attach { .. } => (Ok(encode(Lease { id: "controller".into(), generation: 1 }).unwrap()), false),
                                     Call::Management { controller, package } => {
@@ -66,7 +69,9 @@ impl Fixture {
                                     Call::Invoke { controller, management, .. } => {
                                         let (expected, behavior) = state.active.get(&management).expect("retained handle stays live").clone();
                                         assert_eq!(controller, expected);
-                                        if behavior == 99 {
+                                        if let Some(code)=state.mutation_error.clone() {
+                                            (Err(Failure::from(error(503,&code))),false)
+                                        } else if behavior == 99 {
                                             (Err(Failure::from(error(403, "fixture_denied"))), false)
                                         } else {
                                             state.blocked = behavior == 100;
@@ -211,4 +216,60 @@ async fn cancelling_a_poll_retires_its_last_manager_reference() {
     fixture
         .wait(|state| state.active.is_empty() && state.retired.len() == 1)
         .await;
+}
+
+#[tokio::test]
+async fn unreachable_daemon_signout_persists_owner_fence_and_wrong_scope_is_refused() {
+    let home=tempfile::tempdir().unwrap();
+    crate::daemon::enrollment::Enrollment::enroll_fresh(home.path(),"https://test","@owner:test",None).unwrap();
+    let client=ControllerClient::new(home.path().into(),"@owner:test".into(),"https://test/".into(),1);
+    tokio::time::timeout(Duration::from_secs(3),client.sign_out()).await.unwrap().unwrap();
+    let request=crate::daemon::revocation::load(home.path()).unwrap().unwrap();
+    assert_eq!(request.owner,"@owner:test");
+    let other=ControllerClient::new(home.path().into(),"@other:test".into(),"https://test/".into(),1);
+    assert!(other.sign_out().await.is_err());
+    assert_eq!(crate::daemon::revocation::load(home.path()).unwrap().unwrap(),request);
+}
+
+#[tokio::test]
+async fn explicit_recovery_reopens_expired_original_but_an_ordinary_mutation_does_not() {
+    let fixture=Fixture::start();let manager=fixture.management(1).await;
+    let ManagementClient::Remote(remote)=manager.as_ref() else {panic!("remote")};
+    let (lease,management)=remote.session().await.unwrap();
+    let operation=Operation::retry_saved_command;let arguments=serde_json::json!(["native-original"]);
+    let call=Call::Invoke{controller:lease.id.clone(),management:management.clone(),operation,arguments:arguments.clone()};
+    let key=fingerprint("@owner:test",&remote.package.digest,&call).unwrap();
+    let journal=fixture.controller.journal().unwrap();
+    let id=journal.pending_for("@owner:test",&key).unwrap();
+    let db=rusqlite::Connection::open(fixture._home.path().join("controllers/pending.sqlite3")).unwrap();
+    db.execute("UPDATE pending SET retry_until_ms=1",[]).unwrap();
+    remote.invoke(operation,arguments).await.unwrap();
+    assert_eq!(fixture.handles.lock().unwrap().requests.last(),Some(&id));
+    let call=Call::Invoke{controller:lease.id,management,operation:Operation::rename_resource,arguments:serde_json::json!([{"commandId":"new-name"}])};
+    let key=fingerprint("@owner:test",&remote.package.digest,&call).unwrap();
+    let original=journal.pending_for("@owner:test",&key).unwrap();
+    db.execute("UPDATE pending SET retry_until_ms=1",[]).unwrap();
+    let before=fixture.handles.lock().unwrap().requests.len();
+    assert_eq!(fixture.controller.call(&remote.package.digest,call,true).await.unwrap_err().code,"daemon_command_receipt_expired");
+    assert_eq!(fixture.handles.lock().unwrap().requests.len(),before);
+    assert_eq!(journal.pending_commands("@owner:test").unwrap()[0].request_id,original);
+}
+
+#[tokio::test]
+async fn unknown_call_keeps_original_id_through_stopping_scope_busy_and_unknown_gates() {
+    let fixture=Fixture::start();let manager=fixture.management(1).await;
+    let ManagementClient::Remote(remote)=manager.as_ref() else {panic!("remote")};
+    let arguments=serde_json::json!(["original-native-id"]);
+    let mut original=None;
+    for code in ["daemon_command_pending","daemon_stopping","management_scope_changed","daemon_bridge_busy","future_unknown_gate"] {
+        fixture.handles.lock().unwrap().mutation_error=Some(code.into());
+        assert_eq!(remote.invoke(Operation::retry_saved_command,arguments.clone()).await.unwrap_err().code,code);
+        let id=fixture.handles.lock().unwrap().requests.last().unwrap().clone();
+        assert_eq!(original.get_or_insert(id.clone()),&id);
+        assert_eq!(fixture.controller.pending_commands().unwrap()[0].request_id,id);
+    }
+    fixture.handles.lock().unwrap().mutation_error=None;
+    remote.invoke(Operation::retry_saved_command,arguments).await.unwrap();
+    assert_eq!(fixture.handles.lock().unwrap().requests.last(),original.as_ref());
+    assert!(fixture.controller.pending_commands().unwrap().is_empty());
 }

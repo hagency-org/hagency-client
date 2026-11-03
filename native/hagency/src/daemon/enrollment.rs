@@ -30,6 +30,8 @@ pub enum HandoverSource {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Handover {
+    /// Prospective scope for logout during browser authorization; never hosts.
+    Preparing,
     /// The daemon created this owner root at enrollment.
     Fresh,
     /// An existing root is named but not yet verified as hosted here.
@@ -106,7 +108,7 @@ impl Enrollment {
         };
         let value: Self = serde_json::from_slice(&raw).map_err(|_| EnrollmentError::Storage)?;
         if value.version != 1
-            || !value.owner_root.is_absolute()
+            || Self::check_root(home,&value.owner_root).is_err()
             || !super::protocol::valid_owner_id(&value.owner)
         {
             return Err(EnrollmentError::Storage);
@@ -121,19 +123,25 @@ impl Enrollment {
 
     /// Whether the daemon may open the owner root in this state.
     pub fn hostable(&self) -> bool {
-        !matches!(self.handover, Handover::Released { .. })
+        !matches!(self.handover, Handover::Preparing | Handover::Released { .. })
     }
 
-    fn check_root(home: &Path, root: &Path) -> Result<(), EnrollmentError> {
-        if !root.is_absolute() {
+    pub(super) fn check_root(home: &Path, root: &Path) -> Result<(), EnrollmentError> {
+        if !root.is_absolute() || root.components().any(|part| matches!(part, std::path::Component::ParentDir)) {
             return Err(EnrollmentError::Root);
         }
+        let root = super::assignment::identity(root).map_err(|_| EnrollmentError::Root)?;
+        let home = super::assignment::identity(home).map_err(|_| EnrollmentError::Root)?;
         // The owner root is a sibling custody domain; only `owners/` under
         // the daemon home is allowed, never the home itself or its files.
-        if root.starts_with(home) && !root.starts_with(home.join("owners")) {
+        if root.starts_with(&home) && !root.starts_with(home.join("owners")) {
             return Err(EnrollmentError::Root);
         }
         Ok(())
+    }
+
+    pub(super) fn prepare(home: &Path, origin: &str, owner: &str, display_name: Option<String>, root: PathBuf) -> Result<Self, EnrollmentError> {
+        Self::create(home, origin, owner, display_name, root, Handover::Preparing)
     }
 
     /// Record a fresh enrollment after the daemon's own SDK sign-in.
@@ -144,7 +152,9 @@ impl Enrollment {
         owner: &str,
         display_name: Option<String>,
     ) -> Result<Self, EnrollmentError> {
-        let root = fresh_root(home, origin, owner);
+        let root = Self::load(home)?.filter(|e| e.owner==owner && super::same_origin(&e.origin,origin))
+            .filter(|e| e.owner_root==fresh_root(home,&e.origin,&e.owner))
+            .map(|e|e.owner_root).unwrap_or_else(||fresh_root(home,origin,owner));
         Self::create(home, origin, owner, display_name, root, Handover::Fresh)
     }
 
@@ -183,8 +193,12 @@ impl Enrollment {
         }
         Self::check_root(home, &root)?;
         if let Some(existing) = Self::load(home)? {
-            return if existing.origin == origin && existing.owner == owner && existing.owner_root == root {
-                Ok(existing)
+            return if super::same_origin(&existing.origin, origin) && existing.owner == owner && existing.owner_root == root {
+                if matches!(existing.handover, Handover::Preparing) && !matches!(handover, Handover::Preparing) {
+                    let value = Self { handover, ..existing };
+                    value.save(home)?;
+                    Ok(value)
+                } else { Ok(existing) }
             } else {
                 Err(EnrollmentError::OtherOwner)
             };
@@ -215,7 +229,7 @@ impl Enrollment {
                 source: Some(source),
                 since_ms: now_ms(),
             },
-            Handover::Released { .. } => return Err(EnrollmentError::Transition),
+            Handover::Preparing | Handover::Released { .. } => return Err(EnrollmentError::Transition),
         };
         value.save(home)?;
         Ok(value)
@@ -274,6 +288,34 @@ mod tests {
         temp
     }
 
+    #[test]
+    fn fresh_enrollment_keeps_existing_root_when_origin_slash_form_changes() {
+        let temp=home();let original=Enrollment::enroll_fresh(temp.path(),"https://s","@o:s",None).unwrap();
+        let again=Enrollment::enroll_fresh(temp.path(),"https://s/","@o:s",None).unwrap();
+        assert_eq!(again.owner_root,original.owner_root);
+    }
+    #[test]
+    fn browser_preparation_does_not_assign_native_hosting_or_activate_without_success() {
+        let temp=home();let root=temp.path().parent().unwrap().join("original-root");
+        let prepared=Enrollment::prepare(temp.path(),"https://s/","@o:s",None,root.clone()).unwrap();
+        assert!(!prepared.hostable());
+        assert_eq!(super::super::assignment::resolve(temp.path(),"https://s","@o:s",&root).unwrap(),super::super::assignment::Assignment::Local);
+        assert_eq!(Enrollment::mark_active(temp.path()).unwrap_err(),EnrollmentError::Transition);
+        // A cancelled browser leaves prospective scope for logout, but never
+        // retires native hosting. Successful auth explicitly promotes it.
+        let staged=Enrollment::stage_handover(temp.path(),"https://s","@o:s",None,&root).unwrap();
+        assert!(staged.hostable());
+        assert!(matches!(staged.handover,Handover::Staged{..}));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn root_validation_resolves_aliases_before_custody_boundary_check() {
+        let temp=home();let alias=temp.path().parent().unwrap().join(format!("alias-{}",super::super::new_request_id()));
+        std::os::unix::fs::symlink(temp.path(),&alias).unwrap();
+        assert_eq!(Enrollment::check_root(temp.path(),&alias.join("matrix")),Err(EnrollmentError::Root));
+        assert_eq!(Enrollment::check_root(temp.path(),&temp.path().join("owners/../matrix")),Err(EnrollmentError::Root));
+        std::fs::remove_file(alias).unwrap();
+    }
     #[test]
     fn handover_is_staged_then_active_only_by_explicit_steps_and_survives_reload() {
         let temp = home();

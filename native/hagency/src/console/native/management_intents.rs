@@ -310,6 +310,12 @@ impl NativeManagement {
         let result = session.pending_intents(&context).await;
         self.finish(&context, result, false).await
     }
+    /// Exact native custody lookup, retaining current scope and operation grants.
+    pub(crate) async fn original_command_receipt(&self, command_id: String) -> Result<Option<PendingIntent>, NativeError> {
+        let (context, session) = self.authorized().await?;
+        let result = session.intent(&context, command_id).await;
+        self.finish(&context, result, false).await
+    }
     pub async fn acknowledge_command(&self, command_id: String) -> Result<(), NativeError> {
         let (context, session) = self.authorized().await?;
         let result = session.acknowledge_intent(&context, command_id).await;

@@ -54,33 +54,27 @@ impl ControllerClient {
             Ok(())
         }
     }
+    async fn send(&self, id:String, call:Call) -> Result<Value,NativeError> {
+        self.send_receipt(id,call).await.0
+    }
     #[cfg(not(unix))]
-    async fn send(&self, _id: String, _call: Call) -> Result<Value, NativeError> {
-        Err(error(503, "owner_daemon_platform_unsupported"))
+    async fn send_receipt(&self,_id:String,_call:Call)->(Result<Value,NativeError>,bool) {
+        (Err(error(503,"owner_daemon_platform_unsupported")),false)
     }
     #[cfg(unix)]
-    async fn send(&self, id: String, call: Call) -> Result<Value, NativeError> {
-        let mut client = super::super::DaemonClient::connect(&self.home)
-            .await
-            .map_err(|_| error(503, "owner_daemon_unavailable"))?;
-        let request = super::super::Request::new(
-            id,
-            Some(self.owner.clone()),
-            super::super::Command::Bridge { call },
-        );
-        let reply = client
-            .call(&request)
-            .await
-            .map_err(|_| error(503, "daemon_command_pending"))?;
-        if let Some(e) = reply.error {
-            return Err(error(503, &e.code));
+    async fn send_receipt(&self,id:String,call:Call)->(Result<Value,NativeError>,bool) {
+        let response:Result<Result<Value,Failure>,NativeError>=async {
+            let mut client=super::super::DaemonClient::connect(&self.home).await.map_err(|_|error(503,"owner_daemon_unavailable"))?;
+            let request=super::super::Request::new(id,Some(self.owner.clone()),super::super::Command::Bridge{call});
+            let reply=client.call(&request).await.map_err(|_|error(503,"daemon_command_pending"))?;
+            if let Some(error_body)=reply.error {return Err(error(503,&error_body.code));}
+            decode(reply.result.ok_or_else(||error(503,"daemon_bridge_invalid_reply"))?)
+        }.await;
+        match response {
+            Ok(Ok(value))=>(Ok(value),true),
+            Ok(Err(failure))=>{let recorded=failure.terminal;(Err(failure.native()),recorded)},
+            Err(error)=>(Err(error),false),
         }
-        let result: Result<Value, Failure> = decode(
-            reply
-                .result
-                .ok_or_else(|| error(503, "daemon_bridge_invalid_reply"))?,
-        )?;
-        result.map_err(Failure::native)
     }
     async fn lease(&self) -> Result<Lease, NativeError> {
         self.check()?;
@@ -136,20 +130,21 @@ impl ControllerClient {
         let (id, record) = if mutation {
             let fingerprint = fingerprint(&self.owner, scope, &call)?;
             let journal = self.journal()?;
-            (journal.pending(&fingerprint)?, Some((journal, fingerprint)))
+            let id=match journal.pending_for(&self.owner, &fingerprint) {
+                Err(error) if error.code=="daemon_command_receipt_expired" && explicit_original_recovery(&call) => {
+                    journal.resume_fingerprint(&self.owner,&fingerprint)?;
+                    journal.pending_for(&self.owner,&fingerprint)?
+                },
+                result=>result?,
+            };
+            (id, Some((journal, fingerprint)))
         } else {
             (super::super::new_request_id(), None)
         };
-        let result = self.send(id.clone(), call).await;
-        let pending = result.as_ref().is_err_and(|e| {
-            matches!(
-                e.code.as_str(),
-                "daemon_command_pending"
-                    | "owner_daemon_unavailable"
-                    | "daemon_bridge_lease_expired"
-                    | "request_id_reused"
-            )
-        });
+        let (result, recorded) = self.send_receipt(id.clone(), call).await;
+        // An outer gate or unrecognized error cannot settle an earlier
+        // attempt. Only an authoritative receipt releases its logical ID.
+        let pending = !recorded || result.as_ref().is_err_and(|error| error.code == "daemon_bridge_result_too_large");
         if !pending {
             if let Some((journal, fingerprint)) = record {
                 journal.clear(&fingerprint, &id)?;
@@ -157,6 +152,18 @@ impl ControllerClient {
         }
         self.check()?;
         result
+    }
+    /// Bounded recovery inventory for this owner. Unknown outcomes are kept;
+    /// expiry never silently creates a replacement mutation.
+    pub fn pending_commands(&self) -> Result<Vec<super::PendingCommand>, NativeError> {
+        self.check()?;
+        self.journal()?.pending_commands(&self.owner)
+    }
+    /// After the user selects an original request, allow its exact operation
+    /// to recover that request again. This does not execute or clear anything.
+    pub fn resume_pending_command(&self, request_id: &str) -> Result<(), NativeError> {
+        self.check()?;
+        self.journal()?.resume_pending(&self.owner, request_id)
     }
     pub async fn management(
         self: &Arc<Self>,
@@ -271,27 +278,32 @@ impl ControllerClient {
             }
         });
     }
+    /// Acceptance means the durable local logout fence is stored. The daemon
+    /// drains and revokes its independent server grant asynchronously.
     pub async fn sign_out(&self) -> Result<(), NativeError> {
-        let result = async {
-            let lease = self.lease().await?;
-            self.call(
-                "owner",
-                Call::SignOut {
-                    controller: lease.id,
-                },
-                true,
-            )
-            .await?;
-            Ok(())
-        }
-        .await;
-        if result.is_err()
-            && super::super::enrollment::Enrollment::load(&self.home).is_ok_and(|e| e.is_none())
-            && super::super::revocation::load(&self.home).is_ok_and(|e| e.is_none())
+        super::super::revocation::request(&self.home, &self.origin, &self.owner)
+            .map_err(|code| error(503, code))?;
+        if let Some(request) = super::super::revocation::load(&self.home)
+            .map_err(|code| error(503, code))?
         {
-            return Ok(());
+            if request.owner != self.owner || !super::super::same_origin(&request.origin, &self.origin) {
+                return Err(error(401, "daemon_owner_scope_mismatch"));
+            }
+            // If the daemon is absent, also fence native root resumption. A
+            // running host holds this root; its admission/token gates observe
+            // the same durable request even when its socket cannot be reached.
+            if let Ok(_held) = super::super::DaemonHome::open(&self.home) {
+                NativeOwner::revoke_saved_matrix_resumption(&request.root, &request.origin, &request.owner)?;
+            }
         }
-        result
+        // Best effort wakeup. Do not make browser logout wait on network or
+        // native drain completion; the request survives a closed controller.
+        let _ = tokio::time::timeout(Duration::from_secs(2), async {
+            if let Ok(lease) = self.lease().await {
+                let _ = self.send(super::super::new_request_id(), Call::SignOut { controller: lease.id }).await;
+            }
+        }).await;
+        Ok(())
     }
     /// Local fencing is immediate. Remote expiry also covers process crashes.
     pub fn retire(self: &Arc<Self>) {
@@ -312,6 +324,13 @@ impl ControllerClient {
                     .await;
             }
         });
+    }
+}
+fn explicit_original_recovery(call:&Call)->bool {
+    match call {
+        Call::Invoke{operation:Operation::retry_saved_command|Operation::acknowledge_command,..}=>true,
+        Call::Invoke{operation:Operation::project_setup,arguments,..}=>matches!(decode::<super::project_setup::SetupOperation>(arguments.clone()),Ok(super::project_setup::SetupOperation::Resume{..}|super::project_setup::SetupOperation::Retry{..}|super::project_setup::SetupOperation::Acknowledge{..})),
+        _=>false,
     }
 }
 pub(crate) fn fingerprint(owner: &str, scope: &str, call: &Call) -> Result<String, NativeError> {

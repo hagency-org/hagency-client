@@ -29,6 +29,7 @@ pub const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 /// A pause waits for the admission barrier (bounded below this); a stop
 /// replies once its drain was durably accepted.
 pub const CALL_TIMEOUT: Duration = Duration::from_secs(45);
+pub const BRIDGE_CALL_TIMEOUT: Duration = Duration::from_secs(130);
 
 pub fn effective_uid() -> u32 {
     rustix::process::geteuid().as_raw()
@@ -233,7 +234,7 @@ impl DaemonClient {
             // A partial write may still have delivered a whole frame.
             _ => return Err(IpcError::Uncertain),
         }
-        let payload = match tokio::time::timeout(CALL_TIMEOUT, read_reply(&mut self.stream)).await
+        let payload = match tokio::time::timeout(if matches!(request.command, super::protocol::Command::Bridge { .. }) { BRIDGE_CALL_TIMEOUT } else { CALL_TIMEOUT }, read_reply(&mut self.stream)).await
         {
             Ok(Ok(payload)) => payload,
             _ => return Err(IpcError::Uncertain),

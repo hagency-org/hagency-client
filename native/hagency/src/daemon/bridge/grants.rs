@@ -1543,8 +1543,9 @@ mod tests {
             fn stop(&self)->BoxFuture<'_,Result<(),&'static str>>{Box::pin(async{Ok(())})}
             fn snapshot_parts(&self,_:Option<Period>,_:Option<hagency_metering::dashboard::UsageFilter>)->BoxFuture<'_,SnapshotParts>{Box::pin(async{SnapshotParts::default()})}
             fn refresh_providers(&self)->BoxFuture<'_,Result<(),DaemonError>>{Box::pin(async{Ok(())})}
-            fn bridge(&self,_:String,call:super::super::Call)->BoxFuture<'_,Result<Value,NativeError>> {
+            fn bridge(&self,_:String,call:super::super::Call)->BoxFuture<'_,Result<Value,super::super::Failure>> {
                 Box::pin(async move {
+                    let result:Result<Value,NativeError>=async {
                     match call {
                         super::super::Call::Attach{..}=>{
                             let n=self.controller.fetch_add(1,Ordering::AcqRel)+1;
@@ -1565,6 +1566,8 @@ mod tests {
                         }
                         _=>Err(error(400,"fixture_unexpected_operation")),
                     }
+                    }.await;
+                    result.map_err(Into::into)
                 })
             }
         }

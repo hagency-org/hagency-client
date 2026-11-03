@@ -5,6 +5,7 @@ use std::time::Duration;
 #[derive(Default)]
 pub struct Admission {
     open: AtomicBool,
+    fence: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
     barrier: Arc<tokio::sync::RwLock<()>>,
     active: AtomicU64,
 }
@@ -15,7 +16,8 @@ impl Admission {
         gate.open();
         gate
     }
-    pub fn is_open(&self) -> bool { self.open.load(Ordering::Acquire) }
+    pub(crate) fn with_fence(fence: impl Fn() -> bool + Send + Sync + 'static) -> Self { Self { fence: Some(Arc::new(fence)), ..Self::default() } }
+    pub fn is_open(&self) -> bool { self.open.load(Ordering::Acquire) && self.fence.as_ref().is_none_or(|f| f()) }
     pub fn open(&self) { self.open.store(true, Ordering::Release); }
     pub async fn close(&self, within: Duration) -> bool {
         self.open.store(false, Ordering::Release);
@@ -63,6 +65,14 @@ impl Drop for TurnAdmission {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn durable_fence_closes_new_turns_even_when_hosting_state_still_says_open() {
+        let allow=Arc::new(AtomicBool::new(true));let copy=allow.clone();
+        let gate=Arc::new(Admission::with_fence(move||copy.load(Ordering::Acquire)));
+        gate.open();assert!(gate.enter_turn().is_some());
+        allow.store(false,Ordering::Release);assert!(!gate.is_open());assert!(gate.enter_turn().is_none());
+        gate.open();assert!(gate.enter().is_none());
+    }
     #[tokio::test]
     async fn pause_waits_for_start_but_running_turns_drain_and_drop_exactly_once() {
         let gate = Arc::new(Admission::running());

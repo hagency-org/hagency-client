@@ -14,6 +14,7 @@ pub use project_setup::ProjectSetupTransport;
 mod grants;
 use crate::native_owner::ManagementPermission;
 pub use client::{ControllerClient, ManagementClient};
+pub use journal::PendingCommand;
 #[cfg(feature = "resource-adoption")]
 pub use grants::{
     AdoptedSelection, DeviceSetupReview, OwnerGrantAccess, OwnerGrantCancellationResult,
@@ -202,12 +203,18 @@ pub struct Lease {
 pub struct Failure {
     pub status: u16,
     pub code: String,
+    /// Proven terminal native outcome, not merely a persisted bridge error.
+    /// Missing metadata, gates and unknown native effects remain unresolved.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub terminal: bool,
 }
 impl From<crate::native_owner::NativeError> for Failure {
     fn from(e: crate::native_owner::NativeError) -> Self {
+        let terminal=e.status==400 && e.code=="invalid_management_arguments";
         Self {
             status: e.status,
             code: e.code,
+            terminal,
         }
     }
 }
@@ -218,6 +225,9 @@ impl Failure {
             code: self.code,
         }
     }
+}
+pub(crate) fn terminal_receipt(result:&Result<Value,Failure>)->bool {
+    match result {Ok(_)=>true,Err(error)=>error.terminal}
 }
 pub(crate) fn error(status: u16, code: &str) -> crate::native_owner::NativeError {
     crate::native_owner::NativeError {

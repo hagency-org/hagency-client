@@ -70,8 +70,8 @@ pub struct SnapshotParts {
 pub trait Runtime: Send + Sync + 'static {
     #[cfg(unix)]
     fn enrollment(&self,_id:String,_call:super::enrollment_rpc::Call)->BoxFuture<'_,Result<super::enrollment_rpc::Status,String>>{Box::pin(async{Err("daemon_enrollment_unavailable".into())})}
-    fn bridge(&self, _id: String, _call: super::bridge::Call) -> BoxFuture<'_, Result<serde_json::Value, crate::native_owner::NativeError>> {
-        Box::pin(async { Err(crate::native_owner::NativeError { status:503, code:"daemon_bridge_unavailable".into() }) })
+    fn bridge(&self, _id: String, _call: super::bridge::Call) -> BoxFuture<'_, Result<serde_json::Value, super::bridge::Failure>> {
+        Box::pin(async { Err(crate::native_owner::NativeError { status:503, code:"daemon_bridge_unavailable".into() }.into()) })
     }
     fn generation(&self) -> u64 { 0 }
     fn owner(&self) -> Option<OwnerScope>;

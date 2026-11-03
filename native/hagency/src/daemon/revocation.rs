@@ -20,12 +20,12 @@ pub fn request(home: &Path, origin: &str, owner: &str) -> Result<(), &'static st
     let Some(enrollment) = Enrollment::load(home).map_err(|e| e.code())? else {
         return Ok(());
     };
-    if enrollment.owner != owner || enrollment.origin != origin {
+    if enrollment.owner != owner || !super::same_origin(&enrollment.origin, origin) {
         return Err("daemon_owner_scope_mismatch");
     }
     let value = Request {
         owner: owner.into(),
-        origin: origin.into(),
+        origin: enrollment.origin,
         root: enrollment.owner_root,
     };
     if let Some(previous) = load(home)? {

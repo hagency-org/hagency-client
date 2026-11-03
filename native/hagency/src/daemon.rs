@@ -53,6 +53,11 @@ pub const CONTROL: &str = "control.json";
 pub const ENROLLMENT: &str = "enrollment.json";
 pub const MATRIX: &str = "matrix";
 
+/// Server origin equivalence. A URL's optional terminal slash is not scope.
+pub fn same_origin(a: &str, b: &str) -> bool {
+    a.trim_end_matches('/') == b.trim_end_matches('/')
+}
+
 /// Read a private (owner-only, single-link, non-symlink) file of at most
 /// `limit` bytes. `Ok(None)` when it does not exist.
 pub(crate) fn read_private(path: &Path, limit: usize) -> Result<Option<Vec<u8>>, ()> {

@@ -118,6 +118,7 @@ pub struct SdkCustody {
     origin: String,
     owner: String,
     state: AtomicU8,
+    logout_home: Mutex<Option<PathBuf>>,
     /// Set only by a fresh browser enrollment in this process, consumed once.
     explicit: AtomicBool,
     monitor: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -199,7 +200,7 @@ fn saved_from_client(client: &Client, origin: &str, owner: &str) -> Result<Saved
 }
 
 fn verify_same_session(previous: &Saved, next: &Saved) -> Result<(), AuthError> {
-    if previous.homeserver != next.homeserver
+    if !super::same_origin(&previous.homeserver, &next.homeserver)
         || previous.owner != next.owner
         || previous.oauth_client_id != next.oauth_client_id
         || previous.user.meta != next.user.meta
@@ -340,6 +341,10 @@ impl SdkCustody {
     /// custody; the native transports themselves fail closed per request.
     pub fn live(&self) -> bool {
         matches!(self.state(), AuthState::Authorized | AuthState::Unavailable)
+            && self.logout_home.lock().is_ok_and(|home| home.as_ref().is_none_or(|home| super::revocation::load(home).is_ok_and(|r| r.is_none())))
+    }
+    pub(super) fn fence_on_logout(&self, home: &Path) {
+        *self.logout_home.lock().unwrap_or_else(|p| p.into_inner()) = Some(home.into());
     }
     pub fn retire(&self) {
         self.set_state(AuthState::Retired);
@@ -355,7 +360,7 @@ impl SdkCustody {
     /// saved identity differs from the expected owner.
     pub async fn restore(dir: &Path, origin: &str, owner: &str) -> Result<Arc<Self>, AuthError> {
         let saved = read_saved(dir)?.ok_or(AuthError::NotEnrolled)?;
-        if saved.homeserver != origin
+        if !super::same_origin(&saved.homeserver, origin)
             || saved.owner != owner
             || saved.user.meta.user_id.as_str() != owner
         {
@@ -379,6 +384,7 @@ impl SdkCustody {
             origin: origin.into(),
             owner: owner.into(),
             state: AtomicU8::new(AuthState::Authorized.as_u8()),
+            logout_home: Mutex::new(None),
             explicit: AtomicBool::new(explicit),
             monitor: Mutex::new(None),
         });
@@ -427,7 +433,7 @@ impl SdkCustody {
             // A cancelled controller can leave a fully persisted SDK session
             // before native registration completes. Retry the same device;
             // never replace its grant or erase its crypto store.
-            if saved.homeserver != origin
+            if !super::same_origin(&saved.homeserver, origin)
                 || expected_owner.is_some_and(|owner| owner != saved.owner)
                 || saved.user.meta.user_id.as_str() != saved.owner
                 || existing_public_client.is_some_and(|id| id != saved.oauth_client_id)
@@ -471,7 +477,7 @@ impl SdkCustody {
         let Some(saved) = read_saved(dir)? else {
             return Self::enroll(dir, origin, expected_owner, existing_public_client, open).await;
         };
-        if saved.homeserver != origin
+        if !super::same_origin(&saved.homeserver, origin)
             || expected_owner.is_some_and(|owner| owner != saved.owner)
             || saved.user.meta.user_id.as_str() != saved.owner
             || existing_public_client.is_some_and(|id| id != saved.oauth_client_id)

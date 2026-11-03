@@ -424,6 +424,13 @@ fn daemon_systemd_unit_with_installation(exe: &Path, home_dir: &Path, path: &str
 
 /// Register and start the owner daemon for this user. Explicit owner action
 /// only; nothing in the daemon installs itself.
+fn stable_daemon_executable(exe: &Path, user_home: &Path) -> bool {
+    [PathBuf::from("/Applications"), user_home.join("Applications"),
+     PathBuf::from("/usr/local/bin"), PathBuf::from("/usr/bin"),
+     PathBuf::from("/opt/homebrew/bin"), user_home.join(".local/bin")]
+        .iter().any(|root| exe.starts_with(root))
+}
+
 pub fn install_daemon(home_dir: &Path) -> Result<String, String> {
     if !home_dir.is_absolute() {
         return Err("--home must be absolute".into());
@@ -431,6 +438,9 @@ pub fn install_daemon(home_dir: &Path) -> Result<String, String> {
     let exe = std::env::current_exe()
         .and_then(|p| p.canonicalize())
         .map_err(|e| format!("this binary's path: {e}"))?;
+    if !stable_daemon_executable(&exe, &home()?) {
+        return Err("daemon_install_location_unsupported: Move Hagency Hosting.app to /Applications or ~/Applications before enabling login hosting. For a CLI build, install hagency in ~/.local/bin or /usr/local/bin first; temporary, disk-image and development paths cannot be used for a login service.".into());
+    }
     let path = std::env::var("PATH").unwrap_or_default();
     #[cfg(not(all(feature = "test-support", feature = "resource-adoption")))]
     let installation: Option<PathBuf> = None;
@@ -444,12 +454,25 @@ pub fn install_daemon(home_dir: &Path) -> Result<String, String> {
             std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
         }
         let domain = format!("gui/{}", uid());
-        let _ = launchctl(&["bootout", &format!("{domain}/{DAEMON_LABEL}")]);
-        std::fs::write(
-            &plist,
-            daemon_launchd_plist_with_installation(&exe, home_dir, &path, &logs.join("owner-daemon.log"), installation.as_deref()),
-        )
-        .map_err(|e| format!("{}: {e}", plist.display()))?;
+        let label = format!("{domain}/{DAEMON_LABEL}");
+        let _ = launchctl(&["bootout", &label]);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let registered=launchctl(&["print", &label])?.status.success();
+            let drained=match crate::daemon::DaemonHome::open(home_dir) {
+                Ok(held)=>{drop(held);true},
+                Err(crate::daemon::HomeError::AlreadyRunning)=>false,
+                Err(error)=>return Err(error.to_string()),
+            };
+            if !registered && drained { break; }
+            if Instant::now() >= deadline {
+                return Err("daemon_service_stop_pending: The previous hosting service is still stopping. Its saved installation was kept; retry after it has drained.".into());
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        hagency_store::private::replace(&plist,
+            daemon_launchd_plist_with_installation(&exe, home_dir, &path, &logs.join("owner-daemon.log"), installation.as_deref()).as_bytes())
+            .map_err(|e| format!("{}: {e}", plist.display()))?;
         let out = launchctl(&["bootstrap", &domain, &plist.to_string_lossy()])?;
         if !out.status.success() {
             return Err(format!(
@@ -502,6 +525,12 @@ pub fn uninstall_daemon() -> Result<String, String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn daemon_login_install_requires_durable_executable_location() {
+        let user=Path::new("/Users/owner");
+        for path in ["/Applications/Hagency Hosting.app/Contents/Helpers/hagency","/Users/owner/Applications/Hagency Hosting.app/Contents/Helpers/hagency","/Users/owner/.local/bin/hagency"] { assert!(stable_daemon_executable(Path::new(path),user)); }
+        for path in ["/Volumes/Hagency/Hagency Hosting.app/Contents/Helpers/hagency","/private/var/folders/x/AppTranslocation/Hagency.app/hagency","/Users/owner/dev/target/release/hagency"] { assert!(!stable_daemon_executable(Path::new(path),user)); }
+    }
     #[test]
     fn launchd_plist_runs_start_without_opening_and_escapes_paths() {
         let plist = launchd_plist(

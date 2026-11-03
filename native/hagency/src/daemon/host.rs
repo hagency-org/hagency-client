@@ -57,21 +57,18 @@ pub async fn run(
     let store = ControlStore::open(&home.control()).map_err(|e| HostError::Code(e.code))?;
     let runtime = Arc::new(OwnerRuntime::new(home.path().into()).map_err(HostError::Code)?);
     let controller = Controller::new(store, runtime);
-    controller
-        .runtime()
-        .process_revocation()
-        .await
-        .map_err(HostError::Code)?;
-    controller.boot().await;
     let mut server = Server::start(home.path(), controller.clone())?;
+    if super::revocation::load(home.path()).map_err(HostError::Code)?.is_none() {
+        controller.boot().await;
+    }
     tracing::info!("Hagency owner daemon is serving its private control socket");
     let observer = {
         let controller = controller.clone();
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(Duration::from_secs(2)).await;
                 let _ = controller.runtime().process_revocation().await;
                 controller.observe_transition();
+                tokio::time::sleep(Duration::from_secs(2)).await;
             }
         })
     };
@@ -268,17 +265,11 @@ where
         }
         None => None,
     };
-    if let Some(root) = adopt_root {
-        let owner = expected_owner.ok_or(HostError::Code("daemon_handover_owner_required"))?;
-        Enrollment::stage_handover(home, origin, owner, display_name.clone(), root)?;
-    }
-    // Pin prospective custody before OAuth when the Desktop has supplied its
-    // authenticated owner. This makes a concurrent explicit logout durable
-    // even before the browser has returned its independent daemon grant.
-    if adopt_root.is_none() {
-        if let Some(owner) = expected_owner {
-            Enrollment::enroll_fresh(home, origin, owner, display_name.clone())?;
-        }
+    if let Some(owner) = expected_owner {
+        let root=adopt_root.map(Path::to_path_buf)
+            .or_else(||Enrollment::load(home).ok().flatten().filter(|e|e.owner==owner && super::same_origin(&e.origin,origin)).map(|e|e.owner_root))
+            .unwrap_or_else(||super::enrollment::fresh_root(home,origin,owner));
+        Enrollment::prepare(home, origin, owner, display_name.clone(),root)?;
     }
     let directory = home.join(super::MATRIX);
     let custody = tokio::select! {
@@ -286,6 +277,11 @@ where
         _=control.cancelled()=>return Err(HostError::Code("daemon_enrollment_cancelled")),
         result=SdkCustody::reauthenticate(&directory,origin,expected_owner,public_client.as_deref(),open_url)=>result?,
     };
+    custody.fence_on_logout(home);
+    // Claim native custody before publishing a hostable handover. Browser
+    // cancellation can never land a staged root between these steps.
+    control.accept_native().map_err(HostError::Code)?;
+    control.set_custody(custody.clone());
     let owner = custody.owner().to_owned();
     let mut enrollment = match adopt_root {
         Some(root) => Enrollment::stage_handover(home, origin, &owner, display_name, root)?,
@@ -303,8 +299,6 @@ where
         custody.retire();
         return Err(HostError::Code("daemon_logout_pending"));
     }
-    control.accept_native().map_err(HostError::Code)?;
-    control.set_custody(custody.clone());
     let opened = open_for_registration(&enrollment, &custody, control.clone()).await;
     let report = match opened {
         Ok(native) => {
@@ -445,6 +439,24 @@ mod tests {
             .unwrap()
     }
 
+    #[tokio::test]
+    async fn pending_remote_logout_still_serves_status_and_never_opens_hosting() {
+        let temp=short_home();let home=temp.path().join("d");
+        hagency_store::private::directory(&home).unwrap();
+        Enrollment::enroll_fresh(&home,"https://unavailable.invalid/","@owner:unavailable.invalid",None).unwrap();
+        hagency_store::private::directory(&home.join(super::super::MATRIX)).unwrap();
+        hagency_store::private::replace(&home.join(super::super::MATRIX).join("session.json"),b"{}").unwrap();
+        super::super::revocation::request(&home,"https://unavailable.invalid","@owner:unavailable.invalid").unwrap();
+        let shutdown=hagency_matrix::CancellationToken::new();
+        let task={let home=home.clone();let shutdown=shutdown.clone();tokio::spawn(async move{run(&home,shutdown).await})};
+        let hello=tokio::time::timeout(Duration::from_secs(3),async {
+            loop { if let Presence::Running(hello)=probe(&home).await {break hello;} tokio::time::sleep(Duration::from_millis(10)).await; }
+        }).await.unwrap();
+        assert_ne!(hello.hosting,hagency_metering::dashboard::HostingState::Running);
+        assert!(super::super::revocation::load(&home).unwrap().is_some());
+        assert!(!home.join("owners").exists());
+        shutdown.cancel();task.await.unwrap().unwrap();
+    }
     #[tokio::test]
     async fn run_serves_an_unenrolled_daemon_and_detaching_controllers_change_nothing() {
         let temp = short_home();

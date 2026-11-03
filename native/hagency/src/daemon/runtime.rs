@@ -114,9 +114,9 @@ impl OwnerRuntime {
                 enrollment_flow:Mutex::new(super::enrollment_rpc::Flow::default()),
                 logout:tokio::sync::Mutex::new(()),
                 bridge: super::bridge::Bridge::open(&home).map_err(|_| "daemon_bridge_journal_unavailable")?,
-                home,
+                home: home.clone(),
                 enrollment: Mutex::new(enrollment),
-                admission: Arc::new(Admission::default()),
+                admission: Arc::new(Admission::with_fence({ let home = home.clone(); move || super::revocation::load(&home).is_ok_and(|r| r.is_none()) })),
                 phase: Mutex::new((Phase::Idle, None)),
                 hosted: tokio::sync::Mutex::new(None),
                 registered: Mutex::new(None),
@@ -139,9 +139,12 @@ impl OwnerRuntime {
     pub async fn process_revocation(&self)->Result<(), &'static str>{
         let Some(request)=super::revocation::load(&self.inner.home)? else{return Ok(())};
         if let Some(enrolled)=lock(&self.inner.enrollment).as_ref() {
-            if enrolled.owner!=request.owner || enrolled.origin!=request.origin || enrolled.owner_root!=request.root {return Err("daemon_owner_scope_mismatch")}
+            if enrolled.owner!=request.owner || !super::same_origin(&enrolled.origin,&request.origin) || enrolled.owner_root!=request.root {return Err("daemon_owner_scope_mismatch")}
         }
-        self.sign_out().await
+        self.sign_out().await.map_err(|code| {
+            self.inner.set_phase(Phase::Failed, Some(code.into()));
+            code
+        })
     }
     /// Close enrollment admission and wait its original accepted task. A
     /// cancelled shutdown waiter cannot discard the retained native handle.
@@ -360,6 +363,7 @@ impl Inner {
                 AuthError::Unavailable => OpenError::Retry(e.code().into()),
                 _ => OpenError::Terminal(e.code().into()),
             })?;
+        custody.fence_on_logout(&self.home);
         *lock(&self.opening_custody)=Some(custody.clone());
         let epoch = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
         let retired = Arc::new(AtomicBool::new(false));
@@ -826,7 +830,7 @@ impl Runtime for OwnerRuntime {
             if let Call::Status{id}=call{return lock(&self.inner.enrollment_flow).get(&id).map_err(str::to_owned)}
             let Call::Start{origin,owner,display_name,adopt_root}=&call else{unreachable!()};
             if let Some(current)=lock(&self.inner.enrollment).as_ref() {
-                if origin!=&current.origin||owner.as_deref()!=Some(&current.owner)||adopt_root.as_ref().is_some_and(|p|p!=&current.owner_root){return Err("daemon_owner_scope_mismatch".into())}
+                if !super::same_origin(origin,&current.origin)||owner.as_deref()!=Some(&current.owner)||adopt_root.as_ref().is_some_and(|p|p!=&current.owner_root){return Err("daemon_owner_scope_mismatch".into())}
             }
             let (workflow,start)=lock(&self.inner.enrollment_flow).begin(&id,&call).map_err(str::to_owned)?;
             if start {
@@ -834,15 +838,23 @@ impl Runtime for OwnerRuntime {
                 let runtime=Self{inner:self.inner.clone()};let progress=workflow.clone();
                 workflow.spawn(async move {
                     runtime.inner.bridge.revoke_all();
+                    let mut stopped = false;
                     let result=async {
                         runtime.stop().await.map_err(super::host::HostError::Code)?;
+                        stopped = true;
                         let prompt=progress.clone();
                         super::host::enroll_locked_controlled(&runtime.inner.home,&origin,owner.as_deref(),display_name,adopt_root.as_deref(),progress.control.clone(),move |url|async move{lock(&prompt.status).authorization_url=Some(url);Ok(())}).await
                     }.await;
                     match result {
                         Ok(report)=>{lock(&progress.status).result=Some(report);if !progress.control.is_cancelled(){runtime.start();}},
-                        Err(super::host::HostError::Code(code))=>lock(&progress.status).error=Some(code.into()),
-                        Err(_)=>lock(&progress.status).error=Some("daemon_enrollment_failed".into()),
+                        Err(error)=> {
+                            let code = match error { super::host::HostError::Code(code) => code, _ => "daemon_enrollment_failed" };
+                            lock(&progress.status).error=Some(code.into());
+                            runtime.inner.set_phase(Phase::Failed, Some(code.into()));
+                            if stopped && Enrollment::load(&runtime.inner.home).ok().flatten().is_some_and(|e| e.hostable()) && super::revocation::load(&runtime.inner.home).is_ok_and(|r| r.is_none()) {
+                                runtime.start();
+                            }
+                        }
                     }
                 });
             }
@@ -850,7 +862,7 @@ impl Runtime for OwnerRuntime {
         })
     }
 
-    fn bridge(&self, id:String, call:super::bridge::Call) -> BoxFuture<'_,Result<serde_json::Value,crate::native_owner::NativeError>> {
+    fn bridge(&self, id:String, call:super::bridge::Call) -> BoxFuture<'_,Result<serde_json::Value,super::bridge::Failure>> {
         Box::pin(async move {
             let scope = self.owner().ok_or_else(||super::bridge::error(401,"daemon_enrollment_required"))?;
             let generation = self.generation();
@@ -868,7 +880,7 @@ impl Runtime for OwnerRuntime {
             let root=lock(&self.inner.enrollment).as_ref().ok_or_else(||super::bridge::error(401,"daemon_enrollment_required"))?.owner_root.clone();
             #[cfg(feature="resource-adoption")]
             let activate=matches!(call,super::bridge::Call::OwnerAccess{operation:super::bridge::OwnerOperation::ConfirmDeviceSetup,..});
-            let result=self.inner.bridge.handle(&id,&scope.user_id,&scope.server,generation,native,&root,#[cfg(feature="resource-adoption")] shared,call).await;
+            let result=self.inner.bridge.handle_recorded(&id,&scope.user_id,&scope.server,generation,native,&root,#[cfg(feature="resource-adoption")] shared,call).await;
             #[cfg(feature="resource-adoption")]
             if activate && result.is_ok() {
                 self.inner.bridge.revoke_all();

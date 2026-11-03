@@ -192,12 +192,45 @@ impl Bridge {
         >,
         call: Call,
     ) -> Result<Value, NativeError> {
+        let recorded=AtomicBool::new(false);
+        self.handle_inner(request_id,owner,origin,generation,native,owner_root,#[cfg(feature="resource-adoption")] shared,call,&recorded).await
+    }
+    pub async fn handle_recorded(
+        &self,
+        request_id: &str,
+        owner: &str,
+        origin: &str,
+        generation: u64,
+        native: Option<NativeOwner>,
+        owner_root: &Path,
+        #[cfg(feature = "resource-adoption")] shared: Option<
+            Arc<crate::native_owner::AdoptedSharedExecutor>,
+        >,
+        call: Call,
+    ) -> Result<Value, Failure> {
+        let recorded=AtomicBool::new(false);
+        self.handle_inner(request_id,owner,origin,generation,native,owner_root,#[cfg(feature="resource-adoption")] shared,call,&recorded).await.map_err(|error|Failure{status:error.status,code:error.code,terminal:recorded.load(Ordering::Acquire)})
+    }
+    async fn handle_inner(
+        &self,
+        request_id: &str,
+        owner: &str,
+        origin: &str,
+        generation: u64,
+        native: Option<NativeOwner>,
+        owner_root: &Path,
+        #[cfg(feature = "resource-adoption")] shared: Option<
+            Arc<crate::native_owner::AdoptedSharedExecutor>,
+        >,
+        call: Call,
+        receipt_recorded: &AtomicBool,
+    ) -> Result<Value, NativeError> {
         match call {
             Call::Attach {
                 origin: expected,
                 epoch,
             } => {
-                if expected != origin || epoch == 0 {
+                if !super::super::same_origin(&expected, &origin) || epoch == 0 {
                     return Err(error(401, "management_scope_changed"));
                 }
                 let mut state = self
@@ -322,12 +355,20 @@ impl Bridge {
                         super::client::fingerprint(owner, &package.receipt_scope()?, &call)?;
                     match self.journal.admit(request_id, &fingerprint)? {
                         Admission::Pending => return Err(error(503, "daemon_command_pending")),
-                        Admission::Result(result) => return result.map_err(Failure::native),
+                        Admission::RecoveryRequired => {
+                            let Some(result) = recover_native_receipt(&self.journal, request_id, &manager, operation, &arguments).await? else {
+                                return Err(error(409, "daemon_command_recovery_required"));
+                            };
+                            self.journal.finish(request_id, &result)?;
+                    receipt_recorded.store(super::terminal_receipt(&result),Ordering::Release);
+                            return result.map_err(Failure::native);
+                        },
+                        Admission::Result(result) => { receipt_recorded.store(true,Ordering::Release); return result.map_err(Failure::native); },
                         Admission::New => {}
                     }
                 }
                 let result = self
-                    .invoke(&management, &manager, operation, arguments)
+                    .invoke(request_id, &management, &manager, operation, arguments.clone())
                     .await;
                 let result = match result {
                     Ok(value)
@@ -340,8 +381,16 @@ impl Bridge {
                     other => other,
                 };
                 if mutation {
-                    let recorded = result.map_err(Failure::from);
+                    let mut recorded = result.map_err(Failure::from);
+                    if recorded.as_ref().is_err_and(|error| !error.terminal) {
+                        // A bridge error can follow an applied effect. Settle it
+                        // only with this exact native operation, ID and payload.
+                        if let Ok(Some(receipt)) = matching_native_receipt(&manager, operation, &arguments).await {
+                            recorded = receipt;
+                        }
+                    }
                     self.journal.finish(request_id, &recorded)?;
+                    receipt_recorded.store(super::terminal_receipt(&recorded),Ordering::Release);
                     return recorded.map_err(Failure::native);
                 }
                 self.validate(&controller, generation)?;
@@ -367,7 +416,8 @@ impl Bridge {
                 if mutation {
                     match self.journal.admit(request_id, &fingerprint)? {
                         Admission::Pending => return Err(error(503, "daemon_command_pending")),
-                        Admission::Result(r) => return r.map_err(Failure::native),
+                        Admission::RecoveryRequired => return Err(error(409, "daemon_command_recovery_required")),
+                        Admission::Result(r) => { receipt_recorded.store(true,Ordering::Release); return r.map_err(Failure::native); },
                         Admission::New => {}
                     }
                 }
@@ -384,6 +434,7 @@ impl Bridge {
                     .map_err(Failure::from);
                 if mutation {
                     self.journal.finish(request_id, &result)?;
+                    receipt_recorded.store(super::terminal_receipt(&result),Ordering::Release);
                 }
                 result.map_err(Failure::native)
             }
@@ -412,7 +463,8 @@ impl Bridge {
                         &super::client::fingerprint(owner, &package.receipt_scope()?, &call)?,
                     )? {
                         Admission::Pending => return Err(error(503, "daemon_command_pending")),
-                        Admission::Result(result) => return result.map_err(Failure::native),
+                        Admission::RecoveryRequired => return Err(error(409, "daemon_command_recovery_required")),
+                        Admission::Result(result) => { receipt_recorded.store(true,Ordering::Release); return result.map_err(Failure::native); },
                         Admission::New => {}
                     }
                 }
@@ -434,6 +486,7 @@ impl Bridge {
                 if operation.is_mutation() {
                     let result = result.map_err(Failure::from);
                     self.journal.finish(request_id, &result)?;
+                    receipt_recorded.store(super::terminal_receipt(&result),Ordering::Release);
                     return result.map_err(Failure::native);
                 }
                 self.validate(&controller, generation)?;
@@ -453,6 +506,7 @@ impl Bridge {
     }
     fn invoke<'a>(
         &'a self,
+        request_id: &'a str,
         management: &'a str,
         manager: &'a Arc<NativeManagement>,
         operation: Operation,
@@ -461,7 +515,11 @@ impl Bridge {
         macro_rules! deferred { ($($body:tt)*) => { defer(move || async move { $($body)* }) }; }
         match operation {
             Operation::project_setup => deferred! {
-                encode(super::project_setup::dispatch_setup(manager.clone(), decode(arguments)?).await?)
+                let call = decode(arguments)?;
+                if let super::project_setup::SetupOperation::Resume { project } = call {
+                    let transport = crate::native_owner::ProjectSetupTransport::new(manager.clone());
+                    encode(transport.resume_begin_pinned(project, |id| self.journal.pin_native(request_id,&id)).await?)
+                } else { encode(super::project_setup::dispatch_setup(manager.clone(), call).await?) }
             },
             Operation::account_models => deferred! {
                 let (input,): (AccountModelQuery,) = decode(arguments)?;
@@ -1041,5 +1099,91 @@ mod lease_tests {
         );
         assert!(bridge.validate(&id, 1).is_err());
         assert!(!live.load(Ordering::Acquire));
+    }
+}
+
+/// Read original native journal receipts only. Missing receipts never prove
+/// that an effect did not happen (and never authorize a generic retry).
+async fn recover_native_receipt(journal: &Journal, request_id: &str, manager: &Arc<NativeManagement>, operation: Operation, arguments: &Value) -> Result<Option<Result<Value, Failure>>, NativeError> {
+    if operation == Operation::project_setup {
+        let transport = crate::native_owner::ProjectSetupTransport::new(manager.clone());
+        let terminal=AtomicBool::new(false);
+        let result = match decode(arguments.clone())? {
+            super::project_setup::SetupOperation::Resume { project } => match journal.native_pin(request_id)? {
+                None => return Ok(None),
+                Some(Some(id)) => transport.retry_command_terminal(id,&terminal).await,
+                Some(None) => transport.resume_begin_pinned(project, |id| journal.pin_native(request_id,&id)).await,
+            },
+            super::project_setup::SetupOperation::Retry { command } => transport.retry_command_terminal(command,&terminal).await,
+            super::project_setup::SetupOperation::Acknowledge { command } => transport.acknowledge_failure(command).await,
+            _ => return Ok(None),
+        };
+        return Ok(Some(result.and_then(encode).map_err(|error| {let mut failure=Failure::from(error);failure.terminal|=terminal.load(Ordering::Acquire);failure})));
+    }
+    if operation == Operation::acknowledge_command {
+        let (id,): (String,) = decode(arguments.clone())?;
+        // Exact-ID acknowledgment is reduction-only and natively idempotent.
+        return Ok(Some(manager.acknowledge_command(id).await.map(|_| Value::Null).map_err(Failure::from)));
+    }
+    if operation == Operation::retry_saved_command {
+        let (id,): (String,) = decode(arguments.clone())?;
+        let Some(saved) = manager.original_command_receipt(id).await? else { return Ok(None) };
+        return Ok(saved.reply.map(|reply| match reply {
+            service::IntentReply::Success(value) => Ok(serde_json::json!({"operation":saved.operation,"data":value})),
+            service::IntentReply::Failure { status, code } => Err(Failure { status, code, terminal:true }),
+        }));
+    }
+    matching_native_receipt(manager, operation, arguments).await
+}
+
+fn original_intent(operation: Operation, arguments: &Value) -> Option<(String, service::IntentOperation, Value)> {
+    let input = arguments.as_array()?.first()?.clone();
+    let id = input.get("commandId").or_else(|| input.get("command_id"))?.as_str()?.to_owned();
+    let kind = if operation == Operation::central {
+        input.get("operation")?.clone()
+    } else if operation == Operation::retire_resource_approval_binding {
+        Value::String("retire_approval_binding".into())
+    } else {
+        serde_json::to_value(operation).ok()?
+    };
+    Some((id, serde_json::from_value(kind).ok()?, input))
+}
+fn matching_intent_reply(operation: Operation, arguments: &Value, saved: &service::PendingIntent) -> Option<service::IntentReply> {
+    let (id, kind, input) = original_intent(operation, arguments)?;
+    (saved.command_id == id && saved.operation == kind && saved.input == input).then(|| saved.reply.clone()).flatten()
+}
+async fn matching_native_receipt(manager: &Arc<NativeManagement>, operation: Operation, arguments: &Value) -> Result<Option<Result<Value, Failure>>, NativeError> {
+    let Some((id, _, _)) = original_intent(operation, arguments) else { return Ok(None) };
+    let Some(saved) = manager.original_command_receipt(id.clone()).await? else { return Ok(None) };
+    Ok(match matching_intent_reply(operation, arguments, &saved) {
+        Some(service::IntentReply::Failure { status, code }) => Some(Err(Failure { status, code, terminal: true })),
+        Some(service::IntentReply::Success(_)) => {
+            // Reuse the native original-command recovery path: it rechecks
+            // current server role visibility before returning a success.
+            let recovered = manager.retry_saved_command(id).await?;
+            Some(Ok(recovered.get("data").cloned().ok_or_else(|| error(503, "management_saved_result_invalid"))?))
+        },
+        None => None,
+    })
+}
+
+#[cfg(test)]
+mod receipt_matching_tests {
+    use super::*;
+    #[test]
+    fn native_refusal_settles_only_matching_original_payload_and_releases_bridge_id() {
+        let args=serde_json::json!([{"commandId":"rename-1","resourceId":"resource-1","name":"new","expectedRevision":3}]);
+        let mut saved:service::PendingIntent=serde_json::from_value(serde_json::json!({"commandId":"rename-1","operation":"rename_resource","input":args[0],"reply":{"kind":"failure","data":{"status":409,"code":"management_resource_name_changed"}}})).unwrap();
+        let reply=matching_intent_reply(Operation::rename_resource,&args,&saved).unwrap();
+        let service::IntentReply::Failure{status,code}=reply else {panic!("expected native refusal")};
+        let result=Err(Failure{status,code,terminal:true});
+        let temp=tempfile::tempdir().unwrap();let journal=Journal::open(&temp.path().join("journal")).unwrap();
+        let id=journal.pending_for("owner","rename").unwrap();assert!(matches!(journal.admit(&id,"scope").unwrap(),Admission::New));
+        journal.finish(&id,&result).unwrap();assert!(matches!(journal.admit(&id,"scope").unwrap(),Admission::Result(Err(Failure{terminal:true,..}))));
+        if super::super::terminal_receipt(&result) {journal.clear("rename",&id).unwrap();}
+        assert_ne!(journal.pending_for("owner","rename").unwrap(),id);
+        saved.command_id="different".into();assert!(matching_intent_reply(Operation::rename_resource,&args,&saved).is_none());
+        saved.command_id="rename-1".into();saved.input["name"]=Value::String("other".into());assert!(matching_intent_reply(Operation::rename_resource,&args,&saved).is_none());
+        saved.input=args[0].clone();assert!(matching_intent_reply(Operation::configure_resource,&args,&saved).is_none());
     }
 }
