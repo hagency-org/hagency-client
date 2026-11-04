@@ -138,6 +138,38 @@ async fn prepare(a: &Active, w: &SharedWorkItem) -> ManagedCallHistory {
         .await
         .unwrap()
 }
+
+#[tokio::test]
+#[ignore = "requires HAGENCY_TEST_RUNTIME_PROBE offline supervised child"]
+async fn shared_successor_call_failed_start_keeps_zero_and_unknown_distinct_after_retirement() {
+    for dispatched in [false, true] {
+        let mut a = Box::pin(active()).await;
+        let w = a.work("failed_start");
+        let h = prepare(&a, &w).await;
+        let attempt = a.f.registry.begin_shared_start(a.authority(), w.clone(), h.call_id).await.unwrap();
+        let custody = a.f.registry.issue_shared_call(attempt, SharedWorkStart {
+            work: w.clone(), work_digest: digest(&w), activity_epoch: 1, newly_started: true,
+        }).await.unwrap();
+        a.process.start_shared_text_thread().await.unwrap();
+        if dispatched { custody.start_turn(&mut a.process).await.unwrap(); }
+        // Cleanup owns the original process evidence even after management
+        // authority has retired. It can never authorize another model call.
+        a.f.profile.retire();
+        a.f.registry.0.closed.store(true, Ordering::Release);
+        assert!(custody.check().is_err());
+        let receipt = custody.finish_failed_start().await.unwrap();
+        assert_eq!(receipt.known_consumed_tokens, 0);
+        assert_eq!(receipt.usage_complete, !dispatched);
+        assert_eq!(receipt.retained_tokens, Some(if dispatched {110} else {0}));
+        assert_eq!(receipt.state, if dispatched {"unknown"} else {"failed"});
+        assert!(a.process.start_shared_text_turn(w.body.clone()).await.is_err());
+        let stop = a.sink.record(a.process.stop_shared_text_observation()).await.unwrap();
+        assert_eq!(stop.state, "stopped");
+        // Reset only the fixture's close flag so shutdown joins its writer.
+        a.f.registry.0.closed.store(false, Ordering::Release);
+        a.f.registry.shutdown().await.unwrap();
+    }
+}
 #[tokio::test]
 #[ignore = "requires HAGENCY_TEST_RUNTIME_PROBE offline supervised child"]
 async fn shared_successor_call_holds_old_unknown_and_captures_only_exact_new_input() {

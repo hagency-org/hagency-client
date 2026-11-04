@@ -50,6 +50,7 @@ pub(crate) struct State {
     starts: usize,
     activity_epoch: u64,
     refuse_renewal: bool,
+    delay_start_reply: bool,
     process_writes: usize,
     work_writes: usize,
     lose_start: bool,
@@ -64,6 +65,11 @@ pub(crate) struct State {
     stopped_before_reply: bool,
 }
 pub(crate) fn idle_boundary_delay(path: &str, s: &State) -> Option<Duration> {
+    // Central admission can consume the renewal margin while the provider
+    // has not received turn/start yet.
+    if s.delay_start_reply && path.ends_with("/work/start") {
+        return Some(Duration::from_secs(6));
+    }
     if !s.hold_idle_boundary || !path.ends_with("/shared-execution/work/poll") {
         return None;
     }
@@ -842,6 +848,43 @@ async fn native_shared_interrupted_call_start_ack_survives_activity_renewal_with
     let methods=std::fs::read_to_string(f._root.path().join("shared-probe/methods")).unwrap();
     assert_eq!(methods.lines().filter(|m|*m=="turn/start").count(),1);
     assert_eq!(rows(&f,"owner_managed_budget_deltas"),0);
+    f.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires explicit offline supervised runtime probe"]
+async fn native_shared_interrupted_call_slow_admission_does_not_strand_unused_budget() {
+    let (f,t,_)=fixture().await;
+    f.state.lock().unwrap().shared.delay_start_reply=true;
+    t.poll_fixture(&f.registry,launch(&f,"text-small-usage")).await.unwrap();
+    stopped(&f).await;
+    let state=f.state.lock().unwrap();
+    assert_eq!(state.shared.starts,1);
+    assert!(state.shared.receipts.values().any(|r|r.state=="completed" && r.usage_complete));
+    drop(state);
+    let methods=std::fs::read_to_string(f._root.path().join("shared-probe/methods")).unwrap();
+    assert_eq!(methods.lines().filter(|m|*m=="turn/start").count(),1);
+    let db=rusqlite::Connection::open(f._root.path().join("registry/domain.sqlite3")).unwrap();
+    let complete:bool=db.query_row("SELECT usage_complete AND known_consumed_tokens < reserved_tokens FROM owner_managed_calls",[],|r|r.get(0)).unwrap();
+    assert!(complete,"unused allowance is released only after the real provider receipt");
+    drop(db);
+    f.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires explicit offline supervised runtime probe"]
+async fn native_shared_interrupted_call_failed_renewal_during_start_keeps_ack_and_usage() {
+    let (f,t,_)=fixture().await;
+    f.state.lock().unwrap().shared.refuse_renewal=true;
+    t.poll_fixture(&f.registry,launch(&f,"text-start-interrupt-usage")).await.unwrap();
+    stopped(&f).await;
+    let state=f.state.lock().unwrap();
+    assert_eq!(state.shared.starts,1);
+    assert!(state.shared.receipts.values().any(|r|r.state=="failed" && r.usage_complete && r.known_consumed_tokens==27 && r.retained_tokens==Some(27)));
+    drop(state);
+    let methods=std::fs::read_to_string(f._root.path().join("shared-probe/methods")).unwrap();
+    assert_eq!(methods.lines().filter(|m|*m=="turn/start").count(),1);
+    assert_eq!(methods.lines().filter(|m|*m=="turn/interrupt").count(),1);
     f.stop().await;
 }
 

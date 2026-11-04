@@ -136,6 +136,22 @@ impl SharedTextProcessSource {
             .lock()
             .is_ok_and(|s| s.turn && s.input_digest.as_deref() == Some(digest))
     }
+    pub fn turn_dispatch_started(&self) -> bool {
+        // An unavailable state is uncertain, never proof that nothing ran.
+        self.state.lock().map_or(true, |s| s.input_digest.is_some())
+    }
+    /// Atomically fence a retained process that never entered turn dispatch.
+    /// This is original in-memory evidence, never an inference from missing
+    /// usage, an exit code, or a reconstructed process after restart.
+    pub fn seal_unstarted_turn(&self) -> bool {
+        let Ok(mut state) = self.state.lock() else { return false; };
+        if state.turn || state.custody.is_none() || !state.qualified {
+            return false;
+        }
+        state.turn = true;
+        self.retire();
+        true
+    }
     pub(super) fn begin_thread(&self) -> Result<(), Error> {
         let mut s = self.state.lock().map_err(|_| Error::State)?;
         if !self.is_live()

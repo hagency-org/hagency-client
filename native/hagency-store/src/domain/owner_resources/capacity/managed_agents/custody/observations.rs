@@ -340,6 +340,36 @@ pub(super) fn usage(
     save_observation(db, child, &result, &evidence)?;
     Ok(result)
 }
+
+/// Called only after the retained runtime atomically sealed its unstarted
+/// turn. Missing provider observations alone can never reach this path.
+pub(super) fn not_dispatched(db: &Connection, scope: &Scope) -> Result<ManagedObservationReceipt, Error> {
+    check_scope(db, scope, "usage")?;
+    let id = format!("{}_not_dispatched", scope.target);
+    let proof = json!({"source":"native_not_dispatched","issueRevision":scope.issued_revision,"dispatch":"sealed_before_turn"});
+    let (digest, evidence) = evidence("usage", &scope.target, &proof)?;
+    if let Some(old) = replay(db, &id, &scope.child, &scope.target, "usage", &digest)? {
+        return Ok(old);
+    }
+    let h = calls::history(db, &scope.child, &scope.target)?;
+    let observed: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM owner_managed_observations WHERE target_id=?1)",
+        [&scope.target], |r| r.get(0),
+    )?;
+    if h.state != "issued" || h.known_consumed_tokens != 0 || h.usage_complete || observed {
+        return Err(Error::Conflict);
+    }
+    db.execute("UPDATE owner_managed_calls SET state='settled',usage_complete=1,original_result_digest=?2 WHERE id=?1", params![scope.target,digest])?;
+    let grant:String=db.query_row("SELECT COALESCE(a.pool_grant_id,p.grant_id) FROM owner_managed_agents a LEFT JOIN owner_project_reservations p ON p.id=a.project_reservation_id WHERE a.id=?1",[&scope.child],|r|r.get(0))?;
+    grant_floor(db, &grant)?;
+    let receipt = ManagedObservationReceipt {
+        observation_id: id, target_id: scope.target.clone(), kind: "usage".into(),
+        state: "settled".into(), known_consumed_tokens: 0, usage_complete: true,
+        ledger_revision: revision(db)?, content_digest: digest,
+    };
+    save_observation(db, &scope.child, &receipt, &evidence)?;
+    Ok(receipt)
+}
 impl OwnerResourceRegistry {
     /// Exact immutable observation recovery. This neither applies evidence nor
     /// reconstructs a provision/call custody token from stored history.

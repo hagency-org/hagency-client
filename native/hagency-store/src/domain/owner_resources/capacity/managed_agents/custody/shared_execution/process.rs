@@ -84,7 +84,7 @@ impl SharedProcessSink {
         let source = self.source.clone();
         let registry = c.scope.registry.clone();
         let result=registry.store.call(32*1024,move|db|{
-   if c.scope.registry.closed.load(Ordering::Acquire){return Err(Error::LocalAuthority)}
+   if qualified && c.scope.registry.closed.load(Ordering::Acquire){return Err(Error::LocalAuthority)}
    let tx=db.db.transaction_with_behavior(TransactionBehavior::Immediate)?;bound(&tx,&c)?;
    if qualified {demand::require_no_owner_stop(&tx,&c.enrollment.profile.digest,&c.scope.child)?;}
    if let Some(payload)=tx.query_row("SELECT payload FROM owner_shared_process_observations WHERE id=?1",[&id],|r|r.get::<_,String>(0)).optional()?{if qualified{c.check()?;if !source.is_live(){return Err(Error::LocalAuthority)}}return Ok(serde_json::from_str(&payload)?)}

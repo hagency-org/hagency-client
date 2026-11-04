@@ -95,7 +95,7 @@ impl SharedBudgetAttemptProcessSink {
         let source = self.source.clone();
         let registry = custody.registry.clone();
         let value=registry.store.call(32*1024,move|db|{
-            if custody.registry.closed.load(Ordering::Acquire) {return Err(Error::LocalAuthority)}
+            if qualified && custody.registry.closed.load(Ordering::Acquire) {return Err(Error::LocalAuthority)}
             let tx=db.db.transaction_with_behavior(TransactionBehavior::Immediate)?;
             bound(&tx,&custody)?;
             if qualified {

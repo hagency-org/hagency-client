@@ -21,6 +21,7 @@ pub use attempt::*;
 pub use attempt_fence::SharedAttemptFence;
 pub use attempt_process::SharedAttemptProcessSink;
 mod capture;
+mod start_failure;
 mod claim;
 mod initial_unstarted;
 mod process;

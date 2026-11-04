@@ -18,6 +18,21 @@ pub struct SharedCallSink {
 }
 impl SharedCallCustody {
     pub fn bind_turn(self, process: &OwnedSession) -> Result<SharedCallSink, Error> {
+        let source = self.capture_source(process)?;
+        Ok(self.capture(source))
+    }
+    /// Keep a durable call outcome even if the start acknowledgement could not
+    /// be attached to an observation source. This grants no retry authority.
+    pub async fn bind_started_turn(self, process: &OwnedSession) -> Result<SharedCallSink, Error> {
+        match self.capture_source(process) {
+            Ok(source) => Ok(self.capture(source)),
+            Err(error) => {
+                self.finish_failed_start().await?;
+                Err(error)
+            }
+        }
+    }
+    fn capture_source(&self, process: &OwnedSession) -> Result<ObservationSource, Error> {
         self.check_capture(process)?;
         let source = process
             .observation_source()
@@ -33,7 +48,10 @@ impl SharedCallCustody {
         {
             return Err(Error::LocalAuthority);
         }
-        Ok(SharedCallSink {
+        Ok(source)
+    }
+    fn capture(self, source: ObservationSource) -> SharedCallSink {
+        SharedCallSink {
             custody: self,
             source,
             sequence: 0,
@@ -43,7 +61,7 @@ impl SharedCallCustody {
             output: String::new(),
             output_overflow: false,
             last_text_item: None,
-        })
+        }
     }
 }
 impl SharedCallSink {
@@ -150,12 +168,10 @@ impl SharedCallSink {
         let work = c.work.clone();
         let process = c.process_digest()?;
         let state = state.to_owned();
-        let retained_registry = registry.clone();
         registry
             .store
             .call(64 * 1024, move |db| {
-                if retained_registry.closed.load(Ordering::Acquire)
-                    || original_call_changed(&db.db, &child, &binding, issued, &call)?
+                if original_call_changed(&db.db, &child, &binding, issued, &call)?
                 {
                     return Err(Error::LocalAuthority);
                 }

@@ -161,11 +161,50 @@ async fn prepare_while_active<T>(
         tokio::select! { biased;
             _ = cancel.changed() => return Err(failure(409, "shared_execution_closed")),
             _ = tokio::time::sleep_until(a.until.into()) => return Err(failure(409, "shared_execution_expired")),
+            // Poll once under the proof that admitted this operation before
+            // renewing its epoch. The provider acknowledgement may then wait
+            // across later renewals without rechecking that superseded proof.
+            result = &mut preparation => return result,
             _ = tokio::time::sleep_until(wake.into()) => {
                 guarded(cancel, a.until, || maybe_renew(io,r,sink,control,a)).await?;
             }
-            result = &mut preparation => return result,
         }
+    }
+}
+// A start acknowledgement belongs to the same pending dispatch. On stop or
+// renewal failure, retain it briefly so final usage can still attach and drain.
+#[allow(clippy::too_many_arguments)]
+async fn start_while_active(
+    io: &Io, r: &OwnerResourceRegistry, sink: &Arc<SharedProcessSink>,
+    control: &SharedTextActivityControl, a: &mut Activity,
+    cancel: &mut watch::Receiver<bool>,
+    start: impl std::future::Future<Output = Result<(), NativeError>>,
+) -> Result<Option<NativeError>, NativeError> {
+    if super::stop_capture::requested(cancel) {
+        return Err(failure(409, "shared_execution_closed"));
+    }
+    tokio::pin!(start);
+    loop {
+        let wake = a.until.checked_sub(Duration::from_secs(20)).unwrap_or_else(Instant::now);
+        let error = tokio::select! { biased;
+            _ = cancel.changed() => failure(409, "shared_execution_closed"),
+            _ = tokio::time::sleep_until(a.until.into()) => failure(409, "shared_execution_expired"),
+            // Begin under the exact admitted proof before advancing its epoch.
+            result = &mut start => return result.map(|()| None),
+            _ = tokio::time::sleep_until(wake.into()) => {
+                match guarded(cancel,a.until,|| maybe_renew(io,r,sink,control,a)).await {
+                    Ok(()) => continue,
+                    Err(error) => error,
+                }
+            }
+        };
+        if sink.source().turn_dispatch_started() && Instant::now() < a.until {
+            let deadline = a.until.min(Instant::now()+Duration::from_secs(3));
+            if let Ok(Ok(())) = tokio::time::timeout_at(deadline.into(), start.as_mut()).await {
+                return Ok(Some(error));
+            }
+        }
+        return Err(error);
     }
 }
 #[allow(clippy::too_many_arguments)]
@@ -386,18 +425,28 @@ async fn work_loop(
     let (b,p)=proof(io,r,sink,a).await?;
     let attempt=if let Some(input)=&input {r.begin_shared_input_start(p,work.clone(),call.call_id,input.clone()).await} else {r.begin_shared_start(p,work.clone(),call.call_id).await}.map_err(store)?;
     let issued=guarded(cancel,a.until,|| super::context_io::start(&b,r,attempt,&work,input.as_ref(),a.lease.authority.clone(),a.until)).await?;
-    prepare_while_active(io,r,sink,control,a,cancel,async {
-        io.check(sink.command()).await?;
-        issued.check().map_err(store)?;
-        issued.start_turn(process).await.map_err(store)?;
-        Ok(())
-    })
-    .await?;
+    // Central admission and the original custody already checked current
+    // authority. Do not insert another network round trip before the effect
+    // boundary; start_turn checks that exact proof synchronously before send.
+    let start_stop = match start_while_active(io,r,sink,control,a,cancel,async {
+        issued.start_turn(process).await.map_err(store)
+    }).await {
+        Ok(stop) => stop,
+        Err(error) => {
+            match issued.finish_failed_start().await {
+                Ok(receipt) => {
+                    let _ = tokio::time::timeout(Duration::from_secs(1), report_work(io,r,sink.command(),&work,&receipt)).await;
+                }
+                Err(record_error) => tracing::error!(?record_error, work_id=%work.id, "Failed to persist original call start failure"),
+            }
+            return Err(error);
+        }
+    };
     turn.started();
-    let mut capture = issued.bind_turn(process).map_err(store)?;
+    let mut capture = issued.bind_started_turn(process).await.map_err(store)?;
     let mut usage = telemetry.shared_turn(sink.command(), &work, &call_id, process);
     let terminal_result: Result<SharedWorkReceipt, NativeError> = async {
-      let mut stop_reason = None;
+      let mut stop_reason = start_stop;
       let terminal = loop {
         if let Some(error) = stop_reason.take() { return Err(error); }
         if super::stop_capture::requested(cancel) {
