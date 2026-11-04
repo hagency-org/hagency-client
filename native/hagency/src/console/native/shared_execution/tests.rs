@@ -49,6 +49,7 @@ pub(crate) struct State {
     receipts: BTreeMap<String, SharedWorkReceipt>,
     starts: usize,
     activity_epoch: u64,
+    refuse_renewal: bool,
     process_writes: usize,
     work_writes: usize,
     lose_start: bool,
@@ -188,6 +189,7 @@ pub(crate) fn management(path: &str, body: &Value, s: &mut super::State) -> Opti
         (digest(c).unwrap(),c.command_id.clone(),s.shared.budget_attempts.processes.values().find(|r|r.state=="qualified").and_then(|r|r.process_digest.clone()))
     }else{(h,runtime_id,process_digest)};
     if path.ends_with("/activity/renew") {
+        if s.shared.refuse_renewal { return Some(json!({"fixtureStatus":503,"error":"fixture_unavailable"})); }
         assert_eq!(body["authority"]["epoch"], s.shared.activity_epoch);
         s.shared.activity_epoch += 1;
         return Some(
@@ -783,10 +785,20 @@ async fn native_shared_interrupted_call_without_final_usage_preserves_unknown_an
     f.stop().await;
 }
 
+async fn refuse_renewal_and_wait_for_usage(f: &Fixture) {
+    f.state.lock().unwrap().shared.refuse_renewal = true;
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            if f.state.lock().unwrap().shared.receipts.values().any(|r|r.usage_complete && r.known_consumed_tokens==27) { break; }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }).await.expect("renewal refusal collected final usage without owner cancellation");
+}
+
 #[tokio::test]
 #[ignore = "requires explicit offline supervised runtime probe"]
 async fn native_shared_interrupted_call_collects_final_usage_before_stopping_original_and_successor() {
-    for successor in [false, true] {
+    for (successor, refused_renewal) in [(false,false),(true,false),(false,true),(true,true)] {
         let (f, t, c) = if successor { attempts::predecessor().await } else { fixture().await };
         if successor {
             attempts::prepare_lost_start(&f, &t, &c).await;
@@ -795,8 +807,9 @@ async fn native_shared_interrupted_call_collects_final_usage_before_stopping_ori
             t.poll_fixture(&f.registry, launch(&f, "text-interrupt-usage")).await.unwrap();
         }
         method_seen(&f, "turn/start").await;
-        // Stop the real retained process through the same owner lifecycle as
-        // an app restart. Provider receipts, never the stop alone, release credit.
+        // A denied renewal must also stop cooperatively within the old lease.
+        // Provider receipts, never the stop alone, release credit.
+        if refused_renewal { refuse_renewal_and_wait_for_usage(&f).await; }
         f.owner.suspend().await.unwrap();
         let db=rusqlite::Connection::open(f._root.path().join("registry/domain.sqlite3")).unwrap();
         let row:(String,u64,u64,bool)=db.query_row("SELECT state,reserved_tokens,known_consumed_tokens,usage_complete FROM owner_managed_calls",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();

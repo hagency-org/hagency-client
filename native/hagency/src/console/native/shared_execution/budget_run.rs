@@ -415,7 +415,9 @@ async fn work_loop(
     let mut approvals=super::approvals::Approvals::default();
     if approvals_enabled {super::approvals::enable(process)?;}
     let terminal_result: Result<SharedWorkReceipt, NativeError> = async {
+      let mut stop_reason = None;
       let terminal = loop {
+        if let Some(error) = stop_reason.take() { return Err(error); }
         if super::stop_capture::requested(cancel) {
             return Err(failure(409, "shared_execution_closed"));
         }
@@ -435,7 +437,10 @@ async fn work_loop(
                     event=&mut read=>break event.map_err(|error|{tracing::warn!(?error,"Shared Agent event stream ended before completion");failure(409,"shared_execution_event_unknown")}),
                 };
                 if let Err(e) = event {
-                    if super::stop_capture::requested(cancel) {
+                    if Instant::now() < a.until {
+                        // Finish the retained read before cleanup, even when
+                        // renewal failed. Preserve any last usage event first.
+                        stop_reason = Some(e);
                         break read.as_mut().await.map_err(|_|failure(409,"shared_execution_event_unknown"));
                     }
                     break Err(e);
@@ -447,7 +452,7 @@ async fn work_loop(
             Err(e) => return Err(e),
         };
         let Some(event)=event else {
-            if super::stop_capture::requested(cancel) || !approvals_enabled { continue; }
+            if stop_reason.is_some() || super::stop_capture::requested(cancel) || !approvals_enabled { continue; }
             guarded(cancel,a.until,|| maybe_renew(io,r,sink,control,a)).await?;
             let b=io.bound().await?;
             if let Some(receipt)=guarded(cancel,a.until,|| approvals.poll(io,&b,&work,&a.lease.authority,a.until,process,&mut capture,&mut usage)).await? {break receipt;}
@@ -473,6 +478,7 @@ async fn work_loop(
         if ended {
             break recorded.ok_or_else(invalid)?;
         }
+        if stop_reason.is_some() { continue; }
         if let Some(request)=approval {
             let b=io.bound().await?;
             guarded(cancel,a.until,|| approvals.register(io,&b,&work,&a.lease.authority,a.until,process,request)).await?;

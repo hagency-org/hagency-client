@@ -169,9 +169,11 @@ async fn wait_stopped(f:&Fixture){
 #[tokio::test]
 #[ignore="requires explicitly built offline supervised probe"]
 async fn native_shared_interrupted_call_budget_successor_collects_final_usage(){
+  for refused_renewal in [false,true] {
     let(f,t,_)=prepared().await;
     t.poll_budget_successor_fixture(&f.registry,launch(&f,"text-interrupt-usage")).await.unwrap();
     method_seen(&f,"turn/start").await;
+    if refused_renewal { refuse_renewal_and_wait_for_usage(&f).await; }
     f.owner.suspend().await.unwrap();
     let db=rusqlite::Connection::open(f._root.path().join("registry/domain.sqlite3")).unwrap();
     let row:(String,u64,u64,bool)=db.query_row("SELECT state,reserved_tokens,known_consumed_tokens,usage_complete FROM owner_managed_calls",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
@@ -187,6 +189,7 @@ async fn native_shared_interrupted_call_budget_successor_collects_final_usage(){
     assert_eq!(methods.lines().filter(|m|*m=="turn/interrupt").count(),1);
     drop(db);
     f.stop().await;
+  }
 }
 #[tokio::test]
 #[ignore="requires explicitly built offline supervised probe"]

@@ -397,7 +397,9 @@ async fn work_loop(
     let mut capture = issued.bind_turn(process).map_err(store)?;
     let mut usage = telemetry.shared_turn(sink.command(), &work, &call_id, process);
     let terminal_result: Result<SharedWorkReceipt, NativeError> = async {
+      let mut stop_reason = None;
       let terminal = loop {
+        if let Some(error) = stop_reason.take() { return Err(error); }
         if super::stop_capture::requested(cancel) {
             return Err(failure(409, "shared_execution_closed"));
         }
@@ -417,7 +419,10 @@ async fn work_loop(
                     event=&mut read=>break event.map_err(|error|{tracing::warn!(?error,"Shared Agent event stream ended before completion");failure(409,"shared_execution_event_unknown")}),
                 };
                 if let Err(e) = event {
-                    if super::stop_capture::requested(cancel) {
+                    if Instant::now() < a.until {
+                        // Finish the retained read before cleanup, even when
+                        // renewal failed. Preserve any last usage event first.
+                        stop_reason = Some(e);
                         break read.as_mut().await.map_err(|_|failure(409,"shared_execution_event_unknown"));
                     }
                     break Err(e);
