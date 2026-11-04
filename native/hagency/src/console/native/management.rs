@@ -741,6 +741,51 @@ pub(super) fn store_error(error: hagency_store::Error) -> NativeError {
     failure(status, code)
 }
 
+impl NativeManagement {
+    /// Profile authority and owner-resource registry for native accounting
+    /// declarations (owner reconciliation of interrupted calls). Valid until
+    /// the current management session ends; refused without local custody.
+    pub(super) async fn owner_profile_registry(
+        &self,
+        permission: service::Permission,
+    ) -> Result<
+        (
+            hagency_store::owner_resources::ProfileAuthority,
+            hagency_store::owner_resources::OwnerResourceRegistry,
+        ),
+        NativeError,
+    > {
+        let (context, session) = self.authorized().await?;
+        session
+            .authorize(&context, permission)
+            .map_err(|_| failure(403, "management_permission_required"))?;
+        let deadline = session.valid_until();
+        let device = self
+            .owner
+            .0
+            .host
+            .console
+            .authorized_device()
+            .await
+            .map_err(|_| failure(401, "owner_authorization_required"))?;
+        let profile = hagency_store::owner_resources::ProfileAuthority::new(
+            self.profile.clone(),
+            device.owner_mxid().into(),
+            deadline,
+        )
+        .map_err(store_error)?;
+        #[cfg(feature = "resource-adoption")]
+        if let ManagementStore::Adopted(store) = &self.store {
+            let registry = store
+                .native_owner_cleanup_registry(&profile)
+                .map_err(store_error)?;
+            return Ok((profile, registry));
+        }
+        let _ = profile;
+        Err(failure(409, "owner_local_custody_required"))
+    }
+}
+
 #[cfg(test)]
 #[path = "management_scope_tests.rs"]
 mod scope_tests;

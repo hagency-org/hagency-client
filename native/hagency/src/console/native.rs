@@ -2008,6 +2008,11 @@ mod owner_scope_command_tests {
 mod workspaces;
 pub use hagency_store::management::{WorkspaceListQuery, WorkspaceQuery, WorkspaceReleaseBlock, WorkspaceStatus, WorkspacePage, ClearWorkspaceDirty, WorkspaceRelease};
 
+mod interrupted_calls;
+pub use hagency_store::owner_resources::{
+    InterruptedCall, InterruptedCallPage, InterruptedCallQuery, InterruptedCallReconciliation,
+    ReconcileInterruptedCall,
+};
 mod stopped;
 pub use hagency_store::management::{StoppedListQuery, StoppedQuery, StoppedAttempt, StoppedPage, StoppedInventoryEntry, StoppedInspection, ReviewStopped, StoppedReview, StoppedDecision, ResolveStopped, StoppedResolution};
 

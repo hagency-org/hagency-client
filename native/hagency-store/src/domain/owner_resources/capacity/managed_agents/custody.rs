@@ -7,10 +7,15 @@ mod calls;
 mod matrix_check;
 mod observations;
 mod provision;
+mod reconciliation;
 mod runtime;
 pub mod shared_execution;
 use authority::*;
 pub use calls::{ManagedCallClaim, ManagedCallCustody, ManagedCallHistory};
+pub use reconciliation::{
+    InterruptedCall, InterruptedCallPage, InterruptedCallQuery, InterruptedCallReconciliation,
+    ReconcileInterruptedCall,
+};
 pub use matrix_check::{
     AGENT_MATRIX_CAPABILITY, ManagedAgentMatrixChallenge, ManagedAgentMatrixObservation,
     VerifiedManagedMatrixCheck,
@@ -163,6 +168,17 @@ struct Scope {
     expires: Instant,
 }
 impl Scope {
+    /// Registers this call as owned by a live custody object in this process.
+    fn mark_live(&self) {
+        if let Ok(mut live) = self.registry.live_calls.lock() {
+            live.insert(self.target.clone());
+        }
+    }
+    fn unmark_live(&self) {
+        if let Ok(mut live) = self.registry.live_calls.lock() {
+            live.remove(&self.target);
+        }
+    }
     fn check(&self, registry: &Arc<Inner>) -> Result<(), Error> {
         self.profile.check()?;
         if !Arc::ptr_eq(&self.registry, registry)

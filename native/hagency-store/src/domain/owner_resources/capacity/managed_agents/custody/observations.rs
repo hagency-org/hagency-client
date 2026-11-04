@@ -118,14 +118,14 @@ impl ManagedUsageObservation {
         }
     }
 }
-fn evidence<T: Serialize>(kind: &str, target: &str, o: &T) -> Result<(String, String), Error> {
+pub(super) fn evidence<T: Serialize>(kind: &str, target: &str, o: &T) -> Result<(String, String), Error> {
     let value = json!({"kind":kind,"target":target,"observation":o});
     if serde_json::to_vec(&value)?.len() > 16 * 1024 {
         return Err(Error::Capacity);
     }
     Ok((canonical::digest(&value)?, canonical::encode(&value)?))
 }
-fn replay(
+pub(super) fn replay(
     db: &Connection,
     id: &str,
     child: &str,
@@ -144,7 +144,7 @@ fn replay(
         Ok(None)
     }
 }
-fn save_observation(
+pub(super) fn save_observation(
     db: &Connection,
     child: &str,
     value: &ManagedObservationReceipt,

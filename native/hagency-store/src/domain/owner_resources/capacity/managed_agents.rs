@@ -5,6 +5,8 @@ mod accounting;
 mod custody;
 pub use custody::{budget, shared_execution};
 pub use custody::{
+    InterruptedCall, InterruptedCallPage, InterruptedCallQuery, InterruptedCallReconciliation,
+    ReconcileInterruptedCall,
     AGENT_MATRIX_CAPABILITY, AGENT_RUNTIME_CAPABILITY, ManagedAgentMatrixChallenge,
     ManagedAgentMatrixObservation, ManagedAssignmentAuthority, ManagedCallAuthority,
     ManagedCallClaim, ManagedCallCustody, ManagedCallHistory, ManagedCleanupAuthority,

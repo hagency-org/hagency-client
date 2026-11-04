@@ -107,6 +107,8 @@ pub enum Permission {
     ReadStoppedTasks,
     InspectStoppedTasks,
     ResolveStoppedTasks,
+    // Owner declaration that closes a managed call whose process is gone.
+    ReconcileAgentCalls,
     ReadResources,
     ReadResourceTemplates,
     ManageResourceTemplates,

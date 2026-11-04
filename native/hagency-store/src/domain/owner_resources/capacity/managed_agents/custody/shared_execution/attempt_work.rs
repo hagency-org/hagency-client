@@ -251,6 +251,7 @@ pub(super) async fn issue(
                     expires,
                 },
             };
+            call.scope.mark_live();
             a.check()?;
             tx.commit()?;
             a.check().map_err(|_| Error::OutcomeUnknown)?;

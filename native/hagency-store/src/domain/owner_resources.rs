@@ -27,6 +27,8 @@ pub(super) use capacity::unsettled_resource_except;
 #[cfg(feature = "resource-adoption")]
 pub(super) use capacity::unsettled_exact_resource;
 pub use capacity::{
+    InterruptedCall, InterruptedCallPage, InterruptedCallQuery, InterruptedCallReconciliation,
+    ReconcileInterruptedCall,
     ManagedAgentPeriodRenewCommand, ManagedAgentPeriodReceipt, VerifiedManagedAgentPeriodDelivery,
     AGENT_SETTLEMENT_CAPABILITY, ManagedAgentSettlementCommand, ManagedAgentSettlementReceipt,
     VerifiedManagedAgentSettlement, AGENT_CAPABILITY, AGENT_FENCE_CAPABILITY,
@@ -66,6 +68,9 @@ struct Inner {
     store: DomainStore,
     id: String,
     closed: AtomicBool,
+    /// Call ids whose custody object is alive in this process. Owner
+    /// reconciliation refuses them: only a dead process leaves a call open.
+    live_calls: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 #[derive(Clone)]
 pub struct OwnerResourceRegistry(Arc<Inner>);
@@ -341,6 +346,7 @@ impl OwnerResourceRegistry {
             store,
             id,
             closed: AtomicBool::new(false),
+            live_calls: std::sync::Mutex::new(std::collections::HashSet::new()),
         });
         registries.insert(root, Arc::downgrade(&inner));
         Ok(Self(inner))

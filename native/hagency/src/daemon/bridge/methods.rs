@@ -20,6 +20,8 @@ macro_rules! management_methods {
         stopped_inspection(query: StoppedQuery) -> StoppedInspection; false;
         review_stopped(input: ReviewStopped) -> StoppedReview; false;
         resolve_stopped(input: ResolveStopped) -> StoppedResolution; true;
+        interrupted_calls(query: InterruptedCallQuery) -> InterruptedCallPage; false;
+        reconcile_interrupted_call(input: ReconcileInterruptedCall) -> InterruptedCallReconciliation; true;
         web_catalog(query:WebCatalogQuery) -> WebCatalogView; false;
         web_offers(resource_id:String) -> WebOfferPage; false;
         web_trust(query:WebCatalogQuery) -> WebTrustPage; false;

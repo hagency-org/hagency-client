@@ -1017,3 +1017,105 @@ async fn resource_alert_observer_counts_canonical_call_overrun_and_retains_unkno
         Ok(())
     }).await.unwrap();f.registry.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn owner_reconciliation_settles_only_calls_whose_process_is_gone() {
+    let f = fixture().await;
+    let child = native_child(&f).await;
+    qualify(&f, &child).await;
+    let query = InterruptedCallQuery { agent_id: "agent_native".into() };
+    let custody = issue(&f, &child, "one", 100).await;
+    // While the custody object lives, the call is listed but not reconcilable
+    // and the reservation still blocks further calls.
+    let page = f.registry.interrupted_calls(f.profile.clone(), query.clone()).await.unwrap();
+    assert_eq!(page.calls.len(), 1);
+    assert!(page.calls[0].live && !page.calls[0].usage_observed && page.calls[0].state == "issued");
+    assert_eq!((page.calls[0].reserved_tokens, page.calls[0].known_consumed_tokens), (100, 0));
+    assert!(matches!(
+        f.registry.prepare_managed_call(call(&f, &child, "two", 100)).await,
+        Err(Error::Capacity)
+    ));
+    let input = ReconcileInterruptedCall {
+        command_id: "rc_one".into(),
+        agent_id: "agent_native".into(),
+        call_id: custody.call_id().to_owned(),
+        expected_reserved_tokens: 100,
+        consumed_tokens: 0,
+        evidence_reference: "process ended before any model request".into(),
+    };
+    assert!(matches!(
+        f.registry.reconcile_interrupted_call(f.profile.clone(), input.clone()).await,
+        Err(Error::LocalAuthority)
+    ));
+    drop(custody);
+    let settled = f.registry.reconcile_interrupted_call(f.profile.clone(), input.clone()).await.unwrap();
+    assert_eq!(
+        (settled.state.as_str(), settled.consumed_tokens, settled.released_tokens, settled.replayed),
+        ("settled", 0, 100, false)
+    );
+    // The identical declaration replays; a different one for the same call is refused.
+    let again = f.registry.reconcile_interrupted_call(f.profile.clone(), input.clone()).await.unwrap();
+    assert!(again.replayed && again.observation_id == settled.observation_id);
+    let mut other = input.clone();
+    other.command_id = "rc_other".into();
+    other.consumed_tokens = 5;
+    assert!(f.registry.reconcile_interrupted_call(f.profile.clone(), other).await.is_err());
+    let page = f.registry.interrupted_calls(f.profile.clone(), query.clone()).await.unwrap();
+    assert!(page.calls.is_empty());
+    // The allowance is usable again.
+    let next = issue(&f, &child, "two", 100).await;
+    drop(next);
+    // Unknown identities are refused outright.
+    assert!(matches!(
+        f.registry
+            .interrupted_calls(f.profile.clone(), InterruptedCallQuery { agent_id: "agent_missing".into() })
+            .await,
+        Err(Error::Conflict)
+    ));
+    f.registry.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn owner_reconciliation_never_goes_below_observed_usage() {
+    let f = fixture().await;
+    let child = native_child(&f).await;
+    qualify(&f, &child).await;
+    let custody = issue(&f, &child, "one", 100).await;
+    // A terminal but incomplete capture leaves the call unknown with a lower bound.
+    let receipt = f
+        .registry
+        .record_managed_usage(&custody, reported("partial", 40, true, false))
+        .await
+        .unwrap();
+    assert_eq!((receipt.state.as_str(), receipt.known_consumed_tokens, receipt.usage_complete), ("unknown", 40, false));
+    let call_id = custody.call_id().to_owned();
+    drop(custody);
+    let query = InterruptedCallQuery { agent_id: "agent_native".into() };
+    let page = f.registry.interrupted_calls(f.profile.clone(), query.clone()).await.unwrap();
+    assert_eq!(page.calls.len(), 1);
+    assert!(!page.calls[0].live && page.calls[0].usage_observed && page.calls[0].state == "unknown");
+    let declare = |command: &str, consumed: u64, expected: u64| ReconcileInterruptedCall {
+        command_id: command.into(),
+        agent_id: "agent_native".into(),
+        call_id: call_id.clone(),
+        expected_reserved_tokens: expected,
+        consumed_tokens: consumed,
+        evidence_reference: "provider usage page 2026-11-03".into(),
+    };
+    // Below the observed lower bound, above the reservation, or a stale
+    // reservation figure: all refused without changing anything.
+    assert!(f.registry.reconcile_interrupted_call(f.profile.clone(), declare("rc_low", 20, 100)).await.is_err());
+    assert!(f.registry.reconcile_interrupted_call(f.profile.clone(), declare("rc_high", 101, 101)).await.is_err());
+    assert!(f.registry.reconcile_interrupted_call(f.profile.clone(), declare("rc_stale", 40, 99)).await.is_err());
+    assert!(matches!(
+        f.registry.prepare_managed_call(call(&f, &child, "two", 60)).await,
+        Err(Error::Capacity)
+    ));
+    let settled = f.registry.reconcile_interrupted_call(f.profile.clone(), declare("rc_ok", 40, 100)).await.unwrap();
+    assert_eq!((settled.consumed_tokens, settled.released_tokens, settled.replayed), (40, 60, false));
+    assert!(f.registry.interrupted_calls(f.profile.clone(), query).await.unwrap().calls.is_empty());
+    // 150 allocated, 40 consumed: a 100-token call fits again.
+    let next = issue(&f, &child, "two", 100).await;
+    drop(next);
+    f.registry.shutdown().await.unwrap();
+}

@@ -22,6 +22,8 @@ pub(in super::super) use managed_agents::unsettled_resource_except;
 #[cfg(feature = "resource-adoption")]
 pub(in super::super) use managed_agents::unsettled_exact_resource;
 pub use managed_agents::{
+    InterruptedCall, InterruptedCallPage, InterruptedCallQuery, InterruptedCallReconciliation,
+    ReconcileInterruptedCall,
     ManagedAgentPeriodRenewCommand, ManagedAgentPeriodReceipt, VerifiedManagedAgentPeriodDelivery,
     AGENT_SETTLEMENT_CAPABILITY, ManagedAgentSettlementCommand, ManagedAgentSettlementReceipt,
     VerifiedManagedAgentSettlement, AGENT_CAPABILITY, AGENT_FENCE_CAPABILITY,

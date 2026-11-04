@@ -8,7 +8,7 @@ impl SharedCallCustody {
         // dispatch won (usage remains unknown), or no future dispatch can occur.
         let not_dispatched = self.sink.source().seal_unstarted_turn();
         let process_digest = self.process_digest()?;
-        let scope = self.call.scope;
+        let scope = self.call.scope.clone();
         let work = self.work;
         let registry = scope.registry.clone();
         registry.store.call(64 * 1024, move |db| {

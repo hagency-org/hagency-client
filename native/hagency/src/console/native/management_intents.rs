@@ -50,6 +50,11 @@ fn known_failure_for(operation: IntentOperation, error: &NativeError) -> bool {
     if matches!(operation, IntentOperation::ReviewStopped | IntentOperation::ResolveStopped) {
         return error.status == 400 || error.status == 404 || matches!(error.code.as_str(), "management_revision_conflict" | "management_stopped_not_resolvable" | "management_stopped_review_expired");
     }
+    if operation == IntentOperation::ReconcileInterruptedCall {
+        // A live call, a changed call or a declaration outside the observed
+        // bounds leaves nothing applied; the owner looks again and retries.
+        return error.status == 400 || error.status == 404 || matches!(error.code.as_str(), "management_revision_conflict" | "management_access_required" | "management_permission_required" | "owner_local_custody_required");
+    }
     if operation == IntentOperation::ClearWorkspaceDirty {
         return error.status == 400 || error.status == 404 || matches!(error.code.as_str(), "management_revision_conflict" | "management_workspace_inspection_required" | "management_workspace_active");
     }
@@ -354,6 +359,7 @@ impl NativeManagement {
             IntentOperation::EditExecutionPolicy => serde_json::to_value(Box::pin(self.edit_execution_policy(serde_json::from_value(saved.input).map_err(|_| failure(503, "management_saved_command_invalid"))?)).await?),
             IntentOperation::ReviewStopped => serde_json::to_value(Box::pin(self.review_stopped(serde_json::from_value(saved.input).map_err(|_| failure(503, "management_saved_command_invalid"))?)).await?),
             IntentOperation::ResolveStopped => serde_json::to_value(Box::pin(self.resolve_stopped(serde_json::from_value(saved.input).map_err(|_| failure(503, "management_saved_command_invalid"))?)).await?),
+            IntentOperation::ReconcileInterruptedCall => serde_json::to_value(Box::pin(self.reconcile_interrupted_call(serde_json::from_value(saved.input).map_err(|_| failure(503, "management_saved_command_invalid"))?)).await?),
             IntentOperation::ClearWorkspaceDirty => serde_json::to_value(Box::pin(self.clear_workspace_dirty(serde_json::from_value(saved.input).map_err(|_| failure(503, "management_saved_command_invalid"))?)).await?),
             IntentOperation::RenameResource => serde_json::to_value(Box::pin(self.rename_resource(serde_json::from_value(saved.input).map_err(|_| failure(503, "management_saved_command_invalid"))?)).await?),
             IntentOperation::EditLocalResource => serde_json::to_value(Box::pin(self.edit_local_resource(serde_json::from_value(saved.input).map_err(|_|failure(503,"management_saved_command_invalid"))?,std::time::Instant::now()+std::time::Duration::from_secs(30))).await?),

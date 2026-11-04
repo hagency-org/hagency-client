@@ -24,6 +24,11 @@ impl ManagedCallCustody {
         &self.scope.target
     }
 }
+impl Drop for ManagedCallCustody {
+    fn drop(&mut self) {
+        self.scope.unmark_live();
+    }
+}
 fn identity(a: &ManagedCallAuthority, binding: &str) -> Result<(String, String), Error> {
     let digest = canonical::digest(
         &json!({"child":a.assignment.child,"assignmentDigest":binding,"execution":a.execution,"executionDigest":a.execution_digest,"estimatedTokens":a.estimated_tokens}),
@@ -119,6 +124,7 @@ impl OwnerResourceRegistry {
             tx.execute("UPDATE owner_managed_calls SET state='issued' WHERE id=?1 AND state='prepared'",[&id])?;
             tx.execute("UPDATE owner_managed_call_pins SET issue_revision=?2 WHERE call_id=?1",params![id,revision])?;
             let custody=ManagedCallCustody {scope:Scope {registry:r.clone(),profile:a.assignment.enrollment.profile.clone(),child:a.assignment.child.clone(),target:id,binding,issued_revision:revision,expires}};
+            custody.scope.mark_live();
             a.check(&r)?;tx.commit()?;a.check(&r).map_err(|_|Error::OutcomeUnknown)?;Ok(ManagedCallClaim::Issued(custody))
         }).await?;
         after(&p, &self.0, expires)?;

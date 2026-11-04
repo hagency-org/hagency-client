@@ -544,6 +544,14 @@ impl Bridge {
                 let (command_id, name): (String, String) = decode(arguments)?;
                 encode(manager.pool_agent_room(command_id, name).await?)
             },
+            Operation::interrupted_calls => deferred! {
+                let (query,): (InterruptedCallQuery,) = decode(arguments)?;
+                encode(manager.interrupted_calls(query).await?)
+            },
+            Operation::reconcile_interrupted_call => deferred! {
+                let (input,): (ReconcileInterruptedCall,) = decode(arguments)?;
+                encode(manager.reconcile_interrupted_call(input).await?)
+            },
             Operation::rename_resource => deferred! {
                 let (input,): (RenameResource,) = decode(arguments)?;
                 encode(manager.rename_resource(input).await?)
