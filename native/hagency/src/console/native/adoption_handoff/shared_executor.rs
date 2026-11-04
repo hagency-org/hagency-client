@@ -64,6 +64,12 @@ impl AdoptedManagementSelection {
     }
 }
 impl AdoptedSharedExecutor {
+    /// Subscribe before polling so arrivals during a pass are not lost. This
+    /// carries no content or authority; poll methods retain all native checks.
+    pub fn work_changes(&self) -> tokio::sync::watch::Receiver<()> {
+        self.transport.work_changes()
+    }
+
     pub fn retire(&self) {
         self.manager.retire();
     }

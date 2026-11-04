@@ -186,33 +186,9 @@ impl AllocationTransport {
     ) -> Result<(), NativeError> {
         let result = async {
             scope.check()?;
-            // Device renewal may reuse its unexpired server grant. Allocation
-            // still requires a fresh SDK-owned account check at every boundary.
-            let cookie = self.manager.owner.0.cookie.lock().await.clone();
-            scope.check()?;
-            let raw = cookie
-                .strip_prefix("hagency_console=")
-                .ok_or_else(|| failure(401, "owner_authorization_required"))?;
-            self.manager
-                .owner
-                .0
-                .host
-                .console
-                .0
-                .server_login
-                .check_matrix_source(raw)
-                .await
-                .map_err(|code| {
-                    failure(
-                        if code.ends_with("unavailable") {
-                            503
-                        } else {
-                            401
-                        },
-                        code,
-                    )
-                })?;
-            scope.check()?;
+            // authorized() performs the fresh SDK account/token check. Do it
+            // once per boundary instead of issuing the same network-backed
+            // whoami twice; all scope/device checks still follow the await.
             let (current, session) = self.manager.authorized().await?;
             scope.check()?;
             if current != scope.context {

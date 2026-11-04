@@ -4,6 +4,8 @@ mod hooks;
 mod observation;
 mod qualification;
 mod rate_limits;
+mod room_history;
+pub use room_history::{RoomHistoryCall, ROOM_HISTORY_TOOL, ROOM_HISTORY_RESULT_BYTES};
 pub use rate_limits::{quota_account_digest, RateLimitBucket, RateLimitOrigin, RateLimitSnapshot, RateLimitWindow};
 pub use qualification::QualificationRead;
 mod state;
@@ -92,6 +94,7 @@ pub enum ItemPhase {
 }
 
 pub enum Update {
+    RoomHistory(RoomHistoryCall),
     Approval(super::approval::ApprovalRequest),
     /// Upstream callback ended, possibly by cancellation and before applying.
     ApprovalResolved {
@@ -132,8 +135,10 @@ pub struct Settings {
     read_only: bool,
     unrestricted: bool,
     task_mcp: Option<TaskMcp>,
+    room_history: bool,
 }
 impl Settings {
+    pub(crate) fn room_history_enabled(&self) -> bool { self.room_history }
     pub fn new(cwd: PathBuf, model: String, effort: String) -> Result<Self, Error> {
         if !cwd.is_absolute()
             || cwd
@@ -161,6 +166,7 @@ impl Settings {
             read_only: false,
             unrestricted: false,
             task_mcp: None,
+            room_history: false,
         })
     }
     pub(crate) fn shared_mode_matches(&self, mode: Option<&str>) -> bool {
@@ -231,6 +237,13 @@ impl Settings {
         }
         params["config"]["sandbox_workspace_write.network_access"] = false.into();
         params["config"]["sandbox_workspace_write.writable_roots"] = json!([]);
+        if self.room_history {
+            params["dynamicTools"] = json!([room_history::definition()]);
+            // Compact accumulated page summaries well before the provider's
+            // window fills; the host independently bounds each result using
+            // the actual modelContextWindow/last-input usage observations.
+            params["config"]["model_auto_compact_token_limit"] = 24_000.into();
+        }
         if let Some(id) = resume {
             params["threadId"] = id.into();
             params["excludeTurns"] = true.into();

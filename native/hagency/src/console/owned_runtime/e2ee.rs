@@ -24,6 +24,8 @@ use matrix_sdk::{
     store::RoomLoadSettings,
 };
 use sha2::{Digest, Sha256};
+mod history;
+pub(in crate::console) use history::HistoryBatch;
 use std::{
     collections::HashMap,
     path::Path,
@@ -272,6 +274,15 @@ impl AgentDevice {
         directory: &Path,
         agent: &str,
     ) -> Result<Self, RuntimeError> {
+        Self::open_notifying(grant, directory, agent, None).await
+    }
+
+    pub(in crate::console) async fn open_notifying(
+        grant: E2eeDeviceGrant,
+        directory: &Path,
+        agent: &str,
+        changed: Option<watch::Sender<()>>,
+    ) -> Result<Self, RuntimeError> {
         let user_id =
             OwnedUserId::try_from(grant.user_id.as_str()).map_err(|_| RuntimeError::Transport)?;
         let devices = directory.join("agent-devices");
@@ -311,7 +322,7 @@ impl AgentDevice {
             .await
             .map_err(|_| RuntimeError::Transport)?;
         let revoked = Arc::new(AtomicBool::new(false));
-        let sync = tokio::spawn(sync(client.clone(), revoked.clone())).abort_handle();
+        let sync = tokio::spawn(sync(client.clone(), revoked.clone(), changed)).abort_handle();
         Ok(Self {
             client,
             approvals,
@@ -513,13 +524,23 @@ fn request_message(decrypted: &DecryptedRoomEvent, requester: &str) -> Option<De
     })
 }
 
-async fn sync(client: Client, revoked: Arc<AtomicBool>) {
+async fn sync(client: Client, revoked: Arc<AtomicBool>, changed: Option<watch::Sender<()>>) {
     loop {
         match client
             .sync_once(SyncSettings::default().timeout(Duration::from_secs(30)))
             .await
         {
-            Ok(_) => {}
+            Ok(response) => {
+                // SDK crypto processing has finished here. Wake the shared
+                // consumer for both new messages and late room keys, rather
+                // than waiting for its next housekeeping pass. Empty syncs,
+                // receipts and typing updates must not cause a polling storm.
+                if sync_has_work(&response) {
+                    if let Some(changed) = &changed {
+                        changed.send_replace(());
+                    }
+                }
+            }
             Err(error) if unknown_token(&error) => {
                 // Another grant replaced this device's token; the next request
                 // obtains a fresh one under its current lease.
@@ -531,9 +552,25 @@ async fn sync(client: Client, revoked: Arc<AtomicBool>) {
     }
 }
 
+fn sync_has_work(response: &matrix_sdk::sync::SyncResponse) -> bool {
+    !response.to_device.is_empty()
+        || response.rooms.joined.values().any(|room| !room.timeline.events.is_empty())
+        || !response.rooms.left.is_empty()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_work_sync_wakes_for_late_keys_but_not_empty_polls() {
+        let mut response=matrix_sdk::sync::SyncResponse::default();
+        assert!(!sync_has_work(&response));
+        let raw=matrix_sdk::ruma::serde::Raw::from_json_string(serde_json::json!({"type":"m.room_key","sender":"@member:example.test","content":{}}).to_string()).unwrap();
+        response.to_device.push(matrix_sdk::deserialized_responses::ProcessedToDeviceEvent::PlainText(raw));
+        assert!(sync_has_work(&response));
+        response.to_device.clear();assert!(!sync_has_work(&response));
+    }
 
     fn dispatch(thread_root: &str) -> inbox::Dispatch {
         inbox::Dispatch {

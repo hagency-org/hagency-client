@@ -400,6 +400,18 @@ impl OwnedSession {
         }.await;
         operation.finish(result)
     }
+    /// The host has bound a read-only history reader to this admitted room.
+    pub fn enable_shared_room_history(&mut self) -> Result<(), session::Error> {
+        if !self.text_source.has_live_activity() { return Err(session::Error::State); }
+        self.session.enable_room_history()
+    }
+    pub(super) fn shared_room_history_enabled(&self) -> bool { self.session.settings().room_history_enabled() }
+    pub async fn respond_shared_room_history(&mut self, call: &session::RoomHistoryCall, content: String) -> Result<(), session::Error> {
+        if !self.text_source.has_live_activity() { return Err(session::Error::State); }
+        let operation = Operation::new(self)?;
+        let result = operation.runner.session.respond_room_history(call, content).await;
+        operation.finish(result)
+    }
     pub async fn start_shared_text_turn(
         &mut self,
         input: String,

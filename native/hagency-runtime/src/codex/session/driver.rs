@@ -56,6 +56,7 @@ pub struct SessionDriver<R, W, E> {
     policy_declines: usize,
     /// Read-only account quota metadata from this process (never usage).
     rate_limits: super::rate_limits::RateLimitTracker,
+    history_pending: BTreeSet<RequestId>,
 }
 
 impl<R, W, E> SessionDriver<R, W, E> {
@@ -93,6 +94,7 @@ impl<R, W, E> SessionDriver<R, W, E> {
             policy_declined: BTreeSet::new(),
             policy_declines: 0,
             rate_limits: super::rate_limits::RateLimitTracker::default(),
+            history_pending: BTreeSet::new(),
         })
     }
     pub fn settings(&self) -> &Settings {
@@ -536,6 +538,23 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> SessionD
     pub async fn start_thread(&mut self) -> Result<String, Error> {
         self.open_thread(None).await
     }
+    pub fn enable_room_history(&mut self) -> Result<(), Error> {
+        if self.phase() != Phase::Ready { return Err(Error::State); }
+        self.settings.room_history = true;
+        // Long room summaries cross many bounded read/compaction items. Text,
+        // event, transport, time and funded usage ceilings remain independent.
+        self.state.max_items = 4096;
+        Ok(())
+    }
+    pub async fn respond_room_history(&mut self, call: &super::RoomHistoryCall, content: String) -> Result<(), Error> {
+        if self.phase() != Phase::Running || !self.settings.room_history
+            || !self.history_pending.contains(&call.id)
+            || content.len() > super::ROOM_HISTORY_RESULT_BYTES
+        { return Err(Error::Scope); }
+        self.wire.send(transport::Command::RespondRoomHistory { id: call.id.clone(), content }).await.map_err(Error::Transport)?;
+        self.history_pending.remove(&call.id);
+        Ok(())
+    }
     /// Explicit host-recorded upstream identity only; this never authorizes
     /// automatic resume/replay of a Hagency dispatch or an unknown prior turn.
     pub async fn resume_thread(&mut self, id: ResumeThreadId) -> Result<String, Error> {
@@ -718,6 +737,17 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> SessionD
     }
     async fn accept_update(&mut self, event: Event) -> Result<Update, Error> {
         let event = match event {
+            Event::ServerRequest { id, method, params: Some(params) }
+                if method == "item/tool/call" && self.settings.room_history => {
+                if self.phase() != Phase::Running
+                    || params["threadId"].as_str() != self.thread_id()
+                    || params["turnId"].as_str() != self.turn_id()
+                { return Err(Error::Scope); }
+                let call = super::RoomHistoryCall::parse(id.clone(), &params)?;
+                if !self.history_pending.insert(id) { return Err(Error::Scope); }
+                self.observation_kind = super::ObservationKind::Ignored;
+                return Ok(Update::RoomHistory(call));
+            }
             Event::ServerRequest {
                 id,
                 method,
