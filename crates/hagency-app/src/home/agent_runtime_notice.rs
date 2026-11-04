@@ -9,16 +9,22 @@ fn exact_direct_binding<'a>(bindings:&'a Value,agent:&str,room:&str)->Option<&'a
     bindings["bindings"].as_array()?.iter().find(|b|b["agentId"]==agent && b["roomId"]==room && b["scopeKind"]=="owner_direct" && b["projectId"].is_null() && b["state"]=="active" && b["id"].as_str().is_some_and(|id|!id.is_empty()))
 }
 fn room_runtime(value:&Value,agent:&str,binding:&str)->Result<Value,String> {
+    let mut scoped=value.clone();
+    if let Some(problems)=scoped["service"]["problems"].as_array_mut() {
+        problems.retain(|problem|problem["bindingId"].is_null() || problem["bindingId"]==binding);
+    }
     let r=&value["runtime"];
-    if r.is_null() {return Ok(serde_json::json!({"runtime":null}));}
+    if r.is_null() {return Ok(scoped);}
     if r["agentId"]!=agent {return Err("runtime_status_unavailable".into());}
-    if r["phase"]=="waiting_for_lease" {return Ok(value.clone());}
+    if r["phase"]=="waiting_for_lease" {return Ok(scoped);}
     if let Some(b)=r["bindings"].as_array().and_then(|bs|bs.iter().find(|b|b["bindingId"]==binding)) {
         let mut status=b.clone(); status["agentId"]=Value::String(agent.into());
-        return Ok(serde_json::json!({"runtime":status}));
+        scoped["runtime"]=status;
+        return Ok(scoped);
     }
-    if r["bindingId"]==binding {return Ok(value.clone());}
-    Ok(serde_json::json!({"runtime":null}))
+    if r["bindingId"]==binding {return Ok(scoped);}
+    scoped["runtime"]=Value::Null;
+    Ok(scoped)
 }
 script_mod! {
     use mod.prelude.widgets.*
@@ -64,6 +70,7 @@ impl AgentRuntimeNotice {
         self.set_loading(cx,true);
         if self.target.is_some() {self.view.button(cx,ids!(open)).set_enabled(cx,false);self.view.redraw(cx);}
         self.request=self.request.wrapping_add(1);let request=self.request;
+        makepad_widgets::log!("Agent room status poll started: {request}");
         let identity=self.identity.clone(); let room=self.room.clone();
         crate::sliding_sync::spawn_async_task(async move {
             let result=tokio::time::timeout(std::time::Duration::from_secs(30),async {
@@ -77,7 +84,10 @@ impl AgentRuntimeNotice {
                 let current=roster["currentDeviceId"].as_str().filter(|id|!id.is_empty());
                 let here=current.is_some_and(|id|agent["executionDeviceId"]==id && roster["devices"].as_array().is_some_and(|ds|ds.iter().any(|d|d["id"]==id && d["revoked"]==false)));
                 let text=if here {
-                    let result=service.execute(Command::Local {agent_id:agent_id.clone(),action:LocalAction::Runtime,input:None,binding_id:None,requester:None}).await.and_then(|v|room_runtime(&v,&agent_id,&binding_id));
+                    let result=service.execute(Command::Local {agent_id:agent_id.clone(),action:LocalAction::AgentServiceStatus,input:None,binding_id:None,requester:None}).await.and_then(|v| {
+                        makepad_widgets::log!("Agent room status observed: {request}, enabled={}, runtime={}",v["service"]["enabled"]==true,!v["runtime"].is_null());
+                        room_runtime(&v,&agent_id,&binding_id)
+                    });
                     crate::hagency::ui::runtime_service_description(Some(&result),&agent_id)
                 } else if current.is_none() {"Local processing could not be verified. Refresh to retry.".into()}
                 else if agent["executionDeviceId"].as_str().is_none_or(|id|id.is_empty()) {"No available execution device. Open Agent settings to assign this device.".into()}
@@ -89,6 +99,7 @@ impl AgentRuntimeNotice {
                 Ok(Ok(None))=>(None,String::new(),false),
                 _=>(None,"Local processing could not be verified. Refresh to retry.".into(),true),
             };
+            makepad_widgets::log!("Agent room status poll completed: {request}, failed={failed}");
             Cx::post_action(NoticeResult {identity,room,request,target,text,failed});
         });
     }
@@ -99,12 +110,15 @@ impl Widget for AgentRuntimeNotice {
         if self.timer.is_event(event).is_some() {self.timer=Timer::default();if self.active {self.refresh(cx);}}
         if let Event::Actions(actions)=event {
             for action in actions {
+                if let Some(done)=action.downcast_ref::<NoticeResult>() {
+                    makepad_widgets::log!("Agent room status routed: request={}, current={}, identity={}, room={}, active={}",done.request,self.request,done.identity==self.identity,done.room==self.room,self.active);
+                }
                 if let Some(done)=action.downcast_ref::<NoticeResult>()
                     && done.identity==self.identity && done.room==self.room && done.request==self.request {
                     self.set_loading(cx,false);if !done.failed {self.target=done.target.clone();}
                     self.view.label(cx,ids!(status)).set_text(cx,crate::i18n::tr(&done.text));
                     self.view.set_visible(cx,self.target.is_some());self.view.button(cx,ids!(open)).set_enabled(cx,self.target.is_some() && !done.failed);
-                    self.timer=cx.start_timeout(10.0);self.view.redraw(cx);
+                    if self.active {self.timer=cx.start_timeout(10.0);}self.view.redraw(cx);
                 }
             }
             if self.view.button(cx,ids!(open)).clicked(actions) && let Some((agent,binding))=&self.target {
@@ -118,13 +132,18 @@ impl Widget for AgentRuntimeNotice {
 impl AgentRuntimeNoticeRef {
     pub fn set_active(&self,cx:&mut Cx,active:bool) {
         if let Some(mut this)=self.borrow_mut() {
+            let was_active=this.active;
             this.active=active;
             if !active {cx.stop_timer(this.timer);this.timer=Timer::default();}
+            else if !was_active && this.timer.is_empty() && !this.loading {
+                // A hidden RoomScreen cancels its poll. Becoming focused again
+                // must resume it even when the displayed room has not changed.
+                this.timer=cx.start_timeout(0.0);
+            }
         }
     }
     pub fn set_room(&self,cx:&mut Cx,room:&str) {
         let Some(mut this)=self.borrow_mut() else {return;};
-        this.active=true;
         let identity=Service::existing_current().map(|s|s.identity()).unwrap_or_default();
         if identity!=this.identity || room!=this.room {
             cx.stop_timer(this.timer);this.timer=Timer::default();
@@ -137,6 +156,41 @@ impl AgentRuntimeNoticeRef {
 #[cfg(test)]
 mod tests {
     use super::*;use serde_json::json;
+    #[test]
+    fn returning_to_the_same_chat_resumes_a_cancelled_status_poll() {
+        let mut cx=Cx::new(Box::new(|_,_| {}));
+        let notice=cx.with_vm(|vm| {
+            makepad_widgets::script_mod(vm);crate::app::register_widgets(vm);
+            let value=script_eval!(vm,{mod.widgets.AgentRuntimeNotice {}});
+            WidgetRef::new_with_inner(Box::new(AgentRuntimeNotice::script_from_value(vm,value))).as_agent_runtime_notice()
+        });
+        notice.set_active(&mut cx,false);
+        assert!(notice.borrow().unwrap().timer.is_empty());
+        notice.set_room(&mut cx,"!same:example.org");
+        assert!(!notice.borrow().unwrap().active,"drawing the retained room must not reactivate a hidden poll");
+        notice.set_active(&mut cx,true);
+        assert!(!notice.borrow().unwrap().timer.is_empty(),"returning without set_room must resume polling");
+    }
+    #[test]
+    fn retiring_a_room_invalidates_inflight_results_and_clears_the_loading_latch() {
+        let mut cx=Cx::new(Box::new(|_,_| {}));
+        let notice=cx.with_vm(|vm| {
+            makepad_widgets::script_mod(vm);crate::app::register_widgets(vm);
+            let value=script_eval!(vm,{mod.widgets.AgentRuntimeNotice {}});
+            WidgetRef::new_with_inner(Box::new(AgentRuntimeNotice::script_from_value(vm,value))).as_agent_runtime_notice()
+        });
+        {
+            let mut state=notice.borrow_mut().unwrap();
+            state.identity="original-account".into();state.room="!same:example.org".into();
+            state.request=42;state.active=true;state.target=Some(("agent".into(),"binding".into()));
+            state.set_loading(&mut cx,true);state.timer=cx.start_timeout(10.0);
+        }
+        notice.set_active(&mut cx,false);notice.set_room(&mut cx,"");
+        let state=notice.borrow().unwrap();
+        assert!(!state.active && !state.loading && state.timer.is_empty());
+        assert!(state.room.is_empty() && state.target.is_none());
+        assert_ne!(state.request,42,"a late result from the hidden room must be fenced out");
+    }
     #[test]
     fn polling_spinner_preserves_status_wrapping_and_notice_height() {
         use makepad_widgets::makepad_draw::cx_draw::CxDraw;
@@ -187,5 +241,14 @@ mod tests {
         assert_eq!(room_runtime(&waiting,"a","b").unwrap()["runtime"]["phase"],"waiting_for_lease");
         let v=json!({"runtime":{"agentId":"a","phase":"online","bindings":[{"bindingId":"b","phase":"stopped"}]}});
         assert_eq!(room_runtime(&v,"a","b").unwrap()["runtime"]["phase"],"stopped");
+    }
+    #[test] fn direct_status_preserves_service_startup_and_scopes_room_problems() {
+        let starting=json!({"runtime":null,"service":{"enabled":true,"watcherRunning":true,"phase":"starting"}});
+        let status=room_runtime(&starting,"a","b").unwrap();
+        assert!(crate::hagency::ui::runtime_list_label(Some(&Ok(status)),"a").starts_with("Starting service"));
+        let running=json!({"runtime":{"agentId":"a","bindings":[{"bindingId":"b","phase":"online"},{"bindingId":"other","phase":"stopped"}]},"service":{"enabled":true,"watcherRunning":true,"problems":[{"bindingId":"other","error":"other_room_failed"}]}});
+        let status=room_runtime(&running,"a","b").unwrap();
+        assert!(status["service"]["problems"].as_array().unwrap().is_empty());
+        assert!(crate::hagency::ui::runtime_list_label(Some(&Ok(status)),"a").starts_with("Running"));
     }
 }

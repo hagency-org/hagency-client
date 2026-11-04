@@ -137,7 +137,19 @@ impl codex::AttachmentHost for LiveAttachmentHost {
                 .source
                 .fetch_agent_attachment(attachment.clone())
                 .await
-                .map_err(|_| ())?;
+                .map_err(|error| {
+                    // Only fixed native diagnostic codes may enter logs, never
+                    // tokens, source descriptors or arbitrary transport errors.
+                    let code = match error.code.as_str() {
+                        "agent_file_download_unavailable" => "agent_file_download_unavailable",
+                        "agent_file_too_large" => "agent_file_too_large",
+                        "agent_file_integrity_failed" => "agent_file_integrity_failed",
+                        "agent_file_length_mismatch" => "agent_file_length_mismatch",
+                        "matrix_account_changed" => "matrix_account_changed",
+                        _ => "agent_file_source_unavailable",
+                    };
+                    tracing::warn!(code, "Agent attachment download failed");
+                })?;
             if bytes.len() > hagency_agent_local::received_files::MAX_BYTES
                 || !codex::AttachmentHost::authorize(
                     self,

@@ -5980,3 +5980,14 @@ A public native identity failure can be a broker refusal independently of local 
 - **Agent private-chat status:** The Contacts view owns a RoomScreen for direct chats. Keep the focused Contacts room eligible for runtime polling and keep the selected room ID check so another room's status cannot leak into the banner. A chat status banner can become stale even while the Agent service is online and returning encrypted replies.
 
 - **Agent roster loading:** Opening or refreshing My Agents reads the command journal before the roster. Track both reads as loading, and clear their state through the same completion and timeout lifecycle. A cold-start error message can precede any actual roster response.
+
+
+## 2026-11-04 — Published 0.6.4 public QA limits
+
+Official macOS arm64 0.6.4 registered a new user and completed verified-identity encrypted private-chat Codex tasks on hagency.meldry.com. An Agent tool policy is intersected with Room and requester policies; unset high-risk policy is Deny, so Agent AskOwner alone is insufficient. Under three AskOwner policies, an exact receive_file approval reached applying then attachment_receive_failed; ordinary client download of the same39-byte file passed its hash check. Do not report file transfer as qualified. Contacts runtime banner still showed stopped during successful execution in this released binary. See dev-vibe/client-0.6.4-public-e2e-2026-11-04.zh.md; keep credentials and raw QA state in the ignored evidence directory.
+
+## 2026-11-04 — Local fixes qualified against the public server
+
+Authenticated Agent media downloads can legitimately redirect to delegated object storage. Public diagnosis reached the old final-URL equality rejection. Keep the SDK's bounded redirect and cross-origin credential stripping behavior, transport scheme and URL-credential checks, byte limits, encrypted integrity and approval checks. A real two-endpoint test checks both bytes and absence of Matrix Bearer at storage. The fixed native build completed receive_file → exact-path cat → send_file → sent receipt → ordinary client download against hagency.meldry.com; all three 39-byte files matched SHA-256 2a09025d312e77e5d47fae66b9b14ffb8f69f8bf1515a5f1d58ea4743838137c.
+
+RoomScreen hide must retire the notice room and invalidate inflight results, loading and timers; hidden screens can miss async completions. Restarting only the timer on activation was insufficient in native QA. Use full AgentServiceStatus while scoping bindings/problems to the exact room. Final native startup, Projects/Contacts return and stop banners matched the Agent list. Final App suite885 passed/2 existing ignored, receiver9 passed, app no-deps strict Clippy passed; dependency-inclusive Clippy still exposes unrelated article-makepad lint failures. Installed /Applications/Hagency.app is a local fix, not a new official release. See dev-vibe/client-agent-file-status-fixes-2026-11-04.zh.md.

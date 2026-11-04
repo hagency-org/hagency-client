@@ -15683,3 +15683,25 @@ The focused suite passed all four tests after the change. Validation covers fore
 ## 2026-11-03 — Fix the initial Agent roster loading message
 
 On published 0.6.3 a cold opening showed the roster error while the command journal was still loading. Both Agent rows appeared without Refresh. The roster now stays in the loading state during both the journal and roster requests. The existing read wait clears loading on completion, timeout or account/navigation changes. The focused regression fails on the previous source, and all 60 Hagency panel tests pass with the fix. The earlier Agent crypto error is still unclassified: the saved process sample shows Keychain reads, while the terminal status is a generic error with no causal linkage.
+
+
+## 2026-11-04 — Public Client 0.6.4 end to end QA
+
+Downloaded and hash-verified official macOS arm64 v0.6.4, updated /Applications/Hagency.app with a local 0.6.3 backup, and used an isolated QA profile against hagency.meldry.com. A new user registered via browser handoff. Created and verified a private local Agent, connected existing Codex, completed actual replies/context, approval allow/deny/expiry, stop/restart persistence, and project/card state changes. Eight requests settled, held0, cumulative usage233593 tokens.
+
+Preserved a real failure: matrix.receive_file was explicitly approved under three AskOwner layers but returned attachment_receive_failed. No file receipt or send_file; ordinary client download of the same39-byte attachment matched the original hash. Contacts runtime banner also remained stopped while the Agent executed successfully. Finished with service stopped, programming disabled, Agent tools Deny. No business code changes. Detailed results and limits: dev-vibe/client-0.6.4-public-e2e-2026-11-04.zh.md. Private evidence stays in ignored .run/public-client-qa-20261104. No provisioned task-writer was available.
+
+
+## 2026-11-04 — Agent file and chat status remediation in progress
+
+Operator requested fixes plus public receive/send regression. Confirmed a status poll lifecycle defect: hiding a RoomScreen cancels its timer, but reactivating the unchanged room did not restart it. The new focused test fails with the original behavior (exit101); fixed notice suite5/5 passes, including service startup and exact Room isolation. Changed notice reads to full AgentServiceStatus and preserved scoped service diagnostics. Existing SDK bounded encrypted receive test1/1 and Agent-local receive tests9/9 pass.
+
+Added static-only native attachment download diagnostics and built an isolated local diagnostic bundle using the original QA profile. The first restored session is waiting on macOS Keychain SecurityAgent. Computer Use refuses control of that system app, so an asynchronous operator handoff is pending. No new public model request or completed file regression yet; attachment cause remains unconfirmed.
+
+## 2026-11-04 — Agent file and chat status fixes completed
+
+Public original-behavior diagnosis identified final media URL equality as the receive failure. Fixed legitimate delegated-storage responses with existing SDK redirect/credential handling and intact integrity/size/authorization checks. The new redirect regression failed with old logic, then passed fixed. On the original verified Agent, explicitly approved receive_file, exact-path cat and send_file completed; delivery b75ce37a171703ae78ffdfc3b23468b261ccc4dc6c198204012aa41d2392fc35 was sent. Ordinary client downloaded qa064-roundtrip.txt; original, receiver and downloaded bytes all matched (39 bytes, SHA-256 2a09025d312e77e5d47fae66b9b14ffb8f69f8bf1515a5f1d58ea4743838137c).
+
+Initial status reactivation fixes remained stale in native testing; kept those failures. Final fix retires hidden RoomScreen notice state, fences old requests and resumes polling under exact focus, using full scoped AgentServiceStatus. After user handled Keychain, final native build a23c7d6b81d97f852b0c217a113d921f5fada919c1e2e404d9415ea31f2a497c showed running on service start and Projects/Contacts return, then stopped after service stop. Log queries 5/9 observed enabled=true/runtime=true and query13 observed enabled=false/runtime=false; banners matched the list.
+
+Final App library885 passed/0 failed/2 existing ignored; receiver9 passed; no-deps strict App Clippy and diff whitespace checks passed. Unscoped Clippy had unrelated article-makepad27 lint failures. Test profile ends service stopped, programming=false, Agent high-risk Deny revision5; all11 calls settled/inbox replied, spent864267/held0 at each intersected scope. No extra paid model tasks during status regression. Credentials/raw checkpoints remain ignored. Report: dev-vibe/client-agent-file-status-fixes-2026-11-04.zh.md. No commit/push/deploy/release; task-writer remains unavailable.

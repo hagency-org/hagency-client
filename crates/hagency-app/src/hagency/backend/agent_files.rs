@@ -17,6 +17,19 @@ fn unavailable() -> NativeError {
         code: "agent_file_download_unavailable".into(),
     }
 }
+fn unavailable_at(stage: &'static str) -> NativeError {
+    makepad_widgets::warning!("Agent attachment download unavailable at {stage}");
+    unavailable()
+}
+fn acceptable_media_response(request: &url::Url, response: &url::Url) -> bool {
+    // The authenticated homeserver may delegate the bytes to presigned object
+    // storage. The SDK HTTP client bounds redirects and strips credentials on a
+    // different origin; the resulting URL is data, never execution authority.
+    // Keep the original transport scheme (HTTPS in admitted native sessions).
+    response.scheme() == request.scheme()
+        && response.username().is_empty()
+        && response.password().is_none()
+}
 fn too_large() -> NativeError {
     NativeError {
         status: 413,
@@ -35,7 +48,7 @@ pub(super) async fn fetch(
         fetch_inner(client, origin, owner, attachment, &live),
     )
     .await
-    .map_err(|_| unavailable())?
+    .map_err(|_| unavailable_at("overall_timeout"))?
 }
 async fn fetch_inner(
     client: &Client,
@@ -82,11 +95,11 @@ async fn fetch_inner(
     let versions = client
         .supported_versions()
         .await
-        .map_err(|_| unavailable())?;
+        .map_err(|_| unavailable_at("server_versions"))?;
     check()?;
     let history = authenticated_media::get_content::v1::Request::PATH_BUILDER;
     if !history.is_supported(&versions) {
-        return Err(unavailable());
+        return Err(unavailable_at("authenticated_media_unsupported"));
     }
     let (server, id) = uri.parts().map_err(|_| unavailable())?;
     let endpoint = history
@@ -96,7 +109,7 @@ async fn fetch_inner(
             &[&server, &id],
             "",
         )
-        .map_err(|_| unavailable())?;
+        .map_err(|_| unavailable_at("endpoint"))?;
     let url = url::Url::parse(&endpoint).map_err(|_| unavailable())?;
     let mut response = client
         .http_client()
@@ -105,12 +118,12 @@ async fn fetch_inner(
         .bearer_auth(client.access_token().ok_or_else(unavailable)?)
         .send()
         .await
-        .map_err(|_| unavailable())?
+        .map_err(|_| unavailable_at("request"))?
         .error_for_status()
-        .map_err(|_| unavailable())?;
+        .map_err(|_| unavailable_at("http_status"))?;
     check()?;
-    if response.url() != &url {
-        return Err(unavailable());
+    if !acceptable_media_response(&url, response.url()) {
+        return Err(unavailable_at("redirect"));
     }
     if response
         .content_length()
@@ -119,7 +132,7 @@ async fn fetch_inner(
         return Err(too_large());
     }
     let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|_| unavailable())? {
+    while let Some(chunk) = response.chunk().await.map_err(|_| unavailable_at("body"))? {
         check()?;
         if bytes.len().saturating_add(chunk.len()) > MAX_AGENT_FILE_BYTES {
             return Err(too_large());

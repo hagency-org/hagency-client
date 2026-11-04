@@ -1954,7 +1954,15 @@ impl Widget for RoomScreen {
     }
 
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
-        self.view.agent_runtime_notice(cx,ids!(agent_runtime_notice)).set_room(cx,self.room_name_id.as_ref().map(|r|r.room_id().as_str()).unwrap_or(""));
+        let notice=self.view.agent_runtime_notice(cx,ids!(agent_runtime_notice));
+        if let Some(app)=scope.data.get::<crate::app::AppState>() {
+            notice.set_active(cx,agent_runtime_notice_active(
+                &app.selected_tab,
+                app.selected_room.as_ref().map(|room|room.room_id().as_ref()),
+                self.room_name_id.as_ref().map(|room|room.room_id().as_ref()),
+            ));
+        }
+        notice.set_room(cx,self.room_name_id.as_ref().map(|r|r.room_id().as_str()).unwrap_or(""));
         self.update_desktop_chat_header(cx);
         let available = cx.peek_walk_turtle(walk).size.x;
         self.layout_desktop_chat_info(cx, available);
@@ -4498,6 +4506,11 @@ impl RoomScreen {
     }
 
     pub fn hide_displayed_room(&mut self, cx: &mut Cx) {
+        let notice=self.view.agent_runtime_notice(cx,ids!(agent_runtime_notice));
+        notice.set_active(cx,false);
+        // Hidden RoomScreens no longer receive timers or async actions. Retire
+        // the request now so reopening this same room cannot retain a lost poll.
+        notice.set_room(cx,"");
         self.view.action_room_board(cx, ids!(actions_board)).select(cx, None);
         if self.tl_state.is_some() {
             self.hide_timeline();
