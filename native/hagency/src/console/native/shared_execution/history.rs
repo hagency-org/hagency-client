@@ -162,9 +162,6 @@ impl<S: HistoryIo> Reader<S> {
         let mut bytes = 0;
         while let Some(record) = self.records.buffer.front() {
             let size = record.to_string().len();
-            if size > PAGE_BYTES {
-                return Err(failure(502, "shared_history_event_too_large"));
-            }
             if bytes + size > PAGE_BYTES || messages.len() == PAGE_EVENTS {
                 break;
             }
@@ -199,9 +196,21 @@ impl Records {
         if id == anchor || !self.seen.insert(id.clone()) {
             return;
         }
+        // The device layer validates fields, but no single record may ever
+        // exceed a page: that would stall every older message behind it.
+        // A record that is still too large keeps only its identity.
+        if !record["body"].is_string() {
+            record.as_object_mut().unwrap().remove("body");
+        }
+        if record.to_string().len() + FRAGMENT_BYTES > PAGE_BYTES {
+            record = json!({"eventId":id,"sender":record["sender"],"status":"unavailable_oversized_record"});
+            self.unavailable += 1;
+            self.buffer.push_back(record);
+            return;
+        }
         if record["status"] == "edit" {
-            if let (Some(target), Some(sender)) =
-                (record["target"].as_str(), record["sender"].as_str())
+            if let (Some(target), Some(sender), true) =
+                (record["target"].as_str(), record["sender"].as_str(), record["body"].is_string())
             {
                 self.edits
                     .entry((target.into(), sender.into()))
@@ -355,6 +364,58 @@ mod tests {
             serde_json::from_str(&reader.read(blocked["nextCursor"].as_str()).await.unwrap())
                 .unwrap();
         assert!(!resumed["messages"].as_array().unwrap().is_empty());
+    }
+    struct CraftedPage;
+    impl HistoryIo for CraftedPage {
+        async fn start(&self, _room: &str, _anchor: &str) -> Result<Option<String>, NativeError> {
+            Ok(Some("0".into()))
+        }
+        async fn page(&self, _room: &str, from: &str) -> Result<HistoryBatch, NativeError> {
+            // Page 0 carries records the device layer would normally bound,
+            // as if a room member found a path around it. Page 1 is older
+            // history that must stay reachable.
+            if from == "0" {
+                let mut oversized = message("$oversized", "@mallory", "hi");
+                oversized["messageType"] = "x".repeat(20 * 1024).into();
+                let mut object_body = message("$object", "@mallory", "");
+                object_body["body"] = json!({"nested":"y".repeat(20 * 1024)});
+                let blank_edit = json!({"eventId":"$blank_edit","sender":"@alice","status":"edit","target":"$edited","body":{"no":"text"}});
+                Ok(HistoryBatch {
+                    events: vec![message("$newest", "@alice", "latest"), oversized, object_body, blank_edit, message("$edited", "@alice", "original text")],
+                    next: Some("1".into()),
+                })
+            } else {
+                Ok(HistoryBatch { events: vec![message("$older", "@bob", "older history")], next: None })
+            }
+        }
+    }
+    #[tokio::test]
+    async fn room_history_oversized_or_mistyped_records_never_stall_older_history() {
+        let mut reader = Reader {
+            device: Arc::new(CraftedPage),
+            room: "!current:example.test".into(),
+            anchor: "$current".into(),
+            started: false,
+            next: None,
+            pages: Vec::new(),
+            visited: HashSet::new(),
+            records: Records::default(),
+            context_remaining: 32 * 1024,
+            last_usage: None,
+        };
+        let first: Value = serde_json::from_str(&reader.read(None).await.unwrap()).unwrap();
+        let ids: Vec<&str> = first["messages"].as_array().unwrap().iter().map(|m| m["eventId"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["$newest", "$oversized", "$object", "$edited"]);
+        let by_id = |id: &str| first["messages"].as_array().unwrap().iter().find(|m| m["eventId"] == id).unwrap().clone();
+        assert_eq!(by_id("$oversized")["status"], "unavailable_oversized_record");
+        assert!(by_id("$oversized").get("messageType").is_none());
+        assert!(by_id("$object").get("body").is_none(), "a non-string body is dropped, not serialized");
+        assert_eq!(by_id("$edited")["body"], "original text", "an edit without text never blanks the original");
+        assert_eq!(first["unavailableMessages"], 1);
+        assert!(first.to_string().len() < 12 * 1024);
+        let second: Value = serde_json::from_str(&reader.read(first["nextCursor"].as_str()).await.unwrap()).unwrap();
+        assert_eq!(second["messages"][0]["eventId"], "$older");
+        assert_eq!(second["complete"], true);
     }
     #[test]
     fn room_history_includes_unaddressed_participants_deduplicates_ids_and_excludes_current_request()

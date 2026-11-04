@@ -65,13 +65,10 @@ impl AgentDevice {
 
 fn history_event(event: &TimelineEvent) -> Option<Value> {
     let raw: Value = serde_json::from_str(event.kind.raw().json().get()).ok()?;
-    let id = raw["event_id"].as_str()?;
-    let sender = raw["sender"].as_str()?;
-    let mut record = json!({"eventId":id,"sender":sender,"timestamp":raw["origin_server_ts"]});
     let unavailable = match &event.kind {
         TimelineEventKind::UnableToDecrypt { .. } => true,
         TimelineEventKind::Decrypted(d) => {
-            d.encryption_info.sender.as_str() != sender
+            d.encryption_info.sender.as_str() != raw["sender"].as_str().unwrap_or_default()
                 || matches!(
                     d.encryption_info.verification_state,
                     VerificationState::Unverified(
@@ -83,6 +80,31 @@ fn history_event(event: &TimelineEvent) -> Option<Value> {
         }
         TimelineEventKind::PlainText { .. } => false,
     };
+    history_record(&raw, unavailable)
+}
+
+/// Spec limits for the identifiers a record may carry; `msgtype` values are
+/// short namespaced names. Anything else is room-member-controlled JSON.
+const MAX_MATRIX_ID_BYTES: usize = 255;
+const MAX_MSGTYPE_BYTES: usize = 64;
+
+fn matrix_id(value: &Value, prefix: char) -> Option<&str> {
+    value
+        .as_str()
+        .filter(|s| s.starts_with(prefix) && s.len() <= MAX_MATRIX_ID_BYTES && !s.chars().any(char::is_control))
+}
+
+/// Every field is validated and bounded here, so one crafted event (an
+/// oversized `msgtype`, a non-string `body`, a huge relation id) can neither
+/// exceed a history page nor stall pagination for everything older than it.
+/// Bodies stay unbounded strings: the reader splits them into fragments.
+pub(in crate::console) fn history_record(raw: &Value, unavailable: bool) -> Option<Value> {
+    let id = matrix_id(&raw["event_id"], '$')?;
+    let sender = matrix_id(&raw["sender"], '@')?;
+    let mut record = json!({"eventId":id,"sender":sender});
+    if let Some(ts) = raw["origin_server_ts"].as_u64() {
+        record["timestamp"] = ts.into();
+    }
     if unavailable {
         record["status"] = "unavailable_encrypted_message".into();
         return Some(record);
@@ -92,26 +114,82 @@ fn history_event(event: &TimelineEvent) -> Option<Value> {
         return Some(record);
     }
     if raw["type"] == "m.room.redaction" {
+        // Room versions before 11 carry `redacts` at the top level.
+        let target = matrix_id(&raw["content"]["redacts"], '$')
+            .or_else(|| matrix_id(&raw["redacts"], '$'))?;
         record["status"] = "redaction".into();
-        record["target"] = raw
-            .get("redacts")
-            .unwrap_or(&raw["content"]["redacts"])
-            .clone();
+        record["target"] = target.into();
         return Some(record);
     }
     if raw["type"] != "m.room.message" {
         return None;
     }
     let content = &raw["content"];
-    record["body"] = content["body"].clone();
-    record["messageType"] = content["msgtype"].clone();
-    if content["m.relates_to"]["rel_type"] == "m.replace" {
-        record["status"] = "edit".into();
-        record["target"] = content["m.relates_to"]["event_id"].clone();
-        record["body"] = content["m.new_content"]["body"].clone();
+    if let Some(kind) = content["msgtype"].as_str().filter(|s| s.len() <= MAX_MSGTYPE_BYTES) {
+        record["messageType"] = kind.into();
     }
-    if let Some(root) = content["m.relates_to"]["event_id"].as_str() {
+    let relation = &content["m.relates_to"];
+    if relation["rel_type"] == "m.replace" {
+        // An edit without a well-formed target or replacement text is not an
+        // edit of anything; it is dropped rather than blanking the original.
+        let target = matrix_id(&relation["event_id"], '$')?;
+        let body = content["m.new_content"]["body"].as_str()?;
+        record["status"] = "edit".into();
+        record["target"] = target.into();
+        record["body"] = body.into();
+        return Some(record);
+    }
+    if let Some(body) = content["body"].as_str() {
+        record["body"] = body.into();
+    }
+    if let Some(root) = matrix_id(&relation["event_id"], '$') {
         record["relatedEventId"] = root.into();
     }
     Some(record)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event(id: &str, content: Value) -> Value {
+        json!({"type":"m.room.message","event_id":id,"sender":"@member:example.test","origin_server_ts":1700000000000u64,"content":content})
+    }
+
+    #[test]
+    fn history_record_drops_oversized_and_mistyped_fields_but_keeps_long_bodies() {
+        let record = history_record(
+            &event("$big", json!({"msgtype":"x".repeat(20 * 1024),"body":{"not":"text"},"m.relates_to":{"rel_type":"m.thread","event_id":format!("${}", "r".repeat(400))}})),
+            false,
+        )
+        .unwrap();
+        assert!(record.get("messageType").is_none());
+        assert!(record.get("body").is_none());
+        assert!(record.get("relatedEventId").is_none());
+        assert!(record.to_string().len() < 256);
+        let long = "群".repeat(50_000);
+        let record = history_record(&event("$long", json!({"msgtype":"m.text","body":long,"m.relates_to":{"rel_type":"m.thread","event_id":"$root"}})), false).unwrap();
+        assert_eq!(record["body"].as_str().unwrap().len(), long.len());
+        assert_eq!((record["messageType"].as_str(), record["relatedEventId"].as_str()), (Some("m.text"), Some("$root")));
+        assert_eq!(record["timestamp"], 1700000000000u64);
+    }
+
+    #[test]
+    fn history_record_requires_well_formed_edits_and_redaction_targets() {
+        assert!(history_record(&event("$edit", json!({"msgtype":"m.text","body":"* x","m.new_content":{"body":{"no":"text"}},"m.relates_to":{"rel_type":"m.replace","event_id":"$orig"}})), false).is_none());
+        let edit = history_record(&event("$edit", json!({"msgtype":"m.text","body":"* fixed","m.new_content":{"msgtype":"m.text","body":"fixed"},"m.relates_to":{"rel_type":"m.replace","event_id":"$orig"}})), false).unwrap();
+        assert_eq!((edit["status"].as_str(), edit["target"].as_str(), edit["body"].as_str()), (Some("edit"), Some("$orig"), Some("fixed")));
+        let mut redaction = event("$red", json!({"redacts":"$gone","reason":"spam"}));
+        redaction["type"] = "m.room.redaction".into();
+        let record = history_record(&redaction, false).unwrap();
+        assert_eq!((record["status"].as_str(), record["target"].as_str()), (Some("redaction"), Some("$gone")));
+        redaction["content"] = json!({"redacts":"not-an-event"});
+        assert!(history_record(&redaction, false).is_none());
+        let mut bad_sender = event("$e", json!({"msgtype":"m.text","body":"hi"}));
+        bad_sender["sender"] = "mallory".into();
+        assert!(history_record(&bad_sender, false).is_none());
+        let utd = history_record(&json!({"type":"m.room.encrypted","event_id":"$utd","sender":"@member:example.test","content":{"msgtype":"x".repeat(9000)}}), true).unwrap();
+        assert_eq!(utd["status"], "unavailable_encrypted_message");
+        assert!(utd.to_string().len() < 256);
+    }
 }
