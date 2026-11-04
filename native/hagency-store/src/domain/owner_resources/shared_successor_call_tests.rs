@@ -164,7 +164,7 @@ async fn shared_successor_call_failed_start_keeps_zero_and_unknown_distinct_afte
         assert_eq!(receipt.state, if dispatched {"unknown"} else {"failed"});
         assert!(a.process.start_shared_text_turn(w.body.clone()).await.is_err());
         let stop = a.sink.record(a.process.stop_shared_text_observation()).await.unwrap();
-        assert_eq!(stop.state, "stopped");
+        assert_eq!(stop.state, "stopped", "dispatched={dispatched}; cleanup={:?}; guardian={}", a.process.stop(), a.process.guardian_stderr_tail());
         // Reset only the fixture's close flag so shutdown joins its writer.
         a.f.registry.0.closed.store(false, Ordering::Release);
         a.f.registry.shutdown().await.unwrap();

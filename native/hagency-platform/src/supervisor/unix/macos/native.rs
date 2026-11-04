@@ -226,7 +226,7 @@ pub(super) fn census() -> io::Result<Vec<Snapshot>> {
 }
 /// Private caller must already own this birth through spawn or proven ancestry.
 pub(super) fn signal(target: Snapshot, signal: i32) -> io::Result<bool> {
-    let Some(current) = observe(target.pid)? else {
+    let Some(current) = observe_settled(target.pid)? else {
         return Ok(false);
     };
     if current.birth != target.birth || current.status == 5 {
@@ -240,7 +240,45 @@ pub(super) fn signal(target: Snapshot, signal: i32) -> io::Result<bool> {
     match unsafe { proc_signal_with_audittoken(&mut token, signal) } {
         0 => Ok(true),
         libc::ESRCH => Ok(false),
+        libc::EPERM => denied_signal(target),
         error => Err(io::Error::from_raw_os_error(error)),
+    }
+}
+
+// macOS can refuse SIGSTOP while the original child is concurrently exiting.
+// EPERM alone proves nothing: only a fresh, bracketed observation that the
+// original birth has exited makes the signal unnecessary. A live target or an
+// unreadable identity keeps the permission error. Descendant cleanup still
+// requires the guardian's two complete censuses and its retained root reap.
+fn denied_signal(target: Snapshot) -> io::Result<bool> {
+    for attempt in 0..4 {
+        match observe_settled(target.pid) {
+            Ok(None) => return Ok(false),
+            Ok(Some(row)) if row.birth != target.birth || row.status == 5 => return Ok(false),
+            Ok(Some(_)) => {}
+            Err(_) => break,
+        }
+        if attempt < 3 {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+    Err(io::Error::from_raw_os_error(libc::EPERM))
+}
+
+#[cfg(test)]
+mod signal_tests {
+    use super::*;
+
+    #[test]
+    fn native_macos_signal_denial_requires_fresh_exit_evidence() {
+        let mut child = std::process::Command::new("/bin/sleep").arg("1").spawn().unwrap();
+        let target = observe_settled(child.id() as i32).unwrap().unwrap();
+        let live_result = denied_signal(target);
+        // Always reap before asserting so a test failure leaves no child.
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(live_result.unwrap_err().raw_os_error(), Some(libc::EPERM));
+        assert!(!denied_signal(target).unwrap());
     }
 }
 fn cstring(value: &std::ffi::OsStr) -> io::Result<CString> {
