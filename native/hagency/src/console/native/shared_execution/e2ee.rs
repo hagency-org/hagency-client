@@ -11,6 +11,10 @@ use tokio::sync::Mutex;
 static DEVICES: LazyLock<Mutex<HashMap<String, Arc<AgentDevice>>>> =
     LazyLock::new(Default::default);
 static SENDS: Mutex<()> = Mutex::const_new(());
+// A process-local hint, never execution authority. Every subscriber still
+// checks its own account, device, assignment and budget before doing work.
+static WORK_CHANGED: LazyLock<tokio::sync::watch::Sender<()>> =
+    LazyLock::new(|| tokio::sync::watch::channel(()).0);
 pub(super) enum CryptoAction {
     Poll {
         after: Option<String>,
@@ -136,7 +140,7 @@ pub(super) async fn device(io: &Io, b: &Bound, assignment: &str) -> Result<Arc<A
         homeserver: b.scope.device.origin().into(),
     };
     let d = Arc::new(
-        AgentDevice::open(grant, &root, assignment)
+        AgentDevice::open_notifying(grant, &root, assignment, Some(WORK_CHANGED.clone()))
             .await
             .map_err(|_| failure(503, "shared_crypto_device_unavailable"))?,
     );
@@ -144,6 +148,10 @@ pub(super) async fn device(io: &Io, b: &Bound, assignment: &str) -> Result<Arc<A
     Ok(d)
 }
 impl SharedExecutionTransport {
+    pub fn work_changes(&self) -> tokio::sync::watch::Receiver<()> {
+        WORK_CHANGED.subscribe()
+    }
+
     /// Poll before demand admission, even while the provider is stopped. Device
     /// keys must be advertised before another client can share room keys.
     pub(super) async fn pump_crypto(&self) -> Result<(), NativeError> {

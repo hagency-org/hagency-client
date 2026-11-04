@@ -28,6 +28,8 @@ mod live_startup;
 
 #[path = "session/unknown_tolerance.rs"]
 mod unknown_tolerance;
+#[path = "session/room_history.rs"]
+mod room_history;
 
 type Session = SessionDriver<DuplexStream, DuplexStream, DuplexStream>;
 struct Peer {

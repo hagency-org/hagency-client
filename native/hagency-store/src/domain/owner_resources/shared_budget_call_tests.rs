@@ -272,5 +272,13 @@ async fn encrypted_shared_input_is_pinned_locally_and_cannot_fall_back_to_event_
     let follow=a.f.registry.prepare_shared_decrypted_input(a.authority(),next.clone(),"Secret followup".into()).await.unwrap();
     assert!(follow.text().contains(&text));assert!(follow.text().contains(&answer));assert!(follow.text().ends_with("Secret followup"));
     assert!(!serde_json::to_string(&next).unwrap().contains("Secret"));
+    let mut room=a.work("encrypted_room_context");room.encrypted=true;room.body=room.event_id.clone();room.body_digest=format!("{:x}",Sha256::digest(room.body.as_bytes()));room.thread_root=w.thread_root.clone();
+    a.f.registry.receive_shared_work(a.authority(),room.clone()).await.unwrap();
+    let prepared="Room history with all participants. Current request once.".to_string();
+    let room_input=a.f.registry.prepare_shared_room_input(a.authority(),room.clone(),prepared.clone()).await.unwrap();
+    assert_eq!(room_input.text(),prepared,"room history must not get the old eight-turn transcript prepended again");
+    let room_replay=a.f.registry.prepare_shared_room_input(a.authority(),room.clone(),prepared).await.unwrap();
+    assert_eq!(room_input.input_digest(),room_replay.input_digest());
+    assert!(a.f.registry.prepare_shared_room_input(a.authority(),room,"changed snapshot".into()).await.is_err());
     a.stop().await;
 }

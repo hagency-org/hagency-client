@@ -21,6 +21,7 @@ pub(super) struct State {
     final_ids: Vec<String>,
     text_bytes: usize,
     events: usize,
+    pub max_items: usize,
     /// The turn was ended by an `error` notice that will not retry, and the
     /// failed `turn/completed` the app server sends right after it has not been
     /// read yet. Consumed by that one notice and nothing else.
@@ -45,6 +46,7 @@ impl Default for State {
             final_ids: Vec::new(),
             text_bytes: 0,
             events: 0,
+            max_items: MAX_ITEMS,
             failed_echo_owed: false,
             turn_failure: None,
         }
@@ -367,7 +369,7 @@ impl State {
         ) {
             return Err(Error::UnsupportedEvent);
         }
-        if !complete && (self.items.contains_key(item_id) || self.items.len() >= MAX_ITEMS) {
+        if !complete && (self.items.contains_key(item_id) || self.items.len() >= self.max_items) {
             return Err(if self.items.contains_key(item_id) {
                 Error::Scope
             } else {

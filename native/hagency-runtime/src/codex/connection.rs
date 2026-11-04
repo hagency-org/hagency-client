@@ -222,7 +222,8 @@ impl Connection {
             Kind::Initialize,
             "initialize",
             json!({
-                "clientInfo": { "name": "hagency", "title": "Hagency runner", "version": version }
+                "clientInfo": { "name": "hagency", "title": "Hagency runner", "version": version },
+                "capabilities": { "experimentalApi": true }
             }),
             now_ms,
             timeout_ms,
@@ -296,6 +297,20 @@ impl Connection {
             now_ms,
             timeout_ms,
         )
+    }
+
+    /// Return only data for the one registered room-history tool. This cannot
+    /// answer an approval, another tool, an expired request or a second time.
+    pub fn respond_room_history(&mut self, id: &RequestId, content: &str, now_ms: u64) -> Result<Vec<u8>, Error> {
+        self.tick(now_ms)?;
+        let pending = self.server_pending.get(id).ok_or(Error::Identity)?;
+        if pending.responded || pending.method != "item/tool/call"
+            || pending.params.as_ref().and_then(|p| p["tool"].as_str()) != Some(super::session::ROOM_HISTORY_TOOL)
+            || content.len() > super::session::ROOM_HISTORY_RESULT_BYTES
+        { return Err(Error::Identity); }
+        let bytes = encode(Message::Response { id: id.clone(), result: json!({"contentItems":[{"type":"inputText","text":content}],"success":true}) })?;
+        self.server_pending.remove(id);
+        Ok(bytes)
     }
 
     /// Refuse requests when no typed host coordinator is attached.
@@ -452,7 +467,8 @@ impl Connection {
                             .ok_or(Error::Envelope)
                     })
                     .transpose()?;
-                // Only typed approval responses need a content-bound copy.
+                // Typed approvals and the scoped read-only history response
+                // need a content-bound copy.
                 // Bound it before cloning; unrelated unsupported callbacks keep
                 // no payload copy in the connection's pending table.
                 let approval = matches!(
@@ -462,7 +478,9 @@ impl Connection {
                         | "item/permissions/requestApproval"
                         | "mcpServer/elicitation/request"
                 );
-                let response_params = if approval
+                let history = method == "item/tool/call"
+                    && params.as_ref().and_then(|p|p["tool"].as_str()) == Some(super::session::ROOM_HISTORY_TOOL);
+                let response_params = if (approval || history)
                     && serde_json::to_vec(&params)
                         .map_err(|_| Error::Envelope)?
                         .len()
