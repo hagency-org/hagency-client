@@ -145,7 +145,7 @@ async fn apply_delta(f:&Fixture,c:&SharedRuntimeCommand){
     let proof=VerifiedAgentBudgetDelivery::new(enrollment,command.clone(),digest(&command).unwrap(),true,false,Instant::now()+Duration::from_secs(20)).unwrap();
     assert_eq!(f.registry.apply_managed_budget(proof).await.unwrap().state,"applied");
 }
-async fn prepared()->(Fixture,SharedExecutionTransport,SharedRuntimeCommand){
+pub(super) async fn prepared()->(Fixture,SharedExecutionTransport,SharedRuntimeCommand){
     let(f,t,c)=attempts::predecessor().await;
     apply_delta(&f,&c).await;
     f.state.lock().unwrap().shared.budget_attempts.lose_start_reply=true;
@@ -160,7 +160,7 @@ async fn prepared()->(Fixture,SharedExecutionTransport,SharedRuntimeCommand){
     s.shared.idle_work=false;drop(s);
     (f,t,c)
 }
-async fn wait_stopped(f:&Fixture){
+pub(super) async fn wait_stopped(f:&Fixture){
     tokio::time::timeout(Duration::from_secs(15),async{loop{
         if f.state.lock().unwrap().shared.budget_attempts.processes.values().any(|r|r.state=="stopped"){break;}
         tokio::time::sleep(Duration::from_millis(20)).await;

@@ -37,7 +37,29 @@ impl HistoryIo for AgentDevice {
     }
 }
 
-pub(super) struct Reader<S = AgentDevice> {
+pub(super) enum Source {
+    Device(Arc<AgentDevice>),
+    #[cfg(test)]
+    Fixture(Arc<Fixture>),
+}
+impl HistoryIo for Source {
+    async fn start(&self, room: &str, anchor: &str) -> Result<Option<String>, NativeError> {
+        match self {
+            Self::Device(device) => HistoryIo::start(device.as_ref(), room, anchor).await,
+            #[cfg(test)]
+            Self::Fixture(fixture) => fixture.start(room, anchor).await,
+        }
+    }
+    async fn page(&self, room: &str, from: &str) -> Result<HistoryBatch, NativeError> {
+        match self {
+            Self::Device(device) => HistoryIo::page(device.as_ref(), room, from).await,
+            #[cfg(test)]
+            Self::Fixture(fixture) => fixture.page(room, from).await,
+        }
+    }
+}
+
+pub(super) struct Reader<S = Source> {
     device: Arc<S>,
     room: String,
     anchor: String,
@@ -59,12 +81,9 @@ impl Reader {
         if !work.encrypted {
             return Ok(None);
         }
-        #[cfg(test)]
-        if io.crypto_fixture.is_some() {
-            return Ok(None);
-        }
+        let Some(device) = Self::source(io, b, work).await? else { return Ok(None); };
         Ok(Some(Self {
-            device: super::e2ee::device(io, b, &work.assignment_id).await?,
+            device,
             room: work.room_id.clone(),
             anchor: work.event_id.clone(),
             started: false,
@@ -75,6 +94,42 @@ impl Reader {
             context_remaining: 32 * 1024,
             last_usage: None,
         }))
+    }
+
+    async fn source(io: &Io, b: &Bound, work: &SharedWorkItem) -> Result<Option<Arc<Source>>, NativeError> {
+        #[cfg(test)]
+        if let Some(fixture) = &io.crypto_fixture {
+            return Ok(fixture.history.clone().map(|history| Arc::new(Source::Fixture(history))));
+        }
+        Ok(Some(Arc::new(Source::Device(super::e2ee::device(io, b, &work.assignment_id).await?))))
+    }
+}
+
+/// The supervised driver tests substitute only Matrix reads, not the history
+/// reader, input custody, provider protocol, callback handler or delivery.
+#[cfg(test)]
+pub(super) struct Fixture {
+    pub(super) room: String,
+    pub(super) anchor: String,
+    pub(super) pages: Vec<Vec<Value>>,
+    pub(super) reads: Arc<std::sync::Mutex<Vec<String>>>,
+}
+#[cfg(test)]
+impl HistoryIo for Fixture {
+    async fn start(&self, room: &str, anchor: &str) -> Result<Option<String>, NativeError> {
+        assert_eq!(room, self.room);
+        assert_eq!(anchor, self.anchor);
+        self.reads.lock().unwrap().push("start".into());
+        Ok((!self.pages.is_empty()).then(|| "0".into()))
+    }
+    async fn page(&self, room: &str, from: &str) -> Result<HistoryBatch, NativeError> {
+        assert_eq!(room, self.room);
+        let index: usize = from.parse().map_err(|_| invalid())?;
+        self.reads.lock().unwrap().push(from.into());
+        Ok(HistoryBatch {
+            events: self.pages.get(index).ok_or_else(invalid)?.clone(),
+            next: (index + 1 < self.pages.len()).then(|| (index + 1).to_string()),
+        })
     }
 }
 
@@ -176,6 +231,10 @@ impl<S: HistoryIo> Reader<S> {
         if result.len() > hagency_runtime::codex::session::ROOM_HISTORY_RESULT_BYTES {
             return Err(invalid());
         }
+        // Coverage evidence stays local and contains no message text.
+        tracing::info!(room_id=%self.room, before_event_id=%self.anchor, page=index,
+            records=messages.len(), result_bytes=result.len(), complete=next.is_none(),
+            unavailable_messages=self.records.unavailable, "Shared room history page read");
         self.context_remaining = self.context_remaining.saturating_sub(result.len());
         self.pages.push(next);
         Ok(result)

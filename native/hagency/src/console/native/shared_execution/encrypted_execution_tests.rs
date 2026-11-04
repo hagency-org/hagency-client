@@ -117,3 +117,72 @@ async fn native_shared_encrypted_missing_keys_never_start_model() {
         f.stop().await;
     }
 }
+
+#[cfg(feature = "shared-budget-execution")]
+#[tokio::test]
+#[ignore = "requires explicit offline supervised runtime probe; exercises all three native drivers"]
+async fn native_shared_encrypted_history_reaches_original_successor_and_budget_drivers() {
+    for lane in ["original", "successor", "budget"] {
+        let (f, t, _) = match lane {
+            "budget" => Box::pin(budget_attempts::prepared()).await,
+            _ => Box::pin(setup(lane == "successor")).await,
+        };
+        let work = {
+            let mut state = f.state.lock().unwrap();
+            let work = state.shared.work.as_mut().unwrap();
+            work.encrypted = true;
+            work.body = work.event_id.clone();
+            work.body_digest = format!("{:x}", Sha256::digest(work.body.as_bytes()));
+            work.clone()
+        };
+        let deltas_before = rows(&f, "owner_managed_budget_deltas");
+        let (t, sent) = t.with_crypto_fixture(Some(PROMPT.into()));
+        let recent = json!({"eventId":"$recent:history","sender":"@alice:test","body":"Recent unaddressed group message"});
+        let older = json!({"eventId":"$older:history","sender":"@bob:test","body":"Earlier unaddressed group message"});
+        let (t, reads) = t.with_history_fixture(work.room_id.clone(), work.event_id.clone(), vec![
+            vec![json!({"eventId":work.event_id,"sender":work.requester_mxid,"body":PROMPT}), recent.clone()],
+            vec![recent, older, json!({"eventId":"$missing:history","sender":"@carol:test","status":"unavailable_encrypted_message","unavailableReason":"unable_to_decrypt"})],
+        ]);
+        let launch = launch(&f, "text-room-history-usage");
+        let progress = match lane {
+            "original" => t.poll_fixture(&f.registry, launch).await,
+            "successor" => t.poll_successor_fixture(&f.registry, launch).await,
+            _ => t.poll_budget_successor_fixture(&f.registry, launch).await,
+        }.unwrap();
+        assert!(matches!(progress, SharedExecutionProgress::Running { .. }), "{lane}");
+        match lane {
+            "original" => stopped(&f).await,
+            "successor" => attempts::wait_stopped(&f).await,
+            _ => budget_attempts::wait_stopped(&f).await,
+        }
+        let root = f._root.path().join("shared-probe");
+        let thread: Value = serde_json::from_slice(&std::fs::read(root.join("thread-request.json")).unwrap()).unwrap();
+        assert_eq!(thread["dynamicTools"][0]["name"], "read_room_history", "{lane} must expose the history tool");
+        let turn: Value = serde_json::from_slice(&std::fs::read(root.join("turn-request.json")).unwrap()).unwrap();
+        let text = turn["input"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Recent unaddressed group message"), "{lane} must include recent room context");
+        assert_eq!(text.matches(PROMPT).count(), 1, "{lane} must include the current request only once");
+        let pages: Vec<Value> = std::fs::read_to_string(root.join("history-pages.jsonl")).unwrap()
+            .lines().map(|line|serde_json::from_str(line).unwrap()).collect();
+        assert_eq!(pages.len(), 2, "{lane}: repeated preview cursor then the next page");
+        assert_eq!(pages[0]["alreadyRead"], true);
+        assert_eq!(pages[0]["messages"], json!([]));
+        assert_eq!(pages[1]["complete"], true);
+        assert_eq!(pages[1]["unavailableMessages"], 1);
+        assert_eq!(pages[1]["messages"][0]["eventId"], "$older:history");
+        assert!(pages.iter().all(|page|page.to_string().len() <= 12 * 1024));
+        assert_eq!(*reads.lock().unwrap(), ["start", "0", "1"]);
+        {
+            let sends = sent.lock().unwrap();
+            assert_eq!(sends.len(), 1, "{lane}");
+            assert_eq!(sends[0].1, "Earlier unaddressed group message");
+            let state = f.state.lock().unwrap();
+            assert_eq!(state.shared.starts, 1, "{lane}");
+            let receipt = state.shared.receipts.values().find(|r|r.state=="completed").expect("history turn completes");
+            assert!(receipt.usage_complete);
+            assert!(!receipt.body.as_deref().unwrap_or_default().contains("unaddressed group message"));
+        }
+        assert_eq!(rows(&f, "owner_managed_budget_deltas"), deltas_before);
+        f.stop().await;
+    }
+}

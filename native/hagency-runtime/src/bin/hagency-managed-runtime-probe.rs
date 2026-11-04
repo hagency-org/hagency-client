@@ -6,6 +6,8 @@ use std::{
     path::Path,
     time::Duration,
 };
+#[path = "history_probe/mod.rs"]
+mod history_probe;
 fn main() -> io::Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     #[cfg(unix)]
@@ -19,12 +21,17 @@ fn main() -> io::Result<()> {
     let root = Path::new(root);
     fs::write(root.join("process-id"), std::process::id().to_string())?;
     let mut quota = 0;
+    let mut history = history_probe::Probe::default();
     let mut log = fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(root.join("methods"))?;
     for line in io::stdin().lock().lines() {
         let v: Value = serde_json::from_str(&line?).map_err(io::Error::other)?;
+        if mode == "text-room-history-usage" && v.get("method").is_none() {
+            history.response(root, &v)?;
+            continue;
+        }
         let Some(method) = v["method"].as_str() else {
             continue;
         };
@@ -33,9 +40,14 @@ fn main() -> io::Result<()> {
         if method == "initialized" {
             continue;
         }
-        if mode.starts_with("text-workspace") && matches!(method, "thread/start" | "turn/start") {
+        if (mode.starts_with("text-workspace") || mode == "text-room-history-usage") && matches!(method, "thread/start" | "turn/start") {
             let name = if method == "thread/start" { "thread-request.json" } else { "turn-request.json" };
             fs::write(root.join(name), serde_json::to_vec(&v["params"])?)?;
+        }
+        if mode == "text-room-history-usage" && method == "thread/start"
+            && v["params"]["dynamicTools"][0]["name"] != "read_room_history"
+        {
+            return Err(io::Error::other("room history tool was not registered by the execution driver"));
         }
         if (mode == "delay" && method == "account/rateLimits/read")
             || (mode == "delay-config" && method == "config/read")
@@ -154,6 +166,10 @@ fn main() -> io::Result<()> {
         }
         if method == "turn/start" && mode.starts_with("text") {
             io::stdout().flush()?;
+            if mode == "text-room-history-usage" {
+                history.begin()?;
+                continue;
+            }
             if mode.ends_with("interrupt-usage") { continue; }
             if matches!(&*mode, "text-block" | "text-renew") {
                 let deadline = std::time::Instant::now()

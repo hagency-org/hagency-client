@@ -285,6 +285,7 @@ pub(super) struct CryptoFixture {
     input: Option<String>,
     input_delay: Duration,
     sent: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    pub(super) history: Option<Arc<super::history::Fixture>>,
 }
 #[cfg(test)]
 impl SharedExecutionTransport {
@@ -292,12 +293,20 @@ impl SharedExecutionTransport {
         mut self, input: Option<String>,
     ) -> (Self, Arc<std::sync::Mutex<Vec<(String, String)>>>) {
         let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
-        self.io.crypto_fixture = Some(Arc::new(CryptoFixture {input, input_delay: Duration::ZERO, sent: sent.clone()}));
+        self.io.crypto_fixture = Some(Arc::new(CryptoFixture {input, input_delay: Duration::ZERO, sent: sent.clone(), history: None}));
         (self, sent)
     }
     pub(in crate::console::native) fn with_crypto_input_delay(mut self, delay: Duration) -> Self {
         Arc::get_mut(self.io.crypto_fixture.as_mut().unwrap()).unwrap().input_delay = delay;
         self
+    }
+    pub(in crate::console::native) fn with_history_fixture(
+        mut self, room: String, anchor: String, pages: Vec<Vec<Value>>,
+    ) -> (Self, Arc<std::sync::Mutex<Vec<String>>>) {
+        let reads = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let fixture = super::history::Fixture { room, anchor, pages, reads: reads.clone() };
+        Arc::get_mut(self.io.crypto_fixture.as_mut().unwrap()).unwrap().history = Some(Arc::new(fixture));
+        (self, reads)
     }
 }
 #[derive(Serialize, Deserialize)]

@@ -407,10 +407,14 @@ async fn work_loop(
     };
     guarded(cancel,a.until,|| maybe_renew(io,r,sink,control,a)).await?;
     let (b,p)=proof(io,r,sink,a).await?;
+    let mut history=prepare_while_active(io,r,sink,control,a,cancel,super::history::Reader::new(io,&b,&work)).await?;
     let input=if cfg!(feature="shared-context") && work.encrypted {
         let text = prepare_while_active(io,r,sink,control,a,cancel,super::e2ee::input(io,&b,&work)).await?;
+        let text = if let Some(history)=history.as_mut() {
+            prepare_while_active(io,r,sink,control,a,cancel,async { Ok(history.prompt(text).await) }).await?
+        } else {text};
         let (_,fresh) = proof(io,r,sink,a).await?;
-        Some(r.prepare_shared_decrypted_input(fresh,work.clone(),text).await.map_err(store)?)
+        Some(if history.is_some() {r.prepare_shared_room_input(fresh,work.clone(),text).await} else {r.prepare_shared_decrypted_input(fresh,work.clone(),text).await}.map_err(store)?)
     } else if cfg!(feature="shared-context") {
         Some(guarded(cancel,a.until,|| super::context_io::prepare(io,&b,r,p,&work,a.lease.authority.clone(),a.until)).await?)
     }else{None};
@@ -418,6 +422,7 @@ async fn work_loop(
     // recording call admission, so startup failure cannot reserve the budget.
     prepare_while_active(io,r,sink,control,a,cancel,async {
         io.check(&sink.command().original_runtime_command).await?;
+        if history.is_some() { process.enable_shared_room_history().map_err(|_|failure(409,"shared_history_tool_unavailable"))?; }
         process.start_shared_text_thread_for_room(&work.room_id).await.map_err(|error| {
             tracing::warn!(?error, "Shared Agent thread setup failed before call admission");
             failure(409, "shared_execution_thread_unknown")
@@ -499,6 +504,8 @@ async fn work_loop(
             continue;
         };
         let approval=event.approval().cloned();
+        let history_call=event.room_history_call().cloned();
+        if let (Some(history),hagency_runtime::codex::session::ObservationKind::Usage(evidence))=(history.as_mut(),event.observation().kind()) {history.observe_usage(evidence);}
         let ended = matches!(
             event.observation().kind(),
             hagency_runtime::codex::session::ObservationKind::TurnEnded(_)
@@ -519,6 +526,14 @@ async fn work_loop(
             break recorded.ok_or_else(invalid)?;
         }
         if stop_reason.is_some() { continue; }
+        if let Some(call)=history_call {
+            let reader=history.as_mut().ok_or_else(invalid)?;
+            guarded(cancel,a.until,|| io.check(&sink.command().original_runtime_command)).await?;
+            let content=prepare_while_active(io,r,sink,control,a,cancel,reader.read(call.cursor.as_deref())).await
+                .unwrap_or_else(|error| serde_json::json!({"complete":false,"error":error.code}).to_string());
+            guarded(cancel,a.until,|| io.check(&sink.command().original_runtime_command)).await?;
+            guarded(cancel,a.until,||async{ process.respond_shared_room_history(&call,content).await.map_err(|_|failure(409,"shared_history_response_failed")) }).await?;
+        }
         if let Some(request)=approval {
             let b=io.bound().await?;
             guarded(cancel,a.until,|| approvals.register(io,&b,&work,&a.lease.authority,a.until,process,request)).await?;
