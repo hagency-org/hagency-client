@@ -3,6 +3,48 @@ use crate::media_transport::tests::Server;
 use matrix_sdk::ruma::api::MatrixVersion;
 use serde_json::json;
 #[tokio::test]
+async fn sdk_agent_download_accepts_delegated_storage_without_forwarding_matrix_bearer() {
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::{method, path}};
+    let plaintext=b"QA064-FILE-20261104\n\xe4\xb8\xad\xe6\x96\x87\xe9\x99\x84\xe4\xbb\xb6\xe6\xb5\x8b\xe8\xaf\x95\n";
+    let mut input=std::io::Cursor::new(plaintext);
+    let mut encryptor=matrix_sdk_base::crypto::AttachmentEncryptor::new(&mut input);
+    let mut ciphertext=Vec::new();encryptor.read_to_end(&mut ciphertext).unwrap();
+    let mut file=serde_json::to_value(encryptor.finish()).unwrap();
+    file["url"]=json!("mxc://example.org/delegated");
+    let storage=MockServer::start().await;
+    Mock::given(method("GET")).and(path("/object"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(ciphertext)).expect(2)
+        .mount(&storage).await;
+    let server=MockServer::start().await;
+    Mock::given(method("GET")).and(path("/_matrix/client/v1/media/download/example.org/delegated"))
+        .respond_with(ResponseTemplate::new(302).insert_header("Location",format!("{}/object?signature=fixture",storage.uri())))
+        .expect(2).mount(&server).await;
+    let client=Client::builder().http_client(matrix_sdk::reqwest::Client::builder().no_proxy().build().unwrap())
+        .homeserver_url(server.uri()).server_versions([MatrixVersion::V1_11]).build().await.unwrap();
+    client.matrix_auth().restore_session(serde_json::from_value(json!({"access_token":"fixture-token","user_id":"@test:example.org","device_id":"FILES"})).unwrap(),Default::default()).await.unwrap();
+    let content=json!({"msgtype":"m.file","body":"source.txt","file":file,"info":{"size":plaintext.len()}});
+    let source=AgentAttachment::from_content(&content).unwrap();
+    assert_eq!(fetch(&client,client.homeserver().as_str(),"@test:example.org",&source,||Ok(())).await.unwrap(),plaintext);
+    let mut tampered=content;tampered["file"]["hashes"]["sha256"]=json!("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    let source=AgentAttachment::from_content(&tampered).unwrap();
+    assert_eq!(fetch(&client,client.homeserver().as_str(),"@test:example.org",&source,||Ok(())).await.unwrap_err().code,"agent_file_integrity_failed");
+    for request in server.received_requests().await.unwrap() {
+        assert_eq!(request.headers.get("authorization").unwrap(),"Bearer fixture-token");
+    }
+    for request in storage.received_requests().await.unwrap() {
+        assert!(!request.headers.contains_key("authorization"),"Matrix bearer must stay at the homeserver");
+        assert!(!request.headers.contains_key("cookie"));
+    }
+}
+#[test]
+fn delegated_media_response_rejects_transport_downgrades_and_url_credentials() {
+    let request="https://homeserver.example/media".parse().unwrap();
+    for response in ["http://storage.example/blob", "https://user:password@storage.example/blob"] {
+        assert!(!acceptable_media_response(&request,&response.parse().unwrap()));
+    }
+    assert!(acceptable_media_response(&request,&"https://storage.example/blob?signature=fixture".parse().unwrap()));
+}
+#[tokio::test]
 async fn sdk_agent_download_authenticates_bounds_and_verifies_actual_encrypted_bytes_without_cache()
 {
     let plaintext = b"private incoming file";
