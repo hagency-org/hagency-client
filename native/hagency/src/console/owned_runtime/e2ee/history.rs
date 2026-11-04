@@ -1,5 +1,5 @@
 use super::*;
-use matrix_sdk::{deserialized_responses::TimelineEvent, room::MessagesOptions};
+use matrix_sdk::{deserialized_responses::{DeviceLinkProblem, TimelineEvent}, room::MessagesOptions};
 use serde_json::{Value, json};
 
 pub(in crate::console) struct HistoryBatch {
@@ -65,22 +65,35 @@ impl AgentDevice {
 
 fn history_event(event: &TimelineEvent) -> Option<Value> {
     let raw: Value = serde_json::from_str(event.kind.raw().json().get()).ok()?;
-    let unavailable = match &event.kind {
-        TimelineEventKind::UnableToDecrypt { .. } => true,
+    let unavailable_reason = match &event.kind {
+        TimelineEventKind::UnableToDecrypt { .. } => Some("unable_to_decrypt"),
         TimelineEventKind::Decrypted(d) => {
-            d.encryption_info.sender.as_str() != raw["sender"].as_str().unwrap_or_default()
-                || matches!(
-                    d.encryption_info.verification_state,
-                    VerificationState::Unverified(
-                        VerificationLevel::None(_)
-                            | VerificationLevel::MismatchedSender
-                            | VerificationLevel::VerificationViolation
-                    )
-                )
+            if d.encryption_info.sender.as_str() != raw["sender"].as_str().unwrap_or_default() {
+                Some("sender_mismatch")
+            } else {
+                verification_issue(&d.encryption_info.verification_state)
+            }
         }
-        TimelineEventKind::PlainText { .. } => false,
+        TimelineEventKind::PlainText { .. } => None,
     };
-    history_record(&raw, unavailable)
+    let mut record = history_record(&raw, unavailable_reason.is_some())?;
+    if let Some(reason) = unavailable_reason {
+        record["unavailableReason"] = reason.into();
+    }
+    Some(record)
+}
+
+fn verification_issue(state: &VerificationState) -> Option<&'static str> {
+    match state {
+        VerificationState::Unverified(level) => match level {
+            VerificationLevel::None(DeviceLinkProblem::MissingDevice) => Some("sender_device_missing"),
+            VerificationLevel::None(DeviceLinkProblem::InsecureSource) => Some("insecure_key_source"),
+            VerificationLevel::MismatchedSender => Some("sender_mismatch"),
+            VerificationLevel::VerificationViolation => Some("identity_verification_changed"),
+            VerificationLevel::UnverifiedIdentity | VerificationLevel::UnsignedDevice => None,
+        },
+        VerificationState::Verified => None,
+    }
 }
 
 /// Spec limits for the identifiers a record may carry; `msgtype` values are
@@ -91,7 +104,14 @@ const MAX_MSGTYPE_BYTES: usize = 64;
 fn matrix_id(value: &Value, prefix: char) -> Option<&str> {
     value
         .as_str()
-        .filter(|s| s.starts_with(prefix) && s.len() <= MAX_MATRIX_ID_BYTES && !s.chars().any(char::is_control))
+        .filter(|s| {
+            s.len() > 1 && s.len() <= MAX_MATRIX_ID_BYTES && !s.chars().any(char::is_control)
+                && match prefix {
+                    '$' => OwnedEventId::try_from(*s).is_ok(),
+                    '@' => OwnedUserId::try_from(*s).is_ok(),
+                    _ => false,
+                }
+        })
 }
 
 /// Every field is validated and bounded here, so one crafted event (an
@@ -141,6 +161,9 @@ pub(in crate::console) fn history_record(raw: &Value, unavailable: bool) -> Opti
     }
     if let Some(body) = content["body"].as_str() {
         record["body"] = body.into();
+    } else {
+        record["status"] = "unavailable_invalid_message".into();
+        record["unavailableReason"] = "body_is_not_text".into();
     }
     if let Some(root) = matrix_id(&relation["event_id"], '$') {
         record["relatedEventId"] = root.into();
@@ -157,6 +180,27 @@ mod tests {
     }
 
     #[test]
+    fn history_record_distinguishes_unknown_devices_from_unverified_identities() {
+        assert_eq!(verification_issue(&VerificationState::Verified), None);
+        for level in [VerificationLevel::UnverifiedIdentity, VerificationLevel::UnsignedDevice] {
+            assert_eq!(verification_issue(&VerificationState::Unverified(level)), None);
+        }
+        for (level, reason) in [
+            (VerificationLevel::None(DeviceLinkProblem::MissingDevice), "sender_device_missing"),
+            (VerificationLevel::None(DeviceLinkProblem::InsecureSource), "insecure_key_source"),
+            (VerificationLevel::MismatchedSender, "sender_mismatch"),
+            (VerificationLevel::VerificationViolation, "identity_verification_changed"),
+        ] {
+            assert_eq!(verification_issue(&VerificationState::Unverified(level)), Some(reason));
+        }
+        for sender in ["@", "@alice", "@alice:"] {
+            let mut raw = event("$message", json!({"body":"hello"}));
+            raw["sender"] = sender.into();
+            assert!(history_record(&raw, false).is_none(), "{sender}");
+        }
+    }
+
+    #[test]
     fn history_record_drops_oversized_and_mistyped_fields_but_keeps_long_bodies() {
         let record = history_record(
             &event("$big", json!({"msgtype":"x".repeat(20 * 1024),"body":{"not":"text"},"m.relates_to":{"rel_type":"m.thread","event_id":format!("${}", "r".repeat(400))}})),
@@ -165,6 +209,7 @@ mod tests {
         .unwrap();
         assert!(record.get("messageType").is_none());
         assert!(record.get("body").is_none());
+        assert_eq!(record["status"], "unavailable_invalid_message");
         assert!(record.get("relatedEventId").is_none());
         assert!(record.to_string().len() < 256);
         let long = "群".repeat(50_000);
