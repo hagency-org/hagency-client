@@ -17,6 +17,7 @@ fn record(w: &SharedWorkItem) -> SharedContextRecord {
         context_ordinal: 1,
         coverage: "prior_delivered_pairs_only".into(),
         omitted_earlier: false,
+        budget: None,
         history: vec![],
     };
     SharedContextRecord {

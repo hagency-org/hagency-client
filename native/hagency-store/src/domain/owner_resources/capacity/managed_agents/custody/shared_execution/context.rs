@@ -25,15 +25,28 @@ impl SharedPreparedInput {
 }
 
 /// Reserve queue capacity for the bounded rendered input plus its descriptor.
-/// Old plain operations retain their original smaller charge.
+/// Old plain operations retain their original smaller charge; a version 2
+/// record may render up to MAX_CONTEXT_INPUT_BYTES_V2.
 pub(super) fn queue_weight(input: Option<&SharedPreparedInput>) -> u32 {
-    if input.is_some() {
-        128 * 1024
-    } else {
-        32 * 1024
+    match input {
+        Some(i) if i.context.as_ref().is_some_and(|c| c.context.version != 1) => 192 * 1024,
+        Some(_) => 128 * 1024,
+        None => 32 * 1024,
     }
 }
 
+/// Latest `modelContextWindow` the runtime reported for this Agent, if any.
+pub(crate) fn observed_context_window(db: &Connection, child: &str) -> Result<Option<u64>, Error> {
+    const PATH: &str = "'$.observation.usage.runtime_evidence.usage.context_window'";
+    let window: Option<i64> = db
+        .query_row(
+            &format!("SELECT json_extract(evidence,{PATH}) FROM owner_managed_observations WHERE child_id=?1 AND kind='usage' AND json_type(evidence,{PATH})='integer' ORDER BY ledger_revision DESC LIMIT 1"),
+            [child],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(window.and_then(|w| u64::try_from(w).ok()).filter(|w| *w > 0))
+}
 fn mode(db: &Connection, work: &str) -> Result<Option<String>, Error> {
     Ok(db
         .query_row(
@@ -210,6 +223,22 @@ pub(super) fn require_call(
 }
 
 impl OwnerResourceRegistry {
+    /// The model window this Agent's runtime last reported in a usage
+    /// observation, in tokens. Descriptive only: the server derives the
+    /// version 2 history budget from it and both sides re-check the result.
+    pub async fn shared_context_window(
+        &self,
+        a: &VerifiedSharedActivity,
+    ) -> Result<Option<u64>, Error> {
+        if !Arc::ptr_eq(&self.0, a.sink.registry()) {
+            return Err(Error::LocalAuthority);
+        }
+        let child = a.sink.child().to_owned();
+        self.0
+            .store
+            .call(4096, move |db| observed_context_window(&db.db, &child))
+            .await
+    }
     /// The caller supplies an authenticated descriptive mode/context; this
     /// writer rechecks the exact live process, work, Run fence and local pins.
     /// Neither saving this object nor recovering it issues a model call.

@@ -35,6 +35,9 @@ impl ContextAction {
             }
             Self::Freeze { work, input } => {
                 input.authority.validate().map_err(store)?;
+                if let Some(b) = &input.budget {
+                    b.validate().map_err(store)?;
+                }
                 (work, &input.work_digest)
             }
             Self::Recover { work, input } => {
@@ -68,14 +71,34 @@ impl From<ContextAction> for Action {
     }
 }
 
-async fn paired(b: &Bound) -> Result<bool, NativeError> {
+/// The highest context record version the endpoint advertises, if any.
+/// Version 2 implies version 1 routes; a lone version 2 flag is not trusted.
+async fn paired(b: &Bound) -> Result<Option<u16>, NativeError> {
     let d = b.demand_discovery().await?;
     if d.capabilities.len() > 64 || d.capabilities.iter().any(|c| c.len() > 128) {
         return Err(invalid());
     }
-    Ok(d.capabilities
-        .iter()
-        .any(|c| c == SHARED_CONTEXT_CAPABILITY))
+    let has = |name: &str| d.capabilities.iter().any(|c| c == name);
+    Ok(match (has(SHARED_CONTEXT_CAPABILITY), has(SHARED_CONTEXT_CAPABILITY_V2)) {
+        (true, true) => Some(2),
+        (true, false) => Some(1),
+        _ => None,
+    })
+}
+/// A version 2 freeze names the model window this Agent last reported so the
+/// server can budget history against it. Nothing here grants model custody.
+async fn budget(
+    r: &OwnerResourceRegistry,
+    a: &VerifiedSharedActivity,
+    version: u16,
+) -> Result<Option<SharedContextBudgetInput>, NativeError> {
+    if version < 2 {
+        return Ok(None);
+    }
+    Ok(Some(SharedContextBudgetInput {
+        version: 2,
+        model_context_window: r.shared_context_window(a).await.map_err(store)?,
+    }))
 }
 pub(super) async fn prepare(
     io: &Io,
@@ -90,12 +113,13 @@ pub(super) async fn prepare(
         let text = super::e2ee::input(io, b, w).await?;
         return r.prepare_shared_decrypted_input(a, w.clone(), text).await.map_err(store);
     }
-    if !paired(b).await? {
+    let Some(version) = paired(b).await? else {
         return r
             .prepare_shared_legacy_input(a, w.clone())
             .await
             .map_err(store);
-    }
+    };
+    let budget = budget(r, &a, version).await?;
     let mode: Timed<SharedWorkInputMode> = b
         .upload(
             ContextAction::Mode {
@@ -127,6 +151,7 @@ pub(super) async fn prepare(
                 input: SharedContextInput {
                     authority,
                     work_digest: digest(w)?,
+                    budget,
                 },
             }
         };
@@ -190,7 +215,7 @@ pub(super) async fn observe_delivery(
     c: &SharedRuntimeCommand,
     w: &SharedWorkItem,
 ) -> Result<(), NativeError> {
-    if !cfg!(feature = "shared-context") || !paired(b).await? {
+    if !cfg!(feature = "shared-context") || paired(b).await?.is_none() {
         return Ok(());
     }
     let observed: Timed<SharedReplyObservation> = b

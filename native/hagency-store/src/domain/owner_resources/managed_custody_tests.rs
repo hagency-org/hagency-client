@@ -1119,3 +1119,31 @@ async fn owner_reconciliation_never_goes_below_observed_usage() {
     drop(next);
     f.registry.shutdown().await.unwrap();
 }
+
+async fn observed_window(f: &Fixture, child: &str) -> Option<u64> {
+    let child = child.to_owned();
+    f.registry
+        .0
+        .store
+        .call(4096, move |db| {
+            shared_execution::observed_context_window(&db.db, &child)
+        })
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn shared_context_window_follows_the_latest_usage_observation_of_the_child() {
+    let f = fixture().await;
+    let child = native_child(&f).await;
+    qualify(&f, &child).await;
+    assert_eq!(observed_window(&f, &child).await, None);
+    let scope = issue(&f, &child, "window_one", 100).await;
+    f.registry
+        .record_managed_usage(&scope, reported("window_partial", 30, false, false))
+        .await
+        .unwrap();
+    assert_eq!(observed_window(&f, &child).await, Some(100_000));
+    // Another child's reports never leak into this Agent's budget.
+    assert_eq!(observed_window(&f, "someone_else").await, None);
+}

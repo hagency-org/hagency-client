@@ -226,3 +226,68 @@ fn shared_context_plain_fallback_keeps_full_markdown_and_original_receipt_shape(
     c.render_for(&w).unwrap();
     assert_eq!(c.context.history[0].delivery.body.len(), 20_000);
 }
+
+#[test]
+fn shared_context_v2_renderer_matches_independent_server_bytes_and_recomputes_budget() {
+    let v: serde_json::Value =
+        serde_json::from_str(include_str!("management-shared-thread-context-v2.json")).unwrap();
+    let w: SharedWorkItem = serde_json::from_value(v["work"].clone()).unwrap();
+    let c = SharedContextRecord {
+        context: serde_json::from_value(v["context"].clone()).unwrap(),
+        context_digest: v["contextDigest"].as_str().unwrap().into(),
+        input_digest: v["inputDigest"].as_str().unwrap().into(),
+    };
+    let input = c.render_for(&w).unwrap();
+    assert_eq!(input, v["renderedInput"]);
+    assert_eq!(input.len(), v["inputBytes"].as_u64().unwrap() as usize);
+    assert!(input.starts_with("Answer currentRequest only. history holds 1 of 3 earlier delivered exchanges from this thread in time order; the oldest were omitted to fit the model budget; 1 redacted exchanges are excluded. "));
+    assert!(input.contains("\"editedBody\""));
+    let (window, source) = budget_window(Some(272_000));
+    assert_eq!((window, source), (272_000, WINDOW_SOURCE_OBSERVED));
+    assert_eq!(history_budget_bytes(window), c.context.budget.as_ref().unwrap().history_budget_bytes);
+    assert_eq!(budget_window(Some(1_000)), (DEFAULT_MODEL_CONTEXT_WINDOW, WINDOW_SOURCE_DEFAULT));
+    assert_eq!(history_budget_bytes(DEFAULT_MODEL_CONTEXT_WINDOW), 31_999);
+    assert_eq!(history_budget_bytes(10_000_000), MAX_HISTORY_BYTES_V2 as u64);
+    let reject = |mutate: &dyn Fn(&mut SharedThreadContext)| {
+        let mut bad = c.context.clone();
+        mutate(&mut bad);
+        assert!(render_context(&bad, &w).is_err());
+    };
+    // No event twice: not the current request, not another pair's events.
+    reject(&|c| c.history[0].event_id = w.event_id.clone());
+    reject(&|c| c.history[0].delivery.matrix_event_id = c.history[0].event_id.clone());
+    reject(&|c| c.history[0].edited_event_id = Some(c.history[0].event_id.clone()));
+    reject(&|c| {
+        let mut again = c.history[0].clone();
+        again.work_id = "swork_again".into();
+        again.received_at_ms += 1;
+        c.history.push(again);
+        c.budget.as_mut().unwrap().included_pairs = 2;
+    });
+    // The budget and coverage are recomputed, never trusted from the wire.
+    reject(&|c| c.budget.as_mut().unwrap().history_budget_bytes += 1);
+    reject(&|c| c.budget.as_mut().unwrap().model_context_window = 1_000);
+    reject(&|c| c.budget.as_mut().unwrap().window_source = "guess".into());
+    reject(&|c| c.budget.as_mut().unwrap().included_pairs = 0);
+    reject(&|c| c.omitted_earlier = false);
+    reject(&|c| c.budget = None);
+    reject(&|c| c.version = 1);
+    reject(&|c| c.history[0].edited_body = Some("other".into()));
+    reject(&|c| c.history[0].edited_body_digest = None);
+    // Version 1 records keep their exact bytes and refuse the new fields.
+    let (v1, w1, c1) = fixture();
+    assert_eq!(c1.render_for(&w1).unwrap(), v1["renderedInput"]);
+    let mut smuggled = c1.context.clone();
+    smuggled.budget = c.context.budget.clone();
+    assert!(render_context(&smuggled, &w1).is_err());
+    let mut smuggled = c1.context;
+    smuggled.history[0].edited_event_id = Some("$prior_edit".into());
+    smuggled.history[0].edited_body = Some("x".into());
+    smuggled.history[0].edited_body_digest = Some(context_types::context_hash("x"));
+    assert!(render_context(&smuggled, &w1).is_err());
+    // The freeze request itself is bounded.
+    assert!(SharedContextBudgetInput { version: 2, model_context_window: None }.validate().is_ok());
+    assert!(SharedContextBudgetInput { version: 2, model_context_window: Some(272_000) }.validate().is_ok());
+    assert!(SharedContextBudgetInput { version: 1, model_context_window: None }.validate().is_err());
+    assert!(SharedContextBudgetInput { version: 2, model_context_window: Some(0) }.validate().is_err());
+}

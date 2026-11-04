@@ -1111,3 +1111,5 @@ async fn native_shared_execution_retirement_stops_completed_process_with_reply_p
 
 #[cfg(feature="shared-context")]
 pub(crate) fn context_enabled(s:&super::State)->bool{s.shared.contexts.active}
+#[cfg(feature="shared-context")]
+pub(crate) fn context_v2_enabled(s:&super::State)->bool{s.shared.contexts.active && s.shared.contexts.v2}

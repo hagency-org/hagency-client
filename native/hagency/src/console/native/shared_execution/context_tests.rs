@@ -4,6 +4,11 @@ use super::*;
 #[derive(Default)]
 pub(super) struct State {
     pub active: bool,
+    /// Advertise `shared-thread-context-v2`; records stay version 1 until a
+    /// freeze request names a budget, exactly like the server.
+    pub v2: bool,
+    /// Every `budget` object received on a freeze request, in order.
+    budgets: Vec<Value>,
     works: BTreeMap<String, SharedWorkItem>,
     contexts: BTreeMap<String, SharedContextRecord>,
     deliveries: BTreeMap<String, SharedDeliveryRecord>,
@@ -58,6 +63,9 @@ pub(super) fn management(
                         user_body_digest: old.body_digest.clone(),
                         delivery: d.receipt.clone(),
                         delivery_digest: d.receipt_digest.clone(),
+                        edited_event_id: None,
+                        edited_body: None,
+                        edited_body_digest: None,
                     });
                 }
             }
@@ -65,7 +73,9 @@ pub(super) fn management(
                 (a.received_at_ms, &a.work_id).cmp(&(b.received_at_ms, &b.work_id))
             });
             let binding = demands::context_binding(s);
-            let c = SharedThreadContext {
+            let budget = body.get("budget").cloned();
+            let total = history.len() as u64;
+            let mut c = SharedThreadContext {
                 version: 1,
                 input_profile: "shared_thread_text_v1".into(),
                 work_id: w.id.clone(),
@@ -81,8 +91,32 @@ pub(super) fn management(
                 context_ordinal: s.shared.contexts.contexts.len() as u64 + 1,
                 coverage: "prior_delivered_pairs_only".into(),
                 omitted_earlier: false,
+                budget: None,
                 history,
             };
+            if let Some(b) = budget {
+                // Mirror the server: an observed window inside the accepted
+                // range sets the budget, anything else budgets as default.
+                assert_eq!(b["version"], 2);
+                let (window, source) = budget_window(b["modelContextWindow"].as_u64());
+                let bytes = history_budget_bytes(window);
+                c.version = 2;
+                c.input_profile = INPUT_PROFILE_V2.into();
+                if c.history.len() > MAX_HISTORY_PAIRS_V2 {
+                    let drop = c.history.len() - MAX_HISTORY_PAIRS_V2;
+                    c.history.drain(..drop); // keep the newest pairs, like the server
+                }
+                c.budget = Some(SharedContextBudget {
+                    model_context_window: window,
+                    window_source: source.into(),
+                    history_budget_bytes: bytes,
+                    prior_pairs_total: total,
+                    prior_pairs_redacted: 0,
+                    included_pairs: c.history.len() as u64,
+                });
+                c.omitted_earlier = total > c.history.len() as u64;
+                s.shared.contexts.budgets.push(b);
+            }
             let record = SharedContextRecord {
                 context_digest: digest(&c).unwrap(),
                 input_digest: hash_text(&render_context(&c, &w).unwrap()),
@@ -332,5 +366,57 @@ async fn native_shared_context_wrong_thread_refuses_before_any_call_hold() {
     assert_eq!(rows(&f, "owner_managed_calls"), 0);
     assert_eq!(rows(&f, "owner_shared_contexts"), 0);
     assert_eq!(demands::count_methods(&f, "turn/start"), 0);
+    f.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires explicit offline context probe"]
+async fn native_shared_context_v2_negotiates_the_model_budget_and_states_coverage() {
+    let (f, t, _) = demands::fixture_budget(2000).await;
+    f.state.lock().unwrap().shared.contexts.v2 = true;
+    for (n, body) in [(1, "Remember the name 雪."), (2, "What was the name?")] {
+        offer(&f, n, "$thread", body);
+        t.poll_demand_fixture(&f.registry, None, Some(launch(&f, "text-context")))
+            .await
+            .unwrap();
+        demands::wait_attempt(&f).await;
+    }
+    let inputs = std::fs::read_to_string(f._root.path().join("shared-probe/inputs")).unwrap();
+    let inputs: Vec<String> = inputs.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+    assert_eq!(inputs.len(), 2);
+    assert!(inputs[0].starts_with("Answer currentRequest only. history holds 0 of 0 earlier delivered exchanges from this thread in time order. "));
+    assert!(inputs[1].starts_with("Answer currentRequest only. history holds 1 of 1 earlier delivered exchanges from this thread in time order. "));
+    assert!(inputs[1].contains("The name is 雪.") && inputs[1].contains("\"version\":2"));
+    {
+        let s = f.state.lock().unwrap();
+        // The first freeze precedes any usage report; the second names the
+        // window the probe reported (10000 tokens), which is below the accepted
+        // range, so both records budget as default. The plumbing from the
+        // usage observation to the freeze request is what matters here.
+        let budgets: Vec<Value> = s.shared.contexts.budgets.clone();
+        assert_eq!(budgets.len(), 2, "{budgets:?}");
+        assert!(budgets.iter().all(|b| b["version"] == 2), "{budgets:?}");
+        assert!(budgets[0]["modelContextWindow"].is_null(), "{budgets:?}");
+        assert_eq!(budgets[1]["modelContextWindow"], 10000, "{budgets:?}");
+        let c = &s.shared.contexts.contexts["demand_work_2"].context;
+        assert_eq!((c.version, c.input_profile.as_str()), (2, INPUT_PROFILE_V2));
+        let b = c.budget.as_ref().unwrap();
+        assert_eq!(
+            (b.model_context_window, b.window_source.as_str(), b.history_budget_bytes, b.prior_pairs_total, b.included_pairs),
+            (DEFAULT_MODEL_CONTEXT_WINDOW, WINDOW_SOURCE_DEFAULT, 31_999, 1, 1)
+        );
+        assert_eq!(s.shared.contexts.starts, 2);
+        assert!(s.shared.receipts.values().any(|r| r.work_id == "demand_work_2" && r.body.as_deref() == Some("The name is 雪.")));
+    }
+    let db = rusqlite::Connection::open(f._root.path().join("registry/domain.sqlite3")).unwrap();
+    let saved: String = db
+        .query_row("SELECT payload FROM owner_shared_contexts WHERE work_id='demand_work_2'", [], |r| r.get(0))
+        .unwrap();
+    let saved: SharedThreadContext = serde_json::from_str(&saved).unwrap();
+    assert_eq!(saved.version, 2);
+    assert_eq!(saved.history[0].user_body, "Remember the name 雪.");
+    drop(db);
+    assert_eq!(rows(&f, "owner_shared_context_call_pins"), 2);
+    assert_eq!(rows(&f, "owner_shared_reply_deliveries"), 2);
     f.stop().await;
 }
