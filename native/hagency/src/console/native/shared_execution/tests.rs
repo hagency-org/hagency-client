@@ -50,6 +50,7 @@ pub(crate) struct State {
     starts: usize,
     activity_epoch: u64,
     refuse_renewal: bool,
+    delay_renewal_reply: bool,
     delay_start_reply: bool,
     process_writes: usize,
     work_writes: usize,
@@ -65,6 +66,9 @@ pub(crate) struct State {
     stopped_before_reply: bool,
 }
 pub(crate) fn idle_boundary_delay(path: &str, s: &State) -> Option<Duration> {
+    if s.delay_renewal_reply && path.ends_with("/activity/renew") {
+        return Some(Duration::from_secs(30));
+    }
     // Central admission can consume the renewal margin while the provider
     // has not received turn/start yet.
     if s.delay_start_reply && path.ends_with("/work/start") {
@@ -882,6 +886,31 @@ async fn native_shared_interrupted_call_failed_renewal_during_start_keeps_ack_an
     assert_eq!(state.shared.starts,1);
     assert!(state.shared.receipts.values().any(|r|r.state=="failed" && r.usage_complete && r.known_consumed_tokens==27 && r.retained_tokens==Some(27)));
     drop(state);
+    let methods=std::fs::read_to_string(f._root.path().join("shared-probe/methods")).unwrap();
+    assert_eq!(methods.lines().filter(|m|*m=="turn/start").count(),1);
+    assert_eq!(methods.lines().filter(|m|*m=="turn/interrupt").count(),1);
+    f.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires explicit offline supervised runtime probe"]
+async fn native_shared_interrupted_call_unresponsive_renewal_leaves_time_for_final_usage() {
+    let (f,t,_)=fixture().await;
+    f.state.lock().unwrap().shared.delay_renewal_reply=true;
+    t.poll_fixture(&f.registry,launch(&f,"text-interrupt-usage")).await.unwrap();
+    method_seen(&f,"turn/start").await;
+    tokio::time::timeout(Duration::from_secs(35),async {
+        loop {
+            let db=rusqlite::Connection::open(f._root.path().join("registry/domain.sqlite3")).unwrap();
+            let (state,used,complete):(String,u64,bool)=db.query_row("SELECT state,known_consumed_tokens,usage_complete FROM owner_managed_calls LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+            if state!="issued" {
+                assert_eq!((state,used,complete),("settled".into(),27,true));
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }).await.expect("a stalled renewal must not consume the cleanup deadline");
+    f.owner.suspend().await.unwrap();
     let methods=std::fs::read_to_string(f._root.path().join("shared-probe/methods")).unwrap();
     assert_eq!(methods.lines().filter(|m|*m=="turn/start").count(),1);
     assert_eq!(methods.lines().filter(|m|*m=="turn/interrupt").count(),1);
