@@ -77,26 +77,34 @@ async fn native_successor_review_exhaustion_and_recorded_state_preserve_original
 
 #[tokio::test]
 #[ignore = "requires explicit offline supervised runtime probe"]
-async fn native_successor_review_incomplete_and_unrepresentable_usage_are_not_spent() {
+async fn native_successor_review_stopped_run_without_usage_is_zero_and_unrepresentable_usage_blocks() {
     let (f, t, c) = fixture().await;
     // Offline child deliberately supplies no usage report.
     t.poll_fixture(&f.registry, launch(&f, "text"))
         .await
         .unwrap();
     stopped(&f).await;
-    let SharedSuccessorAssessment::Blocked(review) = t
+    // The stopped run's missing usage counts as zero, so its call is closed
+    // and a successor may start with the whole allowance.
+    let SharedSuccessorAssessment::Ready(prepared) = t
         .assess_successor(&f.registry, c.assignment_id.clone())
         .await
         .unwrap()
     else {
-        panic!("unresolved full hold cannot yield Start handle")
+        panic!("a stopped run without usage must not block its successor")
     };
-    assert_eq!(review.reason, SharedSuccessorBlockReason::UsageUnresolved);
-    assert_eq!(review.allocated_tokens, 100);
-    assert_eq!(review.known_consumed_tokens, 0);
-    assert_eq!(review.retained_tokens, 100);
-    assert_eq!(review.remaining_tokens, Some(0));
-    assert!(!review.usage_complete);
+    let review = prepared.review();
+    assert_eq!(
+        (
+            review.allocated_tokens,
+            review.known_consumed_tokens,
+            review.retained_tokens,
+            review.remaining_tokens
+        ),
+        (100, 0, 0, 100)
+    );
+    assert!(review.usage_complete);
+    drop(prepared);
     // Explicitly seed the separate retained-overflow flag; this is a fixture
     // state, not a claim that the offline provider produced unbounded tokens.
     let db = rusqlite::Connection::open(f._root.path().join("registry/domain.sqlite3")).unwrap();

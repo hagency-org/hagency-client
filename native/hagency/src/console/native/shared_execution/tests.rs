@@ -581,7 +581,8 @@ async fn native_shared_execution_logout_during_turn_drains_and_retains_unknown_e
     let receipt: SharedWorkReceipt = serde_json::from_str(&saved).unwrap();
     assert_eq!(receipt.state, "unknown");
     assert!(!receipt.usage_complete);
-    assert_eq!(receipt.retained_tokens, Some(100));
+    // Unreported usage counts as zero; the call never holds its reservation.
+    assert_eq!(receipt.retained_tokens, Some(0));
     assert_eq!(db.query_row("SELECT COUNT(*) FROM owner_shared_process_observations WHERE json_extract(payload,'$.state')='stopped'",[],|r|r.get::<_,u64>(0)).unwrap(),1);
     assert_eq!(f.state.lock().unwrap().shared.work_writes, 0);
     drop(db);
@@ -785,7 +786,8 @@ async fn native_shared_interrupted_call_without_final_usage_preserves_unknown_an
     let receipt: SharedWorkReceipt = serde_json::from_str(&saved).unwrap();
     assert_eq!(receipt.state, "unknown");
     assert!(!receipt.usage_complete);
-    assert_eq!(receipt.retained_tokens, Some(100));
+    // Unreported usage counts as zero; the call never holds its reservation.
+    assert_eq!(receipt.retained_tokens, Some(0));
     assert_eq!(db.query_row("SELECT COUNT(*) FROM owner_shared_process_observations WHERE json_extract(payload,'$.state')='stopped'",[],|r|r.get::<_,u64>(0)).unwrap(),1);
     assert_eq!(f.state.lock().unwrap().shared.starts, 1);
     let methods = std::fs::read_to_string(f._root.path().join("shared-probe/methods")).unwrap();

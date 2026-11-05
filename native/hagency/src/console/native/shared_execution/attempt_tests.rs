@@ -337,7 +337,7 @@ async fn native_shared_successor_cancelled_waiter_retains_one_process_and_usage(
 }
 #[tokio::test]
 #[ignore = "requires explicit offline supervised runtime probe"]
-async fn native_shared_successor_retirement_during_turn_drains_exact_child_and_keeps_unknown_hold()
+async fn native_shared_successor_retirement_during_turn_drains_exact_child_and_keeps_unknown_state()
 {
     let (f, t, c) = Box::pin(predecessor()).await;
     prepare_lost_start(&f, &t, &c).await;
@@ -352,7 +352,8 @@ async fn native_shared_successor_retirement_during_turn_drains_exact_child_and_k
     let payload:String=db.query_row("SELECT payload FROM owner_shared_work_observations ORDER BY ledger_revision DESC LIMIT 1",[],|r|r.get(0)).unwrap();
     let receipt: SharedWorkReceipt = serde_json::from_str(&payload).unwrap();
     assert_eq!(receipt.state, "unknown");
-    assert_eq!(receipt.retained_tokens, Some(100));
+    // Unreported usage counts as zero; the call never holds its reservation.
+    assert_eq!(receipt.retained_tokens, Some(0));
     assert!(!receipt.usage_complete);
     assert_eq!(db.query_row("SELECT COUNT(*) FROM owner_shared_successor_observations WHERE json_extract(payload,'$.state')='stopped'",[],|r|r.get::<_,u64>(0)).unwrap(),1);
     assert_eq!(f.state.lock().unwrap().shared.work_writes, 0);

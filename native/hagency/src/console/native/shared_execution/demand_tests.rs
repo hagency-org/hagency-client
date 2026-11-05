@@ -594,7 +594,7 @@ async fn native_demand_cancelled_waiter_and_closed_miniapp_preserve_accepted_cus
 }
 #[tokio::test]
 #[ignore = "requires explicitly built offline supervised probe"]
-async fn native_demand_late_stop_and_logout_preserve_unknown_charge_and_deny_stale_offer() {
+async fn native_demand_late_stop_and_logout_keep_unknown_state_and_deny_stale_offer() {
     for logout in [false, true] {
         let (f, t, c) = fixture_budget(1000).await;
         offer(&f, 1);
@@ -619,7 +619,8 @@ async fn native_demand_late_stop_and_logout_preserve_unknown_charge_and_deny_sta
         let payload:String=db.query_row("SELECT payload FROM owner_shared_work_observations ORDER BY ledger_revision DESC LIMIT 1",[],|r|r.get(0)).unwrap();
         let receipt: SharedWorkReceipt = serde_json::from_str(&payload).unwrap();
         assert_eq!(receipt.state, "unknown");
-        assert_eq!(receipt.retained_tokens, Some(1000));
+        // Unreported usage counts as zero; the call never holds its reservation.
+        assert_eq!(receipt.retained_tokens, Some(0));
         assert!(!receipt.usage_complete);
         if logout {
             assert!(t.poll_demand(&f.registry, None).await.is_err());
