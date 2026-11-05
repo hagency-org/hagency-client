@@ -96,6 +96,23 @@ fn prepare(path: &Path) -> Result<State, Error> {
 pub fn initialize(path: &Path) -> Result<PathBuf, Error> {
     Ok(prepare(path)?.path)
 }
+/// Whether an existing directory is one `prepare` would accept: empty (or an
+/// interrupted lock only) or this client's format. Reads only the marker;
+/// takes no lock and writes nothing.
+#[cfg(unix)]
+pub(crate) fn is_owner_root_format(path: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(path).and_then(|d| d.collect::<Result<Vec<_>, _>>()) else {
+        return false;
+    };
+    let names: Vec<_> = entries.iter().map(|e| e.file_name()).collect();
+    if names.iter().any(|n| !n.to_str().is_some_and(allowed_entry)) {
+        return false;
+    }
+    if !names.iter().any(|n| n == MARKER) {
+        return names.iter().all(|n| n == LOCK);
+    }
+    hagency_store::private::read_secret(&path.join(MARKER)).is_ok_and(|b| b == MARKER_BYTES)
+}
 /// A reduction-only native operation on an already initialized, exclusively
 /// owned root. Does not construct a console, database, listener or new root.
 pub(crate) fn with_existing_state<T>(

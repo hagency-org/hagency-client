@@ -53,9 +53,10 @@ pub const CONTROL: &str = "control.json";
 pub const ENROLLMENT: &str = "enrollment.json";
 pub const MATRIX: &str = "matrix";
 
-/// Server origin equivalence. A URL's optional terminal slash is not scope.
+/// Server origin equivalence, the same rule as the owner-root registry: a
+/// terminal slash is not scope and scheme and host ignore case.
 pub fn same_origin(a: &str, b: &str) -> bool {
-    a.trim_end_matches('/') == b.trim_end_matches('/')
+    crate::owner_roots::normalize_origin(a) == crate::owner_roots::normalize_origin(b)
 }
 
 /// Read a private (owner-only, single-link, non-symlink) file of at most
