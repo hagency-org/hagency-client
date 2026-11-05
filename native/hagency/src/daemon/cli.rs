@@ -53,6 +53,10 @@ pub enum Command {
         cancel_on_stdin_close: bool,
         #[arg(long)]
         no_open: bool,
+        /// Register a new owner root first. Only for a computer where this
+        /// account has no Desktop root; Desktop registers its own.
+        #[arg(long)]
+        register_root: bool,
     },
     /// Show the running daemon's owner and hosting snapshot.
     Status {
@@ -275,8 +279,13 @@ pub async fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             display_name,
             cancel_on_stdin_close,
             no_open,
+            register_root,
         } => {
             let home = daemon_home(home)?;
+            if register_root {
+                crate::owner_roots::resolve(&server, &owner, None)
+                    .map_err(|e| e.code())?;
+            }
             let control = std::sync::Arc::new(host::EnrollmentControl::default());
             let enrollment = host::enroll_controlled(
                 &home,

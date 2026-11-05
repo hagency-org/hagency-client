@@ -34,6 +34,8 @@ pub enum RootError {
     Unavailable,
     #[error("this platform has no owner-root registry")]
     Unsupported,
+    #[error("this account has no owner root on this computer; set up hosting from Hagency Desktop")]
+    NotRegistered,
 }
 
 impl RootError {
@@ -44,6 +46,7 @@ impl RootError {
             Self::Record => "owner_root_record_invalid",
             Self::Unavailable => "owner_root_registry_unavailable",
             Self::Unsupported => "owner_root_registry_unsupported",
+            Self::NotRegistered => "owner_root_not_registered",
         }
     }
 }

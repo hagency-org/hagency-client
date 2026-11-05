@@ -285,9 +285,13 @@ where
     }) {
         return Err(EnrollmentError::OtherOwner.into());
     }
+    // Only Desktop (or an explicit `--register-root`) registers a root: it
+    // knows the account's existing root, so the daemon can never claim the
+    // account first with an empty one (ADR-192).
     let root = roots
-        .resolve(&origin, owner, None)
-        .map_err(|e| HostError::Code(e.code()))?;
+        .lookup(&origin, owner)
+        .map_err(|e| HostError::Code(e.code()))?
+        .ok_or(HostError::Code(crate::owner_roots::RootError::NotRegistered.code()))?;
     let executor = Executor::inspect(&root, &origin, owner).map_err(HostError::Code)?;
     Enrollment::prepare(home, &origin, owner, display_name.clone(), root.clone())?;
     let directory = home.join(super::MATRIX);
@@ -687,9 +691,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn enrollment_without_a_root_registers_the_canonical_root_and_never_another() {
+    async fn enrollment_requires_a_registered_root_and_never_creates_another() {
         let fixture = super::super::auth::readiness_tests::Fixture::new(0).await;
         let e = enrolling();
+        // The daemon never claims an account first: without a registered root
+        // it refuses before any sign-in and records nothing.
+        let (unregistered, url) = e.until_browser(&fixture.origin).await;
+        assert!(
+            matches!(
+                unregistered,
+                Err(HostError::Code("owner_root_not_registered"))
+            ),
+            "{unregistered:?}"
+        );
+        assert!(url.is_none(), "{url:?}");
+        assert!(e.roots.lookup(&fixture.origin, OWNER).unwrap().is_none());
+        assert!(Enrollment::load(e.home.path()).unwrap().is_none());
+        // Desktop, or `daemon enroll --register-root`, registers it first.
+        e.roots.resolve(&fixture.origin, OWNER, None).unwrap();
         let (first, url) = e.until_browser(&fixture.origin).await;
         // A fresh executor signs in with the daemon's own OAuth client, which
         // needs dynamic client registration; the fixture server has none.
