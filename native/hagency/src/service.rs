@@ -42,20 +42,31 @@ pub fn default_state_dir() -> Result<PathBuf, String> {
     })
 }
 
-/// Owner daemon home (ADR 0012): `~/Library/Application Support/HagencyOwnerDaemon`
-/// on macOS, else `$XDG_STATE_HOME/hagency-owner-daemon` or
-/// `~/.local/state/hagency-owner-daemon`. Separate from the owner-client state
-/// directory, whose entries are a closed set.
+/// Owner daemon home (ADR 0012, ADR-192), one location for Desktop, the
+/// command line and the LaunchAgent: `~/Library/Application Support/Hagency/owner-daemon`
+/// on macOS, else `$XDG_STATE_HOME/hagency/owner-daemon` or
+/// `~/.local/state/hagency/owner-daemon`. A non-empty
+/// `HAGENCY_OWNER_DAEMON_HOME` overrides it for tests. Separate from the
+/// owner-client state directory, whose entries are a closed set.
 pub fn default_daemon_dir() -> Result<PathBuf, String> {
-    if let Some(path) = std::env::var_os("HAGENCY_OWNER_DAEMON_HOME") { return Ok(PathBuf::from(path)); }
-    let home = home()?;
-    if cfg!(target_os = "macos") {
-        return Ok(home.join("Library/Application Support/Hagency/owner-daemon"));
+    if let Some(path) = std::env::var_os("HAGENCY_OWNER_DAEMON_HOME").filter(|p| !p.is_empty()) {
+        return Ok(PathBuf::from(path));
     }
-    Ok(match std::env::var_os("XDG_STATE_HOME") {
+    Ok(daemon_dir(
+        &home()?,
+        std::env::var_os("XDG_STATE_HOME"),
+        cfg!(target_os = "macos"),
+    ))
+}
+
+fn daemon_dir(home: &Path, xdg_state: Option<std::ffi::OsString>, macos: bool) -> PathBuf {
+    if macos {
+        return home.join("Library/Application Support/Hagency/owner-daemon");
+    }
+    match xdg_state {
         Some(dir) if !dir.is_empty() => PathBuf::from(dir).join("hagency/owner-daemon"),
         _ => home.join(".local/state/hagency/owner-daemon"),
-    })
+    }
 }
 
 fn home() -> Result<PathBuf, String> {
@@ -338,13 +349,15 @@ fn uninstall_systemd() -> Result<String, String> {
 /// LaunchAgent label of the owner daemon. Distinct from the console service.
 pub const DAEMON_LABEL: &str = "io.hagency.owner-daemon";
 
-/// Per-user service definition for `hagency daemon run`. KeepAlive restarts
-/// it after a crash; a clean exit (owner stop of the whole service) stays down.
+/// Per-user service definition for `<exe> daemon run`, where `<exe>` is any
+/// binary that dispatches [`crate::daemon::cli::run_if_requested`]. KeepAlive
+/// restarts it after a crash; a clean exit (owner stop of the whole service)
+/// stays down.
 pub fn daemon_launchd_plist(exe: &Path, home_dir: &Path, path: &str, log: &Path) -> String {
     daemon_launchd_plist_with_installation(exe, home_dir, path, log, None)
 }
 
-fn daemon_arguments(exe: &Path, home_dir: &Path, installation: Option<&Path>) -> Vec<String> {
+pub(crate) fn daemon_arguments(exe: &Path, home_dir: &Path, installation: Option<&Path>) -> Vec<String> {
     let mut args = vec![exe.to_string_lossy().into_owned()];
     if let Some(root) = installation {
         args.extend([
@@ -439,7 +452,7 @@ pub fn install_daemon(home_dir: &Path) -> Result<String, String> {
         .and_then(|p| p.canonicalize())
         .map_err(|e| format!("this binary's path: {e}"))?;
     if !stable_daemon_executable(&exe, &home()?) {
-        return Err("daemon_install_location_unsupported: Move Hagency Hosting.app to /Applications or ~/Applications before enabling login hosting. For a CLI build, install hagency in ~/.local/bin or /usr/local/bin first; temporary, disk-image and development paths cannot be used for a login service.".into());
+        return Err("daemon_install_location_unsupported: Move the app to /Applications or ~/Applications before enabling login hosting. For a command-line build, install it in ~/.local/bin or /usr/local/bin first; temporary, disk-image and development paths cannot be used for a login service.".into());
     }
     let path = std::env::var("PATH").unwrap_or_default();
     #[cfg(not(all(feature = "test-support", feature = "resource-adoption")))]
@@ -528,8 +541,8 @@ mod tests {
     #[test]
     fn daemon_login_install_requires_durable_executable_location() {
         let user=Path::new("/Users/owner");
-        for path in ["/Applications/Hagency Hosting.app/Contents/Helpers/hagency","/Users/owner/Applications/Hagency Hosting.app/Contents/Helpers/hagency","/Users/owner/.local/bin/hagency"] { assert!(stable_daemon_executable(Path::new(path),user)); }
-        for path in ["/Volumes/Hagency/Hagency Hosting.app/Contents/Helpers/hagency","/private/var/folders/x/AppTranslocation/Hagency.app/hagency","/Users/owner/dev/target/release/hagency"] { assert!(!stable_daemon_executable(Path::new(path),user)); }
+        for path in ["/Applications/Hagency.app/Contents/MacOS/hagency-desktop","/Users/owner/Applications/Hagency.app/Contents/MacOS/hagency-desktop","/Users/owner/.local/bin/hagency"] { assert!(stable_daemon_executable(Path::new(path),user)); }
+        for path in ["/Volumes/Hagency/Hagency.app/Contents/MacOS/hagency-desktop","/private/var/folders/x/AppTranslocation/Hagency.app/hagency","/Users/owner/dev/target/release/hagency"] { assert!(!stable_daemon_executable(Path::new(path),user)); }
     }
     #[test]
     fn launchd_plist_runs_start_without_opening_and_escapes_paths() {
@@ -571,7 +584,7 @@ mod tests {
     fn daemon_service_runs_daemon_with_its_own_label_and_escaped_home() {
         let plist = daemon_launchd_plist(
             Path::new("/opt/h & co/hagency"),
-            Path::new("/Users/a/Library/Application Support/HagencyOwnerDaemon"),
+            Path::new("/Users/a/Library/Application Support/Hagency/owner-daemon"),
             "/usr/bin:/bin",
             Path::new("/Users/a/Library/Logs/Hagency/owner-daemon.log"),
         );
@@ -579,15 +592,15 @@ mod tests {
         assert!(!plist.contains("<string>io.hagency</string>"));
         assert!(plist.contains("<string>/opt/h &amp; co/hagency</string>"));
         assert!(plist.contains("<string>daemon</string>\n    <string>run</string>"));
-        assert!(plist.contains("<string>/Users/a/Library/Application Support/HagencyOwnerDaemon</string>"));
+        assert!(plist.contains("<string>/Users/a/Library/Application Support/Hagency/owner-daemon</string>"));
         assert!(plist.contains("<key>SuccessfulExit</key>"));
         let unit = daemon_systemd_unit(
             Path::new("/opt/hagency/hagency"),
-            Path::new("/home/a/.local/state/hagency-owner-daemon"),
+            Path::new("/home/a/.local/state/hagency/owner-daemon"),
             "/usr/bin",
         );
         assert!(unit.contains(
-            "ExecStart=\"/opt/hagency/hagency\" daemon run --home \"/home/a/.local/state/hagency-owner-daemon\""
+            "ExecStart=\"/opt/hagency/hagency\" daemon run --home \"/home/a/.local/state/hagency/owner-daemon\""
         ));
         let dir = default_daemon_dir().unwrap();
         assert!(dir.is_absolute());
@@ -595,8 +608,24 @@ mod tests {
     }
 
     #[test]
+    fn the_daemon_home_is_one_canonical_location_per_user() {
+        let user = Path::new("/Users/a");
+        let canonical = Path::new("/Users/a/Library/Application Support/Hagency/owner-daemon");
+        assert_eq!(daemon_dir(user, None, true), canonical);
+        assert_eq!(daemon_dir(user, Some("/x/state".into()), true), canonical);
+        let linux = Path::new("/home/a");
+        let state = Path::new("/home/a/.local/state/hagency/owner-daemon");
+        assert_eq!(
+            daemon_dir(linux, Some("/x/state".into()), false),
+            Path::new("/x/state/hagency/owner-daemon")
+        );
+        assert_eq!(daemon_dir(linux, Some("".into()), false), state);
+        assert_eq!(daemon_dir(linux, None, false), state);
+    }
+
+    #[test]
     fn isolated_daemon_service_preserves_the_explicit_installation_on_restart() {
-        let exe = Path::new("/Applications/Hagency Hosting.app/Contents/Helpers/hagency");
+        let exe = Path::new("/Applications/Hagency.app/Contents/MacOS/hagency-desktop");
         let home = Path::new("/Users/a/Library/Application Support/Hagency/owner-daemon");
         let root = Path::new("/Users/a/isolated & original");
         let args = daemon_arguments(exe, home, Some(root));

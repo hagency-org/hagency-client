@@ -1,11 +1,12 @@
-//! Per-user Hagency owner daemon (ADR 0012).
+//! Per-user Hagency owner daemon (ADR 0012, ADR-192).
 //!
-//! The daemon is the only process that hosts an adopted owner root. It
-//! authenticates through its own Matrix SDK OAuth session, starts the native
-//! allocation and shared-execution workers, and serves a versioned, bounded
-//! control API over a private Unix socket. Dashboard hosts (the standalone
-//! controller and Hagency's Agent page) attach and detach; closing them never
-//! stops hosting.
+//! On macOS the daemon is the only process that opens an owner root and the
+//! resource ledger. It hosts the owner's one registered root
+//! ([`crate::owner_roots`]), authenticates through its own Matrix SDK OAuth
+//! session, starts the native allocation and shared-execution workers, and
+//! serves a versioned, bounded control API over a private Unix socket.
+//! Desktop attaches and detaches; closing it never stops hosting. Any binary
+//! can run the daemon through [`cli::run_if_requested`].
 //!
 //! Layout of a daemon home (directory 0700, files 0600):
 //!
@@ -14,16 +15,17 @@
 //! | `daemon.lock` | exclusive lock: one daemon per home |
 //! | `control.sock` | private control socket |
 //! | `control.sqlite3` | durable hosting intent, revision and command receipts |
-//! | `enrollment.json` | adopted owner (origin, Matrix ID, owner-root path) and handover journal |
+//! | `enrollment.json` | enrolled owner (origin, Matrix ID) and its registered owner-root path |
 //! | `matrix/` | the daemon's own SDK session and crypto store |
 //!
-//! The adopted owner root keeps its own exclusive `.owner-client.lock`, which
-//! the native engine takes when the daemon opens the owner. A second daemon
-//! or a Desktop executor therefore cannot host the same root at the same time.
+//! The owner root keeps its own exclusive `.owner-client.lock`, which the
+//! native engine takes when the daemon opens the owner. A second daemon or an
+//! in-process executor therefore cannot host the same root at the same time.
 #[cfg(unix)]
 pub mod auth;
 pub mod control;
 pub mod bridge;
+pub mod cli;
 pub mod dispatch;
 pub mod enrollment;
 #[cfg(unix)]

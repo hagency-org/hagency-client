@@ -52,69 +52,12 @@ enum Command {
         command: hagency::service::Command,
     },
     /// Per-user owner daemon: hosts the enrolled owner independently of any UI.
+    /// Dispatched by `hagency::daemon::cli` before this parser runs.
     #[cfg(unix)]
     Daemon {
         #[command(subcommand)]
-        command: DaemonCommand,
+        command: hagency::daemon::cli::Command,
     },
-}
-#[cfg(unix)]
-#[derive(Subcommand)]
-enum DaemonCommand {
-    /// Run the daemon in the foreground (used by the LaunchAgent).
-    Run {
-        #[arg(long)]
-        home: Option<PathBuf>,
-    },
-    /// Sign the daemon in through the browser with its own device and record
-    /// the owner's one registered owner root (ADR-192).
-    Enroll {
-        #[arg(long)]
-        home: Option<PathBuf>,
-        #[arg(long)]
-        server: String,
-        #[arg(long)]
-        owner: String,
-        #[arg(long)]
-        display_name: Option<String>,
-        /// Cancel browser enrollment if its launching controller closes.
-        #[arg(long, hide = true)]
-        cancel_on_stdin_close: bool,
-        #[arg(long)]
-        no_open: bool,
-    },
-    /// Show the running daemon's owner and hosting snapshot.
-    Status {
-        #[arg(long)]
-        home: Option<PathBuf>,
-    },
-    /// Stop admitting new work; running work finishes.
-    Pause {
-        #[arg(long)]
-        home: Option<PathBuf>,
-    },
-    /// Resume admission, restarting hosting if it was stopped.
-    Resume {
-        #[arg(long)]
-        home: Option<PathBuf>,
-    },
-    /// Drain and stop hosting; the daemon stays reachable.
-    Stop {
-        #[arg(long)]
-        home: Option<PathBuf>,
-    },
-    /// Explicit owner sign-out: revoke native and SDK credentials (daemon stopped).
-    SignOut {
-        #[arg(long)]
-        home: Option<PathBuf>,
-    },
-    /// Register the daemon as this user's LaunchAgent / systemd user service.
-    Install {
-        #[arg(long)]
-        home: Option<PathBuf>,
-    },
-    /// Remove the daemon service; its home and enrollment are kept.
-    Uninstall,
 }
 fn absolute(path: PathBuf) -> Result<PathBuf, std::io::Error> {
     if path.is_absolute() {
@@ -127,6 +70,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(result) = hagency::native_owner::run_guardian_if_requested() {
         if result.is_err() {
             std::process::exit(1);
+        }
+        return Ok(());
+    }
+    if let Some(status) = hagency::daemon::cli::run_if_requested() {
+        if status != 0 {
+            std::process::exit(status);
         }
         return Ok(());
     }
@@ -186,143 +135,7 @@ async fn async_main(command: Command) -> Result<(), Box<dyn std::error::Error>> 
         }
         Command::Service { command } => println!("{}", hagency::service::run(command)?),
         #[cfg(unix)]
-        Command::Daemon { command } => daemon(command).await?,
-    }
-    Ok(())
-}
-#[cfg(unix)]
-fn daemon_home(home: Option<PathBuf>) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    Ok(absolute(match home {
-        Some(path) => path,
-        None => hagency::daemon::host::default_home()?,
-    })?)
-}
-#[cfg(unix)]
-async fn daemon_call(
-    home: &std::path::Path,
-    command: hagency::daemon::Command,
-) -> Result<hagency::daemon::Reply, Box<dyn std::error::Error>> {
-    use hagency::daemon::{DaemonClient, Request, new_request_id};
-    let mut client = DaemonClient::connect(home).await?;
-    let hello = client
-        .call(&Request::new(new_request_id(), None, hagency::daemon::Command::Hello))
-        .await?
-        .hello()
-        .map_err(|e| e.message)?;
-    let request = Request::new(new_request_id(), hello.owner_id, command);
-    // An uncertain reply is retried once with the same request ID.
-    match client.call(&request).await {
-        Ok(reply) => Ok(reply),
-        Err(hagency::daemon::IpcError::Uncertain) => {
-            Ok(DaemonClient::connect(home).await?.call(&request).await?)
-        }
-        Err(e) => Err(e.into()),
-    }
-}
-#[cfg(unix)]
-async fn daemon(command: DaemonCommand) -> Result<(), Box<dyn std::error::Error>> {
-    use hagency::daemon::{Command as C, host};
-    match command {
-        DaemonCommand::Run { home } => {
-            let home = daemon_home(home)?;
-            let cancel = hagency_matrix::CancellationToken::new();
-            let signal = cancel.clone();
-            tokio::spawn(async move {
-                if let Ok(mut termination) =
-                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                {
-                    tokio::select! {_=tokio::signal::ctrl_c()=>{},_=termination.recv()=>{}}
-                } else {
-                    let _ = tokio::signal::ctrl_c().await;
-                }
-                signal.cancel();
-            });
-            host::run(&home, cancel).await?;
-        }
-        DaemonCommand::Enroll {
-            home,
-            server,
-            owner,
-            display_name,
-            cancel_on_stdin_close,
-            no_open,
-        } => {
-            let home = daemon_home(home)?;
-            let control=std::sync::Arc::new(host::EnrollmentControl::default());
-            let enrollment = host::enroll_controlled(
-                &home,
-                &server,
-                &owner,
-                display_name,
-                control.clone(),
-                |url| async move {
-                    println!("Sign in to enroll the Hagency owner daemon: {url}");
-                    if !no_open {
-                        hagency::service::open_owner_link(&url);
-                    }
-                    Ok(())
-                },
-            );
-            let report = if cancel_on_stdin_close {
-                let (cancel, cancelled) = tokio::sync::oneshot::channel();
-                // A detached OS reader must not keep the Tokio runtime alive
-                // after successful enrollment while the controller owns stdin.
-                std::thread::spawn(move || {
-                    use std::io::Read;
-                    let mut byte = [0];
-                    let _ = std::io::stdin().read(&mut byte);
-                    let _ = cancel.send(());
-                });
-                // Closing the controller cancels OAuth or detaches remote
-                // enrollment. Once native registration is admitted, keep its
-                // original future until cleanup is acknowledged.
-                let cancel_control=control.clone();
-                let watcher=tokio::spawn(async move {let _=cancelled.await;cancel_control.cancel();});
-                let report=enrollment.await;watcher.abort();report?
-            } else { enrollment.await? };
-            match report.pending {
-                None => println!(
-                    "Enrolled {} (owner root {}). Start the daemon with: hagency daemon run",
-                    report.owner,
-                    report.owner_root.display()
-                ),
-                Some(code) => println!(
-                    "Enrolled {} but native registration is pending ({code}). The owner root may still be in use by another process.",
-                    report.owner
-                ),
-            }
-        }
-        DaemonCommand::Status { home } => {
-            let home = daemon_home(home)?;
-            match host::probe(&home).await {
-                host::Presence::NotRunning => println!("Hagency owner daemon is not running."),
-                host::Presence::Unsafe => return Err("the daemon socket is not private to this user".into()),
-                host::Presence::Running(_) => {
-                    let reply = daemon_call(&home, C::Snapshot { period: None, usage_filter:None }).await?;
-                    println!("{}", serde_json::to_string_pretty(&reply)?);
-                }
-            }
-        }
-        DaemonCommand::Pause { home } => {
-            let reply = daemon_call(&daemon_home(home)?, C::PauseHosting).await?;
-            println!("{}", serde_json::to_string_pretty(&reply)?);
-        }
-        DaemonCommand::Resume { home } => {
-            let reply = daemon_call(&daemon_home(home)?, C::ResumeHosting).await?;
-            println!("{}", serde_json::to_string_pretty(&reply)?);
-        }
-        DaemonCommand::Stop { home } => {
-            let reply = daemon_call(&daemon_home(home)?, C::StopHosting).await?;
-            println!("{}", serde_json::to_string_pretty(&reply)?);
-        }
-        DaemonCommand::SignOut { home } => {
-            host::sign_out(&daemon_home(home)?).await?;
-            println!("Owner signed out of the Hagency owner daemon.");
-        }
-        DaemonCommand::Install { home } => {
-            println!("{}", hagency::service::install_daemon(&daemon_home(home)?)?)
-        }
-        DaemonCommand::Uninstall => println!("{}", hagency::service::uninstall_daemon()?),
+        Command::Daemon { command } => hagency::daemon::cli::run(command).await?,
     }
     Ok(())
 }
@@ -437,6 +250,7 @@ mod tests {
             &["hagency", "daemon", "uninstall"],
             &["hagency", "daemon", "enroll", "--server", "https://s.example/", "--owner", "@o:s.example"],
         ] {
+            assert!(hagency::daemon::cli::requested(args), "{args:?}");
             assert!(
                 matches!(Cli::try_parse_from(args).unwrap().command, Some(Command::Daemon { .. })),
                 "{args:?}"
@@ -446,5 +260,6 @@ mod tests {
         assert!(Cli::try_parse_from(["hagency", "daemon", "release"]).is_err());
         assert!(Cli::try_parse_from(["hagency", "daemon", "enroll", "--server", "https://s.example/", "--adopt-root", "/x"]).is_err());
         assert!(Cli::try_parse_from(["hagency", "daemon", "run", "--agent-driver", "x"]).is_err());
+        assert!(!hagency::daemon::cli::requested(&["hagency", "serve"]));
     }
 }
