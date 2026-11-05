@@ -36,3 +36,30 @@ actionlint、原工作流 Python 表达式的 Windows/非 Windows 路径检查�
 核对 [GitHub 官方退役公告](https://github.com/actions/runner-images/issues/13518) 和 [当前 runner 镜像表](https://github.com/actions/runner-images) 后确认：全部 macOS14镜像已于2026-11-02从 GitHub Actions退役；当前 macos-15 是支持的 arm64 runner。发布矩阵将 macOS arm64 Installer 从 macos-14 更新到 macos-15，其他平台、命令、断言、期限和发布门槛不变。旧候选取消并保留实际状态，新冻结源码必须重新跑完整构建，产物使用 `.run/release-0.6.5-r3/`，不拼接旧候选产物。
 
 PR51 的检查此时全部结束：12项实际检查通过、6项条件跳过，完整快照保留在第二候选证据目录。
+
+
+## 最终候选构建及安装包核验
+
+最终构建源码为 `207681a435ea88ba5a8f23b213afbf5a4ed26dde`，本地和 origin/main 均已同步。独立第三轮 [run41970002844](https://github.com/hagency-org/hagency-client/actions/runs/41970002844) 实际完成且 success：Ubuntu24、macOS15、Windows2025 三个完整 Engine 任务，以及 Linux amd64/arm64、macOS arm64、Windows amd64 四个 Installer 任务均 success。Windows Installer 的实际凭据目录持久化探针通过。正式 real-host qualification 与自动 Publish 两项因 `publish=false` 条件跳过，明确不是资格通过。
+
+四个平台均通过 10 项 App contract 测试。macOS 和两个 Linux 平台的 App library 各 886 passed、0 failed、2 existing ignored；Windows 对应平台选择器为 881 passed、0 failed、2 existing ignored。新增 Home 审批鼠标路由回归在四个平台的原始日志中都通过。
+
+四个 Actions 安装包归档均先核对 API 提供的完整归档 SHA-256，随后解包检查六个实际安装包。单连接下载严重缓慢时改用标准 HTTPS Range 分段，仍以合并后的完整归档哈希作判据。每个安装包的版本、真实可执行架构、内嵌完整源码 permalink 与 139 个 `hagency_app/resources` 资源路径/字节均一致。DMG 的 Info.plist 及实际 Mach-O 最低版本均为 macOS12.0；此检查不冒充真实 macOS12 硬件运行资格。检查使用只读解包，不运行任何安装器、不挂载 DMG 或代替用户接受安装许可。
+
+| 安装包 | SHA-256 |
+| --- | --- |
+| `hagency-linux-amd64.AppImage` | `ad8f464e7cf6e9fcc09b10796326b1d737cc91e804e85f79a73c19088e345b7b` |
+| `hagency-linux-amd64.deb` | `7d5447b24290d7e62d8bc206f3b6fbdad2717ae533a36f5a86374426daf21687` |
+| `hagency-linux-arm64.AppImage` | `7c2acb0f0e69106266e4cf803941c144641ee4aeed5f876489e404d663f30805` |
+| `hagency-linux-arm64.deb` | `e27c466ad4b43243cc16d0461f318914a0e31ffdcf12bce09456be151a366e7a` |
+| `hagency-macos-arm64.dmg` | `394395a1d68a6cc8dc7af086e3855fc781440fe5eae5512cf252e774cd251a21` |
+| `hagency-windows-amd64.exe` | `247f6f0412a5044026853dad0153b79f0066266192010b6af11733fc6263955f` |
+
+六包加四份平台校验清单及一份总清单，完整附件集共 11 项。冻结源码的严格资格预检再次实际 exit1，仍拒绝两条 placeholder real-host 记录；未伪造记录、未改变发布门槛，也未把 skip 当作通过。当前仅准备未签名、手动安装草稿，公开发布和远端附件字节复核状态以后续记录为准。
+
+
+## 完整草稿已核验，等待本次发布模式决定
+
+GitHub [0.6.5 草稿](https://github.com/hagency-org/hagency-client/releases/tag/untagged-5db4a23a6a2b12ee6ab1)，release ID434851444，target 完整绑定冻结源码 `207681a435ea88ba5a8f23b213afbf5a4ed26dde`。全部 11 项附件均完成服务器 state/size/SHA-256 核对，并从 GitHub 重新认证下载，逐项与原始本地产物字节/摘要一致。草稿内容明确三项产品修复、公网实测范围、未签名手动安装、无自动更新及两项未完成 real-host 资格。原始运行结果及核验收据均留在忽略目录 `.run/release-0.6.5-r3/`，不上传原始 profile、凭据或私有日志。
+
+此时尚未公开发布；正式 Latest 仍为0.6.4。公开升级需单独决定本次是否沿用未签名、手动安装方式，不能把既往某一版的例外授权永久化，也不能宣称严格资格通过。文档提交可以晚于产物源码，发布标签必须保持指向实际构建的冻结源码，不得移到文档提交。
