@@ -198,6 +198,25 @@ pub struct GlobalApprovalInbox {
 impl Drop for GlobalApprovalInbox {
     fn drop(&mut self) {if let Some(task)=self.task.take() {task.abort();}}
 }
+impl GlobalApprovalInboxRef {
+    /// The inbox is drawn over the entire workspace even though its entry is
+    /// inside the sidebar. Route modal input before the covered workspace can
+    /// capture it; normal actions, polling and lifecycle events still traverse
+    /// the complete Home tree.
+    pub(crate) fn handle_modal_input(&self,cx:&mut Cx,event:&Event,scope:&mut Scope)->bool {
+        let input=event.requires_visibility() || matches!(event,
+            Event::MouseUp(_) | Event::MouseLeave(_) | Event::KeyDown(_) | Event::KeyUp(_)
+            | Event::TextInput(_) | Event::TextRangeReplace(_) | Event::TextCopy(_) | Event::TextCut(_)
+            | Event::BackPressed {..});
+        if !input {return false;}
+        let Some(inbox)=self.borrow() else {return false;};
+        let modal=inbox.view.modal(cx,ids!(inbox_popup));
+        if !modal.is_open() {return false;}
+        drop(inbox);
+        modal.handle_event(cx,event,scope);
+        true
+    }
+}
 impl GlobalApprovalInbox {
     fn reset(&mut self,cx:&mut Cx,identity:String) {
         if let Some(task)=self.task.take() {task.abort();}
@@ -443,6 +462,57 @@ mod tests {
         inbox.failed=true;
         let actions=cx.capture_actions(|cx|inbox.review_for_identity(cx,&target,Some("account-b")));
         assert!(actions.is_empty());
+    }
+    #[test]
+    fn home_approval_modal_pointer_input_precedes_the_workspace() {
+        use crate::{app::AppState, home::home_screen::HomeScreen};
+        let mut cx=Cx::new(Box::new(|_,_|{}));
+        let mut home=cx.with_vm(|vm| {
+            makepad_widgets::script_mod(vm);crate::app::register_widgets(vm);
+            let value=script_eval!(vm,{mod.widgets.HomeScreen {
+                flow:mod.turtle.Flow.Overlay
+                pointer_probe := mod.widgets.Button {width:mod.turtle.Size.Fill height:mod.turtle.Size.Fill text:"Workspace behind approval"}
+            }});
+            HomeScreen::script_from_value(vm,value)
+        });
+        let mut state=AppState::default();
+        let draw=|cx:&mut Cx,home:&mut HomeScreen,state:&mut AppState| {
+            cx.redraw_all();let pass=DrawPass::new(cx);pass.set_size(cx,dvec2(1280.0,800.0));
+            let mut list=DrawList2d::new(cx);let overlay=Overlay {draw_list:DrawList::new(cx)};
+            let event=DrawEvent::default();let mut draw=CxDraw::new(cx,&event);let mut cx2d=Cx2d::new(&mut draw);
+            cx2d.begin_pass(&pass,None);list.begin_always(&mut cx2d);overlay.begin(&mut cx2d);
+            cx2d.begin_root_turtle(dvec2(1280.0,800.0),Layout::flow_overlay());
+            home.draw_walk_all(&mut cx2d,&mut Scope::with_data(state),Walk::fixed(1280.0,800.0));
+            overlay.end(&mut cx2d);cx2d.end_pass_sized_turtle();list.end(&mut cx2d);cx2d.end_pass(&pass);
+        };
+        draw(&mut cx,&mut home,&mut state);
+        let inbox_ref=home.widget(&cx,ids!(global_approvals));
+        {
+            let mut inbox=inbox_ref.borrow_mut::<GlobalApprovalInbox>().unwrap();
+            finish(&mut cx,&mut inbox,json!({"approvals":[summary("agent-a","one","p1")],"total":1,"nextCursor":null}));
+            inbox.view.modal(&cx,ids!(inbox_popup)).open(&mut cx);
+        }
+        draw(&mut cx,&mut home,&mut state);
+        let (review,close)={
+            let inbox=inbox_ref.borrow::<GlobalApprovalInbox>().unwrap();
+            let rows=inbox.view.approval_rows(&cx,ids!(inbox_rows));
+            let review=rows.borrow_mut().unwrap().list.item(&mut cx,0,id!(Approval)).button(&cx,ids!(review_approval));
+            (review,inbox.view.button(&cx,ids!(inbox_close)))
+        };
+        let probe=home.button(&cx,ids!(pointer_probe));
+        for button in [review,close] {
+            cx.fingers=Default::default();
+            let rect=button.area().rect(&cx);let abs=rect.pos+rect.size*0.5;
+            assert!(rect.size.x>0.0 && rect.size.y>0.0);
+            let down=Event::MouseDown(MouseDownEvent {abs,button:MouseButton::PRIMARY,window_id:WindowId(0,0),modifiers:KeyModifiers::default(),handled:Cell::new(Area::Empty),time:1.0});
+            cx.fingers.first_mouse_button=Some((MouseButton::PRIMARY,WindowId(0,0)));
+            let pressed=cx.capture_actions(|cx|home.handle_event(cx,&down,&mut Scope::with_data(&mut state)));
+            let up=Event::MouseUp(MouseUpEvent {abs,button:MouseButton::PRIMARY,window_id:WindowId(0,0),modifiers:KeyModifiers::default(),time:1.1});
+            let released=cx.capture_actions(|cx|home.handle_event(cx,&up,&mut Scope::with_data(&mut state)));
+            cx.fingers.first_mouse_button=None;
+            assert!(button.pressed(&pressed) && button.clicked(&released),"real pointer events must reach the approval modal button: {}",button.text());
+            assert!(!probe.pressed(&pressed) && !probe.clicked(&released),"the covered workspace must not receive the modal click");
+        }
     }
     #[test]
     fn global_inbox_widget_fits_window_and_review_opens_only_the_painted_exact_target() {
