@@ -463,9 +463,11 @@ impl ServerLogin {
 
 impl super::super::native::NativeOwner {
     /// Test fixture: an executor resume record of `state`, written through the
-    /// real journal (scope bound to the root's path). Grants nothing.
-    #[cfg(test)]
-    pub(crate) fn write_test_resume_record(
+    /// real journal (scope bound to the root's path). Grants nothing. Hosts
+    /// with `test-support` use it to test their owner-root selection.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn write_test_resume_record(
         state: &Path,
         origin: &str,
         owner: &str,
