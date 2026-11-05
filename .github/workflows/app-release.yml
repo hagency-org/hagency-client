@@ -66,7 +66,8 @@ jobs:
             platform: linux
             arch: arm64
             formats: deb,appimage
-          - runner: macos-14
+          # macOS 14 runners retired on 2026-11-02. macos-15 is native arm64.
+          - runner: macos-15
             platform: macos
             arch: arm64
             formats: dmg

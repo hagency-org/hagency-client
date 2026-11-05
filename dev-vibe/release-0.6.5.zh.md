@@ -28,3 +28,11 @@
 发现发布流程仍把 TEMP/TMP 与大型构建缓存一起放在 D 盘，而普通 Windows App Build CI 已有明确规则：部分 hosted2022 D 盘带 FILE_PORTABLE_DEVICE，凭据目录持久化适配器必须拒绝；测试临时数据使用系统卷 `C:/hagency-ci-tmp`。本次修复让 Installer 使用相同已存在的测试卷规则，CARGO_HOME、target 和打包工具仍在 D 盘，并在 App 测试前运行已有 `windows_credential_sync`，实际证明目录 flush 及安装凭据写入/重开。没有放宽存储能力判断、文件权限或测试断言，也没有省略凭据测试。
 
 actionlint、原工作流 Python 表达式的 Windows/非 Windows 路径检查及 diff whitespace 检查通过；新候选必须重新完整构建并取得真实 Windows probe 和 App 测试结果。原机器未记录具体原生卷 flags，因此不把该已知 D 卷类别推断描述为本次机器的实测 flags。产物和结果将使用独立 `.run/release-0.6.5-r2/`。
+
+## macOS 14 runner 退役，更新第三次候选
+
+第二候选 `4f10c555389578d8afe4d70df07d4a9e2a24a5ee` / run41967223872 已实际通过 Windows 目录持久化探针与完整 App 测试（probe04:25:16Z、App04:33:55Z），两个 Linux Installer 的 App 测试也通过；其 macos-14 Installer 长时间未分配 runner。没有把这些部分结果记为完整发布验收。
+
+核对 [GitHub 官方退役公告](https://github.com/actions/runner-images/issues/13518) 和 [当前 runner 镜像表](https://github.com/actions/runner-images) 后确认：全部 macOS14镜像已于2026-11-02从 GitHub Actions退役；当前 macos-15 是支持的 arm64 runner。发布矩阵将 macOS arm64 Installer 从 macos-14 更新到 macos-15，其他平台、命令、断言、期限和发布门槛不变。旧候选取消并保留实际状态，新冻结源码必须重新跑完整构建，产物使用 `.run/release-0.6.5-r3/`，不拼接旧候选产物。
+
+PR51 的检查此时全部结束：12项实际检查通过、6项条件跳过，完整快照保留在第二候选证据目录。
