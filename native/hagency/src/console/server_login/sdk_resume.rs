@@ -462,6 +462,43 @@ impl ServerLogin {
 }
 
 impl super::super::native::NativeOwner {
+    /// Test fixture: an executor resume record of `state`, written through the
+    /// real journal (scope bound to the root's path). Grants nothing.
+    #[cfg(test)]
+    pub(crate) fn write_test_resume_record(
+        state: &Path,
+        origin: &str,
+        owner: &str,
+        client_id: &str,
+        active: bool,
+    ) {
+        let journal = Journal::open(Some(state)).unwrap();
+        let record = Record {
+            version: 1,
+            scope: journal.scope.clone(),
+            state: if active {
+                State::Active
+            } else {
+                State::Revoked
+            },
+            binding: Binding {
+                origin: origin.into(),
+                client_id: client_id.into(),
+                installation_id: "fixture-installation".into(),
+                name: "Hagency Desktop".into(),
+                owner: Some(owner.into()),
+                subject: Some(owner.into()),
+            },
+            user_id: "fixture-user".into(),
+            session_token: "a".repeat(64),
+            device: Some(Device {
+                id: "FIXTURE_DEVICE".into(),
+                generation: 1,
+                token: "b".repeat(64),
+            }),
+        };
+        journal.persist(&record).unwrap();
+    }
     /// Reduction-only explicit logout/removal when no NativeOwner was opened.
     /// The trusted host supplies its original state root and account binding.
     /// No SDK token, session, runtime or registration is created by this call.

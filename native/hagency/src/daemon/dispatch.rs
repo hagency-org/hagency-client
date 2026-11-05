@@ -658,7 +658,7 @@ pub(crate) mod tests {
         let c=controller(temp.path(),Probe::new(Some("@o:s")));
         c.begin_shutdown();
         let start=req("new-enroll",Command::Enrollment{call:super::super::enrollment_rpc::Call::Start {
-            origin:"https://s.example/".into(),owner:Some("@o:s".into()),display_name:None,adopt_root:None,
+            origin:"https://s.example/".into(),owner:"@o:s".into(),display_name:None,
         }});
         assert_eq!(c.handle(start).await.error.unwrap().code,"daemon_stopping");
         assert!(c.handle(req("status",Command::Snapshot{period:None,usage_filter:None})).await.snapshot().is_ok());

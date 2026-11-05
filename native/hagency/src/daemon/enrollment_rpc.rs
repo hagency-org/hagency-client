@@ -9,7 +9,7 @@ use super::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU8, Ordering},
@@ -20,11 +20,11 @@ use std::{
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 pub enum Call {
+    /// Enroll `owner` with its registered owner root (ADR-192).
     Start {
         origin: String,
-        owner: Option<String>,
+        owner: String,
         display_name: Option<String>,
-        adopt_root: Option<PathBuf>,
     },
     Status {
         id: String,
@@ -233,9 +233,8 @@ async fn request(home: &Path, id: &str, call: Call) -> Result<Status, HostError>
 pub(super) async fn remote_enroll<F, Fut>(
     home: &Path,
     origin: &str,
-    owner: Option<&str>,
+    owner: &str,
     display_name: Option<String>,
-    adopt_root: Option<&Path>,
     open: F,
 ) -> Result<EnrollReport, HostError>
 where
@@ -249,9 +248,8 @@ where
         &id,
         Call::Start {
             origin: origin.into(),
-            owner: owner.map(str::to_owned),
+            owner: owner.into(),
             display_name,
-            adopt_root: adopt_root.map(Path::to_owned),
         },
     )
     .await?;
@@ -285,9 +283,8 @@ mod tests {
     fn call() -> Call {
         Call::Start {
             origin: "https://test/".into(),
-            owner: Some("@owner:test".into()),
+            owner: "@owner:test".into(),
             display_name: None,
-            adopt_root: None,
         }
     }
     #[tokio::test]
@@ -323,6 +320,7 @@ mod tests {
                 owner_root: "/original".into(),
                 registered: true,
                 pending: None,
+                existing_executor: false,
             });
         });
         entered_rx.await.unwrap();

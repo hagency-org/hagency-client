@@ -11,7 +11,7 @@ use super::{
     auth::{AuthError, AuthState, SdkCustody},
     control::now_ms,
     dispatch::{BoxFuture, Observation, OwnerScope, Phase, Runtime, SnapshotParts},
-    enrollment::{Enrollment, Handover},
+    enrollment::Enrollment,
     protocol::{DaemonError, Period, errors},
     workers::{Admission, Worker},
 };
@@ -39,8 +39,8 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
 }
 
-/// Codes that resolve without owner action. A root still locked by Desktop
-/// during handover appears as `native_owner_state_unavailable`.
+/// Codes that resolve without owner action. A root still locked by another
+/// process appears as `native_owner_state_unavailable`.
 pub(crate) fn retryable(code: &str) -> bool {
     code.ends_with("_unavailable")
         || matches!(code, "server_unavailable" | "source_root_changed" | "native_owner_drain_required")
@@ -338,7 +338,7 @@ impl Inner {
             return Ok(());
         };
         if !enrollment.hostable() {
-            self.set_phase(Phase::Stopped, Some("daemon_handover_released".into()));
+            self.set_phase(Phase::Stopped, Some("daemon_enrollment_incomplete".into()));
             return Ok(());
         }
         let mut hosted = self.hosted.lock().await;
@@ -352,11 +352,7 @@ impl Inner {
             self.cleanup_registered().await;
             if lock(&self.registered).is_some() {return Err(OpenError::Terminal("native_owner_drain_required".into()));}
         }
-        self.set_phase(
-            Phase::Starting,
-            matches!(enrollment.handover, Handover::Staged { .. })
-                .then(|| "Waiting to take over the owner root from Hagency Desktop.".into()),
-        );
+        self.set_phase(Phase::Starting, None);
         let custody = SdkCustody::restore(&self.home.join(super::MATRIX), &enrollment.origin, &enrollment.owner)
             .await
             .map_err(|e| match e {
@@ -467,10 +463,6 @@ impl Inner {
             Phase::Running,
             (!adopted).then(|| "No pooled resources are activated on this device.".into()),
         );
-        match Enrollment::mark_active(&self.home) {
-            Ok(saved) => *lock(&self.enrollment) = Some(saved),
-            Err(e) => tracing::warn!(code = e.code(), "Handover journal not advanced"),
-        }
         self.event(ActivityState::Succeeded, "Hosting started", if adopted { "Pool workers started." } else { "Owner authorized." });
         Ok(())
     }
@@ -828,22 +820,22 @@ impl Runtime for OwnerRuntime {
         Box::pin(async move {
             use super::enrollment_rpc::Call;
             if let Call::Status{id}=call{return lock(&self.inner.enrollment_flow).get(&id).map_err(str::to_owned)}
-            let Call::Start{origin,owner,display_name,adopt_root}=&call else{unreachable!()};
-            if let Some(current)=lock(&self.inner.enrollment).as_ref() {
-                if !super::same_origin(origin,&current.origin)||owner.as_deref()!=Some(&current.owner)||adopt_root.as_ref().is_some_and(|p|p!=&current.owner_root){return Err("daemon_owner_scope_mismatch".into())}
-            }
+            let Call::Start{origin,owner,display_name}=&call else{unreachable!()};
+            if let Some(current)=lock(&self.inner.enrollment).as_ref()
+                && (!super::same_origin(origin,&current.origin)||owner!=&current.owner) {return Err("daemon_owner_scope_mismatch".into())}
             let (workflow,start)=lock(&self.inner.enrollment_flow).begin(&id,&call).map_err(str::to_owned)?;
             if start {
-                let (origin,owner,display_name,adopt_root)=(origin.clone(),owner.clone(),display_name.clone(),adopt_root.clone());
+                let (origin,owner,display_name)=(origin.clone(),owner.clone(),display_name.clone());
                 let runtime=Self{inner:self.inner.clone()};let progress=workflow.clone();
                 workflow.spawn(async move {
                     runtime.inner.bridge.revoke_all();
                     let mut stopped = false;
                     let result=async {
+                        let roots=crate::owner_roots::OwnerRoots::system().map_err(|e|super::host::HostError::Code(e.code()))?;
                         runtime.stop().await.map_err(super::host::HostError::Code)?;
                         stopped = true;
                         let prompt=progress.clone();
-                        super::host::enroll_locked_controlled(&runtime.inner.home,&origin,owner.as_deref(),display_name,adopt_root.as_deref(),progress.control.clone(),move |url|async move{lock(&prompt.status).authorization_url=Some(url);Ok(())}).await
+                        super::host::enroll_locked_controlled(&runtime.inner.home,&roots,&origin,&owner,display_name,progress.control.clone(),move |url|async move{lock(&prompt.status).authorization_url=Some(url);Ok(())}).await
                     }.await;
                     match result {
                         Ok(report)=>{lock(&progress.status).result=Some(report);if !progress.control.is_cancelled(){runtime.start();}},
@@ -1076,6 +1068,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_unfinished_enrollment_is_never_hosted() {
+        let temp = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let root = temp.path().join("owners").join("registered-root");
+        Enrollment::prepare(
+            temp.path(),
+            "https://s.example/",
+            "@o:s.example",
+            None,
+            root.clone(),
+        )
+        .unwrap();
+        let runtime = OwnerRuntime::new(temp.path().into()).unwrap();
+        runtime.start();
+        for _ in 0..200 {
+            if lock(&runtime.inner.starting)
+                .as_ref()
+                .is_some_and(|t| t.is_finished())
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let observed = runtime.observe();
+        assert_eq!(observed.phase, Phase::Stopped);
+        assert_eq!(
+            observed.detail.as_deref(),
+            Some("daemon_enrollment_incomplete")
+        );
+        assert!(!root.exists());
+    }
+
+    #[tokio::test]
     async fn enrolled_without_sdk_session_fails_closed_without_opening_the_root() {
         let temp = tempfile::tempdir().unwrap();
         #[cfg(unix)]
@@ -1084,7 +1113,19 @@ mod tests {
             std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         }
         hagency_store::private::directory(&temp.path().join(super::super::MATRIX)).unwrap();
-        let enrollment = Enrollment::enroll_fresh(temp.path(), "https://s.example/", "@o:s.example", None).unwrap();
+        let root = temp
+            .path()
+            .parent()
+            .unwrap()
+            .join(format!("never-created-{}", super::super::new_request_id()));
+        let enrollment = Enrollment::enroll(
+            temp.path(),
+            "https://s.example/",
+            "@o:s.example",
+            None,
+            &root,
+        )
+        .unwrap();
         let runtime = OwnerRuntime::new(temp.path().into()).unwrap();
         assert_eq!(runtime.owner().unwrap().user_id, "@o:s.example");
         runtime.start();

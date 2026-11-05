@@ -10,8 +10,9 @@ struct State {
     device: Mutex<String>,
     presented: Mutex<Vec<String>>,
 }
-struct Fixture {
-    origin: String,
+/// Loopback OAuth server: discovery, metadata, token and whoami only.
+pub(crate) struct Fixture {
+    pub(crate) origin: String,
     state: Arc<State>,
     task: tokio::task::JoinHandle<()>,
 }
@@ -21,7 +22,7 @@ impl Drop for Fixture {
     }
 }
 impl Fixture {
-    async fn new(denied: usize) -> Self {
+    pub(crate) async fn new(denied: usize) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let origin = format!("http://{}/", listener.local_addr().unwrap());
         let base = origin.clone();

@@ -1374,4 +1374,4 @@ mod reauthentication_tests {
 
 #[cfg(test)]
 #[path = "auth_readiness_tests.rs"]
-mod readiness_tests;
+pub(crate) mod readiness_tests;

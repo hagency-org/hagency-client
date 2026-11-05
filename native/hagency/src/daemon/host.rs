@@ -1,18 +1,18 @@
 //! Process-level entry points: run the daemon, enroll an owner, probe a
-//! running daemon, roll back a handover and sign out. Used by the `hagency
-//! daemon` CLI and by Hagency Desktop's startup/enrollment integration.
+//! running daemon and sign out. Used by the `daemon` command line and by
+//! Hagency Desktop's hosting integration.
 pub use super::enrollment_rpc::EnrollmentControl;
 use super::{
     DaemonHome, HomeError,
     auth::{AuthError, SdkCustody},
     control::ControlStore,
     dispatch::{Controller, Runtime},
-    enrollment::{Enrollment, EnrollmentError, Handover},
+    enrollment::{Enrollment, EnrollmentError},
     ipc::{DaemonClient, IpcError, Server, new_request_id},
     protocol::{Command, Hello, Request},
     runtime::OwnerRuntime,
 };
-use crate::native_owner::NativeOwner;
+use crate::{native_owner::NativeOwner, owner_roots::OwnerRoots};
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -40,8 +40,9 @@ impl From<AuthError> for HostError {
     }
 }
 
-/// `~/Library/Application Support/HagencyOwnerDaemon` on macOS, else
-/// `$XDG_STATE_HOME/hagency-owner-daemon` or `~/.local/state/...`.
+/// `~/Library/Application Support/Hagency/owner-daemon` on macOS, else
+/// `$XDG_STATE_HOME/hagency/owner-daemon` or `~/.local/state/hagency/owner-daemon`.
+/// See [`crate::service::default_daemon_dir`].
 pub fn default_home() -> Result<PathBuf, HostError> {
     crate::service::default_daemon_dir().map_err(|_| HostError::Code("daemon_home_unavailable"))
 }
@@ -134,22 +135,75 @@ pub struct EnrollReport {
     pub registered: bool,
     /// Static code when registration must be retried later.
     pub pending: Option<String>,
+    /// The root already held an active executor, which the daemon proves in
+    /// place; otherwise the daemon registers a new executor device.
+    #[serde(default)]
+    pub existing_executor: bool,
 }
 
-/// Explicit enrollment. Performs a fresh browser sign-in for the daemon's own
-/// SDK device, records the journal, then opens the owner root in-process so
-/// the one-time explicit sign-in permission is consumed by native device
-/// registration immediately. Requires that no daemon runs on this home.
-///
-/// `adopt_root` names Hagency Desktop's existing owner root (handover);
-/// Desktop must already have drained and released it. Without it a fresh
-/// root is created under the daemon home.
+/// What enrollment does with the owner's registered root, decided only from
+/// the root's contents.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Executor {
+    /// An active executor resume record: sign in with the root's OAuth client
+    /// and prove that device in place with the existing adoption checks.
+    InPlace { client_id: String },
+    /// No active executor (no root yet, no record, or a revoked one): sign in
+    /// with the daemon's own OAuth client and register a new executor device.
+    Fresh,
+}
+
+impl Executor {
+    /// `origin` in the native form (see [`native_origin`]).
+    pub fn inspect(root: &Path, origin: &str, owner: &str) -> Result<Self, &'static str> {
+        match std::fs::symlink_metadata(root) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::Fresh),
+            Err(_) => return Err("owner_root_busy_or_invalid"),
+            Ok(_) => {}
+        }
+        match NativeOwner::matrix_resume_client_id(root, origin, owner) {
+            Ok(client_id) => Ok(Self::InPlace { client_id }),
+            Err(e)
+                if matches!(
+                    e.code.as_str(),
+                    "native_resume_missing" | "native_resume_revoked"
+                ) =>
+            {
+                Ok(Self::Fresh)
+            }
+            // A record of another account, or one bound to another path.
+            Err(e) if e.code == "matrix_account_mismatch" => Err("matrix_account_mismatch"),
+            Err(_) => Err("native_resume_unavailable"),
+        }
+    }
+    fn client_id(&self) -> Option<&str> {
+        match self {
+            Self::InPlace { client_id } => Some(client_id),
+            Self::Fresh => None,
+        }
+    }
+}
+
+/// The URL form native owner roots record (`https://host/`). Root contents
+/// such as the resume record compare origins exactly.
+pub fn native_origin(origin: &str) -> Result<String, HostError> {
+    crate::server_admission::normalize_origin(origin)
+        .map(|url| url.to_string())
+        .map_err(|_| AuthError::UnsupportedServer.into())
+}
+
+/// Explicit enrollment of `owner`. The daemon records the owner's registered
+/// root ([`crate::owner_roots`]), never a different one, and signs in through
+/// the browser with its own SDK device, reusing the root's OAuth client when
+/// the root holds an active executor. It then opens the root in-process, so
+/// the one-time sign-in permission is consumed by native device proof or
+/// registration immediately. A running daemon on `home` performs the same
+/// steps under its own custody.
 pub async fn enroll<F, Fut>(
     home: &Path,
     origin: &str,
-    expected_owner: Option<&str>,
+    owner: &str,
     display_name: Option<String>,
-    adopt_root: Option<&Path>,
     open_url: F,
 ) -> Result<EnrollReport, HostError>
 where
@@ -159,9 +213,8 @@ where
     enroll_controlled(
         home,
         origin,
-        expected_owner,
+        owner,
         display_name,
-        adopt_root,
         Arc::new(EnrollmentControl::default()),
         open_url,
     )
@@ -171,9 +224,8 @@ where
 pub async fn enroll_controlled<F, Fut>(
     home: &Path,
     origin: &str,
-    expected_owner: Option<&str>,
+    owner: &str,
     display_name: Option<String>,
-    adopt_root: Option<&Path>,
     control: Arc<EnrollmentControl>,
     open_url: F,
 ) -> Result<EnrollReport, HostError>
@@ -184,7 +236,7 @@ where
     match probe(home).await {
         Presence::Running(_) => {
             return tokio::select! {
-                result=super::enrollment_rpc::remote_enroll(home,origin,expected_owner,display_name,adopt_root,open_url)=>result,
+                result=super::enrollment_rpc::remote_enroll(home,origin,owner,display_name,open_url)=>result,
                 _=control.cancelled()=>Err(HostError::Code("daemon_enrollment_detached")),
             };
         }
@@ -192,37 +244,14 @@ where
         Presence::NotRunning => {}
     }
     let held = DaemonHome::open(home)?;
+    let roots = OwnerRoots::system().map_err(|e| HostError::Code(e.code()))?;
     enroll_locked_controlled(
         held.path(),
+        &roots,
         origin,
-        expected_owner,
+        owner,
         display_name,
-        adopt_root,
         control,
-        open_url,
-    )
-    .await
-}
-
-pub(super) async fn enroll_locked<F, Fut>(
-    home: &Path,
-    origin: &str,
-    expected_owner: Option<&str>,
-    display_name: Option<String>,
-    adopt_root: Option<&Path>,
-    open_url: F,
-) -> Result<EnrollReport, HostError>
-where
-    F: FnOnce(String) -> Fut,
-    Fut: std::future::Future<Output = Result<(), ()>>,
-{
-    enroll_locked_controlled(
-        home,
-        origin,
-        expected_owner,
-        display_name,
-        adopt_root,
-        Arc::new(EnrollmentControl::default()),
         open_url,
     )
     .await
@@ -230,10 +259,10 @@ where
 
 pub(super) async fn enroll_locked_controlled<F, Fut>(
     home: &Path,
+    roots: &OwnerRoots,
     origin: &str,
-    expected_owner: Option<&str>,
+    owner: &str,
     display_name: Option<String>,
-    adopt_root: Option<&Path>,
     control: Arc<EnrollmentControl>,
     open_url: F,
 ) -> Result<EnrollReport, HostError>
@@ -250,48 +279,29 @@ where
     {
         return Err(HostError::Code("daemon_logout_pending"));
     }
-    if let Some(existing) = Enrollment::load(home)?
-        && expected_owner.is_some_and(|o| o != existing.owner)
-    {
+    let origin = native_origin(origin)?;
+    if Enrollment::load(home)?.is_some_and(|existing| {
+        existing.owner != owner || !super::same_origin(&existing.origin, &origin)
+    }) {
         return Err(EnrollmentError::OtherOwner.into());
     }
-    let public_client = match adopt_root {
-        Some(root) => {
-            let owner = expected_owner.ok_or(HostError::Code("daemon_handover_owner_required"))?;
-            Some(
-                NativeOwner::matrix_resume_client_id(root, origin, owner)
-                    .map_err(|error| HostError::Code(registration_code(&error.code)))?,
-            )
-        }
-        None => None,
-    };
-    if let Some(owner) = expected_owner {
-        let root=adopt_root.map(Path::to_path_buf)
-            .or_else(||Enrollment::load(home).ok().flatten().filter(|e|e.owner==owner && super::same_origin(&e.origin,origin)).map(|e|e.owner_root))
-            .unwrap_or_else(||super::enrollment::fresh_root(home,origin,owner));
-        Enrollment::prepare(home, origin, owner, display_name.clone(),root)?;
-    }
+    let root = roots
+        .resolve(&origin, owner, None)
+        .map_err(|e| HostError::Code(e.code()))?;
+    let executor = Executor::inspect(&root, &origin, owner).map_err(HostError::Code)?;
+    Enrollment::prepare(home, &origin, owner, display_name.clone(), root.clone())?;
     let directory = home.join(super::MATRIX);
     let custody = tokio::select! {
         biased;
         _=control.cancelled()=>return Err(HostError::Code("daemon_enrollment_cancelled")),
-        result=SdkCustody::reauthenticate(&directory,origin,expected_owner,public_client.as_deref(),open_url)=>result?,
+        result=SdkCustody::reauthenticate(&directory,&origin,Some(owner),executor.client_id(),open_url)=>result?,
     };
     custody.fence_on_logout(home);
-    // Claim native custody before publishing a hostable handover. Browser
-    // cancellation can never land a staged root between these steps.
+    // Claim native custody before publishing a hostable enrollment. Browser
+    // cancellation can never land an enrolled root between these steps.
     control.accept_native().map_err(HostError::Code)?;
     control.set_custody(custody.clone());
-    let owner = custody.owner().to_owned();
-    let mut enrollment = match adopt_root {
-        Some(root) => Enrollment::stage_handover(home, origin, &owner, display_name, root)?,
-        None => Enrollment::enroll_fresh(home, origin, &owner, display_name)?,
-    };
-    if matches!(enrollment.handover, Handover::Released { .. }) {
-        // This explicit enrollment is the new handover attempt; an ordinary
-        // daemon restart can never undo a Released rollback.
-        enrollment = Enrollment::restage(home)?;
-    }
+    let enrollment = Enrollment::enroll(home, &origin, owner, display_name, &root)?;
     if super::revocation::load(home)
         .map_err(HostError::Code)?
         .is_some()
@@ -299,6 +309,7 @@ where
         custody.retire();
         return Err(HostError::Code("daemon_logout_pending"));
     }
+    let existing_executor = matches!(executor, Executor::InPlace { .. });
     let opened = open_for_registration(&enrollment, &custody, control.clone()).await;
     let report = match opened {
         Ok(native) => {
@@ -311,21 +322,20 @@ where
             }
             let _ = native.identity().await;
             control.drain(false).await.map_err(HostError::Code)?;
-            if matches!(enrollment.handover, Handover::Fresh) {
-                Enrollment::mark_active(home)?;
-            }
             EnrollReport {
-                owner,
+                owner: owner.into(),
                 owner_root: enrollment.owner_root,
                 registered: true,
                 pending: None,
+                existing_executor,
             }
         }
         Err(code) => EnrollReport {
-            owner,
+            owner: owner.into(),
             owner_root: enrollment.owner_root,
             registered: false,
             pending: Some(code.into()),
+            existing_executor,
         },
     };
     control.drain(false).await.map_err(HostError::Code)?;
@@ -392,16 +402,9 @@ fn registration_code(code: &str) -> &'static str {
     }
 }
 
-/// Handover rollback. Requires the daemon to be stopped (this takes the
-/// home lock). Afterwards the daemon will not open the root again until it
-/// is restaged, so Desktop may resume hosting it.
-pub fn release(home: &Path) -> Result<Enrollment, HostError> {
-    let home = DaemonHome::open(home)?;
-    Ok(Enrollment::release(home.path())?)
-}
-
-/// Explicit owner sign-out while the daemon is stopped. Durable native
-/// revocation precedes the drain; the SDK grant is revoked last.
+/// Explicit owner sign-out. Durable native revocation precedes the drain; the
+/// SDK grant is revoked last. The owner root and its registration remain, so
+/// enrolling again finds the same root.
 pub async fn sign_out(home: &Path) -> Result<(), HostError> {
     if let Presence::Running(_) = probe(home).await {
         let enrollment = Enrollment::load(home)?.ok_or(EnrollmentError::Missing)?;
@@ -441,21 +444,54 @@ mod tests {
 
     #[tokio::test]
     async fn pending_remote_logout_still_serves_status_and_never_opens_hosting() {
-        let temp=short_home();let home=temp.path().join("d");
+        let temp = short_home();
+        let home = temp.path().join("d");
+        let root = temp.path().join("owner-root");
         hagency_store::private::directory(&home).unwrap();
-        Enrollment::enroll_fresh(&home,"https://unavailable.invalid/","@owner:unavailable.invalid",None).unwrap();
+        Enrollment::enroll(
+            &home,
+            "https://unavailable.invalid/",
+            "@owner:unavailable.invalid",
+            None,
+            &root,
+        )
+        .unwrap();
         hagency_store::private::directory(&home.join(super::super::MATRIX)).unwrap();
-        hagency_store::private::replace(&home.join(super::super::MATRIX).join("session.json"),b"{}").unwrap();
-        super::super::revocation::request(&home,"https://unavailable.invalid","@owner:unavailable.invalid").unwrap();
-        let shutdown=hagency_matrix::CancellationToken::new();
-        let task={let home=home.clone();let shutdown=shutdown.clone();tokio::spawn(async move{run(&home,shutdown).await})};
-        let hello=tokio::time::timeout(Duration::from_secs(3),async {
-            loop { if let Presence::Running(hello)=probe(&home).await {break hello;} tokio::time::sleep(Duration::from_millis(10)).await; }
-        }).await.unwrap();
-        assert_ne!(hello.hosting,hagency_metering::dashboard::HostingState::Running);
+        hagency_store::private::replace(
+            &home.join(super::super::MATRIX).join("session.json"),
+            b"{}",
+        )
+        .unwrap();
+        super::super::revocation::request(
+            &home,
+            "https://unavailable.invalid",
+            "@owner:unavailable.invalid",
+        )
+        .unwrap();
+        let shutdown = hagency_matrix::CancellationToken::new();
+        let task = {
+            let home = home.clone();
+            let shutdown = shutdown.clone();
+            tokio::spawn(async move { run(&home, shutdown).await })
+        };
+        let hello = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if let Presence::Running(hello) = probe(&home).await {
+                    break hello;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_ne!(
+            hello.hosting,
+            hagency_metering::dashboard::HostingState::Running
+        );
         assert!(super::super::revocation::load(&home).unwrap().is_some());
-        assert!(!home.join("owners").exists());
-        shutdown.cancel();task.await.unwrap().unwrap();
+        assert!(!root.exists());
+        shutdown.cancel();
+        task.await.unwrap().unwrap();
     }
     #[tokio::test]
     async fn run_serves_an_unenrolled_daemon_and_detaching_controllers_change_nothing() {
@@ -485,10 +521,10 @@ mod tests {
             run(&home, hagency_matrix::CancellationToken::new()).await,
             Err(HostError::Home(HomeError::AlreadyRunning))
         ));
-        // Enrollment and rollback also require the home lock.
+        // Local enrollment and sign-out also require the home lock.
         assert!(matches!(
-            release(&home),
-            Err(HostError::Home(HomeError::AlreadyRunning))
+            DaemonHome::open(&home),
+            Err(HomeError::AlreadyRunning)
         ));
         // Controllers attach and detach freely.
         for _ in 0..3 {
@@ -514,5 +550,224 @@ mod tests {
         task.await.unwrap().unwrap();
         assert!(matches!(probe(&home).await, Presence::NotRunning));
         assert!(!home.join(super::super::ipc::SOCKET).exists());
+    }
+
+    const OWNER: &str = "@owner:test";
+
+    struct Enrolling {
+        temp: tempfile::TempDir,
+        roots: OwnerRoots,
+        home: DaemonHome,
+    }
+
+    fn enrolling() -> Enrolling {
+        let temp = short_home();
+        let roots = OwnerRoots::at(temp.path().join("resources")).unwrap();
+        let home = DaemonHome::open(&temp.path().join("d")).unwrap();
+        Enrolling { temp, roots, home }
+    }
+
+    impl Enrolling {
+        /// A Desktop root, optionally holding an executor resume record.
+        fn desktop_root(&self, origin: &str, active: Option<bool>) -> PathBuf {
+            let root =
+                crate::owner_host::initialize(&self.temp.path().join("desktop-root")).unwrap();
+            if let Some(active) = active {
+                NativeOwner::write_test_resume_record(
+                    &root,
+                    origin,
+                    OWNER,
+                    "desktop-client",
+                    active,
+                );
+            }
+            root
+        }
+        /// Enroll until the browser would open; the owner closes it there.
+        async fn until_browser(
+            &self,
+            origin: &str,
+        ) -> (Result<EnrollReport, HostError>, Option<reqwest::Url>) {
+            let opened = Arc::new(std::sync::Mutex::new(None));
+            let seen = opened.clone();
+            let result = enroll_locked_controlled(
+                self.home.path(),
+                &self.roots,
+                origin,
+                OWNER,
+                None,
+                Arc::new(EnrollmentControl::default()),
+                move |url| async move {
+                    *seen.lock().unwrap() = reqwest::Url::parse(&url).ok();
+                    Err(())
+                },
+            )
+            .await;
+            let url = opened.lock().unwrap().take();
+            (result, url)
+        }
+    }
+
+    #[test]
+    fn only_an_active_resume_record_is_proved_in_place() {
+        let e = enrolling();
+        let origin = "https://s.example/";
+        let missing = e.temp.path().join("never-created");
+        assert_eq!(
+            Executor::inspect(&missing, origin, OWNER),
+            Ok(Executor::Fresh)
+        );
+        let root = e.desktop_root(origin, None);
+        assert_eq!(Executor::inspect(&root, origin, OWNER), Ok(Executor::Fresh));
+        NativeOwner::write_test_resume_record(&root, origin, OWNER, "desktop-client", true);
+        let in_place = Ok(Executor::InPlace {
+            client_id: "desktop-client".into(),
+        });
+        assert_eq!(Executor::inspect(&root, origin, OWNER), in_place);
+        // Enrollment passes the native origin form, whatever the caller typed.
+        assert_eq!(
+            Executor::inspect(&root, &native_origin("HTTPS://S.example").unwrap(), OWNER),
+            in_place
+        );
+        assert_eq!(
+            Executor::inspect(&root, origin, "@other:s.example"),
+            Err("matrix_account_mismatch")
+        );
+        NativeOwner::write_test_resume_record(&root, origin, OWNER, "desktop-client", false);
+        assert_eq!(Executor::inspect(&root, origin, OWNER), Ok(Executor::Fresh));
+        // A record bound to another path is never proved here.
+        let copy = e.temp.path().join("copied-root");
+        crate::owner_host::initialize(&copy).unwrap();
+        std::fs::copy(
+            root.join("server-login-sdk-resume.json"),
+            copy.join("server-login-sdk-resume.json"),
+        )
+        .unwrap();
+        assert_eq!(
+            Executor::inspect(&copy, origin, OWNER),
+            Err("native_resume_unavailable")
+        );
+    }
+
+    #[tokio::test]
+    async fn enrollment_proves_an_active_root_in_place_with_its_own_oauth_client() {
+        let fixture = super::super::auth::readiness_tests::Fixture::new(0).await;
+        let e = enrolling();
+        let desktop = e.desktop_root(&fixture.origin, Some(true));
+        assert_eq!(
+            e.roots
+                .resolve(&fixture.origin, OWNER, Some(&desktop))
+                .unwrap(),
+            desktop
+        );
+        let (result, url) = e.until_browser(fixture.origin.trim_end_matches('/')).await;
+        assert!(
+            matches!(result, Err(HostError::Code("daemon_sign_in_cancelled"))),
+            "{result:?}"
+        );
+        let url = url.expect("the browser step was reached");
+        assert!(
+            url.query_pairs()
+                .any(|(k, v)| k == "client_id" && v == "desktop-client"),
+            "{url}"
+        );
+        let prepared = Enrollment::load(e.home.path()).unwrap().unwrap();
+        assert_eq!(
+            (prepared.owner_root.clone(), prepared.hostable()),
+            (desktop.clone(), false)
+        );
+        assert_eq!(
+            prepared.origin, fixture.origin,
+            "the journal keeps the native origin form"
+        );
+        assert_eq!(
+            e.roots.lookup(&fixture.origin, OWNER).unwrap(),
+            Some(desktop)
+        );
+    }
+
+    #[tokio::test]
+    async fn enrollment_without_a_root_registers_the_canonical_root_and_never_another() {
+        let fixture = super::super::auth::readiness_tests::Fixture::new(0).await;
+        let e = enrolling();
+        let (first, url) = e.until_browser(&fixture.origin).await;
+        // A fresh executor signs in with the daemon's own OAuth client, which
+        // needs dynamic client registration; the fixture server has none.
+        assert!(
+            matches!(
+                first,
+                Err(HostError::Code("matrix_authorization_unavailable"))
+            ),
+            "{first:?}"
+        );
+        assert!(
+            url.as_ref()
+                .is_none_or(|url| !url.query_pairs().any(|(k, _)| k == "client_id")),
+            "{url:?}"
+        );
+        let registered = e
+            .roots
+            .lookup(&fixture.origin, OWNER)
+            .unwrap()
+            .expect("registered");
+        let canonical = e
+            .roots
+            .base()
+            .canonicalize()
+            .unwrap()
+            .join(crate::owner_roots::OWNERS);
+        assert!(registered.starts_with(&canonical), "{registered:?}");
+        assert!(
+            !registered.exists(),
+            "nothing is created before authorization"
+        );
+        assert_eq!(
+            Enrollment::load(e.home.path()).unwrap().unwrap().owner_root,
+            registered
+        );
+        // A Desktop root appearing later does not replace the registered root.
+        let _desktop = e.desktop_root(&fixture.origin, Some(true));
+        let (_, url) = e.until_browser(&fixture.origin).await;
+        assert!(url.is_none_or(|url| {
+            !url.query_pairs()
+                .any(|(k, v)| k == "client_id" && v == "desktop-client")
+        }));
+        assert_eq!(
+            Enrollment::load(e.home.path()).unwrap().unwrap().owner_root,
+            registered
+        );
+        // Another owner is refused before any sign-in.
+        Enrollment::withdraw(e.home.path()).unwrap();
+        Enrollment::enroll(
+            e.home.path(),
+            &fixture.origin,
+            "@other:test",
+            None,
+            &registered,
+        )
+        .unwrap();
+        let (refused, url) = e.until_browser(&fixture.origin).await;
+        assert!(
+            matches!(refused, Err(HostError::Code("daemon_other_owner_enrolled"))),
+            "{refused:?}"
+        );
+        assert!(url.is_none());
+    }
+
+    #[tokio::test]
+    async fn sign_out_keeps_the_root_and_its_registration() {
+        let e = enrolling();
+        let origin = "https://unavailable.invalid/";
+        let owner = "@owner:unavailable.invalid";
+        let root = crate::owner_host::initialize(&e.temp.path().join("owner-root")).unwrap();
+        assert_eq!(e.roots.resolve(origin, owner, Some(&root)).unwrap(), root);
+        Enrollment::enroll(e.home.path(), origin, owner, None, &root).unwrap();
+        let home = e.home.path().to_path_buf();
+        drop(e.home);
+        sign_out(&home).await.unwrap();
+        assert!(Enrollment::load(&home).unwrap().is_none());
+        assert!(super::super::revocation::load(&home).unwrap().is_none());
+        assert!(root.is_dir());
+        assert_eq!(e.roots.lookup(origin, owner).unwrap(), Some(root));
     }
 }

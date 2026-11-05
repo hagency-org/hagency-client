@@ -221,7 +221,7 @@ async fn cancelling_a_poll_retires_its_last_manager_reference() {
 #[tokio::test]
 async fn unreachable_daemon_signout_persists_owner_fence_and_wrong_scope_is_refused() {
     let home=tempfile::tempdir().unwrap();
-    crate::daemon::enrollment::Enrollment::enroll_fresh(home.path(),"https://test","@owner:test",None).unwrap();
+    crate::daemon::enrollment::Enrollment::enroll(home.path(),"https://test","@owner:test",None,&home.path().join("owners/root")).unwrap();
     let client=ControllerClient::new(home.path().into(),"@owner:test".into(),"https://test/".into(),1);
     tokio::time::timeout(Duration::from_secs(3),client.sign_out()).await.unwrap().unwrap();
     let request=crate::daemon::revocation::load(home.path()).unwrap().unwrap();

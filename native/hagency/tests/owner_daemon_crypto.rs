@@ -440,7 +440,7 @@ async fn real_daemon_encrypted_child() {
     )
     .await;
     hagency_store::private::write_new(&matrix.join("session.json"), &serde_json::to_vec(&json!({"version":1,"homeserver":origin,"owner":owner,"oauthClientId":fixture["daemon"]["clientId"],"user":{"user_id":owner,"device_id":identity["device_id"],"access_token":daemon_token,"refresh_token":fixture["daemon"].get("refreshToken")}})).unwrap()).unwrap();
-    Enrollment::stage_handover(&home, &origin, owner, None, &native_root).unwrap();
+    Enrollment::enroll(&home, &origin, owner, None, &native_root).unwrap();
     let daemon = DaemonProcess::start(&home, &root.join("daemon.log")).await;
     let a = ControllerClient::new(home.clone(), owner.into(), origin.clone(), 1);
     let b = ControllerClient::new(home.clone(), owner.into(), origin.clone(), 2);

@@ -67,19 +67,16 @@ enum DaemonCommand {
         home: Option<PathBuf>,
     },
     /// Sign the daemon in through the browser with its own device and record
-    /// the owner. `--adopt-root` hands over Hagency Desktop's existing owner
-    /// root, which Desktop must have drained and released first.
+    /// the owner's one registered owner root (ADR-192).
     Enroll {
         #[arg(long)]
         home: Option<PathBuf>,
         #[arg(long)]
         server: String,
         #[arg(long)]
-        owner: Option<String>,
+        owner: String,
         #[arg(long)]
         display_name: Option<String>,
-        #[arg(long)]
-        adopt_root: Option<PathBuf>,
         /// Cancel browser enrollment if its launching controller closes.
         #[arg(long, hide = true)]
         cancel_on_stdin_close: bool,
@@ -103,11 +100,6 @@ enum DaemonCommand {
     },
     /// Drain and stop hosting; the daemon stays reachable.
     Stop {
-        #[arg(long)]
-        home: Option<PathBuf>,
-    },
-    /// Roll back a handover so Desktop may host the root again (daemon stopped).
-    Release {
         #[arg(long)]
         home: Option<PathBuf>,
     },
@@ -252,19 +244,16 @@ async fn daemon(command: DaemonCommand) -> Result<(), Box<dyn std::error::Error>
             server,
             owner,
             display_name,
-            adopt_root,
             cancel_on_stdin_close,
             no_open,
         } => {
             let home = daemon_home(home)?;
-            let adopt_root = adopt_root.map(absolute).transpose()?;
             let control=std::sync::Arc::new(host::EnrollmentControl::default());
             let enrollment = host::enroll_controlled(
                 &home,
                 &server,
-                owner.as_deref(),
+                &owner,
                 display_name,
-                adopt_root.as_deref(),
                 control.clone(),
                 |url| async move {
                     println!("Sign in to enroll the Hagency owner daemon: {url}");
@@ -298,7 +287,7 @@ async fn daemon(command: DaemonCommand) -> Result<(), Box<dyn std::error::Error>
                     report.owner_root.display()
                 ),
                 Some(code) => println!(
-                    "Enrolled {} but native registration is pending ({code}). The root may still be held by Hagency Desktop.",
+                    "Enrolled {} but native registration is pending ({code}). The owner root may still be in use by another process.",
                     report.owner
                 ),
             }
@@ -325,14 +314,6 @@ async fn daemon(command: DaemonCommand) -> Result<(), Box<dyn std::error::Error>
         DaemonCommand::Stop { home } => {
             let reply = daemon_call(&daemon_home(home)?, C::StopHosting).await?;
             println!("{}", serde_json::to_string_pretty(&reply)?);
-        }
-        DaemonCommand::Release { home } => {
-            let enrollment = host::release(&daemon_home(home)?)?;
-            println!(
-                "Handover released for {}; the daemon will not open {} again.",
-                enrollment.owner,
-                enrollment.owner_root.display()
-            );
         }
         DaemonCommand::SignOut { home } => {
             host::sign_out(&daemon_home(home)?).await?;
@@ -444,18 +425,17 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
-    fn daemon_commands_parse_and_enrollment_requires_a_server() {
+    fn daemon_commands_parse_and_enrollment_requires_a_server_and_owner() {
         for args in [
             &["hagency", "daemon", "run", "--home", "/tmp/h"][..],
             &["hagency", "daemon", "status"],
             &["hagency", "daemon", "pause"],
             &["hagency", "daemon", "resume"],
             &["hagency", "daemon", "stop"],
-            &["hagency", "daemon", "release"],
             &["hagency", "daemon", "sign-out"],
             &["hagency", "daemon", "install"],
             &["hagency", "daemon", "uninstall"],
-            &["hagency", "daemon", "enroll", "--server", "https://s.example/", "--adopt-root", "/x"],
+            &["hagency", "daemon", "enroll", "--server", "https://s.example/", "--owner", "@o:s.example"],
         ] {
             assert!(
                 matches!(Cli::try_parse_from(args).unwrap().command, Some(Command::Daemon { .. })),
@@ -463,6 +443,8 @@ mod tests {
             );
         }
         assert!(Cli::try_parse_from(["hagency", "daemon", "enroll"]).is_err());
+        assert!(Cli::try_parse_from(["hagency", "daemon", "release"]).is_err());
+        assert!(Cli::try_parse_from(["hagency", "daemon", "enroll", "--server", "https://s.example/", "--adopt-root", "/x"]).is_err());
         assert!(Cli::try_parse_from(["hagency", "daemon", "run", "--agent-driver", "x"]).is_err());
     }
 }

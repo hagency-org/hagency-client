@@ -214,7 +214,7 @@ async fn enrolled_owner_runtime_survives_two_controller_detaches_and_restart() {
     hagency_store::private::directory(&matrix).unwrap();
     // The saved SDK session is fixture input, never borrowed from a UI SDK.
     hagency_store::private::write_new(&matrix.join("session.json"),&serde_json::to_vec(&json!({"version":1,"homeserver":origin,"owner":OWNER,"oauthClientId":CLIENT,"user":{"user_id":OWNER,"device_id":DEVICE,"access_token":TOKEN}})).unwrap()).unwrap();
-    let enrollment = Enrollment::stage_handover(home.path(), &origin, OWNER, None, &root).unwrap();
+    let enrollment = Enrollment::enroll(home.path(), &origin, OWNER, None, &root).unwrap();
     let (stop, task) = launch(home.path());
     wait_running(home.path()).await;
     let a = ControllerClient::new(home.path().into(), OWNER.into(), origin.clone(), 1);
