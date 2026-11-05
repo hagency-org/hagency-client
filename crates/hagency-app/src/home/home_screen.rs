@@ -26,6 +26,7 @@ use crate::{
 use super::mobile::MobileHubWidgetExt;
 use super::project_tree::{ProjectTreeWidgetExt, ProjectTreeMode};
 use super::rooms_sidebar::DesktopWorkspace;
+use crate::hagency::ui::approval_discovery::GlobalApprovalInboxWidgetExt;
 use crate::shared::sidebar_resize::{left_widths, SidebarKind, SidebarResizeHandleWidgetExt};
 
 script_mod! {
@@ -500,6 +501,9 @@ impl ScriptHook for HomeScreen {
 
 impl Widget for HomeScreen {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        if self.view.global_approval_inbox(cx,ids!(global_approvals)).handle_modal_input(cx,event,scope) {
+            return;
+        }
         if let Event::Scroll(scroll) = event
             && cx.is_scrolling_allowed_within(&self.view.area())
         {
