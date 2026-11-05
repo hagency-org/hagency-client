@@ -14,10 +14,10 @@ async fn ready() -> (Session, Peer) {
         "read_room_history"
     );
     assert_eq!(request["params"]["sandbox"], "read-only");
-    assert_eq!(
-        request["params"]["config"]["model_auto_compact_token_limit"],
-        24_000
-    );
+    // Room history must not force an early compaction point (see session.rs).
+    assert!(request["params"]["config"]
+        .get("model_auto_compact_token_limit")
+        .is_none());
     let (started, _) = tokio::join!(
         session.start_turn("Summarize this room".into()),
         exchange(&mut peer, json!({"turn":turn("inProgress")}), vec![])

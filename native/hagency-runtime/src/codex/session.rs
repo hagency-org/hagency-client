@@ -239,10 +239,11 @@ impl Settings {
         params["config"]["sandbox_workspace_write.writable_roots"] = json!([]);
         if self.room_history {
             params["dynamicTools"] = json!([room_history::definition()]);
-            // Compact accumulated page summaries well before the provider's
-            // window fills; the host independently bounds each result using
-            // the actual modelContextWindow/last-input usage observations.
-            params["config"]["model_auto_compact_token_limit"] = 24_000.into();
+            // Keep the model's own compaction point. A fixed 24,000-token limit
+            // left only a few thousand tokens above the instructions, so every
+            // step compacted away the last tool results and the Agent searched
+            // again without end. The host already bounds each history page by
+            // the observed context window.
         }
         if let Some(id) = resume {
             params["threadId"] = id.into();
