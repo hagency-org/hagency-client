@@ -95,8 +95,12 @@ jobs:
           import os
           from pathlib import Path
           root = Path('D:/BuildCache/hagency-client') if os.name == 'nt' else Path(os.environ['RUNNER_TEMP']) / 'hagency-client'
+          # Match app-builds.yml: some hosted Windows 2022 D volumes carry
+          # FILE_PORTABLE_DEVICE and are correctly refused for credential sync.
+          # Keep large build outputs on D; test data needs the system volume.
+          temporary = Path(os.environ['SystemDrive'] + '/hagency-ci-tmp') if os.name == 'nt' else root / 'tmp'
           paths = {'CARGO_HOME': root / 'cargo', 'CARGO_TARGET_DIR': root / 'target',
-                   'TEMP': root / 'tmp', 'TMP': root / 'tmp',
+                   'TEMP': temporary, 'TMP': temporary,
                    'HAGENCY_PACKAGING_TOOLS': root / 'packaging-tools'}
           with open(os.environ['GITHUB_ENV'], 'a') as env:
               for key, path in paths.items():
@@ -199,6 +203,9 @@ jobs:
         with:
           path: ${{ env.HAGENCY_PACKAGING_TOOLS }}
           key: ${{ steps.packaging-tools.outputs.cache-primary-key }}
+      - name: Verify actual Windows credential directory durability on the test volume
+        if: runner.os == 'Windows'
+        run: cargo run --locked -p hagency-store --example windows_credential_sync
       - name: Test app before packaging
         run: |
           cargo test --locked -p octosense-app-contract --lib

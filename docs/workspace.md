@@ -32,6 +32,12 @@ verify `/mnt/d` is mounted from D: before selecting
 require a builder whose data is on D: or remote storage; the existing Docker
 Desktop disk on C: does not meet that condition.
 
+Hosted Windows 2022 CI keeps credential test temporary files on the system
+volume at `C:/hagency-ci-tmp`: some hosted D volumes carry
+`FILE_PORTABLE_DEVICE`, which the credential durability adapter refuses.
+Build caches and outputs remain on D. Both desktop build and installer jobs
+run the actual credential directory flush/reopen probe before App tests.
+
 On macOS and Linux, install the native dependencies listed in the
 [Desktop build guide](../crates/hagency-app/docs/local-development.md), then run
 `cargo run --locked -p hagency-app --bin hagency`. The workspace macOS runner creates a
