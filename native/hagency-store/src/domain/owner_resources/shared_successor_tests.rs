@@ -194,7 +194,7 @@ async fn shared_successor_claim_is_one_shot_and_keeps_original_unknown_charge() 
             current.retained_tokens,
             current.remaining_tokens
         ),
-        (7, 40, 110)
+        (7, 7, 143)
     );
     let mut replacement = next.clone();
     replacement.command_id = "new_delivery_id".into();
@@ -402,7 +402,7 @@ async fn shared_successor_queue_rechecks_profile_retirement_before_snapshot() {
 }
 
 #[tokio::test]
-async fn shared_successor_incomplete_calls_keep_full_hold_without_blanket_history_refusal() {
+async fn shared_successor_incomplete_calls_hold_known_usage_without_blanket_history_refusal() {
     let f = fixture().await;
     let c = command(&f).await;
     f.registry
@@ -418,13 +418,13 @@ async fn shared_successor_incomplete_calls_keep_full_hold_without_blanket_histor
             a.retained_tokens,
             a.remaining_tokens
         ),
-        (10, 40, 110)
+        (10, 10, 140)
     );
     assert_eq!(a.state, SharedSuccessorBudgetState::Available);
     assert!(!a.usage_complete);
     call(&f, &c, "uncertain_start", "unknown", 60, 0, false, false).await;
     let b = budget(&f, &c).await.unwrap();
-    assert_eq!((b.retained_tokens, b.remaining_tokens), (100, 50));
+    assert_eq!((b.retained_tokens, b.remaining_tokens), (10, 140));
     assert_ne!(a.liability_digest, b.liability_digest);
     call(&f, &c, "complete", "settled", 50, 12, true, false).await;
     call(
@@ -446,7 +446,7 @@ async fn shared_successor_incomplete_calls_keep_full_hold_without_blanket_histor
             after.retained_tokens,
             after.remaining_tokens
         ),
-        (22, 112, 38)
+        (22, 22, 128)
     );
     assert_eq!(
         before.observed_ledger_revision,
@@ -465,7 +465,8 @@ async fn shared_successor_exhaustion_overrun_and_unrepresentable_usage_never_ref
         .await
         .unwrap();
     stopped(&f, &c, "stopped").await;
-    call(&f, &c, "all_headroom", "unknown", 150, 0, false, false).await;
+    // Known usage, not the reservation, exhausts the Agent.
+    call(&f, &c, "all_headroom", "unknown", 150, 150, false, false).await;
     let b = budget(&f, &c).await.unwrap();
     assert_eq!((b.retained_tokens, b.remaining_tokens), (150, 0));
     assert_eq!(b.state, SharedSuccessorBudgetState::Exhausted);
@@ -477,7 +478,7 @@ async fn shared_successor_exhaustion_overrun_and_unrepresentable_usage_never_ref
             b.retained_tokens,
             b.remaining_tokens
         ),
-        (51, 201, 0)
+        (201, 201, 0)
     );
     call(&f, &c, "unrepresentable", "unknown", 1, 0, false, true).await;
     assert_eq!(
@@ -502,14 +503,14 @@ async fn shared_successor_missing_call_custody_and_aggregate_overflow_fail_close
     }).await.unwrap();
     let b = budget(&f, &c).await.unwrap();
     assert_eq!(b.state, SharedSuccessorBudgetState::Unrepresentable);
-    assert_eq!((b.retained_tokens, b.remaining_tokens), (40, 0));
+    assert_eq!((b.retained_tokens, b.remaining_tokens), (1, 0));
     call(
         &f,
         &c,
         "overflow",
         "unknown",
-        JSON_SAFE_MAX,
         0,
+        JSON_SAFE_MAX,
         false,
         false,
     )
@@ -558,7 +559,7 @@ async fn shared_successor_schema81_rollback_reopen_retains_old_holds_and_history
     assert_eq!(before.liability_digest, after.liability_digest);
     assert_eq!(
         (after.known_consumed_tokens, after.retained_tokens),
-        (7, 40)
+        (7, 7)
     );
     let next = attempt(&f, &original).await;
     assert!(matches!(
@@ -937,7 +938,7 @@ async fn shared_successor_schema82_failed_upgrade_retains_original_stop_and_char
     f.registry = OwnerResourceRegistry::open_root(&f._temp.path().join("owner")).unwrap();
     let after = budget(&f, &c).await.unwrap();
     assert_eq!(after.liability_digest, before.liability_digest);
-    assert_eq!((after.retained_tokens, after.remaining_tokens), (40, 110));
+    assert_eq!((after.retained_tokens, after.remaining_tokens), (7, 143));
     f.registry.shutdown().await.unwrap();
 }
 
@@ -950,8 +951,8 @@ async fn shared_successor_settled_incomplete_calls_keep_parent_and_seat_overrun_
         .await
         .unwrap();
     stopped(&f, &c, "stopped").await;
-    call(&f, &c, "partial_one", "settled", 600, 7, false, false).await;
-    call(&f, &c, "partial_two", "settled", 600, 9, false, false).await;
+    call(&f, &c, "partial_one", "settled", 600, 600, false, false).await;
+    call(&f, &c, "partial_two", "settled", 600, 600, false, false).await;
     let child = budget(&f, &c).await.unwrap();
     assert_eq!(
         (
@@ -959,7 +960,7 @@ async fn shared_successor_settled_incomplete_calls_keep_parent_and_seat_overrun_
             child.retained_tokens,
             child.remaining_tokens
         ),
-        (16, 1200, 0)
+        (1200, 1200, 0)
     );
     let resource = f
         .registry

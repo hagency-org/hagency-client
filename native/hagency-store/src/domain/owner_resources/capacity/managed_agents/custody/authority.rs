@@ -170,9 +170,8 @@ pub(super) fn call_budget_all(db: &Connection, child: &str) -> Result<(u64, bool
     call_budget_scoped(db,child,None)
 }
 fn call_budget_scoped(db:&Connection,child:&str,period:Option<&str>)->Result<(u64,bool),Error>{
-    // Only legacy cumulative Agents hold an open call's reservation.
-    let holds_reservation = !periods::enabled(db, child)?;
-    let mut q=db.prepare("SELECT state,reserved_tokens,known_consumed_tokens,usage_complete,unrepresentable_usage FROM owner_managed_calls WHERE child_id=?1 AND (?2 IS NULL OR id IN(SELECT call_id FROM owner_managed_call_periods WHERE period_id=?2))")?;
+    // An open call holds only what it is known to have spent, never its reservation.
+    let mut q=db.prepare("SELECT state,known_consumed_tokens,usage_complete,unrepresentable_usage FROM owner_managed_calls WHERE child_id=?1 AND (?2 IS NULL OR id IN(SELECT call_id FROM owner_managed_call_periods WHERE period_id=?2))")?;
     let mut rows = q.query(params![child,period])?;
     let mut held = 0_u64;
     let mut unknown = false;
@@ -183,18 +182,11 @@ fn call_budget_scoped(db:&Connection,child:&str,period:Option<&str>)->Result<(u6
         }
         count += 1;
         let state: String = r.get(0)?;
-        let reserved: u64 = r.get(1)?;
-        let consumed: u64 = r.get(2)?;
-        let complete: bool = r.get(3)?;
-        let overflow: bool = r.get(4)?;
-        let open = matches!(state.as_str(), "prepared" | "issued" | "unknown");
-        let value = if open && holds_reservation {
-            consumed.max(reserved)
-        } else {
-            consumed
-        };
+        let consumed: u64 = r.get(1)?;
+        let complete: bool = r.get(2)?;
+        let overflow: bool = r.get(3)?;
         held = held
-            .checked_add(value)
+            .checked_add(consumed)
             .filter(|n| *n <= JSON_SAFE_MAX)
             .ok_or(Error::Capacity)?;
         unknown |= overflow

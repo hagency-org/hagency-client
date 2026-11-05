@@ -313,7 +313,6 @@ pub(super) fn usage(
         && !overflow
         && !old_overflow
         && !o.unrepresentable
-        && periods::enabled(db, child)?
         && process_stopped(db, target)?
     {
         complete = true;
@@ -365,13 +364,10 @@ fn process_stopped(db: &Connection, call: &str) -> Result<bool, Error> {
     )?)
 }
 
-/// Closes a recurring Agent's open calls whose process is confirmed stopped, at
+/// Closes an Agent's open calls whose process is confirmed stopped, at
 /// their known usage. Usage that never arrived counts as zero, so nobody has to
 /// settle the call by hand. A process that may still be running stays open.
 pub(super) fn close_stopped_calls(db: &Connection, child: &str) -> Result<(), Error> {
-    if !periods::enabled(db, child)? {
-        return Ok(());
-    }
     let mut q = db.prepare(
         "SELECT id FROM owner_managed_calls WHERE child_id=?1 AND state IN('issued','unknown') AND unrepresentable_usage=0 ORDER BY rowid",
     )?;

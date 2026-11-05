@@ -70,7 +70,7 @@ async fn shared_demand_actual_idle_process_promotes_exact_event_without_new_star
         .await
         .unwrap();
     let h = prepare(&a, &w).await;
-    assert_eq!(h.reserved_tokens, 110);
+    assert_eq!(h.reserved_tokens, 143);
     let attempt =
         a.f.registry
             .begin_shared_start(a.authority(), w.clone(), h.call_id)
@@ -173,7 +173,7 @@ async fn shared_demand_actual_stop_revision_blocks_prepared_call_before_issue() 
             .await
             .unwrap();
     assert!(saved.issue_revision.is_none());
-    assert_eq!(saved.reserved_tokens, 110);
+    assert_eq!(saved.reserved_tokens, 143);
     a.stop().await;
 }
 
@@ -219,7 +219,7 @@ async fn shared_demand_actual_stopped_predecessor_claims_once_and_requires_promo
             input.budget_observation.retained_tokens,
             input.budget_observation.remaining_tokens
         ),
-        (40, 110)
+        (7, 143)
     );
     let now = graphs::now_ms().unwrap();
     let command = SharedAttemptCommand {
@@ -356,7 +356,7 @@ async fn shared_demand_actual_stopped_predecessor_claims_once_and_requires_promo
         "stopped"
     );
     let mut next = offer;
-    next.demand_id = "later_budget_blocked".into();
+    next.demand_id = "later_after_unreported_usage".into();
     next.event_id = "$later_event".into();
     next.predecessor_command_id = a.command.command_id.clone();
     next.predecessor_command_digest = digest(&a.command);
@@ -368,26 +368,20 @@ async fn shared_demand_actual_stopped_predecessor_claims_once_and_requires_promo
         Instant::now() + Duration::from_secs(8),
     )
     .unwrap();
-    let blocked =
+    // The finished turn reported no usage. Its process has stopped, so that
+    // counts as zero and the next event starts instead of being blocked.
+    let later =
         a.f.registry
             .prepare_shared_demand(proof, a.original.clone(), Some(a.command.clone()))
             .await
             .unwrap();
+    assert_eq!(*later.disposition(), SharedDemandDisposition::StartPrepared);
+    let observation = &later.input().unwrap().start.budget_observation;
     assert_eq!(
-        *blocked.disposition(),
-        SharedDemandDisposition::BudgetBlocked
+        (observation.retained_tokens, observation.remaining_tokens),
+        (7, 143)
     );
-    assert!(blocked.input().is_none());
-    assert_eq!(
-        blocked
-            .budget()
-            .unwrap()
-            .observation
-            .as_ref()
-            .unwrap()
-            .retained_tokens,
-        150
-    );
+    assert!(observation.usage_complete);
     let old =
         a.f.registry
             .managed_call_history(cleanup(&a.f, &a.original, 1).await, "old_unknown".into())

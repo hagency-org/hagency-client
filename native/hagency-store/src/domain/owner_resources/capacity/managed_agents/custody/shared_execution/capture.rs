@@ -195,11 +195,7 @@ impl SharedCallSink {
                     [&call],
                     |r| r.get(0),
                 )?;
-                let retained = (!unrepresentable).then_some(if h.usage_complete || periods::enabled(&tx, &child)? {
-                    h.known_consumed_tokens
-                } else {
-                    h.reserved_tokens.max(h.known_consumed_tokens)
-                });
+                let retained = (!unrepresentable).then_some(h.known_consumed_tokens);
                 let revision = revision(&tx)?;
                 let mut receipt = SharedWorkReceipt {
                     version: 1,

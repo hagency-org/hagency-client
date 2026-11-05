@@ -271,7 +271,7 @@ async fn shared_demand_schema85_failed_upgrade_preserves_old_charge() {
     f.registry = OwnerResourceRegistry::open_root(&f._temp.path().join("owner")).unwrap();
     let after = budget(&f, &c).await.unwrap();
     assert_eq!(before.liability_digest, after.liability_digest);
-    assert_eq!((after.retained_tokens, after.remaining_tokens), (40, 110));
+    assert_eq!((after.retained_tokens, after.remaining_tokens), (7, 143));
     f.registry.shutdown().await.unwrap();
 }
 
@@ -584,18 +584,19 @@ async fn shared_demand_submission_and_cursor_preserve_original_scope_and_stop() 
 #[tokio::test]
 async fn shared_demand_unrepresentable_aggregate_is_retained_without_fabricated_budget() {
     let (f, c) = original(true).await;
+    // Known usage past the ledger's exact range, not a large reservation.
     call(
         &f,
         &c,
         "overflow_one",
         "unknown",
-        JSON_SAFE_MAX,
         1,
+        JSON_SAFE_MAX,
         false,
         false,
     )
     .await;
-    call(&f, &c, "overflow_two", "unknown", 1, 0, false, false).await;
+    call(&f, &c, "overflow_two", "unknown", 1, 1, false, false).await;
     let o = offer(&c, "overflow_demand", 1);
     for _ in 0..2 {
         let saved = f

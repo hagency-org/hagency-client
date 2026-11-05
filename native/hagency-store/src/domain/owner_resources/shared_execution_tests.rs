@@ -515,7 +515,7 @@ async fn run_actual_capture_bound(mode: &str, mismatch: bool, shorter_wall: bool
         assert_eq!(final_receipt.state, "completed");
         assert_eq!(final_receipt.body.as_deref(), Some("Offline answer."));
         assert_eq!(final_receipt.known_consumed_tokens, 0);
-        assert_eq!(final_receipt.retained_tokens, Some(150));
+        assert_eq!(final_receipt.retained_tokens, Some(0));
         assert!(
             !final_receipt.usage_complete,
             "terminal alone cannot invent usage"

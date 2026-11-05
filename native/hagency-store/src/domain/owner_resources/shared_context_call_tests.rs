@@ -66,8 +66,8 @@ async fn shared_context_call_plain_fallback_refused_and_exact_actual_input_is_ca
             .await
             .unwrap();
     assert_eq!(
-        h.reserved_tokens, 110,
-        "old bounded unknown hold remains charged"
+        h.reserved_tokens, 143,
+        "the old unknown call charges only its known usage"
     );
     assert!(
         a.f.registry

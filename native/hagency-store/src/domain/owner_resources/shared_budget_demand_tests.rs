@@ -140,7 +140,7 @@ async fn budget_execution_v3_terminal_unstarted_demand_unblocks_only_new_event()
     f.registry.shutdown().await.unwrap();f.registry=OwnerResourceRegistry::open_root(&f._temp.path().join("owner")).unwrap();
     let input=prepare(&f,&c,new_status).await.unwrap().input().unwrap().clone();
     assert_eq!(input.demand_digest,digest(&new));assert!(input.start.predecessor.process_digest.is_empty());
-    assert_eq!((input.start.budget_observation.known_consumed_tokens,input.start.budget_observation.retained_tokens),(7,40));
+    assert_eq!((input.start.budget_observation.known_consumed_tokens,input.start.budget_observation.retained_tokens),(7,7));
     let mut fresh=next(&f,&c,"new_research_runtime").await;fresh.start_intent_id=input.start.start_intent_id.clone();fresh.predecessor=input.start.predecessor.clone();fresh.execution_budget=input.start.execution_budget.clone();fresh.budget_observation=input.start.budget_observation.clone();
     assert!(matches!(f.registry.claim_shared_budget_successor(delivery(&f,fresh)).await.unwrap(),SharedBudgetAttemptClaim::Issued(_)));
     assert_eq!(count(&f,"owner_shared_demands").await,2);assert_eq!(count(&f,"owner_shared_budget_start_intents").await,2);

@@ -1,6 +1,7 @@
 //! Successor calls use the original call ledger. Current actual process and
-//! account conservation are rechecked in each writer; old incomplete usage
-//! remains held and cannot be turned into a refund or replay permission.
+//! account conservation are rechecked in each writer; old incomplete calls
+//! count at their known usage and cannot be turned into a refund or replay
+//! permission.
 use super::*;
 
 pub(super) fn live(
@@ -125,7 +126,7 @@ fn budget(
         _ => b.allocated,
     };
     let calls = successor::calls(db, a.sink.child(), &binding)?;
-    if calls.unrepresentable || calls.retained > ceiling {
+    if calls.unrepresentable || calls.retained >= ceiling {
         return Err(Error::Capacity);
     }
     Ok((ceiling, binding, calls))

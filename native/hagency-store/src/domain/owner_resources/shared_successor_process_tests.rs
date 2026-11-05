@@ -235,9 +235,10 @@ async fn shared_successor_actual_process_stop_allows_attempt_three_without_rebin
             third.budget_observation.retained_tokens,
             third.budget_observation.remaining_tokens
         ),
-        (7, 40, 110)
+        (7, 7, 143)
     );
-    assert!(!third.budget_observation.usage_complete);
+    // The original process stopped, so its old call closed at its known usage.
+    assert!(third.budget_observation.usage_complete);
     assert_eq!(third.original_runtime_digest, digest(&original));
     let SharedAttemptClaim::Issued(third_custody) = f
         .registry

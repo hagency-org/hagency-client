@@ -370,7 +370,7 @@ async fn managed_budget_stale_head_generation_and_unknown_usage_never_rebind() {
             h.retained_tokens,
             h.remaining_tokens
         ),
-        (40, 150, 50)
+        (40, 40, 160)
     );
     assert!(!h.usage_complete);
     let stale = f

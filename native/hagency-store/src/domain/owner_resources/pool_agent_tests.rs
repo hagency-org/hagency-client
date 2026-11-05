@@ -281,7 +281,7 @@ async fn pool_agent_topup_requires_owner_keeps_unknown_usage_and_conserves_sibli
     f.registry.prepare_managed_call(call()).await.unwrap();
     let issued_call=match f.registry.issue_managed_call(call()).await.unwrap(){ManagedCallClaim::Issued(v)=>v,_=>panic!("new call")};
     f.registry.record_managed_usage(&issued_call,ManagedUsageObservation::fixture("interrupted",None,true,false,false)).await.unwrap();
-    // No final usage evidence exists: the original 200-token call stays held.
+    // No final usage evidence exists: the interrupted call holds only its known usage, none.
     let hash=|v:&serde_json::Value|canonical::digest(v).unwrap();
     let mut delta=AgentBudgetCommand { owner_funded: false,
         version:1,capability:AGENT_BUDGET_CAPABILITY.into(),operation:"agent.budget.increase".into(),
@@ -303,7 +303,7 @@ async fn pool_agent_topup_requires_owner_keeps_unknown_usage_and_conserves_sibli
     assert_eq!(applied.state,"applied");
     assert_eq!(f.registry.apply_managed_budget(verified(delta.clone())).await.unwrap().budget_digest,applied.budget_digest);
     let snapshot=f.registry.managed_agent_budget(proof(&f.profile,&f.grant),child.clone()).await.unwrap();
-    assert_eq!((snapshot.effective_ceiling_tokens,snapshot.retained_tokens,snapshot.remaining_tokens),(300,200,100));
+    assert_eq!((snapshot.effective_ceiling_tokens,snapshot.retained_tokens,snapshot.remaining_tokens),(300,0,300));
     assert!(!snapshot.usage_complete);
     delta.command_id="pool_budget_over".into();delta.top_up_id="pool_budget_over_request".into();
     delta.expected_budget_revision=applied.budget_revision;delta.expected_budget_digest=applied.budget_digest;
@@ -326,7 +326,7 @@ async fn pool_agent_topup_requires_owner_keeps_unknown_usage_and_conserves_sibli
     assert_eq!(funded.effective_ceiling_tokens,600);
     assert_eq!(f.registry.apply_managed_budget(verified(delta)).await.unwrap().budget_digest,funded.budget_digest);
     let snapshot=f.registry.managed_agent_budget(proof(&f.profile,&f.grant),child.clone()).await.unwrap();
-    assert_eq!((snapshot.effective_ceiling_tokens,snapshot.retained_tokens,snapshot.remaining_tokens),(600,200,400));
+    assert_eq!((snapshot.effective_ceiling_tokens,snapshot.retained_tokens,snapshot.remaining_tokens),(600,0,600));
     assert!(!snapshot.usage_complete);
     f.registry.0.store.call(2048,move|db| {
         assert_eq!(db.db.query_row("SELECT allocated_tokens FROM owner_capacity_grants",[],|r|r.get::<_,u64>(0))?,700);

@@ -160,7 +160,9 @@ async fn shared_successor_call_failed_start_keeps_zero_and_unknown_distinct_afte
         let receipt = custody.finish_failed_start().await.unwrap();
         assert_eq!(receipt.known_consumed_tokens, 0);
         assert_eq!(receipt.usage_complete, !dispatched);
-        assert_eq!(receipt.retained_tokens, Some(if dispatched {110} else {0}));
+        // Neither start charges more than its known usage; the state and
+        // completeness tell them apart.
+        assert_eq!(receipt.retained_tokens, Some(0));
         assert_eq!(receipt.state, if dispatched {"unknown"} else {"failed"});
         assert!(a.process.start_shared_text_turn(w.body.clone()).await.is_err());
         let stop = a.sink.record(a.process.stop_shared_text_observation()).await.unwrap();
@@ -176,7 +178,7 @@ async fn shared_successor_call_holds_old_unknown_and_captures_only_exact_new_inp
     let mut a = Box::pin(active()).await;
     let w = a.work("new_work");
     let h = prepare(&a, &w).await;
-    assert_eq!(h.reserved_tokens, 110);
+    assert_eq!(h.reserved_tokens, 143);
     let replay =
         a.f.registry
             .prepare_shared_call(a.authority(), w.clone())
@@ -214,10 +216,16 @@ async fn shared_successor_call_holds_old_unknown_and_captures_only_exact_new_inp
         .receive_shared_work(a.authority(), next.clone())
         .await
         .unwrap();
-    assert!(matches!(
-        a.f.registry.prepare_shared_call(a.authority(), next).await,
-        Err(Error::Capacity)
-    ));
+    // A call that has not started holds nothing, so a second one is admitted
+    // with the same remainder.
+    assert_eq!(
+        a.f.registry
+            .prepare_shared_call(a.authority(), next)
+            .await
+            .unwrap()
+            .reserved_tokens,
+        143
+    );
     assert!(matches!(
         a.f.registry
             .begin_shared_start(a.authority(), w.clone(), h.call_id)
@@ -244,7 +252,7 @@ async fn shared_successor_call_holds_old_unknown_and_captures_only_exact_new_inp
     };
     assert_eq!(final_receipt.body.as_deref(), Some("Offline answer."));
     assert_eq!(final_receipt.runtime_command_digest, digest(&a.command));
-    assert_eq!(final_receipt.retained_tokens, Some(110));
+    assert_eq!(final_receipt.retained_tokens, Some(0));
     assert!(!final_receipt.usage_complete);
     let old =
         a.f.registry
@@ -292,7 +300,7 @@ async fn shared_successor_call_lost_or_replayed_start_cannot_issue_model() {
             .await
             .unwrap();
     assert_eq!(held.state, "prepared");
-    assert_eq!(held.reserved_tokens, 110);
+    assert_eq!(held.reserved_tokens, 143);
     assert!(held.issue_revision.is_none());
     a.stop().await;
 }
@@ -312,7 +320,7 @@ async fn shared_successor_call_rechecks_overrun_before_issue() {
         .store
         .call(1024, |db| {
             db.db.execute(
-                "UPDATE owner_managed_calls SET known_consumed_tokens=80 WHERE id='old_unknown'",
+                "UPDATE owner_managed_calls SET known_consumed_tokens=150 WHERE id='old_unknown'",
                 [],
             )?;
             Ok(())
@@ -387,7 +395,7 @@ async fn shared_successor_call_bounded_sibling_liability_is_preserved_without_bl
     let a = Box::pin(active_with_sibling(true)).await;
     let w = a.work("with_sibling");
     let h = prepare(&a, &w).await;
-    assert_eq!(h.reserved_tokens, 110);
+    assert_eq!(h.reserved_tokens, 143);
     let prior=a.f.registry.0.store.call(1024,|db|Ok(db.db.query_row("SELECT reserved_tokens,known_consumed_tokens FROM owner_managed_calls WHERE id='sibling_unknown'",[],|r|Ok((r.get::<_,u64>(0)?,r.get::<_,u64>(1)?)))?)).await.unwrap();
     assert_eq!(prior, (40, 7));
     let start =

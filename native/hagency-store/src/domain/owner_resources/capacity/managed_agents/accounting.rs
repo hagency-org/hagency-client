@@ -57,7 +57,6 @@ fn child_at(db: &Connection, id: &str, _at: u64) -> Result<ChildLiability, Error
     let mut call_rows = calls.query([&id])?;
     let mut calls_count = 0;
     let mut spent = 0;
-    let mut outstanding = 0;
     let mut issued = false;
     let mut ever_issued = false;
     while let Some(call) = call_rows.next()? {
@@ -66,7 +65,6 @@ fn child_at(db: &Connection, id: &str, _at: u64) -> Result<ChildLiability, Error
         }
         calls_count += 1;
         let state: String = call.get(0)?;
-        let reserved: u64 = call.get(1)?;
         let known: u64 = call.get(2)?;
         let reported: bool = call.get(3)?;
         let overflow: bool = call.get(4)?;
@@ -80,14 +78,11 @@ fn child_at(db: &Connection, id: &str, _at: u64) -> Result<ChildLiability, Error
             || running
             || (state == "settled" && !reported)
             || (matches!(state.as_str(), "prepared" | "cancelled_before_issue") && known > 0);
-        if running || state == "prepared" || (state == "settled" && !reported) {
-            outstanding = add(outstanding, reserved.saturating_sub(known))?;
-        }
     }
     let held = if fenced && state == "fenced" && !unknown && !issued {
         spent
     } else {
-        allocated.max(add(spent, outstanding)?)
+        allocated.max(spent)
     };
     let never_started = effect.as_deref() == Some("pending") && !ever_issued
         && !db.query_row("SELECT EXISTS(SELECT 1 FROM owner_shared_runtime_lifetimes WHERE child_id=?1 UNION ALL SELECT 1 FROM owner_managed_runtime_lifetimes WHERE child_id=?1 AND issued_revision IS NOT NULL)",[id],|r|r.get::<_,bool>(0))?;

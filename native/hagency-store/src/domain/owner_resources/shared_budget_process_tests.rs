@@ -143,7 +143,7 @@ async fn budget_execution_v3_claim_is_one_shot_and_rechecks_full_applied_head() 
             current.budget_observation.retained_tokens,
             current.budget_observation.remaining_tokens
         ),
-        (225, 40, 185)
+        (225, 7, 218)
     );
     let (a, b) = tokio::join!(
         f.registry
@@ -448,7 +448,7 @@ async fn budget_execution_v3_unstarted_fence_recovers_without_replaying_or_relea
     assert_eq!(successor.predecessor.command_digest,digest(&failed));
     assert!(successor.predecessor.process_digest.is_empty());
     assert_eq!(successor.predecessor.stopped_receipt_digest,digest(&r));
-    assert_eq!((successor.budget_observation.known_consumed_tokens,successor.budget_observation.retained_tokens),(7,40));
+    assert_eq!((successor.budget_observation.known_consumed_tokens,successor.budget_observation.retained_tokens),(7,7));
     assert!(matches!(f.registry.claim_shared_budget_successor(delivery(&f,successor.clone())).await.unwrap(),SharedBudgetAttemptClaim::Issued(_)));
     f.registry.fence_shared_budget_successor(cleanup(&f,&c,2).await,successor.clone()).await.unwrap();
     assert!(f.registry.record_unstarted_shared_budget_attempt(cleanup(&f,&c,2).await,successor).await.unwrap().is_none(),"one-shot custody cannot be relabelled as never started");

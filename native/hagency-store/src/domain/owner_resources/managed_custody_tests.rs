@@ -247,7 +247,7 @@ async fn managed_custody_call_preparation_and_issue_preserve_capacity_and_restar
     ));
     assert!(matches!(
         f.registry
-            .prepare_managed_call(call(&f, &child, "two", 51))
+            .prepare_managed_call(call(&f, &child, "two", 151))
             .await,
         Err(Error::Capacity)
     ));
@@ -279,6 +279,35 @@ async fn managed_custody_call_preparation_and_issue_preserve_capacity_and_restar
             .state,
         "issued"
     );
+    f.registry.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn managed_custody_prepared_calls_hold_nothing_and_issue_stops_at_known_allowance() {
+    let f = fixture().await;
+    let child = native_child(&f).await;
+    qualify(&f, &child).await;
+    // A prepared call holds nothing, so a second one is admitted beside it.
+    for id in ["first", "second"] {
+        let prepared = f
+            .registry
+            .prepare_managed_call(call(&f, &child, id, 150))
+            .await
+            .unwrap();
+        assert_eq!(prepared.state, "prepared");
+    }
+    let spend = issue(&f, &child, "first", 150).await;
+    f.registry
+        .record_managed_usage(&spend, reported("all_spent", 150, true, true))
+        .await
+        .unwrap();
+    // Known usage now reaches the allowance, so the waiting call can't start.
+    assert!(matches!(
+        f.registry
+            .issue_managed_call(call(&f, &child, "second", 150))
+            .await,
+        Err(Error::Capacity)
+    ));
     f.registry.shutdown().await.unwrap();
 }
 

@@ -46,8 +46,8 @@ that never arrived counts as zero: the call closes at its known figure, with tha
 evidence retained, and a later report still adds to it. A process that cannot be
 confirmed stopped stays unresolved. The owner chose this on 2026-11-05 so that an
 interrupted run cannot stop an Agent. The ledger can therefore understate real
-provider usage, and one run can pass the allowance by its own usage. Legacy
-cumulative Agents keep holding their reservations.
+provider usage, and one run can pass the allowance by its own usage. Cumulative
+Agents follow the same rule: no Agent holds a call's reservation.
 
 The executor checks current owner approval, effective parent capacity, current
 period, revocation and token availability transactionally before admitting work.

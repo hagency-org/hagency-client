@@ -76,7 +76,9 @@ async fn budget_execution_v3_call_uses_delta_keeps_overrun_and_exact_process_aft
     assert_eq!(a.f.registry.prepare_shared_call(a.authority(), w.clone()).await.unwrap().call_id, h.call_id);
     let next = a.work("parallel_work");
     a.f.registry.receive_shared_work(a.authority(), next.clone()).await.unwrap();
-    assert!(matches!(a.f.registry.prepare_shared_call(a.authority(), next).await, Err(Error::Capacity)));
+    // A prepared call holds nothing, so a second one is admitted with the same
+    // remainder; only known usage refuses work.
+    assert_eq!(a.f.registry.prepare_shared_call(a.authority(), next).await.unwrap().reserved_tokens, 69);
     let intent = a.f.registry.begin_shared_start(a.authority(), w.clone(), h.call_id.clone()).await.unwrap();
     let custody = a.f.registry.issue_shared_call(intent, started(&w)).await.unwrap();
     assert!(a.f.registry.begin_shared_start(a.authority(), w.clone(), h.call_id).await.is_err());
@@ -96,8 +98,8 @@ async fn budget_execution_v3_call_uses_delta_keeps_overrun_and_exact_process_aft
     };
     assert_eq!(receipt.body.as_deref(), Some("Offline answer."));
     assert_eq!(receipt.runtime_command_digest, digest(&a.command));
-    assert_eq!(receipt.retained_tokens, Some(69));
-    assert!(!receipt.usage_complete, "missing provider usage is not a refund");
+    assert_eq!(receipt.retained_tokens, Some(0));
+    assert!(!receipt.usage_complete, "missing provider usage counts as zero but stays incomplete");
     let old = a.f.registry.managed_call_history(cleanup(&a.f, &a.original, 1).await, "old_overrun".into()).await.unwrap();
     assert_eq!((old.reserved_tokens, old.known_consumed_tokens, old.usage_complete), (150, 181, true));
     let methods = std::fs::read_to_string(a.instructions.parent().unwrap().join("methods")).unwrap();

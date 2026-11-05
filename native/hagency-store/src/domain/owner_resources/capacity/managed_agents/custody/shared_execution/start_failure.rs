@@ -35,7 +35,7 @@ impl SharedCallCustody {
                 ledger_revision: recorded.ledger_revision,
                 state: if not_dispatched {"failed"} else {"unknown"}.into(),
                 known_consumed_tokens: h.known_consumed_tokens,
-                retained_tokens: (!unrepresentable).then_some(if h.usage_complete || periods::enabled(&tx, &scope.child)? {h.known_consumed_tokens} else {h.reserved_tokens.max(h.known_consumed_tokens)}),
+                retained_tokens: (!unrepresentable).then_some(h.known_consumed_tokens),
                 usage_complete: h.usage_complete, body: None, body_digest: None,
             };
             receipt.validate_for(&work, &process_digest)?;

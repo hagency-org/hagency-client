@@ -119,7 +119,7 @@ impl OwnerResourceRegistry {
             live_call(&tx,&b,&a.assignment.child)?;
             periods::require_call_current(&tx,&a.assignment.child,&id)?;
             let (held,unknown)=call_budget(&tx,&a.assignment.child)?;
-            if unknown || held>b.allocated {return Err(Error::Capacity);}
+            if unknown || held>=b.allocated {return Err(Error::Capacity);}
             let revision=revision(&tx)?;
             tx.execute("UPDATE owner_managed_calls SET state='issued' WHERE id=?1 AND state='prepared'",[&id])?;
             tx.execute("UPDATE owner_managed_call_pins SET issue_revision=?2 WHERE call_id=?1",params![id,revision])?;
