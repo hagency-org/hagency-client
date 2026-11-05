@@ -236,6 +236,7 @@ impl OwnerResourceRegistry {
                 if old.disposition!=SharedDemandDisposition::Pending {proof.check()?;return Ok(old.clone())}
             }
             observe_control(&tx,&profile.digest,child,proof.offer.control_revision)?;
+            observations::close_stopped_calls(&tx,child)?;
             let (head_id,head_digest,stopped)=head(&tx,&profile.digest,&original)?;
             let changed=head_id!=proof.offer.predecessor_command_id||head_digest!=proof.offer.predecessor_command_digest;
             let pending_revision=||->Result<u64,Error>{
@@ -339,7 +340,7 @@ pub(in super::super) fn has_older(
 ) -> Result<bool, Error> {
     let start=if periods::enabled(db,child)? {periods::current(db,child,graphs::now_ms()?)?.ok_or(Error::LocalAuthority)?.period.start_ms} else {0};
     Ok(db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM owner_shared_demands o WHERE o.child_id=?1 AND o.id!=?2 AND json_extract(o.offer_payload,'$.controlRevision')=?3 AND json_extract(o.offer_payload,'$.receivedAtMs')>=?5 AND NOT EXISTS(SELECT 1 FROM owner_shared_demand_bindings b WHERE b.demand_id=o.id) AND NOT EXISTS(SELECT 1 FROM owner_shared_budget_demand_terminals t WHERE t.demand_id=o.id) AND (json_extract(o.offer_payload,'$.receivedAtMs')<?4 OR (json_extract(o.offer_payload,'$.receivedAtMs')=?4 AND o.id<?2)))",
+        "SELECT EXISTS(SELECT 1 FROM owner_shared_demands o WHERE o.child_id=?1 AND o.id!=?2 AND json_extract(o.offer_payload,'$.controlRevision')=?3 AND json_extract(o.offer_payload,'$.receivedAtMs')>=?5 AND NOT EXISTS(SELECT 1 FROM owner_shared_demand_bindings b WHERE b.demand_id=o.id) AND NOT EXISTS(SELECT 1 FROM owner_shared_budget_demand_terminals t WHERE t.demand_id=o.id) AND NOT EXISTS(SELECT 1 FROM owner_shared_demand_decisions x WHERE x.demand_id=o.id AND x.disposition IN('budget_blocked','head_changed')) AND (json_extract(o.offer_payload,'$.receivedAtMs')<?4 OR (json_extract(o.offer_payload,'$.receivedAtMs')=?4 AND o.id<?2)))",
         params![child,offer.demand_id,offer.control_revision,offer.received_at_ms,start],|r|r.get(0),
     )?)
 }

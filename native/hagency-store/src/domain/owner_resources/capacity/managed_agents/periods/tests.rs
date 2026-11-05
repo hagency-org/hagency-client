@@ -339,8 +339,10 @@ async fn recurring_native_calls_pin_first_period_and_exhaust_without_refill() {
         .managed_agent_budget(enrollment(&f), f.child.clone())
         .await
         .unwrap();
-    assert_eq!(budget.remaining_tokens, 0);
-    assert_eq!(budget.retained_tokens, 200);
+    // The open call holds nothing, though its own unresolved state still stops a
+    // second call on this Agent.
+    assert_eq!(budget.remaining_tokens, 200);
+    assert_eq!(budget.retained_tokens, 0);
     let child = f.child.clone();
     f.registry.0.store.call(4096,move|db|{
         let period=current(&db.db,&child,graphs::now_ms()?)?.unwrap();
@@ -400,8 +402,9 @@ async fn recurring_native_cycles_replay_skip_and_retain_old_unknown_on_original_
         .call(4096, move |db| {
             let p = current(&db.db, &child, at)?.unwrap();
             let u = usage(&db.db, &child, Some(&p.id))?;
-            assert_eq!((u.consumed, u.held, u.prior_held), (0, 0, 120));
-            assert_eq!(grant_usage(&db.db, &child, &first, at)?, (120, 0, false));
+            // Only known usage is held, but the unknown call keeps its period open.
+            assert_eq!((u.consumed, u.held, u.prior_held), (0, 0, 0));
+            assert_eq!(grant_usage(&db.db, &child, &first, at)?, (0, 0, false));
             assert_eq!(grant_usage(&db.db, &child, &second, at)?, (200, 0, true));
             let pinned: String = db.db.query_row(
                 "SELECT period_id FROM owner_managed_call_periods WHERE call_id=?1",
@@ -838,8 +841,8 @@ async fn recurring_native_dashboard_lists_direct_pool_and_separates_old_uncertai
     f.registry.0.store.call(4096,move|db|{
         let page=db.management_web_managed_usage(&profile)?;assert_eq!(page.items.len(),1);
         let row=&page.items[0];assert_eq!(row.period_key,next.period_key);
-        assert_eq!((row.allocated_tokens,row.known_consumed_tokens,row.retained_tokens,row.prior_retained_tokens,row.call_count),(200,0,0,120,0));assert!(!row.usage_complete);
-        let link=db.management_web_managed_link(&profile,&request)?.unwrap();assert_eq!(link.period_key,next.period_key);assert_eq!((link.known_consumed_tokens,link.prior_retained_tokens),(0,120));assert!(!link.usage_complete);
+        assert_eq!((row.allocated_tokens,row.known_consumed_tokens,row.retained_tokens,row.prior_retained_tokens,row.call_count),(200,0,0,0,0));assert!(!row.usage_complete);
+        let link=db.management_web_managed_link(&profile,&request)?.unwrap();assert_eq!(link.period_key,next.period_key);assert_eq!((link.known_consumed_tokens,link.prior_retained_tokens),(0,0));assert!(!link.usage_complete);
         assert!(db.management_web_managed_usage(&"b".repeat(64))?.items.is_empty());
         Ok(())
     }).await.unwrap();

@@ -66,7 +66,7 @@ impl ReconcileInterruptedCall {
         identifier(&self.call_id, 128)?;
         let reference = self.evidence_reference.trim();
         if reference.is_empty()
-            || self.evidence_reference.len() > 256
+            || self.evidence_reference.chars().count() > 256
             || self.evidence_reference.chars().any(char::is_control)
         {
             return Err(Error::Conflict);

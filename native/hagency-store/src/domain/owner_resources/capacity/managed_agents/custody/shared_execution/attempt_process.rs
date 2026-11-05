@@ -83,6 +83,7 @@ impl SharedAttemptProcessSink {
             ManagedProcessState::Unknown => "unknown",
         }
         .to_owned();
+        let stopping = state == "stopped";
         let policy = observation.policy_digest().map(str::to_owned);
         let process = self.process_digest()?;
         let id = format!(
@@ -117,6 +118,7 @@ impl SharedAttemptProcessSink {
             receipt.validate_for(&custody.command)?;
             bounded_row(&tx,"owner_shared_successor_observations","id",&id,100_000)?;
             tx.execute("INSERT INTO owner_shared_successor_observations VALUES(?1,?2,?3,?4,?5)",params![id,custody.command.command_id,canonical::encode(&serde_json::to_value(&receipt)?)?,canonical::digest(&serde_json::to_value(&receipt)?)?,revision])?;
+            if stopping {observations::close_stopped_calls(&tx,&custody.command.agent_reservation_id)?;}
             if qualified {custody.check()?;if !source.is_live(){return Err(Error::LocalAuthority)}}
             tx.commit()?;
             if qualified {custody.check().map_err(|_|Error::OutcomeUnknown)?;if !source.is_live(){return Err(Error::OutcomeUnknown)}}

@@ -127,6 +127,7 @@ impl OwnerResourceRegistry {
                 }
             }
             demand::journal::observe_control(&tx,&e.profile.digest,child,proof.offer.control_revision)?;
+            observations::close_stopped_calls(&tx,child)?;
             if let Some(saved)=load(&tx,&e.profile.digest,child,&proof.offer,&status.execution_budget.budget_digest)?{
                 proof.check()?;tx.commit()?;proof.check().map_err(|_|Error::OutcomeUnknown)?;return Ok(saved)
             }

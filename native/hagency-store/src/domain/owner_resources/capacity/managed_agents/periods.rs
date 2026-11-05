@@ -315,7 +315,6 @@ fn usage_scoped(
             return Err(Error::Capacity);
         }
         let state: String = r.get(0)?;
-        let reserved: u64 = r.get(1)?;
         let known: u64 = r.get(2)?;
         let complete: bool = r.get(3)?;
         let overflow: bool = r.get(4)?;
@@ -328,13 +327,9 @@ fn usage_scoped(
         }
         let settled = state == "settled" && complete;
         let cancelled = state == "cancelled_before_issue" && known == 0;
-        let held = if cancelled {
-            0
-        } else if settled {
-            known
-        } else {
-            reserved.max(known)
-        };
+        // Recurring Agents hold only what is known to be spent. An open call's
+        // reservation is not charged, so one interrupted run can't stop the Agent.
+        let held = known;
         let add = |a: u64, b: u64| {
             a.checked_add(b)
                 .filter(|n| *n <= JSON_SAFE_MAX)

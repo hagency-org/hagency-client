@@ -72,6 +72,7 @@ impl SharedProcessSink {
             ManagedProcessState::Unknown => "unknown",
         }
         .to_owned();
+        let stopping = state == "stopped";
         let policy = o.policy_digest().map(str::to_owned);
         let process = self.process_digest()?;
         let id = format!(
@@ -102,6 +103,7 @@ impl SharedProcessSink {
    let payload=canonical::encode(&serde_json::to_value(&receipt)?)?;let digest=canonical::digest(&serde_json::to_value(&receipt)?)?;
    bounded_row(&tx,"owner_shared_process_observations","id",&id,100_000)?;
    tx.execute("INSERT INTO owner_shared_process_observations VALUES(?1,?2,?3,?4,?5)",params![id,c.scope.child,payload,digest,rev])?;
+   if stopping {observations::close_stopped_calls(&tx,&c.scope.child)?;}
    if qualified {c.check()?;if !source.is_live(){return Err(Error::LocalAuthority)}}
    tx.commit()?;if qualified{c.check().map_err(|_|Error::OutcomeUnknown)?;if !source.is_live(){return Err(Error::OutcomeUnknown)}}Ok(receipt)
   }).await?;

@@ -195,7 +195,7 @@ impl SharedCallSink {
                     [&call],
                     |r| r.get(0),
                 )?;
-                let retained = (!unrepresentable).then_some(if h.usage_complete {
+                let retained = (!unrepresentable).then_some(if h.usage_complete || periods::enabled(&tx, &child)? {
                     h.known_consumed_tokens
                 } else {
                     h.reserved_tokens.max(h.known_consumed_tokens)

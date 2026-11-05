@@ -55,6 +55,9 @@ async fn spawn(f: &Fixture, id: &str, tools: bool) -> (OwnedSession, std::path::
     (process, instructions)
 }
 pub(super) fn observed(id: &str, total: u64) -> ManagedUsageObservation {
+    observed_capture(id, total, true)
+}
+fn observed_capture(id: &str, total: u64, complete_capture: bool) -> ManagedUsageObservation {
     use hagency_metering::{
         observation::UsageObservation,
         runtime_usage::{CodexUsage, CounterBreakdown, ProjectionDiagnostics},
@@ -74,7 +77,7 @@ pub(super) fn observed(id: &str, total: u64) -> ManagedUsageObservation {
         diagnostics: ProjectionDiagnostics::default(),
     })
     .unwrap();
-    ManagedUsageObservation::fixture(id, Some(usage), true, true, false)
+    ManagedUsageObservation::fixture(id, Some(usage), true, complete_capture, false)
 }
 fn offer(f: &Fixture, runtime: &SharedRuntimeCommand, id: &str) -> VerifiedSharedDemand {
     let now = graphs::now_ms().unwrap();
@@ -566,4 +569,177 @@ async fn recurring_native_expired_unissued_initial_proves_absence_and_replacemen
         })
         .await
         .unwrap();
+}
+
+/// Claims and qualifies the original process of a fresh recurring Agent.
+async fn qualified_process(
+    f: &Fixture,
+    name: &str,
+) -> (SharedRuntimeCommand, SharedProcessSink, OwnedSession) {
+    let saved = f
+        .registry
+        .recover_managed_agent_reservation(
+            f.profile.clone(),
+            f.grant.executor_device_id.clone(),
+            f.command.command_id.clone(),
+            digest(&f.command),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let now = graphs::now_ms().unwrap();
+    let runtime = SharedRuntimeCommand {
+        version: 1,
+        capability: SHARED_EXECUTION_CAPABILITY.into(),
+        operation: "agent.execution.provision".into(),
+        command_id: format!("{name}_runtime"),
+        assignment_id: "period_assignment".into(),
+        assignment_generation: 1,
+        agent_reservation_id: f.child.clone(),
+        reserve_command: f.command.clone(),
+        reserve_command_digest: digest(&f.command),
+        reserve_receipt_digest: digest(&saved),
+        policy: SHARED_TEXT_POLICY.into(),
+        issued_at_ms: now,
+        expires_at_ms: now + 20_000,
+    };
+    let proof = VerifiedSharedRuntimeDelivery::new(
+        enrollment(f),
+        runtime.clone(),
+        digest(&runtime),
+        true,
+        Instant::now() + Duration::from_secs(20),
+    )
+    .unwrap();
+    let SharedRuntimeClaim::Issued(custody) = f.registry.claim_shared_runtime(proof).await.unwrap()
+    else {
+        panic!("first process")
+    };
+    let (mut process, instructions) = spawn(f, name, false).await;
+    let sink = (*custody)
+        .bind_process(process.shared_text_process_source())
+        .unwrap();
+    sink.record(process.qualify_shared_text(&instructions).await.unwrap())
+        .await
+        .unwrap();
+    (runtime, sink, process)
+}
+async fn agent_budget(f: &Fixture) -> budget::AgentBudgetSnapshot {
+    f.registry
+        .managed_agent_budget(enrollment(f), f.child.clone())
+        .await
+        .unwrap()
+}
+async fn issued_call(f: &Fixture, id: &str, tokens: u64) -> ManagedCallCustody {
+    f.registry
+        .prepare_managed_call(call(f, id, tokens))
+        .await
+        .unwrap();
+    let ManagedCallClaim::Issued(custody) = f
+        .registry
+        .issue_managed_call(call(f, id, tokens))
+        .await
+        .unwrap()
+    else {
+        panic!("call")
+    };
+    custody
+}
+
+#[tokio::test]
+#[ignore = "requires HAGENCY_TEST_RUNTIME_PROBE offline supervised fixture"]
+async fn recurring_interrupted_call_holds_only_known_usage_and_closes_when_its_process_stops() {
+    let f = fixture_kind(RenewalMode::Automatic, false, None).await;
+    let (runtime, sink, mut process) = qualified_process(&f, "interrupted").await;
+    let allocated = f.command.requested_tokens;
+
+    // A running call reserves the remainder, but holds nothing up front.
+    let spend = issued_call(&f, "interrupted_call", allocated).await;
+    let open = agent_budget(&f).await;
+    assert_eq!((open.retained_tokens, open.remaining_tokens), (0, allocated));
+    assert!(!open.usage_complete);
+
+    // The run ends with partial usage: unresolved only while its process lives.
+    f.registry
+        .record_managed_usage(&spend, observed_capture("interrupted_usage", 30, false))
+        .await
+        .unwrap();
+    let interrupted = agent_budget(&f).await;
+    assert_eq!(
+        (interrupted.retained_tokens, interrupted.remaining_tokens),
+        (30, allocated - 30)
+    );
+    assert!(!interrupted.usage_complete);
+
+    let stopped = sink
+        .record(process.stop_shared_text_observation())
+        .await
+        .unwrap();
+    assert_eq!(stopped.state, "stopped");
+    let closed = agent_budget(&f).await;
+    assert_eq!(
+        (closed.retained_tokens, closed.remaining_tokens),
+        (30, allocated - 30)
+    );
+    assert!(closed.usage_complete);
+
+    // A partial figure that arrives late still counts, and nothing reopens.
+    f.registry
+        .record_managed_usage(&spend, observed_capture("late_usage", 50, false))
+        .await
+        .unwrap();
+    let late = agent_budget(&f).await;
+    assert_eq!(
+        (late.retained_tokens, late.remaining_tokens),
+        (50, allocated - 50)
+    );
+    assert!(late.usage_complete);
+
+    // Nobody has to settle anything, and the next event starts.
+    let open_calls = f
+        .registry
+        .interrupted_calls(
+            f.profile.clone(),
+            InterruptedCallQuery {
+                agent_id: f.command.proposed_agent_id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(open_calls.calls.is_empty());
+    let next = f
+        .registry
+        .prepare_shared_demand(offer(&f, &runtime, "next_message"), runtime.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(next.disposition(), &SharedDemandDisposition::StartPrepared);
+    let observation = &next.input().unwrap().start.budget_observation;
+    assert_eq!(observation.remaining_tokens, allocated - 50);
+    assert!(observation.usage_complete);
+}
+
+#[tokio::test]
+#[ignore = "requires HAGENCY_TEST_RUNTIME_PROBE offline supervised fixture"]
+async fn recurring_blocked_event_does_not_hold_back_later_events() {
+    let f = fixture_kind(RenewalMode::Automatic, false, None).await;
+    let (runtime, sink, mut process) = qualified_process(&f, "blocked_head").await;
+    let allocated = f.command.requested_tokens;
+    let spend = issued_call(&f, "blocked_head_call", allocated).await;
+    f.registry
+        .record_managed_usage(&spend, observed("blocked_head_usage", allocated))
+        .await
+        .unwrap();
+    sink.record(process.stop_shared_text_observation())
+        .await
+        .unwrap();
+
+    // Spent allowance still refuses, and each event gets its own answer.
+    for id in ["a_first_message", "b_later_message"] {
+        let demand = f
+            .registry
+            .prepare_shared_demand(offer(&f, &runtime, id), runtime.clone(), None)
+            .await
+            .unwrap();
+        assert_eq!(demand.disposition(), &SharedDemandDisposition::BudgetBlocked);
+    }
 }

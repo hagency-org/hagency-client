@@ -67,11 +67,16 @@ fn usage_readback(db:&Connection,id:&str,command:&ManagedAgentReserveCommand,ori
     let grants=db.prepare("SELECT DISTINCT grant_id FROM owner_managed_periods WHERE child_id=?1 AND end_ms<=?2")?.query_map(params![id,now],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
     for grant in grants {old_grants.insert(periods::funding_grant(db,&grant,now)?);}
     let mut prior=0u64;
-    for grant in old_grants {prior=prior.checked_add(periods::grant_usage(db,id,&grant,now)?.0).filter(|n|*n<=JSON_SAFE_MAX).ok_or(Error::Capacity)?;}
+    let mut prior_complete=true;
+    for grant in old_grants {
+        let (held,_,complete)=periods::grant_usage(db,id,&grant,now)?;
+        prior=prior.checked_add(held).filter(|n|*n<=JSON_SAFE_MAX).ok_or(Error::Capacity)?;
+        prior_complete&=complete;
+    }
     let unknown=custody::budget::process_unknown(db,id)?;
     value.retained=if unknown {usage.held.max(allocated)} else {usage.held};
     value.consumed=usage.consumed;
-    value.complete=usage.complete&&!unknown&&prior==0;
+    value.complete=usage.complete&&!unknown&&prior==0&&prior_complete;
     let call_count=db.query_row("SELECT COUNT(*) FROM owner_managed_calls c JOIN owner_managed_call_periods p ON p.call_id=c.id WHERE c.child_id=?1 AND p.period_id IS ?2",params![id,current.map(|p|p.id)],|r|r.get(0))?;
     Ok(UsageReadback{period,allocated,prior,call_count,value})
 }

@@ -306,6 +306,18 @@ pub(super) fn usage(
                 && observed <= h.known_consumed_tokens
                 && !o.unrepresentable));
     let consumed = h.known_consumed_tokens.max(observed);
+    // A stopped process can't spend more, so a partial figure arriving after it
+    // is final. Reopening the call would only make it wait for evidence that
+    // can't come.
+    if !complete
+        && !overflow
+        && !old_overflow
+        && !o.unrepresentable
+        && periods::enabled(db, child)?
+        && process_stopped(db, target)?
+    {
+        complete = true;
+    }
     let mut state = if complete {
         "settled"
     } else if o.terminal || h.state != "issued" {
@@ -339,6 +351,61 @@ pub(super) fn usage(
     };
     save_observation(db, child, &result, &evidence)?;
     Ok(result)
+}
+
+/// Whether the process that ran this call left recorded stopped evidence.
+fn process_stopped(db: &Connection, call: &str) -> Result<bool, Error> {
+    Ok(db.query_row(
+        "SELECT CASE WHEN p.attempt_id IS NOT NULL \
+         THEN EXISTS(SELECT 1 FROM owner_shared_successor_observations o WHERE o.attempt_id=p.attempt_id AND json_extract(o.payload,'$.state')='stopped') \
+         ELSE EXISTS(SELECT 1 FROM owner_shared_process_observations o WHERE o.child_id=c.child_id AND json_extract(o.payload,'$.state')='stopped') END \
+         FROM owner_managed_calls c LEFT JOIN owner_shared_successor_call_pins p ON p.call_id=c.id WHERE c.id=?1",
+        [call],
+        |r| r.get(0),
+    )?)
+}
+
+/// Closes a recurring Agent's open calls whose process is confirmed stopped, at
+/// their known usage. Usage that never arrived counts as zero, so nobody has to
+/// settle the call by hand. A process that may still be running stays open.
+pub(super) fn close_stopped_calls(db: &Connection, child: &str) -> Result<(), Error> {
+    if !periods::enabled(db, child)? {
+        return Ok(());
+    }
+    let mut q = db.prepare(
+        "SELECT id FROM owner_managed_calls WHERE child_id=?1 AND state IN('issued','unknown') AND unrepresentable_usage=0 ORDER BY rowid",
+    )?;
+    let open = q
+        .query_map([child], |r| r.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    for call in open {
+        if !process_stopped(db, &call)? {
+            continue;
+        }
+        let h = calls::history(db, child, &call)?;
+        let proof = json!({
+            "source":"process_stopped_unreported_usage",
+            "knownConsumedTokens":h.known_consumed_tokens,
+            "issueRevision":h.issue_revision,
+        });
+        let (digest, evidence) = evidence("usage", &call, &proof)?;
+        db.execute(
+            "UPDATE owner_managed_calls SET state='settled',usage_complete=1,original_result_digest=COALESCE(original_result_digest,?2) WHERE id=?1",
+            params![call, digest],
+        )?;
+        let receipt = ManagedObservationReceipt {
+            observation_id: format!("{call}_unreported_usage"),
+            target_id: call,
+            kind: "usage".into(),
+            state: "settled".into(),
+            known_consumed_tokens: h.known_consumed_tokens,
+            usage_complete: true,
+            ledger_revision: revision(db)?,
+            content_digest: digest,
+        };
+        save_observation(db, child, &receipt, &evidence)?;
+    }
+    Ok(())
 }
 
 /// Called only after the retained runtime atomically sealed its unstarted

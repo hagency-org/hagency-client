@@ -36,10 +36,18 @@ owner-approved allocation; additive top-ups are unavailable for recurring Agents
 
 Calls pin their authorization when admitted. A call crossing the boundary stays
 charged to its original period, including late usage. Settled consumption from
-old periods is historical; unresolved calls retain their reservation against
-resource capacity until reconciled. Neither an unknown usage result nor a
-process restart means zero consumption. A period change never rewrites a
-previous receipt, clears an irreversible fence or manufactures settlement.
+old periods is historical. A period change never rewrites a previous receipt,
+clears an irreversible fence or manufactures settlement.
+
+Recurring Agents hold only known usage. A call's reservation is not charged
+against the allowance, and new work is refused only when known consumption
+reaches the period's amount. Once a call's process is confirmed stopped, usage
+that never arrived counts as zero: the call closes at its known figure, with that
+evidence retained, and a later report still adds to it. A process that cannot be
+confirmed stopped stays unresolved. The owner chose this on 2026-11-05 so that an
+interrupted run cannot stop an Agent. The ledger can therefore understate real
+provider usage, and one run can pass the allowance by its own usage. Legacy
+cumulative Agents keep holding their reservations.
 
 The executor checks current owner approval, effective parent capacity, current
 period, revocation and token availability transactionally before admitting work.
