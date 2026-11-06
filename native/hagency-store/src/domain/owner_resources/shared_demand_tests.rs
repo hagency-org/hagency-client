@@ -1181,3 +1181,104 @@ async fn shared_demand_v2_claimed_attempt_is_never_retried() {
     }
     f.registry.shutdown().await.unwrap();
 }
+
+/// The prepared retry R1 of a never-started event, claimed here.
+async fn claimed_retry(f: &Fixture, c: &SharedRuntimeCommand, lost: &SharedDemandOffer) -> SharedAttemptCommand {
+    let input = f.registry.prepare_shared_demand(verified(f, lost.clone()), c.clone(), None).await.unwrap().input().unwrap().clone();
+    let mut failed = attempt(f, c).await;
+    failed.start_intent_id = input.start.start_intent_id.clone();
+    failed.predecessor = input.start.predecessor.clone();
+    failed.budget_observation = input.start.budget_observation.clone();
+    f.registry.fence_shared_successor(cleanup(f, c, 1).await, failed.clone()).await.unwrap();
+    let SharedDemandRetry::Start(first) = f
+        .registry
+        .prepare_shared_demand_retry(verified(f, lost.clone()), c.clone(), Some(failed.clone()), 1)
+        .await
+        .unwrap()
+    else {
+        panic!("a retry start");
+    };
+    let start = first.input().start.clone();
+    let mut retried = failed.clone();
+    retried.command_id = "retried_runtime".into();
+    retried.process_attempt = failed.process_attempt + 1;
+    retried.predecessor = start.predecessor.clone();
+    retried.budget_observation = start.budget_observation.clone();
+    retried.start_intent_id = start.start_intent_id.clone();
+    let now = graphs::now_ms().unwrap();
+    retried.issued_at_ms = now;
+    retried.expires_at_ms = now + 20_000;
+    assert!(matches!(f.registry.claim_shared_successor(attempt_proof(f, retried.clone())).await.unwrap(), SharedAttemptClaim::Issued(_)));
+    retried
+}
+
+#[tokio::test]
+async fn shared_demand_v2_retry_binding_recovers_after_a_lost_reply() {
+    let (f, c) = original(true).await;
+    call(&f, &c, "retained_unknown", "unknown", 40, 7, false, false).await;
+    let lost = offer(&c, "bound_retry", 1);
+    let retried = claimed_retry(&f, &c, &lost).await;
+    // The server bound R1's work, then the reply and the local bind were lost
+    // and the process ended (its time-bound stop is the stop evidence here).
+    f.registry.fence_shared_successor(cleanup(&f, &c, 1).await, retried.clone()).await.unwrap();
+    let clock = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(retried.expires_at_ms + 30_000 + UNCERTAIN_GRACE_MS));
+    let worker = clock.clone();
+    f.registry.0.store.call(1024, move |_| { graphs::install_test_clock(&worker); Ok(()) }).await.unwrap();
+    f.registry.record_shared_attempt_timeout(cleanup(&f, &c, 1).await, retried.clone()).await.unwrap().unwrap();
+    let binding = SharedDemandBinding {
+        version: 1,
+        demand_id: lost.demand_id.clone(),
+        demand_digest: digest(&lost),
+        control_revision: lost.control_revision,
+        assignment_id: lost.assignment_id.clone(),
+        event_id: lost.event_id.clone(),
+        received_at_ms: lost.received_at_ms,
+        runtime_command_id: retried.command_id.clone(),
+        runtime_command_digest: digest(&retried),
+        work_id: "bound_retry_work".into(),
+        work_digest: "f".repeat(64),
+    };
+    let device = c.reserve_command.executor_device_id.clone();
+    assert!(recovery_walk(&f, &device, true).await.contains(&lost.demand_id));
+    f.registry.recover_shared_demand_binding(cleanup(&f, &c, 1).await, lost.clone(), binding.clone()).await.unwrap();
+    f.registry.recover_shared_demand_binding(cleanup(&f, &c, 1).await, lost.clone(), binding).await.unwrap();
+    assert_eq!(count(&f, "owner_shared_demand_bindings").await, 1);
+    assert!(!recovery_walk(&f, &device, true).await.contains(&lost.demand_id), "the event no longer holds the queue");
+    drop(clock);
+    f.registry.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn shared_demand_v2_blocked_retry_ends_locally_and_releases_the_queue() {
+    let (f, c) = original(true).await;
+    call(&f, &c, "retained_unknown", "unknown", 40, 7, false, false).await;
+    let lost = offer(&c, "blocked_retry", 1);
+    let input = f.registry.prepare_shared_demand(verified(&f, lost.clone()), c.clone(), None).await.unwrap().input().unwrap().clone();
+    let mut failed = attempt(&f, &c).await;
+    failed.start_intent_id = input.start.start_intent_id.clone();
+    failed.predecessor = input.start.predecessor.clone();
+    failed.budget_observation = input.start.budget_observation.clone();
+    f.registry.fence_shared_successor(cleanup(&f, &c, 1).await, failed.clone()).await.unwrap();
+    // Usage reported meanwhile leaves no budget for the retry.
+    call(&f, &c, "late_overrun", "settled", 150, 201, true, false).await;
+    let SharedDemandRetry::Blocked(budget) = f
+        .registry
+        .prepare_shared_demand_retry(verified(&f, lost.clone()), c.clone(), Some(failed.clone()), 1)
+        .await
+        .unwrap()
+    else {
+        panic!("a blocked retry");
+    };
+    assert_eq!(budget.state, "exhausted");
+    assert_eq!(count(&f, "owner_shared_start_intents").await, 1, "no retry start was saved");
+    let device = c.reserve_command.executor_device_id.clone();
+    assert!(recovery_walk(&f, &device, true).await.contains(&lost.demand_id));
+    // Once the server confirms the block, the event ends here too.
+    f.registry
+        .retain_shared_demand_terminal(cleanup(&f, &c, 1).await, lost.clone(), "budget_blocked".into(), Some(failed.command_id.clone()))
+        .await
+        .unwrap();
+    assert!(!recovery_walk(&f, &device, true).await.contains(&lost.demand_id), "the queue moves on");
+    assert!(f.registry.prepare_shared_demand_retry(verified(&f, lost.clone()), c.clone(), Some(failed), 1).await.is_err());
+    f.registry.shutdown().await.unwrap();
+}

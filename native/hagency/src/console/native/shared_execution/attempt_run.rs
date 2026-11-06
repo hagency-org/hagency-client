@@ -61,9 +61,11 @@ pub(super) async fn upload_end(
     }
 }
 /// Upload a demand attempt's not_started evidence through the demand retry
-/// route, which re-offers the same event in place. `false` when the attempt
-/// was not started by a demand, the server has no retry route, or the demand
-/// already moved on: the caller then uploads the evidence as before.
+/// route, which re-offers the same event in place. `false` whenever the route
+/// did not record it (no demand, no retry capability, or any refusal by the
+/// server): the caller then uploads the evidence on the plain result route, so
+/// evidence is always recorded. Only a failure that may not have reached the
+/// server's decision, or a revoked authority, is returned as an error.
 pub(super) async fn upload_retry(
     b: &Bound,
     r: &OwnerResourceRegistry,
@@ -73,15 +75,13 @@ pub(super) async fn upload_retry(
 ) -> Result<bool, NativeError> {
     receipt.validate_for(&d.command).map_err(store)?;
     let a = b.cleanup(r, &d.command.original_runtime_command).await?;
-    let Some((offer, n)) = r
-        .shared_demand_for_attempt(a, d.command.clone())
-        .await
-        .map_err(store)?
-    else {
+    let Ok(Some((offer, n))) = r.shared_demand_for_attempt(a, d.command.clone()).await else {
         return Ok(false);
     };
-    if !super::demand_io::retries(b).await? {
-        return Ok(false);
+    match super::demand_io::retries(b).await {
+        Ok(true) => {}
+        Err(e) if undecided(&e) => return Err(e),
+        Ok(false) | Err(_) => return Ok(false),
     }
     let reply: Timed<super::demand_io::RetryReply> = match b
         .upload(
@@ -105,10 +105,9 @@ pub(super) async fn upload_retry(
         .await
     {
         Ok(v) => v,
-        // The demand moved on (a later start, a stop or a block): report
-        // the evidence on its own; nothing is retried.
-        Err(e) if e.code == "shared_demand_retry_changed" => return Ok(false),
-        Err(e) => return Err(e),
+        Err(e) if undecided(&e) => return Err(e),
+        // Refused (gate off, demand moved on, stop): report the evidence alone.
+        Err(_) => return Ok(false),
     };
     let ack = &reply.value.acknowledgement;
     reply.value.demand.validate()?;
@@ -120,6 +119,22 @@ pub(super) async fn upload_retry(
         return Err(invalid());
     }
     Ok(true)
+}
+/// The request may not have reached the server's decision, or authority was
+/// revoked: neither is a refusal that permits another route.
+fn undecided(e: &NativeError) -> bool {
+    matches!(
+        e.code.as_str(),
+        "server_unavailable"
+            | "invalid_server_response"
+            | "server_request_failed"
+            | "management_outcome_unknown"
+            | "allocation_ticket_expired"
+            | "management_scope_changed"
+            | "owner_authorization_required"
+            | "sign_in_required"
+            | "device_authorization_required"
+    )
 }
 fn activity(
     sink: &SharedAttemptProcessSink,

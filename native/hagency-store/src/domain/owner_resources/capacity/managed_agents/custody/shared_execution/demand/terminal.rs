@@ -5,7 +5,15 @@
 //! day can still end; the server's state is the only input that is trusted.
 use super::*;
 
-const TERMINAL: [&str; 3] = ["expired", "cancelled", "head_changed"];
+/// Budget blocks end an event here only after a retry (ADR-193 amendment):
+/// the original start's own block is its saved decision.
+const TERMINAL: [&str; 5] = [
+    "expired",
+    "cancelled",
+    "head_changed",
+    "budget_blocked",
+    "usage_unrepresentable",
+];
 
 /// Version-neutral idempotency check over a retained terminal payload.
 pub(in super::super) fn same_terminal(saved: &str, offer: &SharedDemandOffer, state: &str) -> Result<bool, Error> {

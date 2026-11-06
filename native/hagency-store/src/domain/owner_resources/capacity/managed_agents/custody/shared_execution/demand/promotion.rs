@@ -59,9 +59,7 @@ impl OwnerResourceRegistry {
                 SharedDemandDisposition::StartPrepared=>{
                     let id:String=tx.query_row("SELECT start_intent_id FROM owner_shared_successor_attempts WHERE id=?1 AND child_id=?2 AND command_digest=?3",params![binding.runtime_command_id,activity.sink.child(),binding.runtime_command_digest],|r|r.get(0))?;
                     // The demand's original start or one of its retries (ADR-193 amendment).
-                    let Some((demand,n))=retry::demand_for_start(&tx,&id)? else {return Err(Error::Conflict)};
-                    let start=retry::saved_start(&tx,&activity.enrollment.profile.digest,activity.sink.child(),&saved,n)?;
-                    if demand!=saved.offer.demand_id||start.start_intent_id!=id{return Err(Error::Conflict)}
+                    retry::own_start(&tx,&activity.enrollment.profile.digest,activity.sink.child(),&saved,&id)?;
                 }
                 SharedDemandDisposition::BudgetBlocked|SharedDemandDisposition::HeadChanged=>return Err(Error::Capacity),
             }

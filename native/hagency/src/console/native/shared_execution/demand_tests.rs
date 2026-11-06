@@ -22,6 +22,8 @@ pub(super) struct State {
     retry: Option<u64>,
     pub(super) no_retry: bool,
     retry_requests: usize,
+    retry_refused: bool,
+    poll_retries: Vec<Option<bool>>,
 }
 fn status(s: &super::super::State) -> Value {
     let d = &s.shared.demands;
@@ -75,6 +77,7 @@ pub(super) fn management(
         ));
     }
     if path.ends_with("/demands/poll") {
+        s.shared.demands.poll_retries.push(body["retries"].as_bool());
         return Some(Some(
             json!({"demand":if matches!(s.shared.demands.status.as_str(),"offered"|"start_committed"|"retry_offered"){status(s)}else{Value::Null},"nextAfter":s.shared.command.as_ref().unwrap().assignment_id,"observedAtMs":at}),
         ));
@@ -86,6 +89,10 @@ pub(super) fn management(
             return Some(Some(json!({"demand":status(s),"observedAtMs":at})));
         }
         if path.ends_with("/retry") {
+            // A server with a demand gate off refuses the route.
+            if s.shared.demands.retry_refused {
+                return Some(Some(json!({"fixtureStatus":503,"code":"shared_demand_retry_unavailable"})));
+            }
             // Records the never-started evidence and re-offers the same event.
             assert_eq!(body["demandDigest"], o.digest().unwrap());
             let n = body["retry"].as_u64().unwrap();
@@ -1064,10 +1071,11 @@ async fn native_shared_owner_policy_applies_before_the_first_model_call() {
 #[tokio::test]
 #[ignore = "requires explicitly built offline supervised probe"]
 async fn native_demand_never_started_attempt_retries_same_event_exactly_once() {
-    for mode in ["retry", "old_server", "logout"] {
+    for mode in ["retry", "old_server", "logout", "refused", "blocked"] {
         let old_server = mode == "old_server";
         let (f, t, _) = fixture_budget(1000).await;
         f.state.lock().unwrap().shared.demands.no_retry = old_server;
+        f.state.lock().unwrap().shared.demands.retry_refused = mode == "refused";
         offer(&f, 1);
         // Start accepted, reply lost; this executor never claims the attempt.
         f.state.lock().unwrap().shared.demands.lose_start = true;
@@ -1076,11 +1084,16 @@ async fn native_demand_never_started_attempt_retries_same_event_exactly_once() {
         f.state.lock().unwrap().shared.cleanup = true;
         let outcome = t.poll_successor(&f.registry, None).await.unwrap();
         assert!(matches!(outcome, SharedExecutionProgress::Recorded { process_state: Some(ref s), .. } if s == "not_started"));
-        if old_server {
-            // An older server keeps today's behavior: evidence only, no retry.
+        if old_server || mode == "refused" {
+            // An older server, or a refused retry route: the evidence is
+            // still recorded on the plain route and nothing is retried.
             let s = f.state.lock().unwrap();
             assert_eq!(s.shared.demands.retry_requests, 0);
             assert_eq!(s.shared.demands.inputs.len(), 1);
+            assert!(s.shared.attempts.processes.values().any(|r| r.state == "not_started"));
+            if old_server {
+                assert!(s.shared.demands.poll_retries.iter().all(Option::is_none), "no retry flag for an older server");
+            }
             drop(s);
             f.stop().await;
             continue;
@@ -1092,6 +1105,22 @@ async fn native_demand_never_started_attempt_retries_same_event_exactly_once() {
             s.shared.cleanup = false;
             // The retry's start reply is lost as well.
             s.shared.demands.lose_start = true;
+        }
+        assert!(f.state.lock().unwrap().shared.demands.poll_retries.iter().all(|v| *v == Some(true)));
+        if mode == "blocked" {
+            // The server blocked the retried event (budget): it ends here too
+            // and no longer holds the queue.
+            f.state.lock().unwrap().shared.demands.status = "budget_blocked".into();
+            assert!(matches!(
+                t.resume_next_demand(&f.registry, None).await.unwrap().unwrap().outcome.unwrap(),
+                SharedDemandProgress::Historical { ref status, .. } if status == "budget_blocked"
+            ));
+            assert_eq!(rows(&f, "owner_shared_budget_demand_terminals"), 1);
+            let scope = f.transport.scope(Permission::ExecuteManagedAgents).await.unwrap();
+            let device = scope.device.device_id().to_string();
+            assert!(f.registry.next_unfinished_shared_demand(scope.profile, device, None).await.unwrap().is_none());
+            f.stop().await;
+            continue;
         }
         if mode == "logout" {
             // Revocation stops at once: no retry start, no model turn.

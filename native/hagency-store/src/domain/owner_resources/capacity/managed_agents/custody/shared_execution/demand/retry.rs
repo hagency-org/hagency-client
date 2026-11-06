@@ -74,6 +74,25 @@ pub(in super::super) fn saved_start(
     Ok(input)
 }
 
+/// `start_intent_id` is one of the saved demand's own starts: its original
+/// start or one of its retries.
+pub(in super::super) fn own_start(
+    db: &Connection,
+    profile: &str,
+    child: &str,
+    saved: &SharedDemandIntent,
+    start_intent_id: &str,
+) -> Result<(), Error> {
+    let Some((demand, n)) = demand_for_start(db, start_intent_id)? else {
+        return Err(Error::Conflict);
+    };
+    let start = saved_start(db, profile, child, saved, n)?;
+    if demand != saved.offer.demand_id || start.start_intent_id != start_intent_id {
+        return Err(Error::Conflict);
+    }
+    Ok(())
+}
+
 /// Every earlier start of the event is provably unstarted on this
 /// installation, and the latest one is the never-started head. Returns that
 /// head's command id.
@@ -183,10 +202,11 @@ impl OwnerResourceRegistry {
                 let Some(c) = predecessor.as_ref().filter(|c| c.command_id == head) else {
                     return Err(Error::Conflict);
                 };
-                // No other start (manual or another event) names this head.
+                // No other start (manual or another event) holds this head's
+                // slot in the current period (owner_shared_start_intent_period).
                 let competing: bool = tx.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM owner_shared_start_intents WHERE child_id=?1 AND predecessor_digest=?2 AND id<>?3)",
-                    params![child, canonical::digest(&serde_json::to_value(c)?)?, id],
+                    "SELECT EXISTS(SELECT 1 FROM owner_shared_start_intents WHERE child_id=?1 AND predecessor_digest=?2 AND period_id IS ?3 AND id<>?4)",
+                    params![child, canonical::digest(&serde_json::to_value(c)?)?, periods::current_id(&tx, &child)?, id],
                     |r| r.get(0),
                 )?;
                 if competing {

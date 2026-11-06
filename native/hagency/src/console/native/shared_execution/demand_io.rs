@@ -105,6 +105,9 @@ pub(super) struct BlockInput {
     pub expected_control_revision: u64,
     pub reason: String,
     pub budget: Option<SharedBudgetObservation>,
+    /// Sent only to a server that advertises retries (ADR-193 amendment).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub retries: bool,
 }
 pub(super) enum DemandAction {
     Discovery,
@@ -115,12 +118,16 @@ pub(super) enum DemandAction {
         assignment: String,
         input: SharedDemandStopInput,
     },
+    /// `retries`: this executor runs retries and the server advertises them;
+    /// only then may a status carry them (ADR-193 amendment).
     Poll {
         after: Option<String>,
+        retries: bool,
     },
     Recover {
         id: String,
         digest: String,
+        retries: bool,
     },
     Binding {
         work: String,
@@ -154,12 +161,12 @@ impl DemandAction {
                     return Err(invalid());
                 }
             }
-            Self::Poll { after } => {
+            Self::Poll { after, .. } => {
                 if let Some(id) = after {
                     super::super::key(id)?;
                 }
             }
-            Self::Recover { id, digest } => {
+            Self::Recover { id, digest, .. } => {
                 super::super::key(id)?;
                 hash(digest)?;
             }
@@ -211,10 +218,13 @@ impl DemandAction {
             Self::Stop { assignment, input } => {
                 (format!("assignments/{assignment}/control"), json!(input))
             }
-            Self::Poll { after } => ("demands/poll".into(), json!({"after":after})),
-            Self::Recover { id, digest } => (
+            Self::Poll { after, retries } => (
+                "demands/poll".into(),
+                if retries { json!({"after":after,"retries":true}) } else { json!({"after":after}) },
+            ),
+            Self::Recover { id, digest, retries } => (
                 format!("demands/{id}/recover"),
-                json!({"demandDigest":digest}),
+                if retries { json!({"demandDigest":digest,"retries":true}) } else { json!({"demandDigest":digest}) },
             ),
             Self::Binding {
                 work,

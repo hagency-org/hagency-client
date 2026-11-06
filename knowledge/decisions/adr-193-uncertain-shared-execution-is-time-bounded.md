@@ -97,10 +97,29 @@ Local proof on the executor:
 - The server advertises `shared-demand-retry-v1`, and an executor uses the retry route only then.
 - New server with an older executor: no retry requests, so the previous terminal behavior. The only change is that a never-qualified attempt stopped by the time bound waits for the executor's evidence; executors with this ADR's first part supply it.
 - New executor with an older server: no capability, so the plain evidence upload and the previous behavior.
-- Wire: `SharedDemandStartInput` and `SharedDemandStatus` gain an optional `retry`, and there is a new state, `retry_offered`, and a new route. Existing bytes and digests are unchanged. The new fields and state reach only an executor that asked for a retry.
+- The capability is advertised only while every gate of the retry route is on (the route and discovery share one predicate). If the route refuses anyway, the executor uploads the same evidence on the plain result route, so `not_started` evidence is always recorded.
+- Wire: `SharedDemandStartInput` and `SharedDemandStatus` gain an optional `retry`, and there is a new state, `retry_offered`, and a new route. Existing bytes and digests are unchanged.
+- Retry fields are sent only to an executor that declares retry support in that request (`retries: true` on demand poll, recover and block; declared only to a server that advertises the capability). Any other executor never sees `retry` or `retry_offered`. An unbound retry it cannot run ends the message as before (`head_changed`, block payload `"retry_unsupported"`), and a bound one reads as `bound`.
 - Server schema: two additive tables and a replaced demand validator, applied idempotently at every start, with no version change. The previous binary ignores them; a retry in flight during a rollback ends `head_changed`.
 - Executor: no SQLite migration. Retry starts live in the existing start-intent table.
+- A retry stopped by a budget block ends the message locally once the server confirms the block; the original start's decision cannot change, so a terminal record releases the queue place.
 - v3 budget demands keep the previous behavior.
+
+### Rollback rules
+
+- **Executor:** no downgrade below this build once retries have occurred. An older executor reads no retry fields and ends an unbound retry as before, but it cannot recover a binding to a retry attempt: that Agent's later messages wait until the event expires or the owner stops and re-runs the Run. If a downgrade is unavoidable, first let retries finish (bound and recorded locally).
+- **Server:** before rolling back, let retries finish: no demand `retry_offered` and no unbound retry start.
+  - The previous binary cannot run a retry. It ends an unbound one as `head_changed`, because its refresh sees a newer head than the original start.
+  - It reports a demand bound to a retry attempt with the original start's runtime, which this executor rejects. If such a demand is still unbound locally, stop and re-run the Agent's Run to release it.
+- **Never drop the retry tables.** Their rows are the only record of which attempt a demand started and which runtime its binding names. The validator, `current()`, `allowed()` and the sweep read them.
+- `validate_shared_demand()` is owned by the retry schema file and re-created at every start. Startup refuses to replace a body that a later versioned migration changed, so a later change is never silently undone. A future change to that function belongs in the retry schema file.
+
+### Known limit: start slots of ended messages
+
+A start intent saved locally but never committed by the server (the Run stopped or the event expired before the server accepted it) holds its head's start slot (`owner_shared_start_intent_period`) for the rest of the period. Later messages naming that head wait.
+- Original starts already have this limit.
+- A retry adds the same exposure once per retry, only in the short window between saving the retry start and the server committing it.
+- Releasing the slot of an ended message needs a client migration (the slot is a unique index), so it is left as a follow-up.
 
 ### Consequences
 

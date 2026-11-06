@@ -90,7 +90,14 @@ impl SharedExecutionTransport {
         let b = self.io.bound().await?;
         demand_io::require_pair(&b).await?;
         let reply: Timed<demand_io::PollReply> = b
-            .request(DemandAction::Poll { after }.into(), false)
+            .request(
+                DemandAction::Poll {
+                    after,
+                    retries: demand_io::retries(&b).await?,
+                }
+                .into(),
+                false,
+            )
             .await?;
         if let Some(id) = &reply.value.next_after {
             super::super::key(id)?;
@@ -147,6 +154,7 @@ impl SharedExecutionTransport {
                     DemandAction::Recover {
                         id: id.clone(),
                         digest: expected.clone(),
+                        retries: demand_io::retries(&b).await?,
                     }
                     .into(),
                     false,
@@ -195,7 +203,12 @@ impl SharedExecutionTransport {
             }
             // A final central state releases this event's FIFO position; the
             // interrupted event is never started or replayed (ADR-193).
-            if matches!(s.state.as_str(), "expired" | "cancelled" | "head_changed") {
+            // A block of a retried event ends it here too: its saved decision
+            // is the original start, which holds the queue (ADR-193 amendment).
+            if matches!(s.state.as_str(), "expired" | "cancelled" | "head_changed")
+                || matches!(s.state.as_str(), "budget_blocked" | "usage_unrepresentable")
+                    && s.retry.is_some()
+            {
                 r.retain_shared_demand_terminal(
                     b.cleanup(r, target.original()).await?,
                     s.offer.clone(),
@@ -252,6 +265,7 @@ impl SharedExecutionTransport {
                                 expected_control_revision: s.offer.control_revision,
                                 reason: reason.into(),
                                 budget: budget.observation.clone(),
+                                retries: demand_io::retries(&b).await?,
                             },
                         }
                         .into(),
@@ -340,6 +354,7 @@ impl SharedExecutionTransport {
                                 expected_control_revision: s.offer.control_revision,
                                 reason: reason.into(),
                                 budget: budget.observation.clone(),
+                                retries: true,
                             },
                         }
                         .into(),
@@ -351,6 +366,16 @@ impl SharedExecutionTransport {
                 if current.offer.demand_id != id || current.state != reason {
                     return Err(invalid());
                 }
+                // The original start's decision cannot change: the confirmed
+                // block ends the event locally and releases its queue place.
+                r.retain_shared_demand_terminal(
+                    b.cleanup(r, target.original()).await?,
+                    s.offer.clone(),
+                    reason.into(),
+                    current.runtime_command_id.clone(),
+                )
+                .await
+                .map_err(store)?;
                 return Ok(SharedDemandProgress::Blocked {
                     demand_id: id,
                     reason: reason.into(),
