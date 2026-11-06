@@ -1097,3 +1097,87 @@ async fn shared_demand_v2_terminal_unstarted_demand_unblocks_only_new_event() {
     assert_eq!(count(&f, "owner_shared_demands").await, 2);
     f.registry.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn shared_demand_v2_never_started_attempt_retries_same_event_in_place() {
+    let (f, c) = original(true).await;
+    call(&f, &c, "retained_unknown", "unknown", 40, 7, false, false).await;
+    let lost = offer(&c, "retried_event", 1);
+    let input = f.registry.prepare_shared_demand(verified(&f, lost.clone()), c.clone(), None).await.unwrap().input().unwrap().clone();
+    let mut later = offer(&c, "later_event", 1);
+    later.received_at_ms = lost.received_at_ms + 1;
+    let mut failed = attempt(&f, &c).await;
+    failed.start_intent_id = input.start.start_intent_id.clone();
+    failed.predecessor = input.start.predecessor.clone();
+    failed.budget_observation = input.start.budget_observation.clone();
+    let retry = |n: u64, predecessor: Option<SharedAttemptCommand>| {
+        f.registry.prepare_shared_demand_retry(verified(&f, lost.clone()), c.clone(), predecessor, n)
+    };
+    assert!(retry(1, Some(failed.clone())).await.is_err(), "no retry without the local unclaimed fence");
+    f.registry.fence_shared_successor(cleanup(&f, &c, 1).await, failed.clone()).await.unwrap();
+    let target = f.registry.shared_successor_selection(f.profile.clone(), c.assignment_id.clone()).await.unwrap().unwrap();
+    assert_eq!(digest(target.predecessor().unwrap()), digest(&failed));
+    assert!(retry(2, target.predecessor().cloned()).await.is_err(), "retries are numbered without gaps");
+    assert!(retry(MAX_DEMAND_RETRIES + 1, target.predecessor().cloned()).await.is_err(), "the cap holds locally");
+    let SharedDemandRetry::Start(first) = retry(1, target.predecessor().cloned()).await.unwrap() else {
+        panic!("a retry start");
+    };
+    let start = first.input().clone();
+    assert_eq!(start.retry, Some(1));
+    assert_eq!(start.start.start_intent_id, format!("sdr1_{}", lost.demand_id));
+    assert_eq!(start.start.predecessor.command_id, failed.command_id);
+    assert!(start.start.predecessor.process_digest.is_empty());
+    start.validate_for(&lost).unwrap();
+    let SharedDemandRetry::Start(again) = retry(1, target.predecessor().cloned()).await.unwrap() else {
+        panic!("a retry start");
+    };
+    assert_eq!(digest(again.input()), digest(&start), "a replay reuses the same start, never a new one");
+    // The retried event keeps its FIFO place; manual start recovery never adopts it.
+    let waiting = f.registry.prepare_shared_demand(verified(&f, later.clone()), c.clone(), target.predecessor().cloned()).await.unwrap();
+    assert_eq!(*waiting.disposition(), SharedDemandDisposition::Pending);
+    assert!(f.registry.recover_shared_attempt_start(cleanup(&f, &c, 1).await, c.clone(), Some(failed.clone())).await.unwrap().is_none());
+    // The retry attempt is the demand's own, pinned to its Run revision.
+    let mut retried = failed.clone();
+    retried.command_id = "retried_runtime".into();
+    retried.process_attempt = failed.process_attempt + 1;
+    retried.predecessor = start.start.predecessor.clone();
+    retried.budget_observation = start.start.budget_observation.clone();
+    retried.start_intent_id = start.start.start_intent_id.clone();
+    let now = graphs::now_ms().unwrap();
+    retried.issued_at_ms = now;
+    retried.expires_at_ms = now + 20_000;
+    let SharedAttemptClaim::Issued(custody) = f.registry.claim_shared_successor(attempt_proof(&f, retried.clone())).await.unwrap() else {
+        panic!("the retry is claimed");
+    };
+    assert_eq!(custody.demand_control_revision(), Some(1));
+    let (owner, n) = f.registry.shared_demand_for_attempt(cleanup(&f, &c, 1).await, retried.clone()).await.unwrap().unwrap();
+    assert_eq!((owner.demand_id.as_str(), n), (lost.demand_id.as_str(), 1));
+    // A claimed attempt may have run: the event is never retried again.
+    assert!(retry(2, Some(retried)).await.is_err());
+    f.registry.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn shared_demand_v2_claimed_attempt_is_never_retried() {
+    let (f, c) = original(true).await;
+    call(&f, &c, "retained_unknown", "unknown", 40, 7, false, false).await;
+    let lost = offer(&c, "claimed_event", 1);
+    let input = f.registry.prepare_shared_demand(verified(&f, lost.clone()), c.clone(), None).await.unwrap().input().unwrap().clone();
+    let mut claimed = attempt(&f, &c).await;
+    claimed.start_intent_id = input.start.start_intent_id.clone();
+    claimed.predecessor = input.start.predecessor.clone();
+    claimed.budget_observation = input.start.budget_observation.clone();
+    let now = graphs::now_ms().unwrap();
+    claimed.issued_at_ms = now;
+    claimed.expires_at_ms = now + 20_000;
+    assert!(matches!(f.registry.claim_shared_successor(attempt_proof(&f, claimed.clone())).await.unwrap(), SharedAttemptClaim::Issued(_)));
+    let (owner, n) = f.registry.shared_demand_for_attempt(cleanup(&f, &c, 1).await, claimed.clone()).await.unwrap().unwrap();
+    assert_eq!((owner.demand_id, n), (lost.demand_id.clone(), 0));
+    for predecessor in [None, Some(claimed.clone())] {
+        assert!(matches!(
+            f.registry.prepare_shared_demand_retry(verified(&f, lost.clone()), c.clone(), predecessor, 1).await,
+            Err(Error::LocalAuthority | Error::Conflict)
+        ));
+    }
+    f.registry.shutdown().await.unwrap();
+}

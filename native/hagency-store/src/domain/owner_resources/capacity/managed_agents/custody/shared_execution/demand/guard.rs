@@ -2,6 +2,9 @@
 use super::*;
 
 pub(in super::super) fn require_explicit_start(db: &Connection, id: &str) -> Result<(), Error> {
+    if retry::parse(id).is_some() {
+        return Err(Error::LocalAuthority);
+    }
     let linked: bool = db.query_row(
         "SELECT EXISTS(SELECT 1 FROM owner_shared_demand_decisions WHERE start_intent_id=?1) OR EXISTS(SELECT 1 FROM owner_shared_budget_demand_decisions WHERE start_intent_id=?1)",
         [id],
@@ -18,21 +21,14 @@ pub(in super::super) fn check_attempt_control(
     profile: &str,
     command: &SharedAttemptCommand,
 ) -> Result<(), Error> {
-    let id: Option<String> = db
-        .query_row(
-            "SELECT demand_id FROM owner_shared_demand_decisions WHERE start_intent_id=?1",
-            [&command.start_intent_id],
-            |r| r.get(0),
-        )
-        .optional()?;
-    let Some(id) = id else {
+    // The original start or a retry start (ADR-193 amendment) of a demand.
+    let Some((id, n)) = retry::demand_for_start(db, &command.start_intent_id)? else {
         return require_no_owner_stop(db, profile, &command.agent_reservation_id);
     };
     let saved = journal::load(db, profile, &command.agent_reservation_id, &id)?
         .ok_or(Error::LocalAuthority)?;
-    let input = saved.input.ok_or(Error::Conflict)?;
     let original = SharedAttemptStartIntent {
-        input: input.start,
+        input: retry::saved_start(db, profile, &command.agent_reservation_id, &saved, n)?,
         original: command.original_runtime_command.clone(),
     };
     original.matches_command(command)?;
@@ -71,13 +67,7 @@ pub(in super::super) fn attempt_control_revision(
     c: &SharedAttemptCommand,
 ) -> Result<Option<u64>, Error> {
     check_attempt_control(db, profile, c)?;
-    let id: Option<String> = db
-        .query_row(
-            "SELECT demand_id FROM owner_shared_demand_decisions WHERE start_intent_id=?1",
-            [&c.start_intent_id],
-            |r| r.get(0),
-        )
-        .optional()?;
+    let id = retry::demand_for_start(db, &c.start_intent_id)?.map(|(id, _)| id);
     id.map(|id| {
         journal::load(db, profile, &c.agent_reservation_id, &id)?
             .map(|s| s.offer.control_revision)

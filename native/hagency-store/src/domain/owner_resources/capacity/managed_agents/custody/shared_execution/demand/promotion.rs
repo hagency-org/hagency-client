@@ -57,9 +57,11 @@ impl OwnerResourceRegistry {
                     if binding.runtime_command_id!=saved.offer.predecessor_command_id||binding.runtime_command_digest!=saved.offer.predecessor_command_digest{return Err(Error::Conflict)}
                 }
                 SharedDemandDisposition::StartPrepared=>{
-                    let input=saved.input.ok_or(Error::Conflict)?;
                     let id:String=tx.query_row("SELECT start_intent_id FROM owner_shared_successor_attempts WHERE id=?1 AND child_id=?2 AND command_digest=?3",params![binding.runtime_command_id,activity.sink.child(),binding.runtime_command_digest],|r|r.get(0))?;
-                    if id!=input.start.start_intent_id{return Err(Error::Conflict)}
+                    // The demand's original start or one of its retries (ADR-193 amendment).
+                    let Some((demand,n))=retry::demand_for_start(&tx,&id)? else {return Err(Error::Conflict)};
+                    let start=retry::saved_start(&tx,&activity.enrollment.profile.digest,activity.sink.child(),&saved,n)?;
+                    if demand!=saved.offer.demand_id||start.start_intent_id!=id{return Err(Error::Conflict)}
                 }
                 SharedDemandDisposition::BudgetBlocked|SharedDemandDisposition::HeadChanged=>return Err(Error::Capacity),
             }
@@ -89,7 +91,7 @@ pub(in super::super) fn check_work_control(
         // A demand-created process cannot admit any event until its exact
         // promotion has been retained. Disabling intake never removes this fence.
         let demand_attempt: bool = db.query_row(
-            "SELECT EXISTS(SELECT 1 FROM owner_shared_successor_attempts a JOIN owner_shared_demand_decisions d ON d.start_intent_id=a.start_intent_id WHERE a.child_id=?1 AND a.command_digest=?2) OR EXISTS(SELECT 1 FROM owner_shared_successor_attempts a JOIN owner_shared_budget_demand_decisions d ON d.start_intent_id=a.start_intent_id WHERE a.child_id=?1 AND a.command_digest=?2) OR EXISTS(SELECT 1 FROM owner_shared_demands WHERE child_id=?1 AND event_id=?3 AND json_extract(offer_payload,'$.assignmentId')=?4)",
+            "SELECT EXISTS(SELECT 1 FROM owner_shared_successor_attempts a JOIN owner_shared_demand_decisions d ON d.start_intent_id=a.start_intent_id WHERE a.child_id=?1 AND a.command_digest=?2) OR EXISTS(SELECT 1 FROM owner_shared_successor_attempts a WHERE a.child_id=?1 AND a.command_digest=?2 AND a.start_intent_id GLOB 'sdr[1-3]_*') OR EXISTS(SELECT 1 FROM owner_shared_successor_attempts a JOIN owner_shared_budget_demand_decisions d ON d.start_intent_id=a.start_intent_id WHERE a.child_id=?1 AND a.command_digest=?2) OR EXISTS(SELECT 1 FROM owner_shared_demands WHERE child_id=?1 AND event_id=?3 AND json_extract(offer_payload,'$.assignmentId')=?4)",
             params![child, w.runtime_command_digest, w.event_id, w.assignment_id], |r| r.get(0),
         )?;
         return if demand_attempt {

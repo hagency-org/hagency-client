@@ -180,6 +180,11 @@ impl SharedExecutionTransport {
             .map_err(store)?
             .ok_or_else(|| failure(409, "shared_demand_original_missing"))?;
         io::binding(&b.scope, target.original(), false)?;
+        // The server re-offered this event after this executor proved its
+        // attempt never started (ADR-193 amendment): run it again in place.
+        if s.state == "retry_offered" || s.state == "start_committed" && s.retry.is_some() {
+            return self.consume_retry(r, &b, &target, s, observed, launch).await;
+        }
         if !matches!(s.state.as_str(), "offered" | "start_committed") {
             if s.state == "bound" {
                 r.recover_shared_demand_binding(
@@ -293,6 +298,84 @@ impl SharedExecutionTransport {
         }
     }
 }
+impl SharedExecutionTransport {
+    /// One retry of a saved event whose earlier attempts provably never
+    /// started here. A replay reuses the saved retry start; nothing calls the
+    /// model unless the server issues and this installation claims it.
+    async fn consume_retry(
+        &self,
+        r: &OwnerResourceRegistry,
+        b: &Bound,
+        target: &SharedSuccessorSelection,
+        s: Status,
+        observed: u64,
+        launch: Option<super::super::managed_runtime::PreparedLaunch>,
+    ) -> Result<SharedDemandProgress, NativeError> {
+        let id = s.offer.demand_id.clone();
+        let n = s.retry.ok_or_else(invalid)?;
+        let proof = offer_proof(b, r, target.original(), &s, observed).await?;
+        let prepared = r
+            .prepare_shared_demand_retry(
+                proof,
+                target.original().clone(),
+                target.predecessor().cloned(),
+                n,
+            )
+            .await
+            .map_err(store)?;
+        let submission = match prepared {
+            SharedDemandRetry::Start(submission) => submission,
+            SharedDemandRetry::Blocked(budget) => {
+                let reason = if budget.state == "exhausted" {
+                    "budget_blocked"
+                } else {
+                    "usage_unrepresentable"
+                };
+                let reply: Timed<demand_io::RecoverReply> = b
+                    .request(
+                        DemandAction::Block {
+                            id: id.clone(),
+                            input: demand_io::BlockInput {
+                                demand_digest: s.demand_digest,
+                                expected_control_revision: s.offer.control_revision,
+                                reason: reason.into(),
+                                budget: budget.observation.clone(),
+                            },
+                        }
+                        .into(),
+                        true,
+                    )
+                    .await?;
+                let current = reply.value.demand.ok_or_else(invalid)?;
+                current.validate()?;
+                if current.offer.demand_id != id || current.state != reason {
+                    return Err(invalid());
+                }
+                return Ok(SharedDemandProgress::Blocked {
+                    demand_id: id,
+                    reason: reason.into(),
+                });
+            }
+        };
+        demand_io::require_pair(b).await?;
+        submission.check().map_err(store)?;
+        let progress = self
+            .process_attempt(
+                r,
+                attempt_io::AttemptAction::DemandStart {
+                    id: id.clone(),
+                    input: submission.input().clone(),
+                },
+                None,
+                launch,
+            )
+            .await?;
+        Ok(SharedDemandProgress::Execution {
+            demand_id: id,
+            progress,
+        })
+    }
+}
 /// Promotion is descriptive. Store binding is durable before inbox/ACK, and the
 /// ordinary native call hold + central one-shot start + issue gates still follow.
 pub(super) async fn bind_work(
@@ -342,6 +425,7 @@ pub(super) async fn bind_work(
         state: "bound".into(),
         runtime_command_id: Some(link.binding.runtime_command_id.clone()),
         binding: Some(link.binding.clone()),
+        retry: None,
     };
     let proof = offer_proof(b, r, original, &status, reply.observed).await?;
     r.prepare_shared_demand(proof, original.clone(), target.predecessor().cloned())
@@ -392,6 +476,7 @@ pub(super) async fn bind_budget_work(
         state: "bound".into(),
         runtime_command_id: Some(link.binding.runtime_command_id.clone()),
         binding: Some(link.binding.clone()),
+        retry: None,
     };
     let saved=r.recover_shared_demand(b.cleanup(r,original).await?,status.offer.demand_id.clone()).await.map_err(store)?;
     if let Some(saved)=saved {

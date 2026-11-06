@@ -11,6 +11,19 @@ pub struct SharedDemandSubmission {
     input: SharedDemandStartInput,
 }
 impl SharedDemandSubmission {
+    pub(super) fn new(
+        registry: Arc<Inner>,
+        proof: VerifiedSharedDemand,
+        original: SharedRuntimeCommand,
+        input: SharedDemandStartInput,
+    ) -> Self {
+        Self {
+            registry,
+            proof,
+            original,
+            input,
+        }
+    }
     pub fn check(&self) -> Result<(), Error> {
         self.proof.check()?;
         after(

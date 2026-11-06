@@ -1111,6 +1111,8 @@ async fn native_shared_execution_retirement_stops_completed_process_with_reply_p
     f.stop().await;
 }
 
+/// An older server has no demand retry route (ADR-193 amendment).
+pub(crate) fn demand_retry_enabled(s:&super::State)->bool{!s.shared.demands.no_retry}
 #[cfg(feature="shared-context")]
 pub(crate) fn context_enabled(s:&super::State)->bool{s.shared.contexts.active}
 #[cfg(feature="shared-context")]

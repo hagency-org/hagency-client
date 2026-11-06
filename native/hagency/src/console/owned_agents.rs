@@ -331,6 +331,7 @@ fn public(value: &Value, kind: &str) -> Result<Value, OwnerError> {
                         | "invalid_matrix_response"
                         | "matrix_outcome_unknown"
                         | "matrix_request_failed"
+                        | "matrix_rate_limited"
                         | "matrix_response_too_large"
                         | "matrix_unavailable"
                         | "storage_unavailable"

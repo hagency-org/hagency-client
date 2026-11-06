@@ -117,7 +117,7 @@ fn summary(
     };
     let period_id=periods::current(db,&child,graphs::now_ms()?)?.map(|p|p.id);
     let saved_id: Option<String> = db.query_row(
-        "SELECT id FROM owner_shared_start_intents WHERE child_id=?1 AND profile=?2 AND device_id=?3 AND device_generation=?4 AND period_id IS ?5 AND NOT EXISTS(SELECT 1 FROM owner_shared_demand_decisions d WHERE d.start_intent_id=owner_shared_start_intents.id) ORDER BY ledger_revision DESC LIMIT 1",
+        "SELECT id FROM owner_shared_start_intents WHERE child_id=?1 AND profile=?2 AND device_id=?3 AND device_generation=?4 AND period_id IS ?5 AND NOT EXISTS(SELECT 1 FROM owner_shared_demand_decisions d WHERE d.start_intent_id=owner_shared_start_intents.id) AND owner_shared_start_intents.id NOT GLOB 'sdr[1-3]_*' ORDER BY ledger_revision DESC LIMIT 1",
         params![child,profile.digest,device,generation,period_id], |r| r.get(0),
     ).optional()?;
     if let Some(id) = &saved_id {

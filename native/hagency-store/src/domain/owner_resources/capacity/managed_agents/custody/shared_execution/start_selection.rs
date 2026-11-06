@@ -121,7 +121,7 @@ impl OwnerResourceRegistry {
         let expires = p.expires;
         let result=self.0.store.call(64*1024,move|db|{
             profile.check()?;
-            let id:Option<String>=db.db.query_row("SELECT id FROM owner_shared_start_intents WHERE profile=?1 AND (?2 IS NULL OR id>?2) AND NOT EXISTS(SELECT 1 FROM owner_shared_demand_decisions d WHERE d.start_intent_id=owner_shared_start_intents.id) ORDER BY id LIMIT 1",params![profile.digest,after_id],|r|r.get(0)).optional()?;
+            let id:Option<String>=db.db.query_row("SELECT id FROM owner_shared_start_intents WHERE profile=?1 AND (?2 IS NULL OR id>?2) AND NOT EXISTS(SELECT 1 FROM owner_shared_demand_decisions d WHERE d.start_intent_id=owner_shared_start_intents.id) AND owner_shared_start_intents.id NOT GLOB 'sdr[1-3]_*' ORDER BY id LIMIT 1",params![profile.digest,after_id],|r|r.get(0)).optional()?;
             let result=id.map(|id|saved_start(&db.db,&profile,&id)).transpose()?;
             profile.check()?;Ok(result)
         }).await?;
@@ -141,7 +141,7 @@ impl OwnerResourceRegistry {
         let expires = p.expires;
         let result=self.0.store.call(64*1024,move|db|{
             profile.check()?;
-            let id:Option<String>=db.db.query_row("SELECT s.id FROM owner_shared_start_intents s JOIN owner_shared_runtime_lifetimes l ON l.child_id=s.child_id WHERE s.profile=?1 AND l.profile=?1 AND l.assignment_id=?2 AND (NOT EXISTS(SELECT 1 FROM owner_managed_periods p WHERE p.child_id=s.child_id) OR s.period_id=(SELECT p.id FROM owner_managed_periods p WHERE p.child_id=s.child_id AND p.start_ms<=?3 AND p.end_ms>?3)) AND NOT EXISTS(SELECT 1 FROM owner_shared_demand_decisions d WHERE d.start_intent_id=s.id) ORDER BY s.ledger_revision DESC LIMIT 1",params![profile.digest,assignment,graphs::now_ms()?],|r|r.get(0)).optional()?;
+            let id:Option<String>=db.db.query_row("SELECT s.id FROM owner_shared_start_intents s JOIN owner_shared_runtime_lifetimes l ON l.child_id=s.child_id WHERE s.profile=?1 AND l.profile=?1 AND l.assignment_id=?2 AND (NOT EXISTS(SELECT 1 FROM owner_managed_periods p WHERE p.child_id=s.child_id) OR s.period_id=(SELECT p.id FROM owner_managed_periods p WHERE p.child_id=s.child_id AND p.start_ms<=?3 AND p.end_ms>?3)) AND NOT EXISTS(SELECT 1 FROM owner_shared_demand_decisions d WHERE d.start_intent_id=s.id) AND s.id NOT GLOB 'sdr[1-3]_*' ORDER BY s.ledger_revision DESC LIMIT 1",params![profile.digest,assignment,graphs::now_ms()?],|r|r.get(0)).optional()?;
             let result=id.map(|id|saved_start(&db.db,&profile,&id)).transpose()?;
             profile.check()?;Ok(result)
         }).await?;

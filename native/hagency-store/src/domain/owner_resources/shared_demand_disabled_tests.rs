@@ -44,6 +44,7 @@ async fn shared_demand_disabled_refuses_new_offers_and_preserves_saved_fences() 
         demand_digest: digest(&o),
         expected_control_revision: 1,
         start: saved.input().clone(),
+        retry: None,
     };
     let child = c.agent_reservation_id.clone();
     let profile = f.profile.digest.clone();

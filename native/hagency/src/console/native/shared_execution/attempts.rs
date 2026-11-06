@@ -294,6 +294,18 @@ impl SharedExecutionTransport {
             if !cleaning && (local.state == "not_started" || local.reason.is_some()) {
                 return Ok(SharedExecutionProgress::HistoricalEvidenceMissing { command_id: c.command_id.clone() });
             }
+            // A never-started attempt of a demand asks the server to run the
+            // same event again, with this evidence (ADR-193 amendment).
+            if cleaning
+                && local.state == "not_started"
+                && attempt_run::upload_retry(&b, r, &d, until, &local).await?
+            {
+                return Ok(SharedExecutionProgress::Recorded {
+                    command_id: c.command_id.clone(),
+                    observation_id: local.observation_id,
+                    process_state: Some(local.state.clone()),
+                });
+            }
             // Report actual stop independently before accounting recovery: an
             // old work upload failure must not hide known process termination.
             if !attempt_run::upload_end(&b, &d, until, &local).await? {

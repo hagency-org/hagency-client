@@ -47,10 +47,21 @@ pub struct SharedDemandStartInput {
     pub demand_digest: String,
     pub expected_control_revision: u64,
     pub start: SharedAttemptStartInput,
+    /// A retry of the same event names the demand's never-started attempt,
+    /// not the offer's predecessor (ADR-193 amendment). Omitted otherwise,
+    /// so the original start bytes are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<u64>,
 }
 impl SharedDemandStartInput {
     pub fn validate_for(&self, offer: &SharedDemandOffer) -> Result<(), Error> {
         offer.validate()?;
+        if self
+            .retry
+            .is_some_and(|n| !(1..=retry::MAX_DEMAND_RETRIES).contains(&n))
+        {
+            return Err(Error::LocalAuthority);
+        }
         identifier(&self.start.start_intent_id, 128)?;
         exact(self.start.predecessor.process_attempt)?;
         hash(&self.start.predecessor.stopped_receipt_digest)?;
@@ -70,8 +81,9 @@ impl SharedDemandStartInput {
         if self.demand_digest != offer.digest()?
             || self.expected_control_revision != offer.control_revision
             || self.start.assignment_id != offer.assignment_id
-            || self.start.predecessor.command_id != offer.predecessor_command_id
-            || self.start.predecessor.command_digest != offer.predecessor_command_digest
+            || self.retry.is_none()
+                && (self.start.predecessor.command_id != offer.predecessor_command_id
+                    || self.start.predecessor.command_digest != offer.predecessor_command_digest)
             || serde_json::to_vec(self)?.len() > 16384
         {
             return Err(Error::Conflict);

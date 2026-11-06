@@ -54,6 +54,7 @@ pub(in super::super) fn load(
     let input = input.map(|payload| -> Result<SharedDemandStartInput,Error> {
         let value:SharedDemandStartInput=serde_json::from_str(&payload)?;
         value.validate_for(&offer)?;
+        if value.retry.is_some() {return Err(Error::Conflict)}
         if Some(canonical::digest(&serde_json::to_value(&value)?)?)!=digest || Some(&value.start.start_intent_id)!=start_id.as_ref() {return Err(Error::Conflict)}
         let (p,c,payload,saved_digest):(String,String,String,String)=db.query_row("SELECT profile,child_id,input_payload,input_digest FROM owner_shared_start_intents WHERE id=?1",[&value.start.start_intent_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
         let saved:SharedAttemptStartInput=serde_json::from_str(&payload)?;
@@ -269,7 +270,7 @@ impl OwnerResourceRegistry {
                         (SharedDemandDisposition::Pending,None,None,pending_revision()?)
                     }else{
                         let saved=start_intent::prepare_in_transaction(&tx,e,original.clone(),predecessor.clone(),id)?;
-                        let input=SharedDemandStartInput{demand_digest:proof.offer.digest()?,expected_control_revision:proof.offer.control_revision,start:saved.input};
+                        let input=SharedDemandStartInput{demand_digest:proof.offer.digest()?,expected_control_revision:proof.offer.control_revision,start:saved.input,retry:None};
                         input.validate_for(&proof.offer)?;let rev=input.start.budget_observation.observed_ledger_revision;
                         (SharedDemandDisposition::StartPrepared,Some(input),None,rev)
                     }

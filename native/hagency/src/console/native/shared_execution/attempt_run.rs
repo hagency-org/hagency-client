@@ -60,6 +60,67 @@ pub(super) async fn upload_end(
         Err(e) => Err(e),
     }
 }
+/// Upload a demand attempt's not_started evidence through the demand retry
+/// route, which re-offers the same event in place. `false` when the attempt
+/// was not started by a demand, the server has no retry route, or the demand
+/// already moved on: the caller then uploads the evidence as before.
+pub(super) async fn upload_retry(
+    b: &Bound,
+    r: &OwnerResourceRegistry,
+    d: &SharedRuntimeDelivery,
+    until: Instant,
+    receipt: &SharedAttemptProcessReceipt,
+) -> Result<bool, NativeError> {
+    receipt.validate_for(&d.command).map_err(store)?;
+    let a = b.cleanup(r, &d.command.original_runtime_command).await?;
+    let Some((offer, n)) = r
+        .shared_demand_for_attempt(a, d.command.clone())
+        .await
+        .map_err(store)?
+    else {
+        return Ok(false);
+    };
+    if !super::demand_io::retries(b).await? {
+        return Ok(false);
+    }
+    let reply: Timed<super::demand_io::RetryReply> = match b
+        .upload(
+            super::demand_io::DemandAction::Retry {
+                id: offer.demand_id.clone(),
+                input: super::demand_io::RetryInput {
+                    demand_digest: offer.digest().map_err(store)?,
+                    expected_control_revision: offer.control_revision,
+                    retry: n + 1,
+                    attempt_id: d.command.command_id.clone(),
+                    result: SharedProcessInput {
+                        command_digest: d.command_digest.clone(),
+                        token: d.token.clone(),
+                        receipt: receipt.clone(),
+                    },
+                },
+            }
+            .into(),
+            until,
+        )
+        .await
+    {
+        Ok(v) => v,
+        // The demand moved on (a later start, a stop or a block): report
+        // the evidence on its own; nothing is retried.
+        Err(e) if e.code == "shared_demand_retry_changed" => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    let ack = &reply.value.acknowledgement;
+    reply.value.demand.validate()?;
+    if ack.observation_id != receipt.observation_id
+        || ack.receipt_digest != digest(receipt)?
+        || ack.state != "stopped"
+        || reply.value.demand.offer.demand_id != offer.demand_id
+    {
+        return Err(invalid());
+    }
+    Ok(true)
+}
 fn activity(
     sink: &SharedAttemptProcessSink,
     lease: SharedActivityLease,

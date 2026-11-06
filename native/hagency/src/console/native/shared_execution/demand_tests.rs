@@ -19,10 +19,13 @@ pub(super) struct State {
     stop_results: BTreeMap<String, u64>,
     generic_starts: usize,
     control_reads: usize,
+    retry: Option<u64>,
+    pub(super) no_retry: bool,
+    retry_requests: usize,
 }
 fn status(s: &super::super::State) -> Value {
     let d = &s.shared.demands;
-    json!({"offer":d.offer,"demandDigest":d.offer.as_ref().unwrap().digest().unwrap(),"state":d.status,"runtimeCommandId":d.binding.as_ref().map(|b|b.runtime_command_id.clone()).or_else(||s.shared.attempts.command.as_ref().map(|c|c.command_id.clone())),"binding":d.binding})
+    json!({"offer":d.offer,"demandDigest":d.offer.as_ref().unwrap().digest().unwrap(),"state":d.status,"runtimeCommandId":d.binding.as_ref().map(|b|b.runtime_command_id.clone()).or_else(||s.shared.attempts.command.as_ref().map(|c|c.command_id.clone())),"binding":d.binding,"retry":d.retry})
 }
 fn control(s: &super::super::State) -> Value {
     json!({"assignmentId":s.shared.command.as_ref().unwrap().assignment_id,"revision":s.shared.demands.revision,"mode":if s.shared.demands.paused{"paused"}else{"running"},"runningSinceMs":null,"updatedAtMs":now(),"origin":"manager"})
@@ -73,7 +76,7 @@ pub(super) fn management(
     }
     if path.ends_with("/demands/poll") {
         return Some(Some(
-            json!({"demand":if matches!(s.shared.demands.status.as_str(),"offered"|"start_committed"){status(s)}else{Value::Null},"nextAfter":s.shared.command.as_ref().unwrap().assignment_id,"observedAtMs":at}),
+            json!({"demand":if matches!(s.shared.demands.status.as_str(),"offered"|"start_committed"|"retry_offered"){status(s)}else{Value::Null},"nextAfter":s.shared.command.as_ref().unwrap().assignment_id,"observedAtMs":at}),
         ));
     }
     if path.contains("/demands/") {
@@ -81,6 +84,26 @@ pub(super) fn management(
         if path.ends_with("/recover") {
             assert_eq!(body["demandDigest"], o.digest().unwrap());
             return Some(Some(json!({"demand":status(s),"observedAtMs":at})));
+        }
+        if path.ends_with("/retry") {
+            // Records the never-started evidence and re-offers the same event.
+            assert_eq!(body["demandDigest"], o.digest().unwrap());
+            let n = body["retry"].as_u64().unwrap();
+            assert_eq!(n, s.shared.demands.retry.unwrap_or(0) + 1);
+            let c = s.shared.attempts.command.clone().unwrap();
+            assert_eq!(body["attemptId"], c.command_id);
+            assert_eq!(body["result"]["commandDigest"], digest(&c).unwrap());
+            let token = body["result"]["token"].as_str().unwrap();
+            assert!(s.shared.attempts.tickets.get(token).is_some_and(|(execute, until)| !*execute && *until > at));
+            let r: SharedAttemptProcessReceipt = serde_json::from_value(body["result"]["receipt"].clone()).unwrap();
+            assert_eq!(r.state, "not_started");
+            s.shared.attempts.processes.insert(r.observation_id.clone(), r.clone());
+            s.shared.demands.retry = Some(n);
+            s.shared.demands.status = "retry_offered".into();
+            s.shared.demands.retry_requests += 1;
+            return Some(Some(
+                json!({"acknowledgement":{"observationId":r.observation_id,"receiptDigest":digest(&r).unwrap(),"activity":null,"state":"stopped"},"demand":status(s),"observedAtMs":at}),
+            ));
         }
         if path.ends_with("/block") {
             assert_eq!(body["expectedControlRevision"], o.control_revision);
@@ -1036,5 +1059,74 @@ async fn native_shared_owner_policy_applies_before_the_first_model_call() {
         assert_eq!(thread["approvalPolicy"], if yolo {"never"} else {"on-request"});
         assert!(f.state.lock().unwrap().shared.receipts.values().any(|r| r.usage_complete && r.state == "completed"));
         f.registry.shutdown().await.unwrap();
+    }
+}
+#[tokio::test]
+#[ignore = "requires explicitly built offline supervised probe"]
+async fn native_demand_never_started_attempt_retries_same_event_exactly_once() {
+    for mode in ["retry", "old_server", "logout"] {
+        let old_server = mode == "old_server";
+        let (f, t, _) = fixture_budget(1000).await;
+        f.state.lock().unwrap().shared.demands.no_retry = old_server;
+        offer(&f, 1);
+        // Start accepted, reply lost; this executor never claims the attempt.
+        f.state.lock().unwrap().shared.demands.lose_start = true;
+        assert!(t.poll_demand(&f.registry, None).await.unwrap().outcome.is_err());
+        let lost = f.state.lock().unwrap().shared.attempts.command.clone().unwrap();
+        f.state.lock().unwrap().shared.cleanup = true;
+        let outcome = t.poll_successor(&f.registry, None).await.unwrap();
+        assert!(matches!(outcome, SharedExecutionProgress::Recorded { process_state: Some(ref s), .. } if s == "not_started"));
+        if old_server {
+            // An older server keeps today's behavior: evidence only, no retry.
+            let s = f.state.lock().unwrap();
+            assert_eq!(s.shared.demands.retry_requests, 0);
+            assert_eq!(s.shared.demands.inputs.len(), 1);
+            drop(s);
+            f.stop().await;
+            continue;
+        }
+        {
+            let mut s = f.state.lock().unwrap();
+            assert_eq!(s.shared.demands.retry_requests, 1, "the evidence asks to run the event again");
+            assert_eq!(s.shared.demands.status, "retry_offered");
+            s.shared.cleanup = false;
+            // The retry's start reply is lost as well.
+            s.shared.demands.lose_start = true;
+        }
+        if mode == "logout" {
+            // Revocation stops at once: no retry start, no model turn.
+            f.current.store(false, Ordering::Release);
+            f.owner.retire();
+            f.owner.0.shared_execution.drain().await.unwrap();
+            assert!(t.poll_demand(&f.registry, None).await.is_err());
+            assert_eq!(f.state.lock().unwrap().shared.demands.inputs.len(), 1);
+            assert_eq!(rows(&f, "owner_shared_start_intents"), 1);
+            assert_eq!(count_methods(&f, "turn/start"), 0);
+            f.stop().await;
+            continue;
+        }
+        assert!(t.poll_demand(&f.registry, None).await.unwrap().outcome.is_err());
+        let retried = f.state.lock().unwrap().shared.attempts.command.clone().unwrap();
+        assert_eq!(retried.predecessor.command_id, lost.command_id);
+        assert!(retried.predecessor.process_digest.is_empty());
+        assert_eq!(retried.start_intent_id, "sdr1_demand_001");
+        let inputs = f.state.lock().unwrap().shared.demands.inputs.clone();
+        assert_eq!(inputs.len(), 2);
+        assert!(matches!(
+            t.resume_next_demand(&f.registry, None).await.unwrap().unwrap().outcome.unwrap(),
+            SharedDemandProgress::Execution {
+                progress: SharedExecutionProgress::HistoricalEvidenceMissing { .. },
+                ..
+            }
+        ));
+        assert_eq!(inputs, f.state.lock().unwrap().shared.demands.inputs, "a replay never starts again");
+        assert!(matches!(
+            t.poll_successor_fixture(&f.registry, launch(&f, "text-usage")).await.unwrap(),
+            SharedExecutionProgress::Running { .. }
+        ));
+        wait_attempt(&f).await;
+        assert_eq!(count_methods(&f, "turn/start"), 1, "the event runs exactly once");
+        assert_eq!(f.state.lock().unwrap().shared.demands.generic_starts, 0);
+        f.stop().await;
     }
 }

@@ -9,14 +9,23 @@ pub(super) struct Status {
     pub state: String,
     pub runtime_command_id: Option<String>,
     pub binding: Option<SharedDemandBinding>,
+    /// The latest retry of this event (ADR-193 amendment), once this
+    /// executor asked for one.
+    #[serde(default)]
+    pub retry: Option<u64>,
 }
 impl Status {
     pub fn validate(&self) -> Result<(), NativeError> {
         if self.offer.digest().map_err(store)? != self.demand_digest
+            || self
+                .retry
+                .is_some_and(|n| !(1..=MAX_DEMAND_RETRIES).contains(&n))
+            || self.state == "retry_offered" && self.retry.is_none()
             || !matches!(
                 self.state.as_str(),
                 "offered"
                     | "start_committed"
+                    | "retry_offered"
                     | "bound"
                     | "cancelled"
                     | "expired"
@@ -72,6 +81,23 @@ pub(super) struct WorkBinding {
 pub(super) struct BindingReply {
     pub demand: Option<WorkBinding>,
 }
+/// The executor's not_started evidence for a demand's latest attempt, with its
+/// request to run the same event again in place (ADR-193 amendment).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct RetryInput {
+    pub demand_digest: String,
+    pub expected_control_revision: u64,
+    pub retry: u64,
+    pub attempt_id: String,
+    pub result: super::attempt_io::ResultInput,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct RetryReply {
+    pub acknowledgement: super::attempt_io::Acknowledgement,
+    pub demand: Status,
+}
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct BlockInput {
@@ -104,6 +130,10 @@ pub(super) enum DemandAction {
     Block {
         id: String,
         input: BlockInput,
+    },
+    Retry {
+        id: String,
+        input: RetryInput,
     },
 }
 impl DemandAction {
@@ -155,6 +185,20 @@ impl DemandAction {
                     return Err(invalid());
                 }
             }
+            Self::Retry { id, input } => {
+                super::super::key(id)?;
+                super::super::key(&input.attempt_id)?;
+                hash(&input.demand_digest)?;
+                hash(&input.result.command_digest)?;
+                hash(&input.result.token)?;
+                if input.expected_control_revision == 0
+                    || input.expected_control_revision > 9_007_199_254_740_991
+                    || !(1..=MAX_DEMAND_RETRIES + 1).contains(&input.retry)
+                    || input.result.receipt.state != "not_started"
+                {
+                    return Err(invalid());
+                }
+            }
         }
         Ok(())
     }
@@ -181,6 +225,7 @@ impl DemandAction {
                 json!({"workDigest":work_digest,"runtimeCommandDigest":runtime_digest}),
             ),
             Self::Block { id, input } => (format!("demands/{id}/block"), json!(input)),
+            Self::Retry { id, input } => (format!("demands/{id}/retry"), json!(input)),
         }
     }
 }
@@ -244,6 +289,14 @@ pub(super) async fn paired(b: &Bound) -> Result<bool, NativeError> {
     Ok(d.capabilities
         .iter()
         .any(|c| c == "shared-durable-demand-v1"))
+}
+/// Whether the server retries an event whose attempt never started.
+pub(super) async fn retries(b: &Bound) -> Result<bool, NativeError> {
+    let d = b.demand_discovery().await?;
+    if d.capabilities.len() > 64 || d.capabilities.iter().any(|c| c.len() > 128) {
+        return Err(invalid());
+    }
+    Ok(d.capabilities.iter().any(|c| c == "shared-demand-retry-v1"))
 }
 pub(super) async fn require_pair(b: &Bound) -> Result<(), NativeError> {
     if !paired(b).await? {

@@ -8,7 +8,7 @@ pub(super) struct State {
     start_inputs: Vec<Value>,
     ticket_sequence: u64,
     ticket_command: Option<String>,
-    tickets: BTreeMap<String, (bool, u64)>,
+    pub(super) tickets: BTreeMap<String, (bool, u64)>,
     lose_start_reply: bool,
     retire_start_caller: Option<Arc<AtomicBool>>,
     pub(super) fail_work_reports: bool,
