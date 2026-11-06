@@ -121,11 +121,14 @@ pub(super) async fn upload_retry(
     Ok(true)
 }
 /// The request may not have reached the server's decision, or authority was
-/// revoked: neither is a refusal that permits another route.
+/// revoked: neither is a refusal that permits another route. A server storage
+/// failure (503 storage_unavailable, which includes trigger exceptions) is
+/// also undecided: falling back would end the message instead of retrying it.
 fn undecided(e: &NativeError) -> bool {
     matches!(
         e.code.as_str(),
         "server_unavailable"
+            | "storage_unavailable"
             | "invalid_server_response"
             | "server_request_failed"
             | "management_outcome_unknown"
