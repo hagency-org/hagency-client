@@ -243,6 +243,43 @@ impl Io {
         b.check_namespace(c).await?;
         Ok(())
     }
+    /// The same check from inside a running process. Around each of the
+    /// daemon's SDK credential refreshes (every few minutes) the owner's
+    /// management boundary briefly reports a changed scope, a lost
+    /// authorization or an unknown outcome. Worker steps retry on their next
+    /// pass, but a run ended on the first one and its message went unanswered.
+    /// Such codes are retried for a short while; a real revocation still ends
+    /// the run once they persist. Callers keep the run's cancellation and
+    /// activity deadline around this.
+    pub async fn check_running(&self, c: &SharedRuntimeCommand) -> Result<(), NativeError> {
+        let settle = std::time::Instant::now() + RUNNING_CHECK_SETTLE;
+        loop {
+            match self.check(c).await {
+                Err(error) if transient_boundary(&error) && std::time::Instant::now() < settle => {
+                    tracing::info!(code = %error.code, "Shared run authority check retrying");
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+                result => return result,
+            }
+        }
+    }
+}
+
+/// How long a running process waits out a transient authority failure.
+const RUNNING_CHECK_SETTLE: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Codes the owner's management boundary reports while its SDK credentials or
+/// management session are being renewed.
+fn transient_boundary(error: &NativeError) -> bool {
+    matches!(
+        error.code.as_str(),
+        "management_scope_changed"
+            | "management_outcome_unknown"
+            | "management_access_required"
+            | "owner_authorization_required"
+            | "matrix_authorization_unavailable"
+            | "management_unavailable"
+    )
 }
 impl Bound {
     async fn check_namespace(&self,c:&SharedRuntimeCommand)->Result<(),NativeError> {

@@ -259,12 +259,12 @@ pub(super) async fn run(
         }
     };
     let result = guarded(&mut cancel, until, || async {
-        io.check(&d.command.original_runtime_command).await?;
+        io.check_running(&d.command.original_runtime_command).await?;
         process
             .initialize()
             .await
             .map_err(|_| failure(409, "shared_execution_initialize_failed"))?;
-        io.check(&d.command.original_runtime_command).await?;
+        io.check_running(&d.command.original_runtime_command).await?;
         let observation = process
             .qualify_shared_tools(launch.instructions(), d.command.web_search, d.command.tool_policy.as_ref().map(|p|p.mode.as_str()))
             .await
@@ -435,13 +435,13 @@ async fn work_loop(
     // Opening a provider thread does not run the model. Finish it before
     // recording call admission, so startup failure cannot reserve the budget.
     prepare_while_active(io,r,sink,control,a,cancel,async {
-        io.check(&sink.command().original_runtime_command).await?;
+        io.check_running(&sink.command().original_runtime_command).await?;
         if history.is_some() { process.enable_shared_room_history().map_err(|_|failure(409,"shared_history_tool_unavailable"))?; }
         process.start_shared_text_thread_for_room(&work.room_id).await.map_err(|error| {
             tracing::warn!(?error, "Shared Agent thread setup failed before call admission");
             failure(409, "shared_execution_thread_unknown")
         })?;
-        io.check(&sink.command().original_runtime_command).await
+        io.check_running(&sink.command().original_runtime_command).await
     }).await?;
     guarded(cancel,a.until,|| maybe_renew(io,r,sink,control,a)).await?;
     let (_,p)=proof(io,r,sink,a).await?;
@@ -542,10 +542,10 @@ async fn work_loop(
         if stop_reason.is_some() { continue; }
         if let Some(call)=history_call {
             let reader=history.as_mut().ok_or_else(invalid)?;
-            guarded(cancel,a.until,|| io.check(&sink.command().original_runtime_command)).await?;
+            guarded(cancel,a.until,|| io.check_running(&sink.command().original_runtime_command)).await?;
             let content=prepare_while_active(io,r,sink,control,a,cancel,reader.read(call.cursor.as_deref())).await
                 .unwrap_or_else(|error| serde_json::json!({"complete":false,"error":error.code}).to_string());
-            guarded(cancel,a.until,|| io.check(&sink.command().original_runtime_command)).await?;
+            guarded(cancel,a.until,|| io.check_running(&sink.command().original_runtime_command)).await?;
             guarded(cancel,a.until,||async{ process.respond_shared_room_history(&call,content).await.map_err(|_|failure(409,"shared_history_response_failed")) }).await?;
         }
         if let Some(request)=approval {
