@@ -490,3 +490,29 @@ async fn budget_execution_v3_schema101_upgrade_retains_unclaimed_fence_and_rolls
     assert!(next(&f,&c,"after_migration").await.predecessor.process_digest.is_empty());
     f.registry.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn budget_execution_v3_uncertain_claim_blocks_only_until_grace_then_chain_continues() {
+    use std::sync::{Arc, atomic::AtomicU64};
+    let (f, c) = synthetic().await;
+    call(&f, &c, "old_unknown", "unknown", 40, 7, false, false).await;
+    let claimed = next(&f, &c, "claimed_then_lost").await;
+    assert!(matches!(f.registry.claim_shared_budget_successor(delivery(&f, claimed.clone())).await.unwrap(), SharedBudgetAttemptClaim::Issued(_)));
+    f.registry.fence_shared_budget_successor(cleanup(&f, &c, 1).await, claimed.clone()).await.unwrap();
+    assert!(f.registry.record_shared_budget_attempt_timeout(cleanup(&f, &c, 1).await, claimed.clone()).await.unwrap().is_none(), "within the grace period");
+    assert!(f.registry.shared_budget_successor_selection(enrollment(&f), c.clone()).await.is_err(), "no second process before the bound");
+    let clock = Arc::new(AtomicU64::new(claimed.expires_at_ms + 30_000 + UNCERTAIN_GRACE_MS));
+    let worker = clock.clone();
+    f.registry.0.store.call(1024, move |_| { graphs::install_test_clock(&worker); Ok(()) }).await.unwrap();
+    let timeout = f.registry.record_shared_budget_attempt_timeout(cleanup(&f, &c, 1).await, claimed.clone()).await.unwrap().unwrap();
+    assert_eq!((timeout.state.as_str(), timeout.reason.as_deref()), ("stopped", Some(UNCERTAIN_TIMEOUT)));
+    assert_eq!(timeout.budget_digest, claimed.execution_budget.budget_digest);
+    drop(clock);
+    let following = next(&f, &c, "after_uncertain").await;
+    assert_eq!(following.predecessor.command_id, claimed.command_id);
+    assert_eq!(Some(&following.predecessor.process_digest), timeout.process_digest.as_ref());
+    assert_eq!(following.predecessor.stopped_receipt_digest, digest(&timeout));
+    assert_eq!((following.budget_observation.known_consumed_tokens, following.budget_observation.retained_tokens), (7, 7));
+    assert!(matches!(f.registry.claim_shared_budget_successor(delivery(&f, following)).await.unwrap(), SharedBudgetAttemptClaim::Issued(_)));
+    f.registry.shutdown().await.unwrap();
+}

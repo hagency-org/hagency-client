@@ -214,7 +214,8 @@ impl SharedExecutionTransport {
             });
         }
         let a = b.cleanup(r, &c.original_runtime_command).await?;
-        let local = r
+        // An unclaimed fenced attempt already yields its not_started receipt.
+        let mut local = r
             .recover_shared_attempt_process(
                 a,
                 c.clone(),
@@ -222,6 +223,18 @@ impl SharedExecutionTransport {
             )
             .await
             .map_err(store)?;
+        // Time bound (ADR-193): a claimed process with no stop evidence and no
+        // live local child is interrupted once its grace period has passed.
+        let cleaning = historical.is_none() && d.cleanup_allowed && !d.execution_allowed;
+        if cleaning && local.as_ref().is_none_or(|l| !matches!(l.state.as_str(), "stopped" | "not_started")) {
+            if let Some(timeout) = r
+                .record_shared_attempt_timeout(b.cleanup(r, &c.original_runtime_command).await?, c.clone())
+                .await
+                .map_err(store)?
+            {
+                local = Some(timeout);
+            }
+        }
         b.transport.check_scope(&b.scope, false).await?;
         if let Some(saved) = &d.recorded {
             saved.validate_for(c).map_err(store)?;
@@ -233,6 +246,19 @@ impl SharedExecutionTransport {
                 return Err(invalid());
             }
             if let Some(latest) = &local {
+                if latest.ledger_revision > saved.ledger_revision && latest.reason.is_some() {
+                    // A time-bound end is accepted only on a cleanup ticket;
+                    // otherwise a later cleanup poll reports it.
+                    if !cleaning || !attempt_run::upload_end(&b, &d, until, latest).await? {
+                        return Ok(SharedExecutionProgress::HistoricalEvidenceMissing { command_id: c.command_id.clone() });
+                    }
+                    attempt_run::recover_process_work(&self.io, r, c).await?;
+                    return Ok(SharedExecutionProgress::Recorded {
+                        command_id: c.command_id.clone(),
+                        observation_id: latest.observation_id.clone(),
+                        process_state: Some(latest.state.clone()),
+                    });
+                }
                 if latest.ledger_revision > saved.ledger_revision {
                     attempt_run::report_process(&self.io, r, c, latest).await?;
                     attempt_run::recover_process_work(&self.io, r, c).await?;
@@ -263,9 +289,16 @@ impl SharedExecutionTransport {
             });
         }
         if let Some(local) = local {
+            // Non-issuance and time-bound ends are accepted only on a cleanup
+            // ticket; a later cleanup poll reports them.
+            if !cleaning && (local.state == "not_started" || local.reason.is_some()) {
+                return Ok(SharedExecutionProgress::HistoricalEvidenceMissing { command_id: c.command_id.clone() });
+            }
             // Report actual stop independently before accounting recovery: an
             // old work upload failure must not hide known process termination.
-            attempt_run::upload_process(&b, &d, until, &local).await?;
+            if !attempt_run::upload_end(&b, &d, until, &local).await? {
+                return Ok(SharedExecutionProgress::HistoricalEvidenceMissing { command_id: c.command_id.clone() });
+            }
             attempt_run::recover_process_work(&self.io, r, c).await?;
             return Ok(SharedExecutionProgress::Recorded {
                 command_id: c.command_id.clone(),

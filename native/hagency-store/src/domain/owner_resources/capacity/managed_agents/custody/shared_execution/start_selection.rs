@@ -90,12 +90,17 @@ impl OwnerResourceRegistry {
             let original:SharedRuntimeCommand=serde_json::from_str(&payload)?;
             original.validate(&profile.account)?;
             if original.assignment_id!=assignment || original.agent_reservation_id!=child || canonical::digest(&serde_json::to_value(&original)?)?!=digest {return Err(Error::Conflict)}
-            let latest:Option<(String,String,String)>=db.db.query_row("SELECT profile,command_digest,command_payload FROM owner_shared_successor_attempts WHERE child_id=?1 ORDER BY process_attempt DESC LIMIT 1",[&child],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+            // A never-started v2 attempt after the last actual process is the head.
+            let unstarted=match attempt_unstarted::head(&db.db,&profile.digest,&original)? {
+                Some(attempt_unstarted::UnstartedHead::V2(c,_))=>Some(c),
+                _=>None,
+            };
+            let latest:Option<(String,String,String)>=if unstarted.is_some(){None}else{db.db.query_row("SELECT profile,command_digest,command_payload FROM owner_shared_successor_attempts WHERE child_id=?1 ORDER BY process_attempt DESC LIMIT 1",[&child],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?};
             let predecessor=latest.map(|(saved,digest,payload)|->Result<SharedAttemptCommand,Error>{
                 let c:SharedAttemptCommand=serde_json::from_str(&payload)?;c.validate(&profile.account)?;
                 if saved!=profile.digest || c.agent_reservation_id!=child || c.original_runtime_digest!=canonical::digest(&serde_json::to_value(&original)?)? || canonical::digest(&serde_json::to_value(&c)?)?!=digest {return Err(Error::Conflict)}
                 Ok(c)
-            }).transpose()?;
+            }).transpose()?.or(unstarted);
             profile.check()?;Ok(Some(SharedSuccessorSelection{original,predecessor}))
         }).await?;
         after(&p, &self.0, expires)?;

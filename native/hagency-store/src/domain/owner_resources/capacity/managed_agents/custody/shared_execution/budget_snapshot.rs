@@ -208,11 +208,12 @@ impl OwnerResourceRegistry {
 
 pub(super) fn snapshot(db:&Connection,e:&VerifiedManagementEnrollment,original:&SharedRuntimeCommand)->Result<SharedBudgetSuccessorSelection,Error>{
     let mut value=snapshot_actual(db,e,original)?;
-    if let Some((c,r))=budget_unstarted::head(db,&e.profile.digest,original)? {
-        let digest=canonical::digest(&serde_json::to_value(&c)?)?;
-        let receipt=canonical::digest(&serde_json::to_value(&r)?)?;
-        if value.budget.observed_ledger_revision<r.ledger_revision{return Err(Error::Conflict)}
-        value.predecessor=SharedAttemptPredecessor{command_id:c.command_id,command_digest:digest.clone(),process_attempt:c.process_attempt,stopped_receipt_digest:receipt.clone(),process_digest:String::new()};
+    // A never-started head (v2 or v3) follows the last actual stopped process.
+    if let Some(head)=attempt_unstarted::head(db,&e.profile.digest,original)? {
+        let digest=head.command_digest()?;
+        let receipt=head.receipt_digest()?;
+        if value.budget.observed_ledger_revision<head.ledger_revision(){return Err(Error::Conflict)}
+        value.predecessor=SharedAttemptPredecessor{command_id:head.command_id().to_owned(),command_digest:digest.clone(),process_attempt:head.process_attempt(),stopped_receipt_digest:receipt.clone(),process_digest:String::new()};
         value.budget.predecessor_command_digest=digest.clone();value.budget.stopped_receipt_digest=receipt.clone();
         let binding=authority::original(db,e,&original.agent_reservation_id,false)?;
         let assignment=canonical::digest(&json!({"child":original.agent_reservation_id,"assignmentId":original.assignment_id,"assignmentGeneration":1,"commandDigest":binding.digest,"providerDigest":binding.provider}))?;

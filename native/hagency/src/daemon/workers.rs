@@ -24,8 +24,26 @@ use std::{
     time::Duration,
 };
 
-pub type StepFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Option<String>, NativeError>> + Send + 'a>>;
+pub type StepFuture<'a> = Pin<Box<dyn Future<Output = Result<Advance, NativeError>> + Send + 'a>>;
+
+/// One step's result: the next cursor for its own journal and, for logging
+/// only, a non-error outcome code worth reporting (never content or ids).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Advance {
+    pub cursor: Option<String>,
+    pub note: Option<String>,
+}
+
+impl From<Option<String>> for Advance {
+    fn from(cursor: Option<String>) -> Self {
+        Self { cursor, note: None }
+    }
+}
+
+/// Status of a step whose last run succeeded without a note.
+pub const STEP_OK: &str = "ok";
+/// A shared step that found no local process evidence for central history.
+pub const HISTORICAL_EVIDENCE_MISSING: &str = "historical_evidence_missing";
 
 pub use crate::console::hosting::Admission;
 
@@ -85,12 +103,33 @@ pub trait PassIo: Send + Sync {
     fn run(&self, step: Step, after: Option<String>) -> StepFuture<'_>;
 }
 
+/// Per-step cursors, and the last status code per step (`STEP_OK`, a note or
+/// an error code), so a pass logs only when a step's status changes.
 #[derive(Default, Debug)]
-pub struct Cursors(HashMap<Step, Option<String>>);
+pub struct Cursors(HashMap<Step, Option<String>>, HashMap<Step, String>);
 
 impl Cursors {
     pub fn get(&self, step: Step) -> Option<String> {
         self.0.get(&step).cloned().flatten()
+    }
+    pub fn status(&self, step: Step) -> Option<&str> {
+        self.1.get(&step).map(String::as_str)
+    }
+}
+
+/// Info-level and change-only: the step name and a static or error code, never
+/// identifiers or content. Every failure still logs at debug below.
+fn report_change(step: Step, previous: Option<&str>, status: &str) {
+    let previous = previous.unwrap_or(STEP_OK);
+    if previous == status {
+        return;
+    }
+    if status == STEP_OK {
+        tracing::info!(?step, previous = %previous, "Owner daemon executor step recovered");
+    } else if status == HISTORICAL_EVIDENCE_MISSING {
+        tracing::info!(?step, "Owner daemon shared step ended in HistoricalEvidenceMissing");
+    } else {
+        tracing::info!(?step, code = %status, "Owner daemon executor step status changed");
     }
 }
 
@@ -135,9 +174,15 @@ pub async fn pass(
         if !live() {
             return report;
         }
+        let status = match &result {
+            Ok(advance) => advance.note.clone().unwrap_or_else(|| STEP_OK.into()),
+            Err(error) => error.code.clone(),
+        };
+        report_change(step, cursors.status(step), &status);
+        cursors.1.insert(step, status);
         match result {
-            Ok(next) => {
-                cursors.0.insert(step, next);
+            Ok(advance) => {
+                cursors.0.insert(step, advance.cursor);
             }
             Err(error) => {
                 tracing::debug!(?step, status = error.status, code = %error.code, "Owner daemon executor step awaits recovery");
@@ -202,7 +247,7 @@ pub mod native {
     use crate::native_owner::{
         AdoptedAllocationExecutor, AdoptedManagementSelection, AdoptedSharedExecutor,
         AgentSettlementProgress, AllocationProgress, ManagedAgentProgress, ManagedMatrixProgress,
-        ManagementPackage, NativeOwner, SharedExecutionProgress,
+        ManagementPackage, NativeOwner, SharedDemandProgress, SharedExecutionProgress,
     };
 
     fn progress(after: Option<String>, p: SharedExecutionProgress) -> Option<String> {
@@ -212,6 +257,22 @@ pub mod native {
             | SharedExecutionProgress::HistoricalEvidenceMissing { command_id }
             | SharedExecutionProgress::Recorded { command_id, .. } => Some(command_id),
             SharedExecutionProgress::Idle => after,
+        }
+    }
+
+    /// Logging note for a shared outcome; never the command identifier.
+    fn shared_note(p: &SharedExecutionProgress) -> Option<String> {
+        matches!(p, SharedExecutionProgress::HistoricalEvidenceMissing { .. })
+            .then(|| HISTORICAL_EVIDENCE_MISSING.into())
+    }
+
+    /// A demand step advances its cursor even when the selected demand's own
+    /// operation fails. Report that operation's code instead of dropping it.
+    fn demand_note(outcome: &Result<SharedDemandProgress, NativeError>) -> Option<String> {
+        match outcome {
+            Err(error) => Some(error.code.clone()),
+            Ok(SharedDemandProgress::Execution { progress, .. }) => shared_note(progress),
+            Ok(_) => None,
         }
     }
 
@@ -231,16 +292,24 @@ pub mod native {
         }
         fn run(&self, step: Step, after: Option<String>) -> StepFuture<'_> {
             Box::pin(async move {
-                match step {
+                let mut note = None;
+                let cursor = match step {
                     Step::DemandStop => self
                         .resume_next_demand_stop(after)
                         .await
                         .map(|s| s.map(|v| v.command_id)),
-                    Step::IntakeDemandRecover => self
-                        .resume_next_demand(after)
-                        .await
-                        .map(|s| s.map(|v| v.demand_id)),
-                    Step::IntakeDemand => self.poll_demand(after).await.map(|s| s.next_after),
+                    Step::IntakeDemandRecover => {
+                        self.resume_next_demand(after).await.map(|s| {
+                            s.map(|v| {
+                                note = demand_note(&v.outcome);
+                                v.demand_id
+                            })
+                        })
+                    }
+                    Step::IntakeDemand => self.poll_demand(after).await.map(|s| {
+                        note = demand_note(&s.outcome);
+                        s.next_after
+                    }),
                     #[cfg(feature = "shared-budget-execution")]
                     Step::BudgetDelta => self.poll_budget(after).await.map(|s| {
                         use crate::native_owner::AgentBudgetProgress as B;
@@ -251,20 +320,29 @@ pub mod native {
                         }
                     }),
                     #[cfg(feature = "shared-budget-execution")]
-                    Step::BudgetDemandRecover => self
-                        .resume_next_budget_demand(after)
-                        .await
-                        .map(|s| s.map(|v| v.demand_id)),
+                    Step::BudgetDemandRecover => {
+                        self.resume_next_budget_demand(after).await.map(|s| {
+                            s.map(|v| {
+                                note = demand_note(&v.outcome);
+                                v.demand_id
+                            })
+                        })
+                    }
                     #[cfg(feature = "shared-budget-execution")]
-                    Step::BudgetProcess => self
-                        .poll_budget_successor(after.clone())
-                        .await
-                        .map(|p| match p {
-                            SharedExecutionProgress::Idle => None,
-                            p => progress(None, p),
-                        }),
+                    Step::BudgetProcess => {
+                        self.poll_budget_successor(after.clone()).await.map(|p| {
+                            note = shared_note(&p);
+                            match p {
+                                SharedExecutionProgress::Idle => None,
+                                p => progress(None, p),
+                            }
+                        })
+                    }
                     #[cfg(feature = "shared-budget-execution")]
-                    Step::BudgetDemand => self.poll_budget_demand(after).await.map(|s| s.next_after),
+                    Step::BudgetDemand => self.poll_budget_demand(after).await.map(|s| {
+                        note = demand_note(&s.outcome);
+                        s.next_after
+                    }),
                     #[cfg(not(feature = "shared-budget-execution"))]
                     Step::BudgetDelta
                     | Step::BudgetDemandRecover
@@ -280,16 +358,19 @@ pub mod native {
                         | ManagedMatrixProgress::Observed { command_id, .. } => Some(command_id),
                         ManagedMatrixProgress::Idle => after,
                     }),
-                    Step::Runtime => self.poll(after.clone()).await.map(|p| progress(after, p)),
+                    Step::Runtime => self.poll(after.clone()).await.map(|p| {
+                        note = shared_note(&p);
+                        progress(after, p)
+                    }),
                     Step::SuccessorResume => match self.resume_next_successor(after).await {
                         Ok(Some(result)) => Ok(Some(result.intent_id)),
                         Ok(None) => Ok(None),
                         Err(e) => Err(e),
                     },
-                    Step::SuccessorPoll => self
-                        .poll_successor(after.clone())
-                        .await
-                        .map(|p| progress(after, p)),
+                    Step::SuccessorPoll => self.poll_successor(after.clone()).await.map(|p| {
+                        note = shared_note(&p);
+                        progress(after, p)
+                    }),
                     Step::Settlement => {
                         self.poll_settlement(after.clone()).await.map(|p| match p {
                             AgentSettlementProgress::HistoricalReceiptMissing { command_id }
@@ -299,7 +380,8 @@ pub mod native {
                             AgentSettlementProgress::Idle => after,
                         })
                     }
-                }
+                };
+                cursor.map(|cursor| Advance { cursor, note })
             })
         }
     }
@@ -472,6 +554,7 @@ mod tests {
         live: AtomicBool,
         calls: Mutex<Vec<(Step, Option<String>)>>,
         fail: Option<Step>,
+        note: Option<Step>,
         retire_at: Option<Step>,
         hold: Option<(Step, Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
     }
@@ -481,6 +564,7 @@ mod tests {
                 live: AtomicBool::new(true),
                 calls: Mutex::new(Vec::new()),
                 fail: None,
+                note: None,
                 retire_at: None,
                 hold: None,
             }
@@ -511,7 +595,10 @@ mod tests {
                         code: "server_unavailable".into(),
                     });
                 }
-                Ok(Some(format!("{step:?}-cursor")))
+                Ok(Advance {
+                    cursor: Some(format!("{step:?}-cursor")),
+                    note: (self.note == Some(step)).then(|| HISTORICAL_EVIDENCE_MISSING.into()),
+                })
             })
         }
     }
@@ -568,6 +655,29 @@ mod tests {
             pass(&io, &mut cursors, || io.live.load(Ordering::Acquire), &admission).await;
             assert_eq!(io.steps().len(), index + 1, "{step:?}");
             assert!(cursors.get(step).is_none(), "{step:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn step_status_tracks_errors_and_notes_and_returns_to_ok() {
+        let admission = Admission::default();
+        admission.open();
+        let mut cursors = Cursors::default();
+        let mut io = Fixture::new();
+        io.fail = Some(Step::IntakeDemand);
+        io.note = Some(Step::SuccessorPoll);
+        let report = pass(&io, &mut cursors, || true, &admission).await;
+        assert_eq!(report.failed, 1);
+        assert_eq!(cursors.status(Step::IntakeDemand), Some("server_unavailable"));
+        // A note is not a failure: the cursor still advances.
+        assert_eq!(cursors.status(Step::SuccessorPoll), Some(HISTORICAL_EVIDENCE_MISSING));
+        assert_eq!(cursors.get(Step::SuccessorPoll).as_deref(), Some("SuccessorPoll-cursor"));
+        assert_eq!(cursors.status(Step::Runtime), Some(STEP_OK));
+        let io = Fixture::new();
+        let report = pass(&io, &mut cursors, || true, &admission).await;
+        assert_eq!(report.failed, 0);
+        for step in ORDER {
+            assert_eq!(cursors.status(step), Some(STEP_OK), "{step:?}");
         }
     }
 

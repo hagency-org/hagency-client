@@ -5,6 +5,8 @@ use super::*;
 mod inventory;
 #[path = "shared_successor_process_tests.rs"]
 mod observed;
+#[path = "shared_successor_unstarted_tests.rs"]
+mod unstarted;
 
 #[test]
 fn shared_successor_v2_matches_central_fixture_and_does_not_reuse_old_spawn_window() {

@@ -113,7 +113,7 @@ impl SharedAttemptProcessSink {
             if stopped && state!="stopped" {return Err(Error::Conflict)}
             let revision=revision(&tx)?;
             let receipt=SharedAttemptProcessReceipt{
-                version:2,observation_id:id.clone(),command_id:custody.command.command_id.clone(),command_digest:custody.digest.clone(),assignment_id:custody.command.assignment_id.clone(),agent_reservation_id:custody.command.agent_reservation_id.clone(),process_attempt:custody.command.process_attempt,original_runtime_digest:custody.command.original_runtime_digest.clone(),ledger_revision:revision,process_digest:Some(process),state,policy_digest:policy,
+                version:2,observation_id:id.clone(),command_id:custody.command.command_id.clone(),command_digest:custody.digest.clone(),assignment_id:custody.command.assignment_id.clone(),agent_reservation_id:custody.command.agent_reservation_id.clone(),process_attempt:custody.command.process_attempt,original_runtime_digest:custody.command.original_runtime_digest.clone(),ledger_revision:revision,process_digest:Some(process),state,policy_digest:policy,reason:None,
             };
             receipt.validate_for(&custody.command)?;
             bounded_row(&tx,"owner_shared_successor_observations","id",&id,100_000)?;
@@ -156,7 +156,8 @@ impl OwnerResourceRegistry {
             authority.check(&registry)?;authority::cleanup(&db.db,&authority)?;
             let digest=canonical::digest(&serde_json::to_value(&command)?)?;
             let saved:Option<(String,String)>=db.db.query_row("SELECT profile,command_digest FROM owner_shared_successor_attempts WHERE id=?1 AND child_id=?2",params![command.command_id,command.agent_reservation_id],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
-            if saved.is_none(){authority.check(&registry)?;return Ok(None)}
+            // Never claimed: only an unclaimed permanent fence is evidence, of non-issuance.
+            if saved.is_none(){let value=attempt_unstarted::load(&db.db,&authority.enrollment.profile.digest,&command)?;if observation_id.as_ref().is_some_and(|id|value.as_ref().is_none_or(|r|&r.observation_id!=id)){return Err(Error::Conflict)}authority.check(&registry)?;return Ok(value)}
             if saved!=Some((authority.enrollment.profile.digest.clone(),digest)){return Err(Error::Conflict)}
             let payload:Option<String>=db.db.query_row("SELECT payload FROM owner_shared_successor_observations WHERE attempt_id=?1 AND (?2 IS NULL OR id=?2) ORDER BY ledger_revision DESC LIMIT 1",params![command.command_id,observation_id],|r|r.get(0)).optional()?;
             let value=payload.map(|s|serde_json::from_str::<SharedAttemptProcessReceipt>(&s)).transpose()?;

@@ -3,6 +3,18 @@
 use super::*;
 
 pub const SHARED_ATTEMPT_CAPABILITY: &str = "hagency.managed_agents.execution.v2";
+/// Explicit evidence that an uncertain run was ended by the time bound, not
+/// observed to stop. It names only the claim's own process, never usage.
+pub const UNCERTAIN_TIMEOUT: &str = "uncertain_timeout";
+/// Grace after an attempt's window and its first activity lease (ADR-193).
+/// The server applies the same bound and refuses an earlier timeout.
+pub const UNCERTAIN_GRACE_MS: u64 = 180_000;
+pub(super) fn timeout_due(expires_at_ms: u64) -> Result<bool, Error> {
+    Ok(graphs::now_ms()? >= expires_at_ms.saturating_add(30_000).saturating_add(UNCERTAIN_GRACE_MS))
+}
+pub(super) fn valid_receipt_reason(state: &str, reason: Option<&str>) -> bool {
+    reason.is_none_or(|r| r == UNCERTAIN_TIMEOUT && state == "stopped")
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -63,10 +75,17 @@ impl SharedAttemptCommand {
             &self.original_runtime_digest,
             &self.predecessor.command_digest,
             &self.predecessor.stopped_receipt_digest,
-            &self.predecessor.process_digest,
             &self.budget_observation.liability_digest,
         ] {
             hash(h)?;
+        }
+        // Empty only for a never-started predecessor, which is never the original.
+        if self.predecessor.process_digest.is_empty() {
+            if self.process_attempt == 2 {
+                return Err(Error::LocalAuthority);
+            }
+        } else {
+            hash(&self.predecessor.process_digest)?;
         }
         let original = &self.original_runtime_command;
         let b = &self.budget_observation;
@@ -128,6 +147,9 @@ pub struct SharedAttemptProcessReceipt {
     pub process_digest: Option<String>,
     pub state: String,
     pub policy_digest: Option<String>,
+    /// Present only on a stop recorded by the uncertainty time bound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 impl SharedAttemptProcessReceipt {
     pub fn validate_for(&self, c: &SharedAttemptCommand) -> Result<(), Error> {
@@ -146,11 +168,13 @@ impl SharedAttemptProcessReceipt {
             || self.agent_reservation_id != c.agent_reservation_id
             || self.process_attempt != c.process_attempt
             || self.original_runtime_digest != c.original_runtime_digest
-            || !matches!(self.state.as_str(), "qualified" | "stopped" | "unknown")
+            || !matches!(self.state.as_str(), "qualified" | "stopped" | "unknown" | "not_started")
             || self.state == "qualified"
                 && (self.process_digest.is_none() || self.policy_digest.is_none())
             || self.state == "stopped" && self.process_digest.is_none()
+            || self.state == "not_started" && self.process_digest.is_some()
             || self.state != "qualified" && self.policy_digest.is_some()
+            || !valid_receipt_reason(&self.state, self.reason.as_deref())
         {
             return Err(Error::LocalAuthority);
         }
@@ -329,11 +353,19 @@ impl OwnerResourceRegistry {
             let now=graphs::now_ms()?;
             let b=authority::original(&tx,&p.enrollment,&c.agent_reservation_id,false)?;
             if now>=authority::lifetime(&tx,&b,now)?{return Err(Error::LocalAuthority)}
-            let current=if c.process_attempt==2 {successor::snapshot(&tx,&p.enrollment,&c.original_runtime_command)?}else{
-                let payload:String=tx.query_row("SELECT command_payload FROM owner_shared_successor_attempts WHERE id=?1 AND child_id=?2",params![c.predecessor.command_id,c.agent_reservation_id],|r|r.get(0))?;
-                let predecessor:SharedAttemptCommand=serde_json::from_str(&payload)?;
+            let (current,unstarted)=if c.process_attempt==2 {(successor::snapshot(&tx,&p.enrollment,&c.original_runtime_command)?,false)}else{
+                let payload:Option<String>=tx.query_row("SELECT command_payload FROM owner_shared_successor_attempts WHERE id=?1 AND child_id=?2",params![c.predecessor.command_id,c.agent_reservation_id],|r|r.get(0)).optional()?;
+                // A never-claimed predecessor counts only as the exact retained
+                // non-issuance head; the snapshot then checks its receipt.
+                let (predecessor,unstarted):(SharedAttemptCommand,bool)=match payload {
+                    Some(payload)=>(serde_json::from_str(&payload)?,false),
+                    None=>match attempt_unstarted::head(&tx,&p.enrollment.profile.digest,&c.original_runtime_command)? {
+                        Some(attempt_unstarted::UnstartedHead::V2(head,_)) if head.command_id==c.predecessor.command_id=>(head,true),
+                        _=>return Err(Error::Conflict),
+                    },
+                };
                 if predecessor.process_attempt!=c.predecessor.process_attempt||canonical::digest(&serde_json::to_value(&predecessor)?)?!=c.predecessor.command_digest{return Err(Error::Conflict)}
-                successor::snapshot_for_head(&tx,&p.enrollment,&c.original_runtime_command,Some(&predecessor))?
+                (successor::snapshot_for_head(&tx,&p.enrollment,&c.original_runtime_command,Some(&predecessor))?,unstarted)
             };
             let expected=&c.budget_observation;
             if current.state!=SharedSuccessorBudgetState::Available
@@ -348,7 +380,10 @@ impl OwnerResourceRegistry {
                 || current.stopped_receipt_digest!=c.predecessor.stopped_receipt_digest {
                 return Err(Error::Conflict)
             }
-            let process:String=if c.process_attempt==2 {
+            let process:String=if unstarted {
+                // No process ever existed; the snapshot verified its not_started head.
+                String::new()
+            }else if c.process_attempt==2 {
                 tx.query_row("SELECT json_extract(payload,'$.processDigest') FROM owner_shared_process_observations WHERE child_id=?1 AND digest=?2",params![c.agent_reservation_id,c.predecessor.stopped_receipt_digest],|r|r.get(0))?
             }else{
                 tx.query_row("SELECT json_extract(payload,'$.processDigest') FROM owner_shared_successor_observations WHERE attempt_id=?1 AND digest=?2",params![c.predecessor.command_id,c.predecessor.stopped_receipt_digest],|r|r.get(0))?

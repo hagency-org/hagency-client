@@ -25,17 +25,6 @@ pub(super) fn load(
     Ok(Some(receipt))
 }
 
-/// Highest acknowledged non-issuance head after the last actual process.
-pub(super) fn head(db:&Connection,profile:&str,original:&SharedRuntimeCommand)->Result<Option<(SharedBudgetAttemptCommand,SharedBudgetAttemptProcessReceipt)>,Error>{
-    let payload:Option<String>=db.query_row("SELECT f.command_payload FROM owner_shared_successor_fences f JOIN owner_shared_unstarted_attempts u ON u.command_id=f.command_id WHERE f.child_id=?1 AND f.process_attempt>coalesce((SELECT max(process_attempt) FROM owner_shared_successor_attempts WHERE child_id=?1),1) ORDER BY f.process_attempt DESC LIMIT 1",[&original.agent_reservation_id],|r|r.get(0)).optional()?;
-    let Some(payload)=payload else{return Ok(None)};
-    let c:SharedBudgetAttemptCommand=serde_json::from_str(&payload)?;
-    c.validate(&original.reserve_command.manager_mxid)?;
-    if c.agent_reservation_id!=original.agent_reservation_id || c.original_runtime_digest!=canonical::digest(&serde_json::to_value(original)?)? {return Err(Error::Conflict)}
-    let r=load(db,profile,&c)?.ok_or(Error::Conflict)?;
-    Ok(Some((c,r)))
-}
-
 impl OwnerResourceRegistry {
     /// Returns None if one-shot custody ever existed. Only an immutable,
     /// matching, unclaimed fence can yield a not_started receipt.
@@ -64,7 +53,7 @@ impl OwnerResourceRegistry {
             let revision=revision(&tx)?;
             let receipt=SharedBudgetAttemptProcessReceipt{
                 version:3,observation_id:format!("sanu_{}",&canonical::digest(&json!({"command":command.command_id,"digest":canonical::digest(&serde_json::to_value(&command)?)?,"state":"not_started"}))?[..48]),
-                command_id:command.command_id.clone(),command_digest:canonical::digest(&serde_json::to_value(&command)?)?,assignment_id:command.assignment_id.clone(),agent_reservation_id:command.agent_reservation_id.clone(),process_attempt:command.process_attempt,original_runtime_digest:command.original_runtime_digest.clone(),budget_revision:command.execution_budget.budget_revision,budget_digest:command.execution_budget.budget_digest.clone(),ledger_revision:revision,process_digest:None,state:"not_started".into(),policy_digest:None,
+                command_id:command.command_id.clone(),command_digest:canonical::digest(&serde_json::to_value(&command)?)?,assignment_id:command.assignment_id.clone(),agent_reservation_id:command.agent_reservation_id.clone(),process_attempt:command.process_attempt,original_runtime_digest:command.original_runtime_digest.clone(),budget_revision:command.execution_budget.budget_revision,budget_digest:command.execution_budget.budget_digest.clone(),ledger_revision:revision,process_digest:None,state:"not_started".into(),policy_digest:None,reason:None,
             };
             receipt.validate_for(&command)?;
             bounded_row(&tx,"owner_shared_unstarted_attempts","command_id",&command.command_id,100_000)?;

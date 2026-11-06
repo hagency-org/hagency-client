@@ -15,6 +15,8 @@ mod attempt_fence;
 mod attempt_process;
 mod attempt_work;
 mod attempt_recovery;
+mod attempt_unstarted;
+mod attempt_timeout;
 mod process_binding;
 use process_binding::ProcessBinding;
 pub use attempt::*;
@@ -84,6 +86,8 @@ mod budget_process;
 mod budget_fence;
 #[cfg(feature="shared-budget-execution")]
 mod budget_unstarted;
+#[cfg(feature="shared-budget-execution")]
+mod budget_timeout;
 #[cfg(feature="shared-budget-execution")]
 pub use budget_attempt::*;
 #[cfg(feature="shared-budget-execution")]

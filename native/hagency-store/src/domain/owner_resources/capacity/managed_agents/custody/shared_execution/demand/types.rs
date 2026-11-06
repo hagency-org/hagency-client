@@ -54,7 +54,14 @@ impl SharedDemandStartInput {
         identifier(&self.start.start_intent_id, 128)?;
         exact(self.start.predecessor.process_attempt)?;
         hash(&self.start.predecessor.stopped_receipt_digest)?;
-        hash(&self.start.predecessor.process_digest)?;
+        // Empty only for a never-started predecessor, which is never the original.
+        if self.start.predecessor.process_digest.is_empty() {
+            if self.start.predecessor.process_attempt < 2 {
+                return Err(Error::LocalAuthority);
+            }
+        } else {
+            hash(&self.start.predecessor.process_digest)?;
+        }
         let b = &self.start.budget_observation;
         validate_budget(b)?;
         if b.remaining_tokens == 0 {

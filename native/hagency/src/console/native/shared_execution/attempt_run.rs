@@ -46,6 +46,20 @@ pub(super) async fn upload_process(
     }
     Ok((ack.value, ack.observed, started))
 }
+/// Upload end evidence. A time-bound stop that the server's own bound does
+/// not yet allow returns false and is retried by a later cleanup poll.
+pub(super) async fn upload_end(
+    b: &Bound,
+    d: &SharedRuntimeDelivery,
+    until: Instant,
+    receipt: &SharedAttemptProcessReceipt,
+) -> Result<bool, NativeError> {
+    match upload_process(b, d, until, receipt).await {
+        Ok(_) => Ok(true),
+        Err(e) if receipt.reason.is_some() && e.code == "shared_attempt_timeout_pending" => Ok(false),
+        Err(e) => Err(e),
+    }
+}
 fn activity(
     sink: &SharedAttemptProcessSink,
     lease: SharedActivityLease,

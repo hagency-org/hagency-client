@@ -222,8 +222,7 @@ impl OwnerResourceRegistry {
             if old.offer().digest()?!=v.status.demand_digest{return Err(Error::Conflict)}
             let saved:Option<String>=tx.query_row("SELECT payload FROM owner_shared_budget_demand_terminals WHERE demand_id=?1",[&v.status.offer.demand_id],|r|r.get(0)).optional()?;
             if let Some(saved)=saved {
-                let previous:SharedBudgetDemandStatus=serde_json::from_str(&saved)?;
-                if previous.offer.digest()?!=v.status.offer.digest()? || previous.state!=v.status.state{return Err(Error::Conflict)}
+                if !demand::same_terminal(&saved,&v.status.offer,&v.status.state)?{return Err(Error::Conflict)}
                 return Ok(())
             }
             let payload=canonical::encode(&serde_json::to_value(&v.status)?)?;let digest=canonical::digest(&serde_json::to_value(&v.status)?)?;let revision=revision(&tx)?;

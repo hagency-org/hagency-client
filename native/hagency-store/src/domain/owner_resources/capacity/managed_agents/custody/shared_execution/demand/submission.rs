@@ -125,6 +125,9 @@ impl OwnerResourceRegistry {
                     return Err(Error::Conflict);
                 }
                 journal::control(&tx, &p.digest, child, proof.offer.control_revision)?;
+                if tx.query_row("SELECT EXISTS(SELECT 1 FROM owner_shared_budget_demand_terminals WHERE demand_id=?1)", [&proof.offer.demand_id], |r| r.get::<_, bool>(0))? {
+                    return Err(Error::LocalAuthority);
+                }
                 let input = saved.input.ok_or(Error::Capacity)?;
                 let start = start_selection::saved_start(&tx, &p, &input.start.start_intent_id)?;
                 if canonical::digest(&serde_json::to_value(start.original())?)?

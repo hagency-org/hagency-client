@@ -114,7 +114,7 @@ impl SharedBudgetAttemptProcessSink {
             if stopped && state!="stopped" {return Err(Error::Conflict)}
             let revision=revision(&tx)?;
             let receipt=SharedBudgetAttemptProcessReceipt{
-                version:3,budget_revision:custody.command.execution_budget.budget_revision,budget_digest:custody.command.execution_budget.budget_digest.clone(),observation_id:id.clone(),command_id:custody.command.command_id.clone(),command_digest:custody.digest.clone(),assignment_id:custody.command.assignment_id.clone(),agent_reservation_id:custody.command.agent_reservation_id.clone(),process_attempt:custody.command.process_attempt,original_runtime_digest:custody.command.original_runtime_digest.clone(),ledger_revision:revision,process_digest:Some(process),state,policy_digest:policy,
+                version:3,budget_revision:custody.command.execution_budget.budget_revision,budget_digest:custody.command.execution_budget.budget_digest.clone(),observation_id:id.clone(),command_id:custody.command.command_id.clone(),command_digest:custody.digest.clone(),assignment_id:custody.command.assignment_id.clone(),agent_reservation_id:custody.command.agent_reservation_id.clone(),process_attempt:custody.command.process_attempt,original_runtime_digest:custody.command.original_runtime_digest.clone(),ledger_revision:revision,process_digest:Some(process),state,policy_digest:policy,reason:None,
             };
             receipt.validate_for(&custody.command)?;
             bounded_row(&tx,"owner_shared_successor_observations","id",&id,100_000)?;
