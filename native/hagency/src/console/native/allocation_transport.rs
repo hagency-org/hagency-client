@@ -67,22 +67,38 @@ pub(super) struct Scope {
     permission: Permission,
     pub(super) deadline: Instant,
     host_gate: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
+    created: Instant,
 }
 impl Scope {
     fn check(&self) -> Result<(), NativeError> {
         if self.host_gate.as_ref().is_some_and(|gate| !gate()) {
-            return Err(failure(401, "management_scope_changed"));
+            return Err(self.failed("host_gate", failure(401, "management_scope_changed")));
         }
-        self.device
-            .bearer()
-            .map_err(|_| failure(401, "management_scope_changed"))?;
-        self.session
-            .authorize(&self.context, self.permission)
-            .map_err(storage)?;
+        if self.device.bearer().is_err() {
+            return Err(self.failed("device_bearer", failure(401, "management_scope_changed")));
+        }
+        if let Err(error) = self.session.authorize(&self.context, self.permission) {
+            return Err(self.failed("session_permission", storage(error)));
+        }
         if Instant::now() >= self.deadline {
-            return Err(failure(401, "management_scope_changed"));
+            return Err(self.failed("scope_deadline", failure(401, "management_scope_changed")));
         }
         Ok(())
+    }
+    /// Several boundary checks share one returned code. Record which one
+    /// failed, and how old the scope was, so a failure can be traced to its
+    /// cause. Stage names and timings only; never identifiers or content.
+    fn failed(&self, stage: &'static str, error: NativeError) -> NativeError {
+        let now = Instant::now();
+        tracing::info!(
+            stage,
+            code = %error.code,
+            scope_age_ms = now.saturating_duration_since(self.created).as_millis() as u64,
+            deadline_in_ms = self.deadline.saturating_duration_since(now).as_millis() as u64,
+            deadline_passed = now >= self.deadline,
+            "Management boundary check failed"
+        );
+        error
     }
 }
 
@@ -175,6 +191,7 @@ impl AllocationTransport {
             permission,
             deadline,
             host_gate: self.host_gate.clone(),
+            created: Instant::now(),
         };
         self.check_scope(&result, false).await?;
         Ok(result)
@@ -189,14 +206,18 @@ impl AllocationTransport {
             // authorized() performs the fresh SDK account/token check. Do it
             // once per boundary instead of issuing the same network-backed
             // whoami twice; all scope/device checks still follow the await.
-            let (current, session) = self.manager.authorized().await?;
+            let (current, session) = self
+                .manager
+                .authorized()
+                .await
+                .map_err(|error| scope.failed("authorized", error))?;
             scope.check()?;
             if current != scope.context {
-                return Err(failure(401, "management_scope_changed"));
+                return Err(scope.failed("context_changed", failure(401, "management_scope_changed")));
             }
             session
                 .authorize(&current, scope.permission)
-                .map_err(storage)?;
+                .map_err(|error| scope.failed("current_permission", storage(error)))?;
             let device = self
                 .manager
                 .owner
@@ -205,15 +226,17 @@ impl AllocationTransport {
                 .console
                 .authorized_device()
                 .await
-                .map_err(|_| failure(401, "owner_authorization_required"))?;
+                .map_err(|_| scope.failed("device_unavailable", failure(401, "owner_authorization_required")))?;
             if DeviceIdentity::from(&device) != DeviceIdentity::from(&scope.device) {
-                return Err(failure(401, "management_scope_changed"));
+                return Err(scope.failed("device_changed", failure(401, "management_scope_changed")));
             }
             scope.check()
         }
         .await;
         result.map_err(|error| {
             if uncertain {
+                // The request may have committed; the specific cause is logged above.
+                tracing::info!(code = %error.code, "Management boundary failed after a possibly committed request");
                 failure(409, "management_outcome_unknown")
             } else {
                 error
@@ -247,7 +270,7 @@ impl AllocationTransport {
             || reply.issuer != scope.device.issuer()
             || reply.subject != scope.device.subject()
         {
-            return Err(failure(401, "management_scope_changed"));
+            return Err(scope.failed("reply_identity", failure(401, "management_scope_changed")));
         }
         wire::decode_bounded(reply.value, response_limit)
     }

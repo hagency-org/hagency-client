@@ -54,6 +54,9 @@ pub enum Step {
     BudgetDemandRecover,
     BudgetProcess,
     BudgetDemand,
+    /// Saved demands not yet finished locally; the only ones that can hold an
+    /// Agent's FIFO. Visited separately so a restart releases them quickly.
+    IntakeDemandUnfinished,
     IntakeDemandRecover,
     IntakeDemand,
     Agent,
@@ -71,6 +74,7 @@ impl Step {
             self,
             Self::BudgetDemandRecover
                 | Self::BudgetDemand
+                | Self::IntakeDemandUnfinished
                 | Self::IntakeDemandRecover
                 | Self::IntakeDemand
                 | Self::SuccessorResume
@@ -80,12 +84,13 @@ impl Step {
 
 /// Desktop's order: stop recovery precedes every launch path; reserve/fence
 /// and Matrix readiness precede runtime delivery; settlement observes last.
-pub const ORDER: [Step; 13] = [
+pub const ORDER: [Step; 14] = [
     Step::DemandStop,
     Step::BudgetDelta,
     Step::BudgetDemandRecover,
     Step::BudgetProcess,
     Step::BudgetDemand,
+    Step::IntakeDemandUnfinished,
     Step::IntakeDemandRecover,
     Step::IntakeDemand,
     Step::Agent,
@@ -279,7 +284,10 @@ pub mod native {
     impl PassIo for AdoptedSharedExecutor {
         fn enabled(&self, step: Step) -> bool {
             match step {
-                Step::DemandStop | Step::IntakeDemandRecover | Step::IntakeDemand => {
+                Step::DemandStop
+                | Step::IntakeDemandUnfinished
+                | Step::IntakeDemandRecover
+                | Step::IntakeDemand => {
                     cfg!(feature = "shared-intake")
                 }
                 Step::BudgetDelta
@@ -298,6 +306,14 @@ pub mod native {
                         .resume_next_demand_stop(after)
                         .await
                         .map(|s| s.map(|v| v.command_id)),
+                    Step::IntakeDemandUnfinished => {
+                        self.resume_next_unfinished_demand(after).await.map(|s| {
+                            s.map(|v| {
+                                note = demand_note(&v.outcome);
+                                v.demand_id
+                            })
+                        })
+                    }
                     Step::IntakeDemandRecover => {
                         self.resume_next_demand(after).await.map(|s| {
                             s.map(|v| {
@@ -627,11 +643,11 @@ mod tests {
         let report = pass(&io, &mut cursors, || true, &admission).await;
         let expected: Vec<Step> = ORDER.into_iter().filter(|s| !s.admits_work()).collect();
         assert_eq!(io.steps(), expected);
-        assert_eq!(report.skipped_for_admission, 5);
+        assert_eq!(report.skipped_for_admission, 6);
         for step in [Step::DemandStop, Step::Runtime, Step::Settlement, Step::Agent, Step::SuccessorPoll] {
             assert!(io.steps().contains(&step));
         }
-        for step in [Step::IntakeDemand, Step::IntakeDemandRecover, Step::BudgetDemand, Step::SuccessorResume] {
+        for step in [Step::IntakeDemand, Step::IntakeDemandUnfinished, Step::IntakeDemandRecover, Step::BudgetDemand, Step::SuccessorResume] {
             assert!(!io.steps().contains(&step));
             assert!(cursors.get(step).is_none());
         }

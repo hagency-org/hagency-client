@@ -22,6 +22,15 @@ impl AdoptedSharedExecutor {
             .resume_next_demand(&self.selection.registry, after)
             .await
     }
+    pub async fn resume_next_unfinished_demand(
+        &self,
+        after: Option<String>,
+    ) -> Result<Option<SharedDemandResume>, NativeError> {
+        self.selection.check_executor_owner(&self.owner).await?;
+        self.transport
+            .resume_next_unfinished_demand(&self.selection.registry, after)
+            .await
+    }
     pub async fn stop_demand_assignment(
         &self,
         assignment: String,

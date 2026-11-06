@@ -111,17 +111,32 @@ impl SharedExecutionTransport {
         r: &OwnerResourceRegistry,
         after: Option<String>,
     ) -> Result<Option<SharedDemandResume>, NativeError> {
+        self.resume_saved_demand(r, after, false).await
+    }
+    /// The same recovery over demands not yet finished locally, which alone
+    /// can hold an Agent's FIFO position.
+    pub async fn resume_next_unfinished_demand(
+        &self,
+        r: &OwnerResourceRegistry,
+        after: Option<String>,
+    ) -> Result<Option<SharedDemandResume>, NativeError> {
+        self.resume_saved_demand(r, after, true).await
+    }
+    async fn resume_saved_demand(
+        &self,
+        r: &OwnerResourceRegistry,
+        after: Option<String>,
+        unfinished: bool,
+    ) -> Result<Option<SharedDemandResume>, NativeError> {
         enabled()?;
         let b = self.io.bound().await?;
-        let Some(saved) = r
-            .next_shared_demand(
-                b.scope.profile.clone(),
-                b.scope.device.device_id().into(),
-                after,
-            )
-            .await
-            .map_err(store)?
-        else {
+        let (profile, device) = (b.scope.profile.clone(), b.scope.device.device_id().to_owned());
+        let saved = if unfinished {
+            r.next_unfinished_shared_demand(profile, device, after).await
+        } else {
+            r.next_shared_demand(profile, device, after).await
+        };
+        let Some(saved) = saved.map_err(store)? else {
             return Ok(None);
         };
         let id = saved.intent().offer().demand_id.clone();

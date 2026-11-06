@@ -107,14 +107,12 @@ async fn renew(
         .await
         .map_err(store)?;
     let started = Instant::now();
-    let reply: Timed<ActivityReply> = b
-        .upload(
-            Action::Renew(SharedActivityRenewInput {
-                authority: a.lease.authority.clone(),
-                renewal_id: id,
-            }),
-            a.until,
-        )
+    let renewal = SharedActivityRenewInput {
+        authority: a.lease.authority.clone(),
+        renewal_id: id,
+    };
+    let (b, reply): (Bound, Timed<ActivityReply>) = io
+        .upload_renewal(b, || Action::Renew(renewal.clone()), a.until)
         .await?;
     let next = activity(
         sink,

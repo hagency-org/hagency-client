@@ -255,15 +255,58 @@ impl Io {
         let settle = std::time::Instant::now() + RUNNING_CHECK_SETTLE;
         loop {
             match self.check(c).await {
-                Err(error) if transient_boundary(&error) && std::time::Instant::now() < settle => {
+                Err(error) if self.transient(&error) && std::time::Instant::now() < settle => {
                     tracing::info!(code = %error.code, "Shared run authority check retrying");
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    tokio::time::sleep(RETRY_GAP).await;
                 }
                 result => return result,
             }
         }
     }
+    /// Hosting stopping, or this management package retired or expired, is a
+    /// real revocation: no retry, the run stops now.
+    fn revoked(&self) -> bool {
+        self.host_gate.as_ref().is_some_and(|gate| !gate())
+            || self.manager.upgrade().is_none_or(|manager| manager.is_retired())
+    }
+    /// A boundary failure worth waiting out: one of the shared codes, and not a
+    /// real revocation.
+    pub(super) fn transient(&self, error: &NativeError) -> bool {
+        transient_boundary(error) && !self.revoked()
+    }
+    /// Uploads one activity renewal. If its reply is lost or a boundary check
+    /// fails, the SAME renewal (id and authority) is resubmitted under a fresh
+    /// scope until the lease ends: the server returns an already applied
+    /// renewal again instead of renewing twice, so the run keeps its lease.
+    pub(super) async fn upload_renewal<T: DeserializeOwned>(
+        &self,
+        mut b: Bound,
+        action: impl Fn() -> Action,
+        until: Instant,
+    ) -> Result<(Bound, Timed<T>), NativeError> {
+        loop {
+            let error = match b.upload(action(), until).await {
+                Ok(reply) => return Ok((b, reply)),
+                Err(error) => error,
+            };
+            if !self.transient(&error) || Instant::now() + RETRY_GAP >= until {
+                return Err(error);
+            }
+            tracing::info!(code = %error.code, "Shared activity renewal resubmitting the same renewal");
+            tokio::time::sleep(RETRY_GAP).await;
+            b = match self.bound().await {
+                Ok(fresh) => fresh,
+                Err(error) if self.transient(&error) && Instant::now() + RETRY_GAP < until => {
+                    tokio::time::sleep(RETRY_GAP).await;
+                    self.bound().await?
+                }
+                Err(error) => return Err(error),
+            };
+        }
+    }
 }
+
+const RETRY_GAP: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// How long a running process waits out a transient authority failure.
 const RUNNING_CHECK_SETTLE: std::time::Duration = std::time::Duration::from_secs(20);

@@ -34,6 +34,23 @@ async fn count(f: &Fixture, table: &'static str) -> u64 {
         .await
         .unwrap()
 }
+/// Demand ids in recovery order: the full walk, or only unfinished demands.
+async fn recovery_walk(f: &Fixture, device: &str, unfinished: bool) -> Vec<String> {
+    let mut after = None;
+    let mut ids = Vec::new();
+    loop {
+        let next = if unfinished {
+            f.registry.next_unfinished_shared_demand(f.profile.clone(), device.into(), after.clone()).await
+        } else {
+            f.registry.next_shared_demand(f.profile.clone(), device.into(), after.clone()).await
+        };
+        let Some(saved) = next.unwrap() else { return ids };
+        let id = saved.intent().offer().demand_id.clone();
+        ids.push(id.clone());
+        after = Some(id);
+    }
+}
+
 async fn original(stop: bool) -> (Fixture, SharedRuntimeCommand) {
     let f = fixture().await;
     let c = command(&f).await;
@@ -1042,12 +1059,21 @@ async fn shared_demand_v2_terminal_unstarted_demand_unblocks_only_new_event() {
     assert_eq!(digest(target.predecessor().unwrap()), digest(&failed));
     let waiting = f.registry.prepare_shared_demand(verified(&f, new.clone()), c.clone(), target.predecessor().cloned()).await.unwrap();
     assert_eq!(*waiting.disposition(), SharedDemandDisposition::Pending, "the lost event still holds the queue");
+    let device = c.reserve_command.executor_device_id.clone();
+    let unfinished = recovery_walk(&f, &device, true).await;
+    assert!(unfinished.contains(&old.demand_id) && unfinished.contains(&new.demand_id));
     let a = || cleanup(&f, &c, 1);
     assert!(f.registry.retain_shared_demand_terminal(a().await, old.clone(), "start_committed".into(), None).await.is_err());
     f.registry.retain_shared_demand_terminal(a().await, old.clone(), "head_changed".into(), Some(failed.command_id.clone())).await.unwrap();
     f.registry.retain_shared_demand_terminal(a().await, old.clone(), "head_changed".into(), Some(failed.command_id.clone())).await.unwrap();
     assert!(f.registry.retain_shared_demand_terminal(a().await, old.clone(), "expired".into(), None).await.is_err(), "a terminal state never changes");
     assert_eq!(count(&f, "owner_shared_budget_demand_terminals").await, 1);
+    // The fast recovery pass skips the finished demand; the full walk still
+    // visits it (a bound demand's central state can still turn cancelled).
+    let unfinished = recovery_walk(&f, &device, true).await;
+    assert!(unfinished.contains(&new.demand_id) && !unfinished.contains(&old.demand_id));
+    let all = recovery_walk(&f, &device, false).await;
+    assert!(all.contains(&new.demand_id) && all.contains(&old.demand_id));
     assert!(f.registry.shared_demand_submission(verified(&f, old.clone()), c.clone()).await.is_err(), "the interrupted event never starts again");
     assert!(f.registry.prepare_shared_demand(verified(&f, old.clone()), c.clone(), Some(failed.clone())).await.is_err());
     f.registry.shutdown().await.unwrap();

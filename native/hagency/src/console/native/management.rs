@@ -462,18 +462,32 @@ impl NativeManagement {
     /// Irreversible package or owner retirement. Expired renewable sessions are
     /// not retirement, and a false result does not replace current authorization.
     pub fn is_retired(&self) -> bool {
-        self.retired.load(Ordering::Acquire)
-            || self.controller_deadline().is_err()
-            || self.owner.0.management.retired.load(Ordering::Acquire)
-            || self.session.lock().map_or(true, |current| current.deadline.is_some_and(|until| Instant::now() >= until))
+        self.retired_reason().is_some()
+    }
+    /// Which retirement applies, for the boundary log only.
+    fn retired_reason(&self) -> Option<&'static str> {
+        if self.retired.load(Ordering::Acquire) {
+            Some("package_retired")
+        } else if self.controller_deadline().is_err() {
+            Some("controller_deadline")
+        } else if self.owner.0.management.retired.load(Ordering::Acquire) {
+            Some("owner_management_retired")
+        } else if self.session.lock().map_or(true, |current| current.deadline.is_some_and(|until| Instant::now() >= until)) {
+            Some("session_deadline")
+        } else {
+            None
+        }
     }
     pub(super) async fn authorized(
         &self,
     ) -> Result<(service::HostContext, service::Session), NativeError> {
-        if self.is_retired() {
-            return Err(failure(401, "management_access_required"));
+        if let Some(reason) = self.retired_reason() {
+            return Err(authorization_failed(reason, failure(401, "management_access_required")));
         }
-        self.owner.sync_management_matrix().await?;
+        self.owner
+            .sync_management_matrix()
+            .await
+            .map_err(|error| authorization_failed("matrix_sync", error))?;
         // Renewal may reuse a cached device grant; each management boundary
         // still requires the SDK's current account/token source.
         let cookie = self.owner.0.cookie.lock().await.clone();
@@ -489,17 +503,17 @@ impl NativeManagement {
             .check_matrix_source(raw)
             .await
             .map_err(|code| {
-                failure(
+                authorization_failed("matrix_source", failure(
                     if code.ends_with("unavailable") {
                         503
                     } else {
                         401
                     },
                     code,
-                )
+                ))
             })?;
-        if self.is_retired() {
-            return Err(failure(401, "management_access_required"));
+        if let Some(reason) = self.retired_reason() {
+            return Err(authorization_failed(reason, failure(401, "management_access_required")));
         }
         let device = self
             .owner
@@ -508,14 +522,14 @@ impl NativeManagement {
             .console
             .authorized_device()
             .await
-            .map_err(|_| failure(401, "owner_authorization_required"))?;
+            .map_err(|_| authorization_failed("device", failure(401, "owner_authorization_required")))?;
         device
             .bearer()
-            .map_err(|_| failure(401, "owner_authorization_required"))?;
+            .map_err(|_| authorization_failed("device_bearer", failure(401, "owner_authorization_required")))?;
         if device.origin() != self.owner.0.expected_origin
             || device.owner_mxid() != self.owner.0.expected_owner
         {
-            return Err(failure(401, "matrix_account_mismatch"));
+            return Err(authorization_failed("account", failure(401, "matrix_account_mismatch")));
         }
         if profile_identity(
             device.origin(),
@@ -885,4 +899,11 @@ mod package_deadline_tests {
         assert_eq!(sessions.restrict_deadline(deadline+Duration::from_secs(60)),deadline);
         assert_eq!(sessions.deadline,Some(deadline));
     }
+}
+
+/// Which authorization step failed, for diagnosis: several steps share one
+/// returned code. Stage names and codes only; never identifiers.
+fn authorization_failed(stage: &'static str, error: NativeError) -> NativeError {
+    tracing::info!(stage, code = %error.code, "Management authorization failed");
+    error
 }
