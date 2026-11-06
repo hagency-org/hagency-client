@@ -140,12 +140,70 @@ pub(super) fn snapshot(
 ) -> Result<SharedSuccessorBudget, Error> {
     snapshot_for_head(db, enrollment, command, None)
 }
+// A never-claimed head counts only as the exact retained non-issuance head,
+// and only after the last actual process has stopped: uncertainty still blocks.
+fn unstarted_snapshot(
+    db: &Connection,
+    enrollment: &VerifiedManagementEnrollment,
+    command: &SharedRuntimeCommand,
+    head: &SharedAttemptCommand,
+) -> Result<SharedSuccessorBudget, Error> {
+    head.validate(&enrollment.profile.account)?;
+    let Some(attempt_unstarted::UnstartedHead::V2(current, receipt)) =
+        attempt_unstarted::head(db, &enrollment.profile.digest, command)?
+    else {
+        return Err(Error::OutcomeUnknown);
+    };
+    let digest = canonical::digest(&serde_json::to_value(head)?)?;
+    if canonical::digest(&serde_json::to_value(&current)?)? != digest {
+        return Err(Error::Conflict);
+    }
+    let latest: Option<String> = db.query_row(
+        "SELECT command_payload FROM owner_shared_successor_attempts WHERE child_id=?1 ORDER BY process_attempt DESC LIMIT 1",
+        [&command.agent_reservation_id], |r| r.get(0),
+    ).optional()?;
+    let actual = latest
+        .map(|payload| -> Result<SharedAttemptCommand, Error> { Ok(serde_json::from_str(&payload)?) })
+        .transpose()?;
+    let mut value = snapshot_for_head(db, enrollment, command, actual.as_ref())?;
+    if value.observed_ledger_revision < receipt.ledger_revision {
+        return Err(Error::Conflict);
+    }
+    let stopped = canonical::digest(&serde_json::to_value(&receipt)?)?;
+    let provider: String = db.query_row(
+        "SELECT provider_digest FROM owner_shared_runtime_lifetimes WHERE child_id=?1 AND assignment_id=?2",
+        params![command.agent_reservation_id, command.assignment_id], |r| r.get(0),
+    )?;
+    let binding = canonical::digest(&json!({
+        "child":command.agent_reservation_id,"assignmentId":command.assignment_id,
+        "assignmentGeneration":command.assignment_generation,
+        "commandDigest":command.reserve_command_digest,"providerDigest":provider
+    }))?;
+    let calls = calls(db, &command.agent_reservation_id, &binding)?;
+    value.predecessor_command_digest = digest.clone();
+    value.stopped_receipt_digest = stopped.clone();
+    value.liability_digest = canonical::digest(&json!({
+        "child":command.agent_reservation_id,"predecessorCommandDigest":digest,
+        "stoppedReceiptDigest":stopped,"allocatedTokens":value.allocated_tokens,
+        "callsDigest":calls.digest
+    }))?;
+    Ok(value)
+}
 pub(super) fn snapshot_for_head(
     db: &Connection,
     enrollment: &VerifiedManagementEnrollment,
     command: &SharedRuntimeCommand,
     head: Option<&SharedAttemptCommand>,
 ) -> Result<SharedSuccessorBudget, Error> {
+    if let Some(h) = head {
+        let claimed: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM owner_shared_successor_attempts WHERE id=?1)",
+            [&h.command_id], |r| r.get(0),
+        )?;
+        if !claimed {
+            return unstarted_snapshot(db, enrollment, command, h);
+        }
+    }
     let original = authority::original(db, enrollment, &command.agent_reservation_id, false)?;
     if original.digest != command.reserve_command_digest {
         return Err(Error::LocalAuthority);

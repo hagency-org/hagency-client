@@ -183,10 +183,20 @@ impl SharedExecutionTransport {
             )
             .await
             .map_err(store)?;
-        if local.is_none() && d.cleanup_allowed && !d.execution_allowed && historical.is_none() {
+        let cleaning = d.cleanup_allowed && !d.execution_allowed && historical.is_none();
+        if local.is_none() && cleaning {
             local = r.record_unstarted_shared_budget_attempt(
                 b.cleanup(r, &c.original_runtime_command).await?, c.clone(),
             ).await.map_err(store)?;
+        }
+        // Time bound (ADR-193): a claimed process with no stop evidence and no
+        // live local child is interrupted once its grace period has passed.
+        if cleaning && local.as_ref().is_none_or(|l| !matches!(l.state.as_str(), "stopped" | "not_started")) {
+            if let Some(timeout) = r.record_shared_budget_attempt_timeout(
+                b.cleanup(r, &c.original_runtime_command).await?, c.clone(),
+            ).await.map_err(store)? {
+                local = Some(timeout);
+            }
         }
         b.transport.check_scope(&b.scope, false).await?;
         if let Some(saved) = &d.recorded {
@@ -199,6 +209,19 @@ impl SharedExecutionTransport {
                 return Err(invalid());
             }
             if let Some(latest) = &local {
+                if latest.ledger_revision > saved.ledger_revision && latest.reason.is_some() {
+                    // A time-bound end is accepted only on a cleanup ticket;
+                    // otherwise a later cleanup poll reports it.
+                    if !cleaning || !budget_run::upload_end(&b, &d, until, latest).await? {
+                        return Ok(SharedExecutionProgress::HistoricalEvidenceMissing { command_id: c.command_id.clone() });
+                    }
+                    budget_run::recover_process_work(&self.io, r, c).await?;
+                    return Ok(SharedExecutionProgress::Recorded {
+                        command_id: c.command_id.clone(),
+                        observation_id: latest.observation_id.clone(),
+                        process_state: Some(latest.state.clone()),
+                    });
+                }
                 if latest.ledger_revision > saved.ledger_revision {
                     budget_run::report_process(&self.io, r, c, latest).await?;
                     budget_run::recover_process_work(&self.io, r, c).await?;
@@ -231,7 +254,9 @@ impl SharedExecutionTransport {
         if let Some(local) = local {
             // Report actual stop independently before accounting recovery: an
             // old work upload failure must not hide known process termination.
-            budget_run::upload_process(&b, &d, until, &local).await?;
+            if !budget_run::upload_end(&b, &d, until, &local).await? {
+                return Ok(SharedExecutionProgress::HistoricalEvidenceMissing { command_id: c.command_id.clone() });
+            }
             budget_run::recover_process_work(&self.io, r, c).await?;
             return Ok(SharedExecutionProgress::Recorded {
                 command_id: c.command_id.clone(),

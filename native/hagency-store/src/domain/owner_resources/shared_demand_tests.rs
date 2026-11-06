@@ -1021,3 +1021,53 @@ async fn shared_demand_local_owner_stop_queued_retirement_and_atomic_rollback() 
     assert_eq!(count(&f, "owner_shared_stop_intents").await, 0);
     assert_eq!(count(&f, "owner_shared_demand_controls").await, 0);
 }
+
+#[tokio::test]
+async fn shared_demand_v2_terminal_unstarted_demand_unblocks_only_new_event() {
+    let (mut f, c) = original(true).await;
+    call(&f, &c, "retained_unknown", "unknown", 40, 7, false, false).await;
+    let old = offer(&c, "old_failed_demand", 1);
+    let input = f.registry.prepare_shared_demand(verified(&f, old.clone()), c.clone(), None).await.unwrap().input().unwrap().clone();
+    // The issued attempt is never claimed: cleanup fences it permanently.
+    let mut failed = attempt(&f, &c).await;
+    failed.start_intent_id = input.start.start_intent_id.clone();
+    failed.predecessor = input.start.predecessor.clone();
+    failed.budget_observation = input.start.budget_observation.clone();
+    f.registry.fence_shared_successor(cleanup(&f, &c, 1).await, failed.clone()).await.unwrap();
+    let mut new = offer(&c, "new_research", 1);
+    new.received_at_ms = old.received_at_ms + 1;
+    new.predecessor_command_id = failed.command_id.clone();
+    new.predecessor_command_digest = digest(&failed);
+    let target = f.registry.shared_successor_selection(f.profile.clone(), c.assignment_id.clone()).await.unwrap().unwrap();
+    assert_eq!(digest(target.predecessor().unwrap()), digest(&failed));
+    let waiting = f.registry.prepare_shared_demand(verified(&f, new.clone()), c.clone(), target.predecessor().cloned()).await.unwrap();
+    assert_eq!(*waiting.disposition(), SharedDemandDisposition::Pending, "the lost event still holds the queue");
+    let a = || cleanup(&f, &c, 1);
+    assert!(f.registry.retain_shared_demand_terminal(a().await, old.clone(), "start_committed".into(), None).await.is_err());
+    f.registry.retain_shared_demand_terminal(a().await, old.clone(), "head_changed".into(), Some(failed.command_id.clone())).await.unwrap();
+    f.registry.retain_shared_demand_terminal(a().await, old.clone(), "head_changed".into(), Some(failed.command_id.clone())).await.unwrap();
+    assert!(f.registry.retain_shared_demand_terminal(a().await, old.clone(), "expired".into(), None).await.is_err(), "a terminal state never changes");
+    assert_eq!(count(&f, "owner_shared_budget_demand_terminals").await, 1);
+    assert!(f.registry.shared_demand_submission(verified(&f, old.clone()), c.clone()).await.is_err(), "the interrupted event never starts again");
+    assert!(f.registry.prepare_shared_demand(verified(&f, old.clone()), c.clone(), Some(failed.clone())).await.is_err());
+    f.registry.shutdown().await.unwrap();
+    f.registry = OwnerResourceRegistry::open_root(&f._temp.path().join("owner")).unwrap();
+    let input = f.registry.prepare_shared_demand(verified(&f, new.clone()), c.clone(), Some(failed.clone())).await.unwrap().input().unwrap().clone();
+    assert_eq!(input.demand_digest, digest(&new));
+    assert!(input.start.predecessor.process_digest.is_empty());
+    assert_eq!(input.start.predecessor.process_attempt, failed.process_attempt);
+    assert_eq!((input.start.budget_observation.known_consumed_tokens, input.start.budget_observation.retained_tokens), (7, 7));
+    let mut fresh = failed.clone();
+    fresh.command_id = "new_research_runtime".into();
+    fresh.process_attempt = failed.process_attempt + 1;
+    fresh.predecessor = input.start.predecessor.clone();
+    fresh.budget_observation = input.start.budget_observation.clone();
+    fresh.start_intent_id = input.start.start_intent_id.clone();
+    let now = graphs::now_ms().unwrap();
+    fresh.issued_at_ms = now;
+    fresh.expires_at_ms = now + 20_000;
+    assert!(matches!(f.registry.claim_shared_successor(attempt_proof(&f, fresh)).await.unwrap(), SharedAttemptClaim::Issued(_)));
+    assert!(f.registry.claim_shared_successor(attempt_proof(&f, failed)).await.is_err());
+    assert_eq!(count(&f, "owner_shared_demands").await, 2);
+    f.registry.shutdown().await.unwrap();
+}

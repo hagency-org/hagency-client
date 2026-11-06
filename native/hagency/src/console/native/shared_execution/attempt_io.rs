@@ -73,7 +73,10 @@ impl AttemptAction {
                 super::super::key(&v.predecessor.command_id)?;
                 hash(&v.predecessor.command_digest)?;
                 hash(&v.predecessor.stopped_receipt_digest)?;
-                hash(&v.predecessor.process_digest)?;
+                // Empty only after a never-started (not_started) predecessor.
+                if !v.predecessor.process_digest.is_empty() || v.predecessor.process_attempt < 2 {
+                    hash(&v.predecessor.process_digest)?;
+                }
                 hash(&v.budget_observation.liability_digest)?;
             }
             Self::Poll { after } => {

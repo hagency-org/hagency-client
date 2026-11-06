@@ -173,6 +173,16 @@ impl SharedExecutionTransport {
                     s.binding.clone().ok_or_else(invalid)?,
                 ).await.map_err(store)?;
             }
+            // A final central state releases this event's FIFO position; the
+            // interrupted event is never started or replayed (ADR-193).
+            if matches!(s.state.as_str(), "expired" | "cancelled" | "head_changed") {
+                r.retain_shared_demand_terminal(
+                    b.cleanup(r, target.original()).await?,
+                    s.offer.clone(),
+                    s.state.clone(),
+                    s.runtime_command_id.clone(),
+                ).await.map_err(store)?;
+            }
             // Terminal history never becomes fresh launch authority. A central
             // cancellation restricts the original Run revision locally too.
             if s.state == "cancelled" {

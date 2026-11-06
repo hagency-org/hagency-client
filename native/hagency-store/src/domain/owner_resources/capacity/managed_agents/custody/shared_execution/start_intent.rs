@@ -230,7 +230,9 @@ pub(super) fn prepare_in_transaction(
         return Err(Error::Capacity);
     }
     let (command_id, number, process) = if let Some(head) = &predecessor {
-        let process:String=tx.query_row("SELECT json_extract(payload,'$.processDigest') FROM owner_shared_successor_observations WHERE attempt_id=?1 AND digest=?2",params![head.command_id,budget.stopped_receipt_digest],|r|r.get(0))?;
+        let claimed:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM owner_shared_successor_attempts WHERE id=?1)",[&head.command_id],|r|r.get(0))?;
+        // A never-started head has no process; the snapshot verified its receipt.
+        let process:String=if claimed {tx.query_row("SELECT json_extract(payload,'$.processDigest') FROM owner_shared_successor_observations WHERE attempt_id=?1 AND digest=?2",params![head.command_id,budget.stopped_receipt_digest],|r|r.get(0))?} else {String::new()};
         (head.command_id.clone(), head.process_attempt, process)
     } else {
         let process:String=tx.query_row("SELECT json_extract(payload,'$.processDigest') FROM owner_shared_process_observations WHERE child_id=?1 AND digest=?2",params![original.agent_reservation_id,budget.stopped_receipt_digest],|r|r.get(0))?;

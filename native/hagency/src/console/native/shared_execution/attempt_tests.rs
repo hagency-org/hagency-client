@@ -31,11 +31,11 @@ pub(super) fn management(path: &str, body: &Value, s: &mut super::super::State) 
                 version: 2,
                 capability: SHARED_ATTEMPT_CAPABILITY.into(),
                 operation: "agent.execution.provision".into(),
-                command_id: "successor_fixture".into(),
+                command_id: if input.predecessor.process_attempt == 1 {"successor_fixture".into()} else {format!("successor_fixture_{}", input.predecessor.process_attempt + 1)},
                 assignment_id: original.assignment_id.clone(),
                 assignment_generation: 1,
                 agent_reservation_id: original.agent_reservation_id.clone(),
-                process_attempt: 2,
+                process_attempt: input.predecessor.process_attempt + 1,
                 original_runtime_digest: digest(&original).unwrap(),
                 original_runtime_command: original,
                 predecessor: input.predecessor,
@@ -82,7 +82,7 @@ pub(super) fn management(path: &str, body: &Value, s: &mut super::super::State) 
             None
         };
         return Some(
-            json!({"observationId":r.observation_id,"receiptDigest":digest(&r).unwrap(),"activity":activity,"state":r.state,"observedAtMs":at}),
+            json!({"observationId":r.observation_id,"receiptDigest":digest(&r).unwrap(),"activity":activity,"state":if r.state=="not_started" {"stopped"}else{&r.state},"observedAtMs":at}),
         );
     }
     let history = path.ends_with("/recover") || start && replay;
@@ -267,25 +267,71 @@ async fn native_shared_successor_lost_model_start_keeps_hold_and_never_replays()
 }
 #[tokio::test]
 #[ignore = "requires explicit offline supervised runtime probe"]
-async fn native_shared_successor_cleanup_before_claim_persists_fence_without_fake_stop() {
+async fn native_shared_successor_unclaimed_cleanup_uploads_not_started_without_fake_stop() {
     let (f, t, c) = Box::pin(predecessor()).await;
     prepare_lost_start(&f, &t, &c).await;
     f.state.lock().unwrap().shared.cleanup = true;
-    assert!(matches!(
-        t.poll_successor(&f.registry, None).await.unwrap(),
-        SharedExecutionProgress::HistoricalEvidenceMissing { .. }
-    ));
+    // The unclaimed attempt is fenced and reported as never started.
+    let outcome = t.poll_successor(&f.registry, None).await.unwrap();
+    assert!(matches!(outcome, SharedExecutionProgress::Recorded { process_state: Some(ref s), .. } if s == "not_started"));
+    let attempt = {
+        let s = f.state.lock().unwrap();
+        let receipt = s.shared.attempts.processes.values().next().unwrap();
+        assert_eq!(receipt.state, "not_started");
+        assert!(receipt.process_digest.is_none() && receipt.reason.is_none());
+        s.shared.attempts.command.clone().unwrap()
+    };
+    let outcome = t.recover_successor(&f.registry, attempt.command_id.clone(), digest(&attempt).unwrap(), None).await.unwrap();
+    assert!(matches!(outcome, SharedExecutionProgress::Recorded { process_state: Some(ref s), .. } if s == "not_started"));
     assert_eq!(rows(&f, "owner_shared_successor_fences"), 1);
-    assert_eq!(rows(&f, "owner_shared_successor_observations"), 0);
+    assert_eq!(rows(&f, "owner_shared_successor_observations"), 0, "never a fabricated process stop");
     assert_eq!(rows(&f, "owner_shared_successor_attempts"), 0);
-    f.state.lock().unwrap().shared.cleanup = false;
-    assert!(
-        t.poll_successor_fixture(&f.registry, launch(&f, "text-usage"))
-            .await
-            .is_err()
-    );
+    // The chain continues: the next start names the never-started attempt.
+    {
+        let mut s = f.state.lock().unwrap();
+        s.shared.cleanup = false;
+        s.shared.attempts.command = None;
+        s.shared.attempts.processes.clear();
+        s.shared.attempts.start_inputs.clear();
+        s.shared.attempts.lose_start_reply = true;
+    }
+    let prepared = t.prepare_successor(&f.registry, c.assignment_id.clone()).await.unwrap();
+    assert_eq!(prepared.review().predecessor_command_id, attempt.command_id);
+    assert_eq!(prepared.review().process_attempt, attempt.process_attempt + 1);
+    assert!(t.start_prepared_successor(&f.registry, prepared).await.is_err());
+    {
+        let s = f.state.lock().unwrap();
+        assert_eq!(s.shared.attempts.start_inputs.len(), 1);
+        let next = s.shared.attempts.command.as_ref().unwrap();
+        assert_eq!(next.process_attempt, attempt.process_attempt + 1);
+        assert_eq!(next.predecessor.command_id, attempt.command_id);
+        assert!(next.predecessor.process_digest.is_empty());
+    }
+    assert_eq!(rows(&f, "owner_shared_successor_attempts"), 0);
     let methods = std::fs::read_to_string(f._root.path().join("shared-probe/methods")).unwrap();
     assert!(!methods.contains("turn/start"));
+    assert_eq!(methods.lines().filter(|m| *m == "initialize").count(), 1);
+    f.stop().await;
+}
+#[tokio::test]
+#[ignore = "requires explicit offline supervised runtime probe"]
+async fn native_shared_successor_uncertain_claim_waits_for_grace_without_second_process() {
+    let (f, t, c) = Box::pin(predecessor()).await;
+    prepare_lost_start(&f, &t, &c).await;
+    // Claimed, then lost: no process evidence ever reaches the ledger.
+    let attempt = f.state.lock().unwrap().shared.attempts.command.clone().unwrap();
+    let scope = f.transport.scope(Permission::ExecuteManagedAgents).await.unwrap();
+    let grant = f.state.lock().unwrap().grant.clone().unwrap();
+    let enrollment = f.transport.enrollment(&scope, &grant, true).await.unwrap();
+    let proof = VerifiedSharedAttemptDelivery::new(enrollment, attempt.clone(), digest(&attempt).unwrap(), true, Instant::now() + Duration::from_secs(20)).unwrap();
+    assert!(matches!(f.registry.claim_shared_successor(proof).await.unwrap(), SharedAttemptClaim::Issued(_)));
+    f.state.lock().unwrap().shared.cleanup = true;
+    // Within the grace period: fenced, still uncertain, nothing new starts.
+    assert!(matches!(t.poll_successor(&f.registry, None).await.unwrap(), SharedExecutionProgress::HistoricalEvidenceMissing { .. }));
+    assert!(f.state.lock().unwrap().shared.attempts.processes.is_empty(), "no stop is reported before the bound");
+    assert_eq!(rows(&f, "owner_shared_successor_observations"), 0);
+    assert!(t.prepare_successor(&f.registry, c.assignment_id.clone()).await.is_err());
+    let methods = std::fs::read_to_string(f._root.path().join("shared-probe/methods")).unwrap();
     assert_eq!(methods.lines().filter(|m| *m == "initialize").count(), 1);
     f.stop().await;
 }

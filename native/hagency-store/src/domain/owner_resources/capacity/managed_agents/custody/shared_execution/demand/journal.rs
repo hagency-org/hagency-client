@@ -171,9 +171,9 @@ pub(in super::super) fn head(
     profile: &str,
     original: &SharedRuntimeCommand,
 ) -> Result<(String, String, bool), Error> {
-    #[cfg(feature="shared-budget-execution")]
-    if let Some((c,_))=budget_unstarted::head(db,profile,original)? {
-        return Ok((c.command_id.clone(),canonical::digest(&serde_json::to_value(&c)?)?,true));
+    // A never-started attempt after the last actual process is the head.
+    if let Some(h)=attempt_unstarted::head(db,profile,original)? {
+        return Ok((h.command_id().to_owned(),h.command_digest()?,true));
     }
     let latest:Option<(String,String,String)>=db.query_row("SELECT profile,command_digest,command_payload FROM owner_shared_successor_attempts WHERE child_id=?1 ORDER BY process_attempt DESC LIMIT 1",[&original.agent_reservation_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
     if let Some((saved, digest, payload)) = latest {
@@ -230,6 +230,7 @@ impl OwnerResourceRegistry {
             if b.digest!=original.reserve_command_digest||proof.offer.assignment_id!=original.assignment_id
                 ||original.reserve_command.executor_device_id!=e.executor_device_id
                 ||original.reserve_command.executor_generation!=e.executor_generation{return Err(Error::LocalAuthority)}
+            if tx.query_row("SELECT EXISTS(SELECT 1 FROM owner_shared_budget_demand_terminals WHERE demand_id=?1)",[&proof.offer.demand_id],|r|r.get::<_,bool>(0))? {return Err(Error::LocalAuthority)}
             let old=load(&tx,&profile.digest,child,&proof.offer.demand_id)?;
             if let Some(old)=&old {
                 if old.offer.digest()?!=proof.offer.digest()?{return Err(Error::Conflict)}

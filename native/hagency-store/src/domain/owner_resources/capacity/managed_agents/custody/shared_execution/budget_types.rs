@@ -9,7 +9,7 @@ fn valid_digest(value: &str) -> bool {
 fn validate_predecessor(p: &SharedAttemptPredecessor) -> Result<(), Error> {
     identifier(&p.command_id, 128)?;
     exact(p.process_attempt)?;
-    // V3 only: empty processDigest requires a verified not_started receipt.
+    // Empty processDigest requires a verified not_started receipt (v2 or v3).
     if !p.process_digest.is_empty() { hash(&p.process_digest)?; }
     for h in [
         &p.command_digest,
@@ -206,6 +206,9 @@ pub struct SharedBudgetAttemptProcessReceipt {
     pub process_digest: Option<String>,
     pub state: String,
     pub policy_digest: Option<String>,
+    /// Present only on a stop recorded by the uncertainty time bound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 impl SharedBudgetAttemptProcessReceipt {
     pub fn validate_for(&self, c: &SharedBudgetAttemptCommand) -> Result<(), Error> {
@@ -234,6 +237,7 @@ impl SharedBudgetAttemptProcessReceipt {
             || self.state == "stopped" && self.process_digest.is_none()
             || self.state == "not_started" && self.process_digest.is_some()
             || self.state != "qualified" && self.policy_digest.is_some()
+            || !super::attempt::valid_receipt_reason(&self.state, self.reason.as_deref())
         {
             return Err(invalid());
         }
