@@ -67,8 +67,12 @@ impl OwnerResourceRegistry {
         let result=self.0.store.call(64*1024,move |db| {
             after(&profile,&registry,expires)?;
             let tx=db.db.transaction_with_behavior(TransactionBehavior::Deferred)?;
+            // A locally bound demand is done: the server reports a bound demand
+            // as "bound" whatever happens later, so recovering it again is a
+            // no-op. Skipping those keeps recovery proportional to unfinished
+            // demands, so an interrupted one is reached in seconds after a restart.
             let row:Option<(String,String,String,String)>=tx.query_row(
-                "SELECT d.id,d.child_id,l.command_payload,l.command_digest FROM owner_shared_demands d JOIN owner_shared_runtime_lifetimes l ON l.child_id=d.child_id AND l.profile=d.profile WHERE d.profile=?1 AND d.device_id=?2 AND (?3 IS NULL OR d.id>?3) ORDER BY d.id LIMIT 1",
+                "SELECT d.id,d.child_id,l.command_payload,l.command_digest FROM owner_shared_demands d JOIN owner_shared_runtime_lifetimes l ON l.child_id=d.child_id AND l.profile=d.profile WHERE d.profile=?1 AND d.device_id=?2 AND (?3 IS NULL OR d.id>?3) AND NOT EXISTS(SELECT 1 FROM owner_shared_demand_bindings b WHERE b.demand_id=d.id) ORDER BY d.id LIMIT 1",
                 params![profile.digest,device,after_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)),
             ).optional()?;
             let result=row.map(|(id,child,payload,digest)|->Result<SharedDemandRecovery,Error>{

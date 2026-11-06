@@ -153,7 +153,32 @@ pub fn run_if_requested() -> Option<i32> {
         )
         .with_writer(std::io::stderr)
         .try_init();
+    #[cfg(unix)]
+    raise_open_file_limit();
     Some(run_args(args))
+}
+
+/// Open files the daemon asks for. 10240 is macOS's OPEN_MAX, the most that
+/// setrlimit accepts there.
+pub(crate) const OPEN_FILES: u64 = 10240;
+
+/// The daemon holds every pooled Agent's end-to-end encryption stores, each a
+/// pool of SQLite connections. Under launchd's default limit of 256 open files
+/// it ran out after about half an hour; every owner-root check then failed as
+/// `source_root_changed` and no run was claimed. Desktop raises its own limit
+/// when its window starts, which the daemon never reaches.
+#[cfg(unix)]
+fn raise_open_file_limit() {
+    use rustix::process::{Resource, getrlimit, setrlimit};
+    let mut limit = getrlimit(Resource::Nofile);
+    let wanted = limit.maximum.map_or(OPEN_FILES, |max| max.min(OPEN_FILES));
+    if limit.current.is_some_and(|current| current < wanted) {
+        let raised = rustix::process::Rlimit { current: Some(wanted), maximum: limit.maximum };
+        if setrlimit(Resource::Nofile, raised.clone()).is_ok() {
+            limit = raised;
+        }
+    }
+    tracing::info!(soft = ?limit.current, "Owner daemon open file limit");
 }
 
 #[cfg(unix)]

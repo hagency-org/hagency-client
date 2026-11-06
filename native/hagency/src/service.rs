@@ -404,6 +404,11 @@ fn daemon_launchd_plist_with_installation(exe: &Path, home_dir: &Path, path: &st
   </dict>
   <key>ProcessType</key>
   <string>Background</string>
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key>
+    <integer>{open_files}</integer>
+  </dict>
   <key>StandardOutPath</key>
   <string>{log}</string>
   <key>StandardErrorPath</key>
@@ -413,6 +418,7 @@ fn daemon_launchd_plist_with_installation(exe: &Path, home_dir: &Path, path: &st
 "#,
         path = xml(path),
         log = xml(&log.to_string_lossy()),
+        open_files = crate::daemon::cli::OPEN_FILES,
     )
 }
 
@@ -428,10 +434,11 @@ fn daemon_systemd_unit_with_installation(exe: &Path, home_dir: &Path, path: &str
         quote(&exe.to_string_lossy())
     };
     format!(
-        "[Unit]\nDescription=Hagency owner daemon\nAfter=network-online.target\n\n[Service]\nExecStart={} daemon run --home {}\nEnvironment={}\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n",
+        "[Unit]\nDescription=Hagency owner daemon\nAfter=network-online.target\n\n[Service]\nExecStart={} daemon run --home {}\nEnvironment={}\nRestart=on-failure\nRestartSec=5\nLimitNOFILE={}\n\n[Install]\nWantedBy=default.target\n",
         prefix,
         quote(&home_dir.to_string_lossy()),
         quote(&format!("PATH={path}")),
+        crate::daemon::cli::OPEN_FILES,
     )
 }
 
@@ -594,6 +601,8 @@ mod tests {
         assert!(plist.contains("<string>daemon</string>\n    <string>run</string>"));
         assert!(plist.contains("<string>/Users/a/Library/Application Support/Hagency/owner-daemon</string>"));
         assert!(plist.contains("<key>SuccessfulExit</key>"));
+        // launchd's default of 256 open files ran the daemon out within the hour.
+        assert!(plist.contains("<key>NumberOfFiles</key>\n    <integer>10240</integer>"));
         let unit = daemon_systemd_unit(
             Path::new("/opt/hagency/hagency"),
             Path::new("/home/a/.local/state/hagency/owner-daemon"),
@@ -602,6 +611,7 @@ mod tests {
         assert!(unit.contains(
             "ExecStart=\"/opt/hagency/hagency\" daemon run --home \"/home/a/.local/state/hagency/owner-daemon\""
         ));
+        assert!(unit.contains("LimitNOFILE=10240\n"));
         let dir = default_daemon_dir().unwrap();
         assert!(dir.is_absolute());
         assert_ne!(dir, default_state_dir().unwrap());
