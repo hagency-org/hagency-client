@@ -34,6 +34,21 @@ const ADMISSION_BARRIER: Duration = Duration::from_secs(15);
 const MONITOR_PERIOD: Duration = Duration::from_secs(15);
 const READ_PERIOD: Duration = Duration::from_secs(60);
 const MAX_PAGES: usize = 8;
+const PROVIDER_PERIOD: Duration = Duration::from_secs(300);
+/// Every external wait on the provider report path is bounded. The probe
+/// bounds its own RPCs; these bound authorization, ledger reads and child
+/// cleanup around it, so a stalled read reports itself as unavailable.
+const PROVIDER_SETUP_TIMEOUT: Duration = Duration::from_secs(30);
+const PROVIDER_PAGE_TIMEOUT: Duration = Duration::from_secs(30);
+const PROVIDER_REPORT_TIMEOUT: Duration = Duration::from_secs(75);
+/// Below the refresh period, so a stalled job never delays the next one.
+const PROVIDER_REFRESH_BUDGET: Duration = Duration::from_secs(240);
+/// Backstop for a job that cannot even observe its own budget.
+const PROVIDER_REFRESH_STALL: Duration = Duration::from_secs(270);
+/// Stop waits this long for a refresh before cancelling it. The probe's child
+/// stays in provider task custody, which the owner drain still observes.
+const PROVIDER_REFRESH_DRAIN: Duration = Duration::from_secs(10);
+const DASHBOARD_READ_TIMEOUT: Duration = Duration::from_secs(120);
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
@@ -59,6 +74,178 @@ impl Reads {
         if fresh.resources.is_none() {fresh.resources=self.resources.clone();}
         *self=fresh;
     }
+}
+
+/// One in-flight provider report refresh. The handle stays here until the
+/// task is observed finished, so a cancelled stop cannot detach it.
+struct ProviderRefresh {
+    task: tokio::task::JoinHandle<()>,
+    started: tokio::time::Instant,
+    stalled: bool,
+}
+
+impl ProviderRefresh {
+    fn running(&self) -> bool {
+        !self.task.is_finished()
+    }
+    /// True once, when a running job has outlived its own budget without
+    /// reporting: its task is not making progress.
+    fn newly_stalled(&mut self, now: tokio::time::Instant) -> bool {
+        if self.stalled || !self.running() || now.duration_since(self.started) < PROVIDER_REFRESH_STALL {
+            return false;
+        }
+        self.stalled = true;
+        true
+    }
+}
+
+/// Bounds for one refresh; tests use shorter ones.
+#[derive(Clone, Copy)]
+struct RefreshBounds {
+    page: Duration,
+    report: Duration,
+    budget: Duration,
+}
+
+const REFRESH_BOUNDS: RefreshBounds = RefreshBounds {
+    page: PROVIDER_PAGE_TIMEOUT,
+    report: PROVIDER_REPORT_TIMEOUT,
+    budget: PROVIDER_REFRESH_BUDGET,
+};
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ReportTally {
+    observed: usize,
+    failed: usize,
+    complete: bool,
+}
+
+/// The two reads a provider refresh performs. Implemented by the native
+/// manager; tests substitute stalled or failing readers.
+trait ProviderReports: Send + Sync {
+    type Resource: Send;
+    fn page(&self, after: String) -> impl std::future::Future<Output = Result<(Vec<Self::Resource>, Option<String>), NativeError>> + Send;
+    fn reportable(resource: &Self::Resource) -> bool;
+    fn report(&self, resource: &Self::Resource) -> impl std::future::Future<Output = Result<(), NativeError>> + Send;
+}
+
+/// Owns the refresh's read-only management package and retires it on every
+/// exit, including cancellation.
+struct ProviderReader(Arc<crate::native_owner::NativeManagement>);
+
+impl Drop for ProviderReader {
+    fn drop(&mut self) {
+        self.0.retire();
+    }
+}
+
+impl ProviderReports for ProviderReader {
+    type Resource = hagency_store::management::ResourceSummary;
+    async fn page(&self, after: String) -> Result<(Vec<Self::Resource>, Option<String>), NativeError> {
+        let page = self.0.resources(hagency_store::management::ResourceQuery { after, ..Default::default() }).await?;
+        Ok((page.resources, page.next_after))
+    }
+    fn reportable(resource: &Self::Resource) -> bool {
+        resource.framework == "codex"
+    }
+    async fn report(&self, resource: &Self::Resource) -> Result<(), NativeError> {
+        self.0.refresh_resource_quota(resource).await
+    }
+}
+
+/// Reads every page and reports each supported resource, each step bounded.
+/// `None` means hosting was retired while reading: nothing is reported.
+async fn read_provider_reports<P: ProviderReports>(reports: &P, retired: &AtomicBool, bounds: RefreshBounds) -> Option<ReportTally> {
+    let mut tally = ReportTally::default();
+    let mut after = String::new();
+    for _ in 0..MAX_PAGES {
+        if retired.load(Ordering::Acquire) {
+            return None;
+        }
+        let (resources, next) = match tokio::time::timeout(bounds.page, reports.page(after)).await {
+            Ok(Ok(page)) => page,
+            Ok(Err(_)) => {
+                tally.failed += 1;
+                break;
+            }
+            Err(_) => {
+                tracing::info!(code = "provider_inventory_timeout", "Provider report inventory unavailable");
+                tally.failed += 1;
+                break;
+            }
+        };
+        for resource in resources {
+            if retired.load(Ordering::Acquire) {
+                return None;
+            }
+            if !P::reportable(&resource) {
+                continue;
+            }
+            match tokio::time::timeout(bounds.report, reports.report(&resource)).await {
+                Ok(Ok(())) => tally.observed += 1,
+                Ok(Err(error)) => {
+                    tally.failed += 1;
+                    tracing::info!(code = %error.code, "Provider report unavailable");
+                }
+                Err(_) => {
+                    tally.failed += 1;
+                    tracing::info!(code = "provider_report_timeout", "Provider report unavailable");
+                }
+            }
+        }
+        match next {
+            Some(next) => after = next,
+            None => {
+                tally.complete = true;
+                break;
+            }
+        }
+    }
+    if !tally.complete {
+        tally.failed += 1;
+    }
+    Some(tally)
+}
+
+/// The spawned refresh. It always ends in a finished activity unless hosting
+/// was retired or replaced meanwhile.
+async fn provider_refresh_job<P: ProviderReports>(
+    reports: P,
+    retired: Arc<AtomicBool>,
+    inner: std::sync::Weak<Inner>,
+    epoch: u64,
+    bounds: RefreshBounds,
+) {
+    let outcome = tokio::time::timeout(bounds.budget, read_provider_reports(&reports, &retired, bounds)).await;
+    drop(reports);
+    let Some(inner) = inner.upgrade() else { return };
+    if retired.load(Ordering::Acquire) || inner.generation.load(Ordering::Acquire) != epoch {
+        return;
+    }
+    match outcome {
+        Ok(None) => {}
+        Ok(Some(tally)) => {
+            tracing::info!(observed = tally.observed, failed = tally.failed, "Provider report refresh finished");
+            if tally.observed > 0 {
+                inner.event(
+                    if tally.failed == 0 { ActivityState::Succeeded } else { ActivityState::Warning },
+                    "Provider reports refreshed",
+                    &format!("{} resource reports updated. {} unavailable; previous reports keep their observation times.", tally.observed, tally.failed),
+                );
+            } else {
+                inner.event(ActivityState::Warning, "Provider reports unavailable", "No current supported provider report was available. Existing reports keep their observation times.");
+            }
+        }
+        Err(_) => {
+            tracing::warn!(code = "provider_refresh_timeout", "Provider report refresh did not finish within its budget");
+            inner.event(ActivityState::Warning, "Provider reports unavailable", "The provider report refresh did not finish in time and was stopped. Existing reports keep their observation times.");
+        }
+    }
+}
+
+/// Waits for a task without detaching it: on timeout the handle stays usable.
+async fn join_within(task: &mut tokio::task::JoinHandle<()>, within: Duration) -> bool {
+    tokio::time::timeout(within, task).await.is_ok()
 }
 
 struct Hosted {
@@ -95,7 +282,8 @@ struct Inner {
     events: Mutex<VecDeque<Activity>>,
     reads: Mutex<Reads>,
     telemetry: Mutex<Option<OwnerTelemetry>>,
-    provider_refresh:tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Held only briefly, never across provider or management IO: stop needs it.
+    provider_refresh:tokio::sync::Mutex<Option<ProviderRefresh>>,
     health: Arc<Mutex<Option<String>>>,
 }
 
@@ -247,53 +435,74 @@ impl Inner {
         }
     }
 
+    /// Starts one bounded refresh unless one is running. Neither `hosted` nor
+    /// the refresh slot is held across management IO: stop, bridge calls and
+    /// hosting start need `hosted`, and stop needs the slot.
     async fn refresh_provider_reports(self:&Arc<Self>)->Result<(),DaemonError> {
-        let hosted=self.hosted.lock().await;
-        let current=hosted.as_ref().filter(|h|!h.retired.load(Ordering::Acquire))
-            .ok_or(errors::PROVIDER_REFRESH_UNAVAILABLE)?;
-        let mut job=self.provider_refresh.lock().await;
-        if job.as_ref().is_some_and(|j|!j.is_finished()) {return Ok(());}
+        let (owner,retired)={
+            let hosted=self.hosted.lock().await;
+            let current=hosted.as_ref().filter(|h|!h.retired.load(Ordering::Acquire))
+                .ok_or(errors::PROVIDER_REFRESH_UNAVAILABLE)?;
+            (current.owner.clone(),current.retired.clone())
+        };
+        if self.provider_refresh_busy().await {return Ok(());}
         let epoch=self.generation.load(Ordering::Acquire);
         let mut package=read_package(epoch);
         package.permissions.push(crate::native_owner::ManagementPermission::ReadProviders);
-        let manager=current.owner.management(package).await.map_err(|_|errors::PROVIDER_REFRESH_UNAVAILABLE)?;
-        let retired=current.retired.clone();
-        let inner=Arc::downgrade(self);
+        let manager=match tokio::time::timeout(PROVIDER_SETUP_TIMEOUT,owner.management(package)).await {
+            Ok(Ok(manager))=>ProviderReader(manager),
+            Ok(Err(_))=>return Err(errors::PROVIDER_REFRESH_UNAVAILABLE),
+            Err(_)=>{
+                tracing::info!(code="provider_refresh_setup_timeout","Provider report refresh could not start");
+                return Err(errors::PROVIDER_REFRESH_UNAVAILABLE);
+            }
+        };
+        let mut slot=self.provider_refresh.lock().await;
+        // Stop fences `retired` before it takes this slot, so a refresh is
+        // never installed behind a stop that already drained the slot.
+        if retired.load(Ordering::Acquire) || self.generation.load(Ordering::Acquire)!=epoch {
+            return Err(errors::PROVIDER_REFRESH_UNAVAILABLE);
+        }
+        if slot.as_ref().is_some_and(ProviderRefresh::running) {return Ok(());}
         self.event(ActivityState::Running,"Refreshing provider reports","Reading current reports from the original coding accounts.");
-        *job=Some(tokio::spawn(async move {
-            struct Guard(Arc<crate::native_owner::NativeManagement>);
-            impl Drop for Guard {fn drop(&mut self){self.0.retire();}}
-            let manager=Guard(manager);
-            let mut after=String::new();
-            let mut observed=0usize;
-            let mut failed=0usize;
-            let mut complete=false;
-            for _ in 0..MAX_PAGES {
-                if retired.load(Ordering::Acquire) {return;}
-                let page=match manager.0.resources(hagency_store::management::ResourceQuery{after,..Default::default()}).await {
-                    Ok(page)=>page,Err(_)=>{failed+=1;break;}
-                };
-                for resource in page.resources {
-                    if retired.load(Ordering::Acquire) {return;}
-                    if resource.framework!="codex" {continue;}
-                    match manager.0.refresh_resource_quota(&resource).await {
-                        Ok(())=>observed+=1,
-                        Err(error)=>{failed+=1;tracing::info!(code=%error.code,"Provider report unavailable");}
-                    }
-                }
-                match page.next_after {Some(next)=>after=next,None=>{complete=true;break;}}
+        *slot=Some(ProviderRefresh {
+            task: tokio::spawn(provider_refresh_job(manager,retired,Arc::downgrade(self),epoch,REFRESH_BOUNDS)),
+            started: tokio::time::Instant::now(),
+            stalled: false,
+        });
+        Ok(())
+    }
+
+    /// Whether a refresh is still running. A job that outlived its budget
+    /// without finishing is reported once and cancelled; its probe child stays
+    /// in provider task custody.
+    async fn provider_refresh_busy(&self)->bool {
+        let mut slot=self.provider_refresh.lock().await;
+        let Some(refresh)=slot.as_mut() else {return false};
+        if refresh.newly_stalled(tokio::time::Instant::now()) {
+            refresh.task.abort();
+            tracing::warn!(code="provider_refresh_stalled","Provider report refresh stopped making progress");
+            self.event(ActivityState::Failed,"Provider reports unavailable","The provider report refresh stopped making progress and was cancelled. Existing reports keep their observation times.");
+        }
+        refresh.running()
+    }
+
+    /// Bounded wait for the in-flight refresh, then cancellation. The handle
+    /// is released only after its task is observed finished.
+    async fn settle_provider_refresh(&self)->Result<(), &'static str> {
+        self.settle_provider_refresh_within(PROVIDER_REFRESH_DRAIN).await
+    }
+
+    async fn settle_provider_refresh_within(&self,within:Duration)->Result<(), &'static str> {
+        let mut slot=self.provider_refresh.lock().await;
+        if let Some(refresh)=slot.as_mut() && !join_within(&mut refresh.task,within).await {
+            refresh.task.abort();
+            if !join_within(&mut refresh.task,within).await {
+                tracing::warn!(code="provider_refresh_drain_unknown","Provider report refresh did not stop");
+                return Err("provider_refresh_drain_unknown");
             }
-            if let Some(inner)=inner.upgrade() {
-                if retired.load(Ordering::Acquire)||inner.generation.load(Ordering::Acquire)!=epoch {return;}
-                if !complete {failed+=1;}
-                if observed>0 {
-                    inner.event(if failed==0 {ActivityState::Succeeded}else{ActivityState::Warning},"Provider reports refreshed",
-                        &format!("{observed} resource reports updated. {failed} unavailable; previous reports keep their observation times."));
-                } else {
-                    inner.event(ActivityState::Warning,"Provider reports unavailable","No current supported provider report was available. Existing reports keep their observation times.");
-                }
-            }
-        }));
+        }
+        slot.take();
         Ok(())
     }
 
@@ -540,13 +749,11 @@ impl Inner {
         hosted.allocation.retire();
         hosted.shared.retire();
         hosted.monitor.abort();
-        // The read-only probe owns a real child. Retain its task while waiting
-        // so a cancelled drain waiter cannot detach process custody.
-        {
-            let mut probe=self.provider_refresh.lock().await;
-            if let Some(task)=probe.as_mut() {let _=task.await;}
-            probe.take();
-        }
+        // The read-only probe owns a real child. The wait is bounded and the
+        // task is retained until observed finished, so a cancelled drain waiter
+        // cannot detach process custody; an aborted probe's child stays in
+        // provider task custody, which the owner drain below observes.
+        self.settle_provider_refresh().await?;
         hosted.shared.drain().await;
         hosted.allocation.drain().await;
         let result = if revoke {
@@ -554,7 +761,10 @@ impl Inner {
         } else {
             hosted.owner.suspend().await
         };
-        result.map_err(|e| static_code(&e.code))?;
+        result.map_err(|e| {
+            tracing::warn!(code = drain_detail(&e.code), "Native owner drain did not complete");
+            static_code(&e.code)
+        })?;
         hosted.custody.retire();
         Ok(())
     }
@@ -620,6 +830,21 @@ fn static_code(code: &str) -> &'static str {
     }
 }
 
+/// Which owner drain failed, for the log only. The returned code stays the
+/// coarse `static_code`; this still never echoes an unknown string.
+fn drain_detail(code: &str) -> &'static str {
+    match code {
+        "native_configuration_drain_unknown" => "native_configuration_drain_unknown",
+        "native_local_authority_close_failed" => "native_local_authority_close_failed",
+        "native_runtime_drain_unknown" => "native_runtime_drain_unknown",
+        "native_provider_drain_unknown" => "native_provider_drain_unknown",
+        "native_shared_execution_drain_unknown" => "native_shared_execution_drain_unknown",
+        "native_managed_runtime_drain_unknown" => "native_managed_runtime_drain_unknown",
+        "native_account_login_drain_unknown" => "native_account_login_drain_unknown",
+        other => static_code(other),
+    }
+}
+
 async fn monitor(
     inner: std::sync::Weak<Inner>,
     custody: Arc<SdkCustody>,
@@ -673,21 +898,30 @@ async fn monitor(
             }
             AuthState::Retired => return,
         }
-        if last_provider.is_none_or(|t|t.elapsed()>=Duration::from_secs(300)) {
+        if last_provider.is_none_or(|t|t.elapsed()>=PROVIDER_PERIOD) {
             last_provider=Some(tokio::time::Instant::now());
             let _=inner.refresh_provider_reports().await;
         }
         if last_read.is_none_or(|t| t.elapsed() >= READ_PERIOD) {
             last_read = Some(tokio::time::Instant::now());
             if management.is_none() {
-                management = owner
-                    .management(read_package(epoch))
-                    .await
-                    .map_err(|e| tracing::info!(code = %e.code, "Dashboard reads unavailable"))
-                    .ok();
+                management = match tokio::time::timeout(PROVIDER_SETUP_TIMEOUT, owner.management(read_package(epoch))).await {
+                    Ok(result) => result.map_err(|e| tracing::info!(code = %e.code, "Dashboard reads unavailable")).ok(),
+                    Err(_) => {
+                        tracing::info!(code = "dashboard_read_setup_timeout", "Dashboard reads unavailable");
+                        None
+                    }
+                };
             }
             if let Some(manager) = management.as_ref() {
-                let reads = read_dashboard(manager, custody.owner()).await;
+                // A stalled read must not stop this monitor: it also drives
+                // provider refreshes and authorization fencing.
+                let reads = tokio::time::timeout(DASHBOARD_READ_TIMEOUT, read_dashboard(manager, custody.owner()))
+                    .await
+                    .unwrap_or_else(|_| {
+                        tracing::info!(code = "dashboard_read_timeout", "Dashboard reads unavailable");
+                        Reads::default()
+                    });
                 if retired.load(Ordering::Acquire) || inner.generation.load(Ordering::Acquire) != epoch { return; }
                 lock(&inner.reads).refresh(reads);
             }
@@ -1010,6 +1244,178 @@ mod tests {
         reads.refresh(Reads{resources:Some(vec![]),inventory_available:true,inventory_complete:true,..Default::default()});
         assert!(reads.inventory_available && reads.inventory_complete);
         assert!(reads.resources.unwrap().is_empty(),"a successful empty inventory replaces old rows");
+    }
+
+    /// A provider reader whose page or report either answers, fails, or never
+    /// returns (a stalled probe, child reap or authorization wait).
+    struct Reader {
+        page: Behavior,
+        report: Behavior,
+        reports: std::sync::atomic::AtomicUsize,
+        retire_on_report: Option<Arc<AtomicBool>>,
+    }
+    #[derive(Clone, Copy)]
+    enum Behavior { Ok, Fail, Stall }
+    impl Reader {
+        fn new(page: Behavior, report: Behavior) -> Self {
+            Self { page, report, reports: Default::default(), retire_on_report: None }
+        }
+    }
+    async fn behave(behavior: Behavior) -> Result<(), NativeError> {
+        match behavior {
+            Behavior::Ok => Ok(()),
+            Behavior::Fail => Err(NativeError { status: 409, code: "provider_identity_unavailable".into() }),
+            Behavior::Stall => std::future::pending().await,
+        }
+    }
+    impl ProviderReports for Reader {
+        type Resource = &'static str;
+        async fn page(&self, _after: String) -> Result<(Vec<&'static str>, Option<String>), NativeError> {
+            behave(self.page).await?;
+            Ok((vec!["codex", "claude", "codex"], None))
+        }
+        fn reportable(resource: &&'static str) -> bool {
+            *resource == "codex"
+        }
+        async fn report(&self, _resource: &&'static str) -> Result<(), NativeError> {
+            self.reports.fetch_add(1, Ordering::SeqCst);
+            if let Some(retired) = &self.retire_on_report {
+                retired.store(true, Ordering::Release);
+            }
+            behave(self.report).await
+        }
+    }
+
+    fn private_home() -> tempfile::TempDir {
+        let temp = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        temp
+    }
+
+    fn last_event(runtime: &OwnerRuntime) -> Option<(String, String, String)> {
+        lock(&runtime.inner.events).back().map(|a| (a.title.clone(), a.state.clone(), a.detail.clone()))
+    }
+
+    /// Production proportions, scaled down so the bounds fire in milliseconds.
+    const FAST: RefreshBounds = RefreshBounds {
+        page: Duration::from_millis(40),
+        report: Duration::from_millis(100),
+        budget: Duration::from_millis(1500),
+    };
+
+    #[tokio::test]
+    async fn a_stalled_provider_report_finishes_as_unavailable_instead_of_running_forever() {
+        let temp = private_home();
+        let runtime = OwnerRuntime::new(temp.path().into()).unwrap();
+        let epoch = runtime.inner.generation.load(Ordering::Acquire);
+        // Incident shape: the probe, child reap or authorization for a
+        // resource never returns. Before, the job never finished and every
+        // later refresh returned early behind it, leaving "Running" forever.
+        let started = tokio::time::Instant::now();
+        let job = provider_refresh_job(Reader::new(Behavior::Ok, Behavior::Stall), Arc::new(AtomicBool::new(false)), Arc::downgrade(&runtime.inner), epoch, FAST);
+        tokio::time::timeout(Duration::from_secs(10), job).await.expect("the refresh job must finish on its own");
+        assert!(started.elapsed() < FAST.budget, "each stalled report is bounded on its own");
+        let (title, state, detail) = last_event(&runtime).expect("a finished activity, not a perpetual Running");
+        assert_eq!(title, "Provider reports unavailable");
+        assert_eq!(state, ActivityState::Warning.as_str());
+        assert!(detail.contains("Existing reports keep their observation times"));
+
+        // A stalled inventory read is bounded the same way.
+        let job = provider_refresh_job(Reader::new(Behavior::Stall, Behavior::Ok), Arc::new(AtomicBool::new(false)), Arc::downgrade(&runtime.inner), epoch, FAST);
+        tokio::time::timeout(Duration::from_secs(10), job).await.expect("a stalled inventory read must not hang the job");
+        assert_eq!(last_event(&runtime).unwrap().0, "Provider reports unavailable");
+
+        // The overall budget covers work whose individual steps each answer.
+        let slow = RefreshBounds { budget: Duration::from_millis(150), ..FAST };
+        let job = provider_refresh_job(Reader::new(Behavior::Ok, Behavior::Stall), Arc::new(AtomicBool::new(false)), Arc::downgrade(&runtime.inner), epoch, slow);
+        tokio::time::timeout(Duration::from_secs(10), job).await.expect("the budget must end the job");
+        let (_, _, detail) = last_event(&runtime).unwrap();
+        assert!(detail.contains("did not finish in time"), "{detail}");
+    }
+
+    #[tokio::test]
+    async fn provider_report_tallies_are_bounded_per_resource_and_reported() {
+        let retired = AtomicBool::new(false);
+        let stalled = Reader::new(Behavior::Ok, Behavior::Stall);
+        let tally = read_provider_reports(&stalled, &retired, FAST).await.unwrap();
+        assert_eq!(tally, ReportTally { observed: 0, failed: 2, complete: true });
+        assert_eq!(stalled.reports.load(Ordering::SeqCst), 2, "only supported resources are probed, each once");
+        let ok = read_provider_reports(&Reader::new(Behavior::Ok, Behavior::Ok), &retired, FAST).await.unwrap();
+        assert_eq!(ok, ReportTally { observed: 2, failed: 0, complete: true });
+        let failing = read_provider_reports(&Reader::new(Behavior::Ok, Behavior::Fail), &retired, FAST).await.unwrap();
+        assert_eq!(failing, ReportTally { observed: 0, failed: 2, complete: true });
+        let inventory = read_provider_reports(&Reader::new(Behavior::Fail, Behavior::Ok), &retired, FAST).await.unwrap();
+        assert!(!inventory.complete && inventory.observed == 0 && inventory.failed > 0);
+    }
+
+    #[tokio::test]
+    async fn a_refresh_retired_while_reading_reports_nothing() {
+        let temp = private_home();
+        let runtime = OwnerRuntime::new(temp.path().into()).unwrap();
+        let retired = Arc::new(AtomicBool::new(false));
+        let mut reader = Reader::new(Behavior::Ok, Behavior::Ok);
+        reader.retire_on_report = Some(retired.clone());
+        assert_eq!(read_provider_reports(&reader, &retired, FAST).await, None);
+        let mut reader = Reader::new(Behavior::Ok, Behavior::Ok);
+        reader.retire_on_report = Some(retired.clone());
+        provider_refresh_job(reader, retired, Arc::downgrade(&runtime.inner), 0, FAST).await;
+        assert!(last_event(&runtime).is_none(), "a retired host records nothing from a late reply");
+    }
+
+    #[tokio::test]
+    async fn a_running_refresh_is_reported_stalled_once_after_its_budget() {
+        let mut refresh = ProviderRefresh {
+            task: tokio::spawn(std::future::pending::<()>()),
+            started: tokio::time::Instant::now(),
+            stalled: false,
+        };
+        assert!(!refresh.newly_stalled(refresh.started + PROVIDER_REFRESH_BUDGET));
+        assert!(refresh.newly_stalled(refresh.started + PROVIDER_REFRESH_STALL));
+        assert!(!refresh.newly_stalled(refresh.started + PROVIDER_REFRESH_STALL * 2), "reported once");
+        refresh.task.abort();
+        assert!(PROVIDER_REFRESH_STALL < PROVIDER_PERIOD && PROVIDER_REFRESH_BUDGET < PROVIDER_REFRESH_STALL);
+        assert!(PROVIDER_PAGE_TIMEOUT < PROVIDER_REFRESH_BUDGET && PROVIDER_REPORT_TIMEOUT < PROVIDER_REFRESH_BUDGET);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stop_waits_for_a_refresh_only_within_a_bound_and_retains_an_unfinished_task() {
+        let temp = private_home();
+        let runtime = OwnerRuntime::new(temp.path().into()).unwrap();
+        let within = Duration::from_millis(50);
+        // An async stall is cancelled after the bound and then released.
+        *runtime.inner.provider_refresh.lock().await = Some(ProviderRefresh {
+            task: tokio::spawn(std::future::pending::<()>()),
+            started: tokio::time::Instant::now(),
+            stalled: false,
+        });
+        assert_eq!(runtime.inner.settle_provider_refresh_within(within).await, Ok(()));
+        assert!(runtime.inner.provider_refresh.lock().await.is_none());
+        // A task that cannot observe cancellation keeps its handle, so a later
+        // stop waits for the same task instead of detaching it.
+        let (release, blocked) = std::sync::mpsc::channel::<()>();
+        *runtime.inner.provider_refresh.lock().await = Some(ProviderRefresh {
+            task: tokio::spawn(async move { let _ = blocked.recv(); }),
+            started: tokio::time::Instant::now(),
+            stalled: false,
+        });
+        assert_eq!(runtime.inner.settle_provider_refresh_within(within).await, Err("provider_refresh_drain_unknown"));
+        assert!(runtime.inner.provider_refresh.lock().await.is_some());
+        release.send(()).unwrap();
+        assert_eq!(runtime.inner.settle_provider_refresh_within(Duration::from_secs(5)).await, Ok(()));
+        assert!(runtime.inner.provider_refresh.lock().await.is_none());
+    }
+
+    #[test]
+    fn drain_detail_names_only_known_drains() {
+        assert_eq!(drain_detail("native_provider_drain_unknown"), "native_provider_drain_unknown");
+        assert_eq!(drain_detail("native_shared_execution_drain_unknown"), "native_shared_execution_drain_unknown");
+        assert_eq!(drain_detail("management_drain_unavailable"), "management_drain_unavailable");
+        assert_eq!(drain_detail("/Users/x/.codex/auth.json secret"), "native_owner_drain_required");
+        assert_eq!(static_code("native_provider_drain_unknown"), "native_owner_drain_required", "returned codes stay coarse");
     }
 
     #[test]

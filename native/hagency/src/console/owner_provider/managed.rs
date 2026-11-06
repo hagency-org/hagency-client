@@ -1,6 +1,19 @@
 //! The selected original namespace, never the profile-default provider home.
 use super::*;
 use hagency_store::ManagedLaunch;
+
+/// SIGKILL normally reaps within milliseconds. The read-only probes report a
+/// child not observed exiting in time instead of waiting on it: `TrackedChild`
+/// keeps its reap custody, which the provider drain still observes.
+const PROBE_STOP_TIMEOUT: Duration = Duration::from_secs(10);
+
+async fn stop_probe(process: &mut Process) -> Result<(), ProviderError> {
+    match tokio::time::timeout(PROBE_STOP_TIMEOUT, process.child.kill()).await {
+        Ok(Ok(())) => Ok(()),
+        _ => Err(failure(409, "provider_stop_unknown")),
+    }
+}
+
 pub(in crate::console) struct NamespaceLogin {
     process: Process,
     paths: ProviderPaths,
@@ -101,11 +114,7 @@ pub(in crate::console) async fn inspect_models(
     .map_err(|_| failure(504, "provider_catalog_timeout"))
     .and_then(|v| v);
     // Do not return a successful snapshot without observing child cleanup.
-    process
-        .child
-        .kill()
-        .await
-        .map_err(|_| failure(409, "provider_stop_unknown"))?;
+    stop_probe(&mut process).await?;
     result
 }
 
@@ -130,7 +139,7 @@ pub(in crate::console) async fn inspect_resource(
         launch.check().map_err(|_| failure(409,"provider_namespace_unavailable"))?;
         Ok(result)
     }).await.map_err(|_| failure(504,"provider_identity_timeout")).and_then(|v|v);
-    process.child.kill().await.map_err(|_| failure(409,"provider_stop_unknown"))?;
+    stop_probe(&mut process).await?;
     if deadline <= std::time::Instant::now() { return Err(failure(409,"provider_identity_unavailable")); }
     result
 }
@@ -179,7 +188,7 @@ async fn inspect_quota_inner(
         Ok(report)
     })
         .await.map_err(|_|failure(504,"provider_identity_timeout")).and_then(|v|v);
-    process.child.kill().await.map_err(|_|failure(409,"provider_stop_unknown"))?;
+    stop_probe(&mut process).await?;
     selected_reference(&paths.codex_home,paths.shared)?;
     if deadline<=std::time::Instant::now() {return Err(failure(409,"provider_identity_unavailable"));}
     result
