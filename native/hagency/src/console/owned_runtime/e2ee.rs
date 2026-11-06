@@ -224,6 +224,77 @@ fn store_passphrase(root: &Path) -> Result<String, RuntimeError> {
         Err(_) => Err(RuntimeError::Profile),
     }
 }
+/// File in an Agent's device directory that keeps its last working grant.
+const SAVED_GRANT: &str = "device-grant-v1";
+
+/// Each grant is a Matrix login for the Agent's device, and the homeserver
+/// limits logins per address (Palpo's default: 5, then one about every 5.5
+/// minutes). Every Agent device logs in from the server's own address, so a
+/// daemon that logged in every device on each start ran out after a few
+/// restarts and its Agents could not read encrypted messages for many minutes.
+/// The grant is saved beside the device's store (private file, like the store
+/// key) and reused by the next process for the same device generation; a
+/// rejected or stale grant falls back to a fresh one.
+fn saved_grant_path(directory: &Path, agent: &str) -> std::path::PathBuf {
+    directory
+        .join("agent-devices")
+        .join(format!("{:x}", Sha256::digest(agent.as_bytes())))
+        .join(SAVED_GRANT)
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SavedGrant {
+    version: u8,
+    generation: u64,
+    homeserver: String,
+    user_id: String,
+    device_id: String,
+    access_token: String,
+}
+
+pub(in crate::console) fn load_grant(
+    directory: &Path,
+    agent: &str,
+    homeserver: &str,
+    generation: u64,
+) -> Option<E2eeDeviceGrant> {
+    let bytes = hagency_store::private::read_secret(&saved_grant_path(directory, agent)).ok()?;
+    let saved: SavedGrant = serde_json::from_slice(&bytes).ok()?;
+    (saved.version == 1
+        && saved.generation == generation
+        && saved.homeserver == homeserver
+        && saved.device_id.starts_with("HAGE2EE")
+        && saved.device_id.len() <= 64
+        && saved.device_id.bytes().all(|b| b.is_ascii_alphanumeric())
+        && !saved.access_token.is_empty())
+    .then_some(E2eeDeviceGrant {
+        user_id: saved.user_id,
+        device_id: saved.device_id,
+        access_token: saved.access_token,
+        homeserver: saved.homeserver,
+    })
+}
+
+/// Best effort: a grant that cannot be saved only costs a login next start.
+pub(in crate::console) fn save_grant(directory: &Path, agent: &str, grant: &E2eeDeviceGrant, generation: u64) {
+    let saved = SavedGrant {
+        version: 1,
+        generation,
+        homeserver: grant.homeserver.clone(),
+        user_id: grant.user_id.clone(),
+        device_id: grant.device_id.clone(),
+        access_token: grant.access_token.clone(),
+    };
+    if let Ok(bytes) = serde_json::to_vec(&saved) {
+        let _ = hagency_store::private::replace(&saved_grant_path(directory, agent), &bytes);
+    }
+}
+
+pub(in crate::console) fn forget_grant(directory: &Path, agent: &str) {
+    let _ = std::fs::remove_file(saved_grant_path(directory, agent));
+}
+
 fn unknown_token(error: &matrix_sdk::Error) -> bool {
     matches!(
         error.client_api_error_kind(),
@@ -265,7 +336,10 @@ impl AgentDevice {
             })?;
         match &event.kind {
             TimelineEventKind::Decrypted(d) => Ok(request_message(d, requester)),
-            _ => Err(RuntimeError::Transport), // Keys can arrive later; retain the candidate.
+            _ => {
+                tracing::debug!(stage = "encrypted_candidate_undecrypted", room_id = %room_id, "Agent device has no key for the encrypted candidate yet");
+                Err(RuntimeError::Transport) // Keys can arrive later; retain the candidate.
+            }
         }
     }
 
@@ -701,6 +775,46 @@ mod tests {
             format!("hagency_{:x}", Sha256::digest(b"evt_1"))
         );
         assert_ne!(txn("hagency_seen", "evt_1"), txn("hagency", "evt_1"));
+    }
+
+    #[test]
+    fn saved_grant_is_private_and_reused_only_for_its_generation_and_homeserver() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = temporary.path();
+        private_directory(&directory.join("agent-devices")).unwrap();
+        private_directory(
+            &directory
+                .join("agent-devices")
+                .join(format!("{:x}", Sha256::digest(b"agent"))),
+        )
+        .unwrap();
+        let grant = E2eeDeviceGrant {
+            user_id: "@agent:example.test".into(),
+            device_id: "HAGE2EEABC123".into(),
+            access_token: "fixture-token".into(),
+            homeserver: "https://example.test/".into(),
+        };
+        save_grant(directory, "agent", &grant, 3);
+        let loaded = load_grant(directory, "agent", "https://example.test/", 3).unwrap();
+        assert_eq!(
+            (loaded.user_id, loaded.device_id, loaded.access_token),
+            (grant.user_id.clone(), grant.device_id.clone(), grant.access_token.clone())
+        );
+        // A new device generation or another homeserver never reuses it.
+        assert!(load_grant(directory, "agent", "https://example.test/", 4).is_none());
+        assert!(load_grant(directory, "agent", "https://other.test/", 3).is_none());
+        assert!(load_grant(directory, "other", "https://example.test/", 3).is_none());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(saved_grant_path(directory, "agent"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o077, 0);
+        }
+        forget_grant(directory, "agent");
+        assert!(load_grant(directory, "agent", "https://example.test/", 3).is_none());
     }
 
     #[test]

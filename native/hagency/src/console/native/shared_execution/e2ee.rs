@@ -1,7 +1,10 @@
 //! Ordinary Matrix devices on the enrolled execution computer. Wire records
 //! contain event references; decrypted prompts and answers stay on this host.
 use super::*;
-use crate::console::{device_execution::E2eeDeviceGrant, owned_runtime::e2ee::AgentDevice};
+use crate::console::{
+    device_execution::E2eeDeviceGrant,
+    owned_runtime::e2ee::{AgentDevice, forget_grant, load_grant, save_grant},
+};
 use hagency_agent_local::inbox::Dispatch;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -107,6 +110,19 @@ pub(super) async fn device(io: &Io, b: &Bound, assignment: &str) -> Result<Arc<A
     {
         return Ok(d.clone());
     }
+    let generation = b.scope.device.generation();
+    // First open in this process: reuse the grant an earlier daemon saved, so a
+    // restart costs no Matrix login. A revoked device always takes a new grant.
+    if !devices.contains_key(&key) {
+        if let Some(saved) = load_grant(&root, assignment, b.scope.device.origin(), generation) {
+            if let Ok(d) = AgentDevice::open_notifying(saved, &root, assignment, Some(WORK_CHANGED.clone())).await {
+                let d = Arc::new(d);
+                devices.insert(key, d.clone());
+                return Ok(d);
+            }
+            forget_grant(&root, assignment);
+        }
+    }
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
     struct Grant {
@@ -139,11 +155,13 @@ pub(super) async fn device(io: &Io, b: &Bound, assignment: &str) -> Result<Arc<A
         access_token: grant.value.access_token,
         homeserver: b.scope.device.origin().into(),
     };
+    let saved = grant.clone();
     let d = Arc::new(
         AgentDevice::open_notifying(grant, &root, assignment, Some(WORK_CHANGED.clone()))
             .await
             .map_err(|_| failure(503, "shared_crypto_device_unavailable"))?,
     );
+    save_grant(&root, assignment, &saved, generation);
     devices.insert(key, d.clone());
     Ok(d)
 }
