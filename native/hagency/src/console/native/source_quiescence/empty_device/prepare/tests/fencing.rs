@@ -112,7 +112,7 @@ async fn native_optional_source_fence_keeps_original_backup_and_permanent_refusa
                 &f.temp.path().join("installation"),
                 Instant::now() + Duration::from_secs(10),
                 || true
-            ), Err(hagency_store::Error::LocalAuthority)),
+            ), Err(hagency_store::Error::ResourceSetupRequired)),
             "permanent refusal must reject the legacy writer after all native locks are released"
         );
         registry.shutdown().await.unwrap();

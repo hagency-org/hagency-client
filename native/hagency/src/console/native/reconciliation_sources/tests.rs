@@ -1,4 +1,7 @@
 use super::*;
+#[cfg(feature = "resource-adoption")]
+#[path = "historical_schema.rs"]
+pub(in crate::console::native) mod historical_schema;
 use hagency_core::project::Resource;
 use serde_json::{Value, json};
 use std::{
