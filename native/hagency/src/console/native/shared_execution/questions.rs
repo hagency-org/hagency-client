@@ -413,31 +413,6 @@ fn now_ms() -> u64 {
         .map_or(0, |d| d.as_millis() as u64)
 }
 
-#[cfg(test)]
-mod budget_tests {
-    use super::*;
-
-    #[test]
-    fn questions_in_one_turn_share_one_wait() {
-        let start = tokio::time::Instant::now();
-        let minutes = |n: u64| Duration::from_secs(60 * n);
-        let mut budget = WaitBudget::new(minutes(10));
-        assert_eq!(budget.next(start), Some(minutes(10)));
-        budget.start(start);
-        // A second question while the first waits gets only what is left.
-        assert_eq!(budget.next(start + minutes(3)), Some(minutes(7)));
-        budget.stop(start + minutes(4));
-        assert_eq!(budget.next(start + minutes(20)), Some(minutes(6)), "idle time is free");
-        budget.start(start + minutes(20));
-        budget.stop(start + minutes(25));
-        assert_eq!(budget.next(start + minutes(30)), Some(minutes(1)));
-        budget.start(start + minutes(30));
-        budget.stop(start + minutes(30) + Duration::from_secs(40));
-        // Twenty seconds left of ten minutes is too little to ask anyone.
-        assert_eq!(budget.next(start + minutes(31)), None);
-    }
-}
-
 /// The supervised driver tests substitute only the Matrix boundary: posting a
 /// card or its edit, and the answers that reached the Agent's device from
 /// current members. Card building, answer checks, the wait, the Codex
@@ -510,5 +485,30 @@ impl QuestionIo for Fixture {
             .filter(|(sender, _)| self.members.contains(sender))
             .map(|(sender, content)| Candidate { sender, content })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn questions_in_one_turn_share_one_wait() {
+        let start = tokio::time::Instant::now();
+        let minutes = |n: u64| Duration::from_secs(60 * n);
+        let mut budget = WaitBudget::new(minutes(10));
+        assert_eq!(budget.next(start), Some(minutes(10)));
+        budget.start(start);
+        // A second question while the first waits gets only what is left.
+        assert_eq!(budget.next(start + minutes(3)), Some(minutes(7)));
+        budget.stop(start + minutes(4));
+        assert_eq!(budget.next(start + minutes(20)), Some(minutes(6)), "idle time is free");
+        budget.start(start + minutes(20));
+        budget.stop(start + minutes(25));
+        assert_eq!(budget.next(start + minutes(30)), Some(minutes(1)));
+        budget.start(start + minutes(30));
+        budget.stop(start + minutes(30) + Duration::from_secs(40));
+        // Twenty seconds left of ten minutes is too little to ask anyone.
+        assert_eq!(budget.next(start + minutes(31)), None);
     }
 }
