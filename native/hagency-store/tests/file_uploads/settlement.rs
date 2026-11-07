@@ -297,6 +297,7 @@ fn child(root: &Path, phase: &str) {
 #[test]
 fn native_upload_settlement_process() {
     if let Some(phase) = std::env::var_os("HAGENCY_SETTLEMENT_FIXTURE_PHASE") {
+        hagency_platform::legacy_writer::test_support::initialize_process_root().unwrap();
         let root =
             std::path::PathBuf::from(std::env::var_os("HAGENCY_SETTLEMENT_FIXTURE_ROOT").unwrap());
         if phase == "write" {

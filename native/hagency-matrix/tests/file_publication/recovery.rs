@@ -228,6 +228,7 @@ pub(super) async fn child() -> bool {
     let Some(path) = std::env::var_os(ENV) else {
         return false;
     };
+    hagency_platform::legacy_writer::test_support::initialize_process_root().unwrap();
     let bytes = std::fs::read(&path).unwrap();
     assert!(bytes.len() < 4096);
     let value: Value = serde_json::from_slice(&bytes).unwrap();

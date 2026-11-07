@@ -123,7 +123,7 @@ fn legacy_writer_child() {
                 assert!(if locked {
                     matches!(result, Err(Error::Locked))
                 } else {
-                    matches!(result, Err(Error::LocalAuthority))
+                    matches!(result, Err(Error::ResourceSetupRequired))
                 });
             }
             assert!(matches!(
@@ -141,7 +141,7 @@ fn legacy_writer_child() {
                 assert!(if locked {
                     matches!(result, Err(Error::Locked))
                 } else {
-                    matches!(result, Err(Error::LocalAuthority))
+                    matches!(result, Err(Error::ResourceSetupRequired))
                 });
             }
             assert!(!out.exists());

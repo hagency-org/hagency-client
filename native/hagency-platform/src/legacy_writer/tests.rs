@@ -2,6 +2,31 @@ use super::*;
 
 #[test]
 fn shared_lifetime_custody_blocks_exclusive_until_last_connection_guard_drops() {
+    const CHILD: &str = "HAGENCY_SHARED_LIFETIME_CUSTODY_CHILD";
+    if std::env::var_os(CHILD).as_deref() != Some(std::ffi::OsStr::new("1")) {
+        // Create the guards only after exec, with no sibling tests running.
+        // A parallel test can fork while these guards are held; CLOEXEC does
+        // not release that child's inherited locks until it reaches exec.
+        let name = concat!(
+            module_path!(),
+            "::shared_lifetime_custody_blocks_exclusive_until_last_connection_guard_drops"
+        )
+        .strip_prefix("hagency_platform::")
+        .unwrap();
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([name, "--exact", "--test-threads=1", "--nocapture"])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&result.stdout);
+        assert!(
+            result.status.success() && stdout.contains("test result: ok. 1 passed;"),
+            "isolated custody assertion did not pass ({:?}):\n{stdout}\n{}",
+            result.status,
+            String::from_utf8_lossy(&result.stderr)
+        );
+        return;
+    }
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("authority");
     let a = LegacyWriterGuard::isolated_for_tests(&root).unwrap();

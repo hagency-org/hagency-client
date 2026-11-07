@@ -18,7 +18,7 @@ struct Fixture {
 }
 impl Fixture {
     fn new(kind: Kind, mode: &str, policy: ToolPolicy) -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
         let directory = root.path().canonicalize().unwrap();
         for name in ["home", "provider", "work", "outside"] {
             fs::create_dir(directory.join(name)).unwrap();

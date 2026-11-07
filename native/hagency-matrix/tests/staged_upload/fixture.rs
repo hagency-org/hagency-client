@@ -484,6 +484,7 @@ pub(crate) async fn child_settlement() -> bool {
     let Some(path) = std::env::var_os(CHILD) else {
         return false;
     };
+    hagency_platform::legacy_writer::test_support::initialize_process_root().unwrap();
     let bytes = std::fs::read(&path).unwrap();
     assert!(bytes.len() < 4096);
     let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();

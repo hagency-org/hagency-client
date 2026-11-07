@@ -1,23 +1,26 @@
-//! Board #78 acceptance: two dispatches on two threads of ONE agent, driven
-//! through the production owned-dispatch path (`Operation::start`), resolve to
-//! DISTINCT per-thread worktrees and share no file visibility.
+//! Two threads use distinct operator-created worktrees through the production
+//! owned-dispatch path (`Operation::start`). The operator registers each private
+//! root and selects its opaque workspace resource for the corresponding dispatch.
+//! Requesters cannot choose host directories or bootstrap commands.
 //!
 //! The child (the offline `hagency-execution-probe`) writes its request log
 //! (`owned-dispatch.requests`) and entry markers into its OWN working directory,
-//! and echoes that directory back as `thread/start.cwd` (ADR-116). So a
-//! per-thread worktree is observable: the two `thread/start.cwd` values differ,
-//! live under the worktrees root, and are not the shared engagement workspace.
+//! and echoes that directory back as `thread/start.cwd` (ADR-116).
+//! The two `thread/start.cwd` values and retained files prove separate working
+//! directories. This does not assert automatic thread routing or OS isolation.
 
 #[path = "../../hagency-store/tests/common/mod.rs"]
 mod common;
 use common::*;
-use hagency_core::authority::ProjectRequest;
+use hagency_core::authority::{ProjectRequest, verify_request};
 use hagency_core::tasks::*;
-use hagency_execution::{Host, Limits, Operation, Protocol, ordinary_launch_path};
+use hagency_execution::{
+    Host, Limits, Operation, Protocol, WorktreeManager, WorktreeSpec, ordinary_launch_path,
+};
 use hagency_store::{DomainRepository, DomainStore, EffectOutcome};
 use serde_json::json;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
@@ -83,12 +86,10 @@ fn thread_cwd(requests: &Path) -> String {
 }
 
 #[tokio::test]
-async fn native_worktree_two_threads_distinct_worktrees() {
+async fn native_worktree_threads_use_operator_registered_workspaces() {
     let root = hagency_platform::legacy_writer::test_support::initialized_tempdir().unwrap();
 
-    // The agent's own workspace root. TS resolves the worktree repository from
-    // the agent workdir (backend-v2.js:2057 `agent.workdir || agent.homeDir`),
-    // so THIS directory is the repository `git worktree add` branches from.
+    // The operator's repository is the source for the explicit local worktrees.
     let work = root.path().join("agent-workspace");
     hagency_store::private::directory(&work).unwrap();
     let work = work.canonicalize().unwrap();
@@ -105,13 +106,22 @@ async fn native_worktree_two_threads_distinct_worktrees() {
     db.register(&registration()).unwrap();
     let pool = resource("pool", "seat", 1000);
     db.put_resource(&pool).unwrap();
-    // TS per-agent mode (backend-v2.js:2994, resolve at :2057-2075): the
-    // workspace settings ride the AGENT record through the production
-    // admission path — not a host or serve-level switch.
-    let mut value = serde_json::to_value(request("allocation", "Worker", &pool, 100)).unwrap();
-    value["agentDefinition"]["workspaceMode"] = json!("worktree");
-    value["agentDefinition"]["worktreesDir"] = json!(worktrees.to_string_lossy().into_owned());
-    let request: ProjectRequest = serde_json::from_value(value).unwrap();
+    let request = request("allocation", "Worker", &pool, 100);
+    let forbidden = root.path().join("requester-worktrees");
+    let bootstrap_marker = root.path().join("requester-bootstrap");
+    for (field, value) in [
+        ("workspaceMode", json!("worktree")),
+        ("worktreesDir", json!(forbidden)),
+        ("worktreeBootstrap", json!(["touch", bootstrap_marker])),
+    ] {
+        let mut value_with_override = serde_json::to_value(&request).unwrap();
+        value_with_override["agentDefinition"][field] = value;
+        let hostile: ProjectRequest = serde_json::from_value(value_with_override).unwrap();
+        let refusal =
+            verify_request(&registration(), hostile.clone(), observation(&hostile)).unwrap_err();
+        assert_eq!(refusal.0, "a request cannot set the agent's workspace");
+    }
+    assert!(!forbidden.exists() && !bootstrap_marker.exists());
     let proof = proof(&request);
     let engagement = db.admit(&proof, 1000).unwrap();
     db.approve("approved", &proof, 1000).unwrap();
@@ -139,18 +149,45 @@ async fn native_worktree_two_threads_distinct_worktrees() {
         thread_root: Some("$thread-b".into()),
     })
     .unwrap();
-    db.register_workspace("work").unwrap();
+    // There is no requester-controlled worktree mode. Local operator APIs
+    // create the roots and register them before either thread can dispatch.
+    let manager = WorktreeManager::new();
+    let make_worktree = |thread: &str| {
+        let info = manager
+            .ensure(WorktreeSpec {
+                repository_path: work.to_string_lossy().into_owned(),
+                worktrees_dir: worktrees.to_string_lossy().into_owned(),
+                agent_id: engagement.id.clone(),
+                thread_root_event_id: thread.into(),
+                bootstrap: None,
+            })
+            .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&info.path, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        info.path
+    };
+    let work_a = make_worktree("$thread-a");
+    let work_b = make_worktree("$thread-b");
+    fs::write(work_a.join("only-thread-a"), "thread a").unwrap();
+    fs::write(work_b.join("only-thread-b"), "thread b").unwrap();
+    db.register_workspace("work-a").unwrap();
+    db.register_workspace("work-b").unwrap();
     let domain = DomainStore::start(db, 16).unwrap();
 
-    // The shared engagement workspace is the ONLY registered root; the
-    // per-thread worktree is resolved at dispatch time from the scope's
-    // thread root + the operator worktree config.
+    // The host opens only the two private roots explicitly registered by the
+    // operator. The queued dispatch selects one of these opaque resources.
     let host = |env: BTreeMap<OsString, OsString>| {
         Host::new(
             binary(),
             binary(),
             env,
-            BTreeMap::from([("work".into(), work.clone())]),
+            BTreeMap::from([
+                ("work-a".into(), work_a.clone()),
+                ("work-b".into(), work_b.clone()),
+            ]),
         )
         .unwrap()
     };
@@ -171,12 +208,12 @@ async fn native_worktree_two_threads_distinct_worktrees() {
         }
         env
     };
-    let dispatch = |id: &str, session: &str, task: &str| DispatchInput {
+    let dispatch = |id: &str, session: &str, task: &str, workspace: &str| DispatchInput {
         id: id.into(),
         session_id: session.into(),
         task_id: Some(task.into()),
         resources: vec![ResourceLease {
-            id: "work".into(),
+            id: workspace.into(),
             exclusive: true,
         }],
         payload: json!({"instruction": "offline"}),
@@ -193,7 +230,7 @@ async fn native_worktree_two_threads_distinct_worktrees() {
         .await
         .unwrap();
     domain
-        .enqueue_dispatch(dispatch("dispatch-a", "session-a", "task-a"))
+        .enqueue_dispatch(dispatch("dispatch-a", "session-a", "task-a", "work-a"))
         .await
         .unwrap();
     let cap_a = domain
@@ -216,7 +253,7 @@ async fn native_worktree_two_threads_distinct_worktrees() {
         .await
         .unwrap();
     domain
-        .enqueue_dispatch(dispatch("dispatch-b", "session-b", "task-b"))
+        .enqueue_dispatch(dispatch("dispatch-b", "session-b", "task-b", "work-b"))
         .await
         .unwrap();
     let cap_b = domain
@@ -264,6 +301,24 @@ async fn native_worktree_two_threads_distinct_worktrees() {
         Path::new(&cwd_b).starts_with(&worktrees_root),
         "thread B cwd {cwd_b} must live under the worktrees root"
     );
+    assert_eq!(
+        BTreeSet::from([cwd_a, cwd_b]),
+        BTreeSet::from([
+            ordinary_launch_path(&work_a).unwrap(),
+            ordinary_launch_path(&work_b).unwrap(),
+        ])
+    );
+    assert_eq!(
+        fs::read_to_string(work_a.join("only-thread-a")).unwrap(),
+        "thread a"
+    );
+    assert_eq!(
+        fs::read_to_string(work_b.join("only-thread-b")).unwrap(),
+        "thread b"
+    );
+    assert!(!work_a.join("only-thread-b").exists());
+    assert!(!work_b.join("only-thread-a").exists());
+    assert!(!forbidden.exists() && !bootstrap_marker.exists());
 
     domain.shutdown().await.unwrap();
 }

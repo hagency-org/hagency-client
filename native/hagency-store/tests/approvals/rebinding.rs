@@ -248,9 +248,27 @@ fn approval_binding_schema93_recovers_removed_binding_generation_from_context() 
             |r| r.get(0),
         )
         .unwrap();
-    // Reconstruct schema 93: neither later additive table existed then.
-    sql.execute_batch("DROP TABLE IF EXISTS owner_operator_graph_recipients; DROP TABLE IF EXISTS owner_operator_graph_outbox; DROP TABLE IF EXISTS owner_operator_graph_commands; DROP TABLE IF EXISTS owner_operator_graphs; DROP TABLE IF EXISTS owner_operator_graph_archive_chunks; DROP TABLE IF EXISTS owner_operator_graph_archives; DROP TABLE owned_dispatch_execution_policies; DROP TABLE approval_binding_incarnations; DROP TRIGGER IF EXISTS owner_resource_amended_ceiling_retained;DROP TABLE IF EXISTS owner_resource_ceiling_amendments;DROP TABLE IF EXISTS owner_shared_tool_policies;PRAGMA user_version=93;")
+    // Reconstruct schema 93 without retaining later additions or table shapes.
+    common::remove_owner_resource_additions_after_schema98(&sql);
+    sql.execute_batch("DROP TABLE IF EXISTS owner_operator_graph_recipients; DROP TABLE IF EXISTS owner_operator_graph_outbox; DROP TABLE IF EXISTS owner_operator_graph_commands; DROP TABLE IF EXISTS owner_operator_graphs; DROP TABLE IF EXISTS owner_operator_graph_archive_chunks; DROP TABLE IF EXISTS owner_operator_graph_archives; DROP TABLE owned_dispatch_execution_policies; DROP TABLE approval_binding_incarnations;")
         .unwrap();
+    common::restore_empty_historical_tables(
+        &sql,
+        &[
+            include_str!("../../src/migrations/077-owner-managed-agents.sql"),
+            include_str!("../../src/migrations/079-owner-managed-fences.sql"),
+            include_str!("../../src/migrations/081-owner-managed-runtime.sql"),
+            include_str!("../../src/migrations/082-owner-shared-execution.sql"),
+            include_str!("../../src/migrations/084-owner-shared-start-intents.sql"),
+        ],
+        &[
+            "owner_managed_agents",
+            "owner_managed_fences",
+            "owner_shared_work_observations",
+            "owner_shared_start_intents",
+        ],
+    );
+    sql.pragma_update(None, "user_version", 93).unwrap();
     drop(sql);
     let Fixture {
         root, db, rooms, ..
