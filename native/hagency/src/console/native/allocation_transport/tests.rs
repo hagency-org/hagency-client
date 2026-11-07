@@ -405,6 +405,7 @@ async fn server(state: Arc<Mutex<State>>) -> (String, tokio::task::JoinHandle<()
                             if !state.lock().unwrap().missing_demand_capability {
                                 caps.push("shared-durable-demand-v1");
                             }
+                            #[cfg(feature = "shared-execution")]
                             if managed_agents::shared::demand_retry_enabled(&state.lock().unwrap()) {
                                 caps.push("shared-demand-retry-v1");
                             }
