@@ -4,6 +4,7 @@ mod context_io;
 mod e2ee;
 mod history;
 mod approvals;
+pub(in crate::console::native) mod questions;
 mod demand_io;
 mod demands;
 mod io;

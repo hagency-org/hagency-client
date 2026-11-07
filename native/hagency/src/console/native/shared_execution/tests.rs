@@ -9,6 +9,9 @@ mod contexts;
 #[cfg(feature="shared-context")]
 #[path="encrypted_execution_tests.rs"]
 mod encrypted;
+#[cfg(feature="shared-context")]
+#[path="question_tests.rs"]
+mod question_runs;
 #[cfg(feature = "shared-successors")]
 #[path = "attempt_tests.rs"]
 mod attempts;

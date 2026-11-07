@@ -49,6 +49,8 @@ static DEVICES: LazyLock<Mutex<HashMap<String, Arc<AgentDevice>>>> =
 pub(in crate::console) struct AgentDevice {
     client: Client,
     pub(in crate::console) approvals: crate::encrypted_approvals::Inbox,
+    /// Room members' answers to this Agent's question cards.
+    pub(in crate::console) questions: crate::agent_questions::Inbox,
     revoked: Arc<AtomicBool>,
     sync: tokio::task::AbortHandle,
 }
@@ -391,6 +393,7 @@ impl AgentDevice {
         // The first sync uploads this device's identity and one-time keys, so
         // the owner's client starts sharing room keys with it.
         let approvals = crate::encrypted_approvals::Inbox::attach(&client);
+        let questions = crate::agent_questions::Inbox::attach(&client);
         client
             .sync_once(SyncSettings::default().timeout(Duration::ZERO))
             .await
@@ -400,6 +403,7 @@ impl AgentDevice {
         Ok(Self {
             client,
             approvals,
+            questions,
             revoked,
             sync,
         })
@@ -485,6 +489,89 @@ impl AgentDevice {
         let content = reply_content(dispatch, body)?;
         self.send(dispatch, txn("hagency", &dispatch.id), content)
             .await
+    }
+
+    /// Posts one question card, or its edit, under a fixed transaction, so a
+    /// retry after an interruption returns the original event. Encrypted
+    /// whenever the Room is. Unlike a reply, a card has no server-delivered
+    /// plaintext twin, so a plaintext Room gets it in plaintext.
+    pub(in crate::console) async fn send_room_message(
+        &self,
+        room: &str,
+        txn: &str,
+        content: serde_json::Value,
+    ) -> Result<String, RuntimeError> {
+        let room_id = OwnedRoomId::try_from(room).map_err(|_| RuntimeError::Request)?;
+        let room = self
+            .client
+            .get_room(&room_id)
+            .ok_or(RuntimeError::Transport)?;
+        let txn: OwnedTransactionId = txn.into();
+        match room.send_raw("m.room.message", content).with_transaction_id(&txn).await {
+            Ok(sent) => Ok(sent.response.event_id.to_string()),
+            Err(error) => {
+                if unknown_token(&error) {
+                    self.revoked.store(true, Ordering::Release);
+                }
+                tracing::warn!(stage = "agent_device", %error, "Question card send failed");
+                Err(RuntimeError::Transport)
+            }
+        }
+    }
+
+    /// Answers to one question card from current members of its Room, oldest
+    /// first, each handed out once. In an encrypted Room an answer counts only
+    /// when its Megolm sender is authenticated as the event's sender. The
+    /// Agent's own events never answer. Content is not checked here.
+    pub(in crate::console) async fn question_answers(
+        &self,
+        room: &str,
+        card_event_id: &str,
+    ) -> Result<Vec<crate::agent_questions::Received>, RuntimeError> {
+        let room_id = OwnedRoomId::try_from(room).map_err(|_| RuntimeError::Request)?;
+        let room = self
+            .client
+            .get_room(&room_id)
+            .ok_or(RuntimeError::Transport)?;
+        // Room keys can arrive after the answer: retry undecryptable references.
+        // Each pass is bounded; anything left waits for the next pass.
+        for id in self.questions.due_undecrypted(room_id.as_str(), card_event_id, 4) {
+            let Ok(event_id) = OwnedEventId::try_from(id.as_str()) else { continue };
+            if let Ok(Ok(event)) = tokio::time::timeout(Duration::from_secs(2), room.event(&event_id, None)).await
+                && let TimelineEventKind::Decrypted(decrypted) = &event.kind
+                && let Ok(value) = decrypted.event.deserialize_as::<serde_json::Value>()
+            {
+                self.questions.decrypted(room_id.as_str(), &value, Some(&decrypted.encryption_info));
+            }
+        }
+        let encrypted = room
+            .latest_encryption_state()
+            .await
+            .map_err(|_| RuntimeError::Transport)?
+            .is_encrypted();
+        let own = self.client.user_id().map(|u| u.to_string());
+        let mut answers = Vec::new();
+        let mut unsure = Vec::new();
+        for received in self.questions.take(room_id.as_str(), card_event_id, 4) {
+            if !received.admissible(encrypted, own.as_deref()) {
+                continue;
+            }
+            let Ok(user) = OwnedUserId::try_from(received.sender.as_str()) else { continue };
+            match tokio::time::timeout(Duration::from_secs(2), room.get_member(&user)).await {
+                Ok(Ok(Some(member)))
+                    if *member.membership()
+                        == matrix_sdk::ruma::events::room::member::MembershipState::Join =>
+                {
+                    answers.push(received)
+                }
+                // Not a current member: never an answer.
+                Ok(Ok(_)) => {}
+                // Membership unknown for now: keep the answer for the next pass.
+                _ => unsure.push(received),
+            }
+        }
+        self.questions.requeue(unsure);
+        Ok(answers)
     }
 
     pub(in crate::console) async fn send_shared_reply(
@@ -707,6 +794,38 @@ mod tests {
             serde_json::json!({"msgtype":"m.text","body":"replacement"});
         event.event = serde_json::from_value(edit).unwrap();
         assert!(request_message(&event, "@owner:example.test").is_none());
+    }
+
+    #[test]
+    fn agent_question_cards_and_answers_never_become_encrypted_requests() {
+        use matrix_sdk::deserialized_responses::{AlgorithmInfo, EncryptionInfo};
+        let event = |sender: &str, raw: serde_json::Value| DecryptedRoomEvent {
+            event: serde_json::from_value(raw).unwrap(),
+            encryption_info: Arc::new(EncryptionInfo {
+                sender: sender.try_into().unwrap(),
+                sender_device: Some("DEVICE".into()),
+                forwarder: None,
+                algorithm_info: AlgorithmInfo::MegolmV1AesSha2 {
+                    curve25519_key: "key".into(),
+                    sender_claimed_keys: Default::default(),
+                    session_id: Some("session".into()),
+                },
+                verification_state: VerificationState::Verified,
+            }),
+            unsigned_encryption_info: None,
+        };
+        // A member's answer, even one that mentions the Agent, is not a text
+        // message: the addressing check never confirms it as a new request.
+        let answer = serde_json::json!({"type":crate::agent_questions::ANSWER_EVENT,"event_id":"$answer","room_id":"!room:example.test",
+            "sender":"@member:example.test","origin_server_ts":1,"content":{"version":1,"cardId":"aq_x",
+            "answers":{"db":{"option":"SQLite"}},"body":"@agent SQLite","m.mentions":{"user_ids":["@agent:example.test"]},
+            "m.relates_to":{"rel_type":"m.reference","event_id":"$card"}}});
+        assert!(request_message(&event("@member:example.test", answer), "@member:example.test").is_none());
+        // Nor is another Agent's card, whatever its fallback text says.
+        let card = serde_json::json!({"type":"m.room.message","event_id":"$card","room_id":"!room:example.test",
+            "sender":"@_hagency_agt_other:example.test","origin_server_ts":1,"content":{"msgtype":crate::agent_questions::MSGTYPE,
+            "body":"@agent please answer","m.mentions":{"user_ids":["@agent:example.test"]}}});
+        assert!(request_message(&event("@_hagency_agt_other:example.test", card), "@_hagency_agt_other:example.test").is_none());
     }
 
     #[test]

@@ -448,7 +448,9 @@ async fn work_loop(
     turn.started();
     let mut capture = issued.bind_started_turn(process).await.map_err(store)?;
     let mut usage = telemetry.shared_turn(sink.command(), &work, &call_id, process);
+    let mut questions = super::questions::Questions::default();
     let terminal_result: Result<SharedWorkReceipt, NativeError> = async {
+      if start_stop.is_none() { super::questions::enable(process)?; }
       let mut stop_reason = start_stop;
       let terminal = loop {
         if let Some(error) = stop_reason.take() { return Err(error); }
@@ -485,7 +487,20 @@ async fn work_loop(
             Ok(v) => v,
             Err(e) => return Err(e),
         };
-        let Some(event) = event else { continue; };
+        let Some(event) = event else {
+            if stop_reason.is_some() || super::stop_capture::requested(cancel) { continue; }
+            if questions.busy() {
+                // Answers and expiries; the lease keeps renewing meanwhile.
+                let ready=prepare_while_active(io,r,sink,control,a,cancel,Box::pin(questions.collect(io))).await?;
+                for response in ready {
+                    guarded(cancel,a.until,||async{ super::questions::answer(process,response).await }).await?;
+                }
+                prepare_while_active(io,r,sink,control,a,cancel,Box::pin(questions.publish())).await?;
+            }
+            continue;
+        };
+        let question=event.user_input().cloned();
+        let withdrawn=event.user_input_resolved().cloned();
         let history_call=event.room_history_call().cloned();
         if let (Some(history),hagency_runtime::codex::session::ObservationKind::Usage(evidence))=(history.as_mut(),event.observation().kind()) {history.observe_usage(evidence);}
         let ended = matches!(
@@ -516,9 +531,18 @@ async fn work_loop(
             guarded(cancel,a.until,|| io.check_running(sink.command())).await?;
             guarded(cancel,a.until,||async{ process.respond_shared_room_history(&call,content).await.map_err(|_|failure(409,"shared_history_response_failed")) }).await?;
         }
+        if let Some(id)=withdrawn { questions.withdrawn(&id); }
+        if let Some(request)=question {
+            // The card goes to the room; the model waits for its answer.
+            if let Some(response)=prepare_while_active(io,r,sink,control,a,cancel,Box::pin(questions.ask(io,&work,request))).await? {
+                guarded(cancel,a.until,||async{ super::questions::answer(process,response).await }).await?;
+            }
+        }
       };
       Ok(terminal)
     }.await;
+    // Cards still waiting when the turn ended close unanswered.
+    questions.close();
     let terminal = match terminal_result {
         Ok(receipt) => receipt,
         Err(error) => {
@@ -528,9 +552,16 @@ async fn work_loop(
             } else {
                 let _ = capture.record_unknown().await;
             }
+            // Final usage first; then show the closed cards, best effort.
+            let _ = tokio::time::timeout(Duration::from_secs(3), questions.publish()).await;
             return Err(error);
         }
     };
+    if questions.busy() {
+        // Cosmetic only: never hold the reply back for long.
+        let _ = tokio::time::timeout(Duration::from_secs(10),
+            prepare_while_active(io,r,sink,control,a,cancel,Box::pin(questions.publish()))).await;
+    }
     // Reply delivery uses the central durable Matrix transaction. Keep this same
     // process/activity alive while it is pending; do not make a successor turn.
     loop {

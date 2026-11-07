@@ -549,8 +549,10 @@ async fn work_loop(
     let mut usage = telemetry.shared_turn(&sink.command().original_runtime_command, &work, &call_id, process);
     let approvals_enabled=sink.command().tool_policy.as_ref().is_some_and(|p|p.mode=="standard");
     let mut approvals=super::approvals::Approvals::default();
+    let mut questions=super::questions::Questions::default();
     let terminal_result: Result<SharedWorkReceipt, NativeError> = async {
       if approvals_enabled && start_stop.is_none() {super::approvals::enable(process)?;}
+      if start_stop.is_none() {super::questions::enable(process)?;}
       let mut stop_reason = start_stop;
       let terminal = loop {
         if let Some(error) = stop_reason.take() { return Err(error); }
@@ -588,13 +590,33 @@ async fn work_loop(
             Err(e) => return Err(e),
         };
         let Some(event)=event else {
-            if stop_reason.is_some() || super::stop_capture::requested(cancel) || !approvals_enabled { continue; }
+            if stop_reason.is_some() || super::stop_capture::requested(cancel) { continue; }
+            if questions.busy() {
+                // Answers and expiries; the lease keeps renewing meanwhile.
+                let ready=prepare_while_active(io,r,sink,control,a,cancel,Box::pin(questions.collect(io))).await?;
+                for response in ready {
+                    guarded(cancel,a.until,||async{ super::questions::answer(process,response).await }).await?;
+                }
+                prepare_while_active(io,r,sink,control,a,cancel,Box::pin(questions.publish())).await?;
+            }
+            if !approvals_enabled { continue; }
             guarded(cancel,a.until,|| maybe_renew(io,r,sink,control,a)).await?;
             let b=io.bound().await?;
-            if let Some(receipt)=guarded(cancel,a.until,|| approvals.poll(io,&b,&work,&a.lease.authority,a.until,process,&mut capture,&mut usage)).await? {break receipt;}
+            let receipt=guarded(cancel,a.until,|| approvals.poll(io,&b,&work,&a.lease.authority,a.until,process,&mut capture,&mut usage)).await?;
+            // Question updates that arrived while a decision was being sent.
+            let (asked,withdrawn)=approvals.take_questions();
+            if let Some(receipt)=receipt {break receipt;}
+            for id in withdrawn { questions.withdrawn(&id); }
+            for request in asked {
+                if let Some(response)=prepare_while_active(io,r,sink,control,a,cancel,Box::pin(questions.ask(io,&work,request))).await? {
+                    guarded(cancel,a.until,||async{ super::questions::answer(process,response).await }).await?;
+                }
+            }
             continue;
         };
         let approval=event.approval().cloned();
+        let question=event.user_input().cloned();
+        let withdrawn=event.user_input_resolved().cloned();
         let history_call=event.room_history_call().cloned();
         if let (Some(history),hagency_runtime::codex::session::ObservationKind::Usage(evidence))=(history.as_mut(),event.observation().kind()) {history.observe_usage(evidence);}
         let ended = matches!(
@@ -629,9 +651,18 @@ async fn work_loop(
             let b=io.bound().await?;
             guarded(cancel,a.until,|| approvals.register(io,&b,&work,&a.lease.authority,a.until,process,request)).await?;
         }
+        if let Some(id)=withdrawn { questions.withdrawn(&id); }
+        if let Some(request)=question {
+            // The card goes to the room; the model waits for its answer.
+            if let Some(response)=prepare_while_active(io,r,sink,control,a,cancel,Box::pin(questions.ask(io,&work,request))).await? {
+                guarded(cancel,a.until,||async{ super::questions::answer(process,response).await }).await?;
+            }
+        }
       };
       Ok(terminal)
     }.await;
+    // Cards still waiting when the turn ended close unanswered.
+    questions.close();
     let terminal = match terminal_result {
         Ok(receipt) => receipt,
         Err(error) => {
@@ -641,9 +672,16 @@ async fn work_loop(
             } else {
                 let _ = capture.record_unknown().await;
             }
+            // Final usage first; then show the closed cards, best effort.
+            let _ = tokio::time::timeout(Duration::from_secs(3), questions.publish()).await;
             return Err(error);
         }
     };
+    if questions.busy() {
+        // Cosmetic only: never hold the reply back for long.
+        let _ = tokio::time::timeout(Duration::from_secs(10),
+            prepare_while_active(io,r,sink,control,a,cancel,Box::pin(questions.publish()))).await;
+    }
     // Reply delivery uses the central durable Matrix transaction. Keep this same
     // process/activity alive while it is pending; do not make a successor turn.
     loop {

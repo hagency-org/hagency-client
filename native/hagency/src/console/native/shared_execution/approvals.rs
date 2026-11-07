@@ -25,6 +25,10 @@ struct Pending {
 #[derive(Default)]
 pub(super) struct Approvals {
     pending: Vec<Pending>,
+    /// The model's questions, and Codex's withdrawals of them, that arrived
+    /// while a decision was being sent. The driver hands them on.
+    questions: Vec<hagency_runtime::codex::session::UserInputRequest>,
+    withdrawn: Vec<hagency_runtime::codex::RequestId>,
 }
 pub(super) fn enable(process: &mut OwnedSession) -> Result<(), NativeError> {
     process
@@ -36,6 +40,15 @@ pub(super) fn enable(process: &mut OwnedSession) -> Result<(), NativeError> {
     process.enable_owner_wait_expiry().map_err(|_| invalid())
 }
 impl Approvals {
+    /// Question updates observed by `poll`, in order, each handed out once.
+    pub(super) fn take_questions(
+        &mut self,
+    ) -> (
+        Vec<hagency_runtime::codex::session::UserInputRequest>,
+        Vec<hagency_runtime::codex::RequestId>,
+    ) {
+        (std::mem::take(&mut self.questions), std::mem::take(&mut self.withdrawn))
+    }
     pub async fn register(
         &mut self,
         io: &Io,
@@ -260,6 +273,8 @@ impl Approvals {
                             .shared_event(update, *observation)
                             .map_err(|_| invalid())?;
                         let next = event.approval().cloned();
+                        let question = event.user_input().cloned();
+                        let withdrawn = event.user_input_resolved().cloned();
                         let ended =
                             matches!(event.observation().kind(), ObservationKind::TurnEnded(_));
                         let pending = usage.pending(&event);
@@ -275,6 +290,8 @@ impl Approvals {
                         if let Some(next) = next {
                             self.register(io, b, work, a, until, process, next).await?;
                         }
+                        self.questions.extend(question);
+                        self.withdrawn.extend(withdrawn);
                     }
                 }
             }
