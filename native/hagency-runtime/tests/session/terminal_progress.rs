@@ -139,3 +139,27 @@ async fn native_codex_session_terminal_progress() {
     assert_eq!(session.phase(), Phase::Running);
     assert!(session.outcome().is_none());
 }
+
+/// Live 2026-11-07: a website-building turn started a dev server that kept
+/// running, and Codex completed the turn without completing that command. The
+/// answer must be kept; an agent message still active stays a contradiction.
+#[tokio::test]
+async fn native_codex_session_turn_completes_with_a_command_still_running() {
+    let (mut session, mut peer) = running().await;
+    update(&mut session, &mut peer, command(false)).await.unwrap();
+    update(&mut session, &mut peer, item_event("answer", "site ready", false)).await.unwrap();
+    update(&mut session, &mut peer, item_event("answer", "site ready", true)).await.unwrap();
+    assert!(matches!(
+        update(&mut session, &mut peer, end("completed")).await.unwrap(),
+        Update::TurnEnded
+    ));
+    assert!(matches!(session.outcome(), Some(Outcome::Completed { text }) if text == "site ready"));
+
+    let (mut session, mut peer) = running().await;
+    update(&mut session, &mut peer, item_event("answer", "partial", false)).await.unwrap();
+    assert_eq!(
+        update(&mut session, &mut peer, end("completed")).await.err(),
+        Some(Error::State),
+        "an unfinished answer still contradicts a completed turn"
+    );
+}

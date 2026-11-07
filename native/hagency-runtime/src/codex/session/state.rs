@@ -518,12 +518,22 @@ impl State {
                 if turn.get("error").is_some_and(|v| !v.is_null()) {
                     return Err(Error::Malformed);
                 }
-                if self
+                // A unified-exec command can outlive its turn, for example a dev
+                // server the model started to preview a site: Codex completes
+                // the turn without completing that item. It cannot change the
+                // answer, and the runner's process tree is stopped after the
+                // run. Any other item still active contradicts the completion.
+                let running: Vec<&str> = self
                     .items
                     .values()
-                    .any(|item| item.phase == ItemPhase::Active)
-                {
+                    .filter(|item| item.phase == ItemPhase::Active)
+                    .map(|item| item.kind.as_str())
+                    .collect();
+                if running.iter().any(|kind| *kind != "commandExecution") {
                     return Err(Error::State);
+                }
+                if !running.is_empty() {
+                    tracing::info!(running_commands = running.len(), "Codex turn completed with commands still running");
                 }
                 let mut text = String::new();
                 for id in &self.final_ids {
