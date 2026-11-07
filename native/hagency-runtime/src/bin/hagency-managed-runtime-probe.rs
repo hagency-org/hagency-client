@@ -46,7 +46,9 @@ fn main() -> io::Result<()> {
         if method == "initialized" {
             continue;
         }
-        if (mode.starts_with("text-workspace") || mode == "text-room-history-usage") && matches!(method, "thread/start" | "turn/start") {
+        if (mode.starts_with("text-workspace") || mode.starts_with("text-question") || mode == "text-room-history-usage")
+            && matches!(method, "thread/start" | "turn/start")
+        {
             let name = if method == "thread/start" { "thread-request.json" } else { "turn-request.json" };
             fs::write(root.join(name), serde_json::to_vec(&v["params"])?)?;
         }
@@ -303,7 +305,8 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
-/// The model's question for the `text-question*` modes (Codex 0.166 shape).
+/// The model's question for the `text-question*` modes (Codex 0.166 shape;
+/// a Default-mode question is not blocking).
 fn question_params(mode: &str) -> Value {
     let database = json!({"id":"db","header":"Database","question":"Which database should the service use?","isOther":true,"isSecret":false,
         "options":[{"label":"Postgres (Recommended)","description":"Durable and familiar."},{"label":"SQLite","description":"Simplest to run."}]});
@@ -313,7 +316,7 @@ fn question_params(mode: &str) -> Value {
         "text-question-only-secret" => json!([token]),
         _ => json!([database]),
     };
-    json!({"threadId":"text-thread","turnId":"text-turn","itemId":"ask-1","isBlocking":true,"autoResolutionMs":null,"questions":questions})
+    json!({"threadId":"text-thread","turnId":"text-turn","itemId":"ask-1","isBlocking":false,"autoResolutionMs":null,"questions":questions})
 }
 
 fn question_answered(root: &Path, response: &Value) -> io::Result<()> {

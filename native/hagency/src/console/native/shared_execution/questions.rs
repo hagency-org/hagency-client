@@ -368,6 +368,15 @@ impl Questions {
     }
 }
 
+/// Before the thread starts. Every shared turn may ask its room, so Codex
+/// offers the model its question tool. Never fails the run: a thread without
+/// it tells the model the tool is for Plan mode only.
+pub(super) fn offer(process: &mut OwnedSession) {
+    if let Err(error) = process.offer_shared_user_input_tool() {
+        tracing::warn!(?error, "Agent question tool not offered; the model decides on its own");
+    }
+}
+
 /// Every shared turn may ask its room. Without this (a session that is not
 /// running), the session itself answers each question with nothing.
 pub(super) fn enable(process: &mut OwnedSession) -> Result<(), NativeError> {

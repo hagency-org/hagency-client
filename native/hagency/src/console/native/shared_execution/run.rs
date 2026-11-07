@@ -415,6 +415,7 @@ async fn work_loop(
     prepare_while_active(io,r,sink,control,a,cancel,async {
         io.check_running(sink.command()).await?;
         if history.is_some() { process.enable_shared_room_history().map_err(|_|failure(409,"shared_history_tool_unavailable"))?; }
+        super::questions::offer(process);
         process.start_shared_text_thread_for_room(&work.room_id).await.map_err(|error| {
             tracing::warn!(?error, "Shared Agent thread setup failed before call admission");
             failure(409, "shared_execution_thread_unknown")

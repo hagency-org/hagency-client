@@ -568,6 +568,16 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> SessionD
         self.state.max_items = 4096;
         Ok(())
     }
+    /// Explicit host opt-in before the thread starts: Codex offers the model
+    /// its question tool on this thread (in Default mode it does so only when
+    /// asked). It only offers the tool; the host still takes the questions
+    /// with `enable_user_input` once the turn runs, and without that the
+    /// session answers each one with no answers.
+    pub fn offer_user_input_tool(&mut self) -> Result<(), Error> {
+        if self.phase() != Phase::Ready { return Err(Error::State); }
+        self.settings.user_input_tool = true;
+        Ok(())
+    }
     pub async fn respond_room_history(&mut self, call: &super::RoomHistoryCall, content: String) -> Result<(), Error> {
         if self.phase() != Phase::Running || !self.settings.room_history
             || !self.history_pending.contains(&call.id)

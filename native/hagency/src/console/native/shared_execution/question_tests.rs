@@ -101,6 +101,12 @@ fn response(f: &Fixture) -> Option<Value> {
     std::fs::read(path).ok().map(|bytes| serde_json::from_slice(&bytes).unwrap())
 }
 
+/// What the driver asked Codex for when it opened the run's thread.
+fn thread_request(f: &Fixture) -> Value {
+    let path = f._root.path().join("shared-probe/thread-request.json");
+    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+}
+
 fn turn_starts(f: &Fixture) -> usize {
     std::fs::read_to_string(f._root.path().join("shared-probe/methods"))
         .unwrap()
@@ -116,8 +122,15 @@ async fn native_shared_question_member_answer_resumes_the_run_with_exactly_that_
         let (f, t, work) = prepared(lane).await;
         let (t, sent) = t.with_crypto_fixture(Some(PROMPT.into()));
         let (t, room) = t.with_question_fixture(&[MEMBER], Duration::from_secs(60));
+        let _ = std::fs::remove_file(f._root.path().join("shared-probe/thread-request.json"));
         start(&f, &t, lane, "text-question").await;
         let (card_event, card, content) = card(&room, lane).await;
+        // Codex offers the model its question tool only when the thread asks.
+        assert_eq!(
+            thread_request(&f)["config"]["features.default_mode_request_user_input"],
+            true,
+            "{lane}"
+        );
         // The card sits in the run's thread, under the message that started it,
         // with a plain-text fallback for other clients.
         assert_eq!(card.trigger_event_id, work.event_id, "{lane}");

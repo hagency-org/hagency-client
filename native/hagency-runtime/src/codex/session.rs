@@ -151,6 +151,7 @@ pub struct Settings {
     unrestricted: bool,
     task_mcp: Option<TaskMcp>,
     room_history: bool,
+    user_input_tool: bool,
 }
 impl Settings {
     pub(crate) fn room_history_enabled(&self) -> bool { self.room_history }
@@ -182,6 +183,7 @@ impl Settings {
             unrestricted: false,
             task_mcp: None,
             room_history: false,
+            user_input_tool: false,
         })
     }
     pub(crate) fn shared_mode_matches(&self, mode: Option<&str>) -> bool {
@@ -252,6 +254,13 @@ impl Settings {
         }
         params["config"]["sandbox_workspace_write.network_access"] = false.into();
         params["config"]["sandbox_workspace_write.writable_roots"] = json!([]);
+        if self.user_input_tool {
+            // Codex lists `request_user_input` for every thread but lets the
+            // model call it in Default mode only with this feature; without
+            // it the tool says "Plan mode" and refuses each call. A thread's
+            // tools are fixed when it starts, so this cannot wait for the turn.
+            params["config"]["features.default_mode_request_user_input"] = true.into();
+        }
         if self.room_history {
             params["dynamicTools"] = json!([room_history::definition()]);
             // Keep the model's own compaction point. A fixed 24,000-token limit

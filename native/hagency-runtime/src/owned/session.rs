@@ -412,6 +412,15 @@ impl OwnedSession {
         let result = operation.runner.session.respond_room_history(call, content).await;
         operation.finish(result)
     }
+    /// Before the thread starts: the host will show this run's questions to
+    /// its room, so Codex offers the model its question tool. The turn must
+    /// still opt in with `enable_shared_user_input`.
+    pub fn offer_shared_user_input_tool(&mut self) -> Result<(), session::Error> {
+        if !self.text_source.has_live_activity() {
+            return Err(session::Error::State);
+        }
+        self.session.offer_user_input_tool()
+    }
     /// The host shows this turn's questions to its room and answers each one
     /// (Codex `request_user_input`). Without it every question is answered
     /// with no answers, so the model decides on its own.

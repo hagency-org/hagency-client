@@ -112,6 +112,43 @@ async fn native_codex_question_without_a_host_is_answered_with_nothing() {
 }
 
 #[tokio::test]
+async fn native_codex_question_tool_is_requested_at_thread_start_only_when_offered() {
+    // Codex 0.166 lets the model call `request_user_input` in Default mode only
+    // with this feature, and fixes a thread's tools when the thread starts.
+    for offered in [false, true] {
+        let (mut session, mut peer) = fixture(false);
+        initialize(&mut session, &mut peer).await;
+        if offered {
+            session.offer_user_input_tool().unwrap();
+        }
+        let request = open(&mut session, &mut peer, false).await;
+        assert_eq!(request["method"], "thread/start");
+        let mut config = json!({
+            "sandbox_workspace_write.network_access": false,
+            "sandbox_workspace_write.writable_roots": []
+        });
+        if offered {
+            config["features.default_mode_request_user_input"] = true.into();
+        }
+        assert_eq!(request["params"]["config"], config, "offered: {offered}");
+        assert_eq!(
+            session.offer_user_input_tool().err(),
+            Some(Error::State),
+            "too late once the thread started"
+        );
+        start(&mut session, &mut peer, vec![]).await.unwrap();
+        // Offering the tool is not taking the questions: without the turn's
+        // own opt-in the session answers at once with no answers.
+        assert!(matches!(
+            update(&mut session, &mut peer, question_event(46)).await.unwrap(),
+            Update::Notice
+        ));
+        assert_eq!(read(&mut peer.stdin).await, json!({"id":46,"result":{"answers":{}}}));
+        finish(&mut session, &mut peer).await;
+    }
+}
+
+#[tokio::test]
 async fn native_codex_question_secret_is_declined_never_answered() {
     let (mut session, mut peer) = running().await;
     session.enable_user_input().unwrap();
