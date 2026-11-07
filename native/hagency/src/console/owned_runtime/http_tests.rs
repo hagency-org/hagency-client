@@ -44,6 +44,7 @@ struct WireState {
     processing: usize,
     processing_input: Option<Value>,
     first_reply: Option<Value>,
+    matrix_device_keys: BTreeMap<String, Value>,
 }
 impl WireState {
     fn history(&self) -> Value {
@@ -59,6 +60,7 @@ impl WireState {
     }
     fn respond(&mut self, path: &str, input: &Value, origin: &str, unknown: bool) -> (u16, Value) {
         self.paths.push(path.into());
+        let path = path.split('?').next().unwrap();
         let until = wall_ms() + 20_000;
         let generation = self.device_generation.max(1);
         let lease = |epoch| json!({"lease":{"agentId":"agent-a","ownerUserId":"uid","deviceId":"device-a","deviceGeneration":generation,"epoch":epoch,"expiresAtMs":until}});
@@ -104,6 +106,36 @@ impl WireState {
             "/hagency/api/v1/sessions/current" => (200, json!({})),
             "/hagency/api/v1/execution/leases/release" => (200, json!({"released":true})),
             "/hagency/api/v1/execution/history" => (200, self.history()),
+            // Typed executors always prepare their Agent device and check
+            // encrypted candidates before polling ordinary dispatches. Keep
+            // this plaintext fixture on that real device/bootstrap path.
+            "/hagency/api/v1/execution/e2ee-device" => (
+                200,
+                json!({"userId":"@agent:test","deviceId":format!("HAGE2EEFIXTURE{generation}"),"accessToken":"fixture-agent-sdk-only","homeserver":origin}),
+            ),
+            "/hagency/api/v1/execution/e2ee-candidates" => {
+                assert_eq!(input["lease"]["epoch"], self.epoch);
+                (200, json!({"events":[]}))
+            }
+            "/_matrix/client/versions" => (200, json!({"versions":["v1.11","v1.12"]})),
+            "/_matrix/client/v3/keys/upload" => {
+                if let Some(device) = input.get("device_keys") {
+                    assert_eq!(device["user_id"], "@agent:test");
+                    let id = device["device_id"].as_str().unwrap();
+                    assert!(id.starts_with("HAGE2EEFIXTURE"));
+                    assert!(device["keys"].as_object().unwrap().len() >= 2);
+                    self.matrix_device_keys.insert(id.into(), device.clone());
+                }
+                (200, json!({"one_time_key_counts":{"signed_curve25519":50}}))
+            }
+            "/_matrix/client/v3/keys/query" => (
+                200,
+                json!({"device_keys":{"@agent:test":self.matrix_device_keys},"master_keys":{},"self_signing_keys":{},"user_signing_keys":{},"failures":{}}),
+            ),
+            "/_matrix/client/v3/sync" => (
+                200,
+                json!({"next_batch":"fixture-empty","rooms":{"join":{}},"to_device":{"events":[]},"device_one_time_keys_count":{"signed_curve25519":50}}),
+            ),
             "/hagency/api/v1/execution/leases/acquire" => {
                 assert_eq!(input["takeover"], false);
                 if self.restart_busy_remaining > 0 {
@@ -292,6 +324,18 @@ async fn server(
                             .contains(&format!("authorization: bearer {}", "b".repeat(64)))
                     );
                 }
+                if path.starts_with("/_matrix/client/") && path != "/_matrix/client/versions" {
+                    assert!(
+                        headers
+                            .to_ascii_lowercase()
+                            .contains("authorization: bearer fixture-agent-sdk-only")
+                    );
+                }
+                // Model the homeserver's empty long poll without a busy loop;
+                // the initial sync still returns immediately for bootstrap.
+                if path.starts_with("/_matrix/client/v3/sync?") && path.contains("timeout=30000") {
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                }
                 let (mut code, mut value) =
                     state.lock().unwrap().respond(path, &body, &origin, unknown);
                 if path.ends_with("/events/processing") {
@@ -448,6 +492,11 @@ async fn fixture(unknown: bool, budget: u64) {
     fixture_with_processing_failure(unknown, budget, 0).await;
 }
 async fn fixture_with_processing_failure(unknown: bool, budget: u64, processing_failure: u8) {
+    // Agent device opens share a process-wide lock. Separate these fixtures
+    // before starting their clocks so another test's real SDK bootstrap cannot
+    // consume the two-turn case's fixed execution/lease-renewal deadline.
+    static DEVICE_FIXTURE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _device_fixture = DEVICE_FIXTURE.lock().await;
     use hagency_agent_local::{
         Budget, Layer, Limit, ModelProfile, Period, Policy, RequestPolicy, ToolPolicy,
     };
@@ -622,6 +671,8 @@ async fn fixture_with_processing_failure(unknown: bool, budget: u64, processing_
     }
     {
         let s = state.lock().unwrap();
+        assert!(!s.matrix_device_keys.is_empty());
+        assert!(s.paths.iter().any(|p| p.ends_with("/e2ee-candidates")));
         assert!(s.paths.iter().any(|p| p.ends_with("/events/ack")));
         assert!(s.paths.iter().any(|p| p.ends_with("/events/start")));
         assert_eq!(
@@ -1011,10 +1062,16 @@ async fn typed_http_runtime_intent_positive_restore_child() {
         })
         .await
         .unwrap();
-    async fn wait_binding(native: &NativeOwner, binding: &str, online: bool) {
-        tokio::time::timeout(Duration::from_secs(15), async {
+    async fn wait_binding(
+        native: &NativeOwner,
+        state: &Arc<StdMutex<WireState>>,
+        binding: &str,
+        online: bool,
+    ) {
+        let mut status = Value::Null;
+        let ready = tokio::time::timeout(Duration::from_secs(15), async {
             loop {
-                let status = native
+                status = native
                     .execute(Command::Local {
                         agent_id: "agent-a".into(),
                         action: LocalAction::AgentServiceStatus,
@@ -1037,11 +1094,15 @@ async fn typed_http_runtime_intent_positive_restore_child() {
                 tokio::time::sleep(Duration::from_millis(30)).await;
             }
         })
-        .await
-        .unwrap();
+        .await;
+        assert!(
+            ready.is_ok(),
+            "binding {binding} did not reach online={online}: status={status}; paths={:?}",
+            state.lock().unwrap().paths
+        );
     }
-    wait_binding(&stopped, "binding-a", true).await;
-    wait_binding(&stopped, "binding-b", true).await;
+    wait_binding(&stopped, &state, "binding-a", true).await;
+    wait_binding(&stopped, &state, "binding-b", true).await;
     assert_eq!(
         state.lock().unwrap().epoch,
         epoch_before + 1,
@@ -1070,19 +1131,19 @@ async fn typed_http_runtime_intent_positive_restore_child() {
         .unwrap()
         .binding_states
         .insert("binding-d".into(), "active".into());
-    wait_binding(&stopped, "binding-d", true).await;
+    wait_binding(&stopped, &state, "binding-d", true).await;
     state
         .lock()
         .unwrap()
         .binding_states
         .insert("binding-b".into(), "suspended".into());
-    wait_binding(&stopped, "binding-b", false).await;
+    wait_binding(&stopped, &state, "binding-b", false).await;
     state
         .lock()
         .unwrap()
         .binding_states
         .insert("binding-b".into(), "active".into());
-    wait_binding(&stopped, "binding-b", true).await;
+    wait_binding(&stopped, &state, "binding-b", true).await;
     // Restart recovers one owner/device-pinned Agent intent, rather than
     // independently replaying every Room snapshot that discovery published.
     stopped.suspend().await.unwrap();
@@ -1094,10 +1155,10 @@ async fn typed_http_runtime_intent_positive_restore_child() {
     assert_eq!(recovery["recoveries"].as_array().unwrap().len(), 1);
     assert_eq!(recovery["recoveries"][0]["bindingId"], "*");
     assert_eq!(recovery["recoveries"][0]["restored"], true, "{recovery}");
-    wait_binding(&stopped, "binding-a", true).await;
-    wait_binding(&stopped, "binding-b", true).await;
-    wait_binding(&stopped, "binding-d", true).await;
-    wait_binding(&stopped, "binding-c", false).await;
+    wait_binding(&stopped, &state, "binding-a", true).await;
+    wait_binding(&stopped, &state, "binding-b", true).await;
+    wait_binding(&stopped, &state, "binding-d", true).await;
+    wait_binding(&stopped, &state, "binding-c", false).await;
     stopped
         .execute(Command::Local {
             agent_id: "agent-a".into(),
@@ -1160,7 +1221,7 @@ async fn typed_http_runtime_intent_positive_restore_child() {
         .unwrap();
     assert_eq!(status["service"]["reservation"], 15000);
     assert_eq!(status["service"]["effort"], "low");
-    wait_binding(&stopped, "binding-a", true).await;
+    wait_binding(&stopped, &state, "binding-a", true).await;
     let preferences_path = intent_path.with_file_name("agent-service-options.json");
     let saved_preferences = std::fs::read(&preferences_path).unwrap();
     hagency_store::private::replace(&preferences_path, b"{corrupt-preferences").unwrap();
@@ -1210,7 +1271,7 @@ async fn typed_http_runtime_intent_positive_restore_child() {
         })
         .await
         .unwrap();
-    wait_binding(&stopped, "binding-a", true).await;
+    wait_binding(&stopped, &state, "binding-a", true).await;
     std::fs::remove_file(&preferences_path).unwrap();
     let options_lock = hagency_store::private::open(
         &intent_path.with_file_name("agent-service-options.lock"),
