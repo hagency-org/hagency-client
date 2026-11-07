@@ -6,6 +6,12 @@ mod qualification;
 mod rate_limits;
 mod room_history;
 pub use room_history::{RoomHistoryCall, ROOM_HISTORY_TOOL, ROOM_HISTORY_RESULT_BYTES};
+mod user_input;
+pub use user_input::{
+    MAX_USER_INPUT_OPTIONS, MAX_USER_INPUT_QUESTIONS, MAX_USER_INPUT_TEXT_BYTES,
+    OTHER_ANSWER_LABEL, USER_INPUT_METHOD, UserInputAnswer, UserInputOption, UserInputQuestion,
+    UserInputRequest, UserInputResponse,
+};
 pub use rate_limits::{quota_account_digest, RateLimitBucket, RateLimitOrigin, RateLimitSnapshot, RateLimitWindow};
 pub use qualification::QualificationRead;
 mod state;
@@ -97,6 +103,13 @@ pub enum ItemPhase {
 
 pub enum Update {
     RoomHistory(RoomHistoryCall),
+    /// The model asks its user (Codex `request_user_input`). Only a host that
+    /// opted in sees this; it must answer exactly once, possibly with nothing.
+    UserInput(UserInputRequest),
+    /// Codex withdrew a question this host has not answered yet.
+    UserInputResolved {
+        id: super::RequestId,
+    },
     Approval(super::approval::ApprovalRequest),
     /// Upstream callback ended, possibly by cancellation and before applying.
     ApprovalResolved {

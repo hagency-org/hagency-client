@@ -412,6 +412,28 @@ impl OwnedSession {
         let result = operation.runner.session.respond_room_history(call, content).await;
         operation.finish(result)
     }
+    /// The host shows this turn's questions to its room and answers each one
+    /// (Codex `request_user_input`). Without it every question is answered
+    /// with no answers, so the model decides on its own.
+    pub fn enable_shared_user_input(&mut self) -> Result<(), session::Error> {
+        if !self.text_source.has_live_activity() {
+            return Err(session::Error::State);
+        }
+        self.session.enable_user_input()
+    }
+    /// One answer to one question this turn asked. `false`: Codex had already
+    /// withdrawn it and nothing was written.
+    pub async fn respond_shared_user_input(
+        &mut self,
+        response: session::UserInputResponse,
+    ) -> Result<bool, session::Error> {
+        if !self.text_source.has_live_activity() {
+            return Err(session::Error::State);
+        }
+        let operation = Operation::new(self)?;
+        let result = operation.runner.session.respond_user_input(response).await;
+        operation.finish(result)
+    }
     pub async fn start_shared_text_turn(
         &mut self,
         input: String,

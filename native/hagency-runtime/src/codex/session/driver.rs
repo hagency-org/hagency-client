@@ -9,7 +9,7 @@ use super::{
 };
 use crate::codex::{ACKNOWLEDGEMENT_MS, Event, MAX_REQUEST_MS, RequestId, TurnScope, transport};
 use serde_json::Value;
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -57,6 +57,11 @@ pub struct SessionDriver<R, W, E> {
     /// Read-only account quota metadata from this process (never usage).
     rate_limits: super::rate_limits::RateLimitTracker,
     history_pending: BTreeSet<RequestId>,
+    /// The host asks people the model's questions and answers each one.
+    user_input_enabled: bool,
+    /// Every `item/tool/requestUserInput` this session saw, and whether it has
+    /// been answered. Its upstream resolution is never an approval callback.
+    user_input: BTreeMap<RequestId, bool>,
 }
 
 impl<R, W, E> SessionDriver<R, W, E> {
@@ -95,6 +100,8 @@ impl<R, W, E> SessionDriver<R, W, E> {
             policy_declines: 0,
             rate_limits: super::rate_limits::RateLimitTracker::default(),
             history_pending: BTreeSet::new(),
+            user_input_enabled: false,
+            user_input: BTreeMap::new(),
         })
     }
     pub fn settings(&self) -> &Settings {
@@ -252,6 +259,21 @@ impl<R, W, E> SessionDriver<R, W, E> {
         }
         self.approvals_enabled = true;
         Ok(())
+    }
+    /// Explicit host opt-in, once the exact turn is running: the host shows
+    /// the model's questions to people and answers each one exactly once. A
+    /// session without it answers every question itself with no answers, so
+    /// the model decides on its own and the turn goes on.
+    pub fn enable_user_input(&mut self) -> Result<(), Error> {
+        if self.phase() != Phase::Running || self.user_input_enabled {
+            return Err(Error::State);
+        }
+        self.user_input_enabled = true;
+        Ok(())
+    }
+    /// Questions this session handed to the host that are still unanswered.
+    pub fn pending_user_input(&self) -> usize {
+        self.user_input.values().filter(|answered| !**answered).count()
     }
     pub fn phase(&self) -> Phase {
         self.state.phase
@@ -702,6 +724,39 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> SessionD
         operation.finish(result)
     }
 
+    /// Answer one question this session handed to the host, exactly once. The
+    /// response comes only from that request, so it names its own callback,
+    /// thread and turn; anything else is refused without a write. `false`:
+    /// Codex had already withdrawn the question, so nothing was written and
+    /// nothing is owed.
+    pub async fn respond_user_input(
+        &mut self,
+        response: super::UserInputResponse,
+    ) -> Result<bool, Error> {
+        if self.phase() != Phase::Running || !self.user_input_enabled {
+            return Err(Error::State);
+        }
+        if self.thread_id() != Some(response.thread_id.as_str())
+            || self.turn_id() != Some(response.turn_id.as_str())
+            || self.user_input.get(&response.id) != Some(&false)
+        {
+            return Err(Error::Scope);
+        }
+        let id = response.id.clone();
+        // The connection drops a request as soon as it parses Codex's own
+        // resolution, which can be queued behind this answer.
+        if !self.wire.server_request_open(&id) {
+            self.user_input.insert(id, true);
+            return Ok(false);
+        }
+        self.wire
+            .send(transport::Command::RespondUserInput { response })
+            .await
+            .map_err(Error::Transport)?;
+        self.user_input.insert(id, true);
+        Ok(true)
+    }
+
     pub async fn next_update(&mut self) -> Result<Update, Error> {
         if self.phase() != Phase::Running {
             return Err(Error::State);
@@ -737,6 +792,11 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> SessionD
     }
     async fn accept_update(&mut self, event: Event) -> Result<Update, Error> {
         let event = match event {
+            Event::ServerRequest { id, method, params } if method == super::USER_INPUT_METHOD => {
+                self.last_server_request = Some(server_request_shape(&method));
+                self.last_server_request_method = Some(bounded_method(&method));
+                return self.user_input(id, params).await;
+            }
             Event::ServerRequest { id, method, params: Some(params) }
                 if method == "item/tool/call" && self.settings.room_history => {
                 if self.phase() != Phase::Running
@@ -907,11 +967,19 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> SessionD
         })?;
         self.observe_rate_limits(&method, &params);
         self.mcp.observe(&method, &params)?;
-        if self.approvals_enabled && method == "serverRequest/resolved" {
-            let id =
+        if method == "serverRequest/resolved"
+            && (self.approvals_enabled || !self.user_input.is_empty())
+        {
+            let id: RequestId =
                 serde_json::from_value(params.get("requestId").ok_or(Error::Malformed)?.clone())
                     .map_err(|_| Error::Malformed)?;
-            if !self.policy_declined.remove(&id) {
+            if let Some(answered) = self.user_input.remove(&id) {
+                // A question is never an approval callback. Codex withdrawing
+                // one the host still holds tells the host to stop waiting.
+                if !answered {
+                    update = Update::UserInputResolved { id };
+                }
+            } else if self.approvals_enabled && !self.policy_declined.remove(&id) {
                 self.control.resolve(&id);
                 update = Update::ApprovalResolved { id };
             }
@@ -1001,10 +1069,59 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> SessionD
         // `UnsupportedRequest` and collapse every arm into a protocol fault
         // (the macOS shape: `Protocol` where the quiet family or
         // `SettlementUnknown` is owed).
-        if self.wire.pending_server_requests() > 0 && !self.approvals_enabled {
+        // A question still unanswered when the turn ended is moot: the turn
+        // that asked it is over, and the host stops waiting for it.
+        if self.wire.pending_server_requests() > self.pending_user_input() && !self.approvals_enabled {
             return Err(Error::UnsupportedRequest);
         }
         Ok(())
+    }
+
+    /// The model's question (Codex 0.166 `item/tool/requestUserInput`). A
+    /// question from another thread or turn is refused like any callback with
+    /// a substituted identity. A host that opted in receives every valid one;
+    /// otherwise, or when the request cannot be shown, the session answers it
+    /// with no answers and the turn goes on: the model decides on its own,
+    /// which is what Codex itself does when its client cannot ask.
+    async fn user_input(&mut self, id: RequestId, params: Option<Value>) -> Result<Update, Error> {
+        let params = params.unwrap_or(Value::Null);
+        let thread = params.get("threadId").and_then(Value::as_str);
+        let turn = params.get("turnId").and_then(Value::as_str);
+        if self.phase() != Phase::Running
+            || thread != self.thread_id()
+            || turn != self.turn_id()
+            || self.user_input.contains_key(&id)
+        {
+            tracing::warn!(
+                other_thread = thread != self.thread_id(),
+                other_turn = turn != self.turn_id(),
+                "Codex question outside the running turn"
+            );
+            return Err(Error::Scope);
+        }
+        self.observation_kind = super::ObservationKind::Ignored;
+        let parsed = super::UserInputRequest::parse(id.clone(), &params);
+        if self.user_input_enabled
+            && let Ok(request) = parsed
+        {
+            self.user_input.insert(id, false);
+            return Ok(Update::UserInput(request));
+        }
+        match &parsed {
+            Err(error) => tracing::warn!(
+                ?error,
+                "Codex question refused by the adapter; answering with no answers"
+            ),
+            Ok(_) => tracing::debug!("Codex question with no host to ask; answering with no answers"),
+        }
+        let (thread, turn) = (thread.unwrap_or_default().to_owned(), turn.unwrap_or_default().to_owned());
+        let response = super::UserInputResponse::unanswered(id.clone(), &thread, &turn);
+        self.wire
+            .send(transport::Command::RespondUserInput { response })
+            .await
+            .map_err(Error::Transport)?;
+        self.user_input.insert(id, true);
+        Ok(Update::Notice)
     }
 
     async fn call(&mut self, method: &str, params: Value) -> Result<Value, Error> {

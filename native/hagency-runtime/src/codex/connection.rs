@@ -116,6 +116,11 @@ impl Connection {
             .deadline
             .checked_sub(MAX_REQUEST_MS)
     }
+    pub(super) fn server_request_open(&self, id: &RequestId) -> bool {
+        self.server_pending
+            .get(id)
+            .is_some_and(|pending| !pending.responded)
+    }
     pub(super) fn has_prepared_approval(&self, id: &RequestId) -> bool {
         self.server_pending
             .get(id)
@@ -310,6 +315,31 @@ impl Connection {
         { return Err(Error::Identity); }
         let bytes = encode(Message::Response { id: id.clone(), result: json!({"contentItems":[{"type":"inputText","text":content}],"success":true}) })?;
         self.server_pending.remove(id);
+        Ok(bytes)
+    }
+
+    /// The one answer to a pending `item/tool/requestUserInput`. Like the
+    /// history response it removes the pending scope, so an approval, another
+    /// callback, an expired request or a second answer cannot be written here.
+    pub fn respond_user_input(
+        &mut self,
+        response: super::session::UserInputResponse,
+        now_ms: u64,
+    ) -> Result<Vec<u8>, Error> {
+        self.tick(now_ms)?;
+        let pending = self.server_pending.get(&response.id).ok_or(Error::Identity)?;
+        if pending.responded
+            || pending.method != super::session::USER_INPUT_METHOD
+            || pending.thread_id.as_deref() != Some(response.thread_id.as_str())
+            || !super::session::UserInputResponse::well_formed(&response.result)
+        {
+            return Err(Error::Identity);
+        }
+        let bytes = encode(Message::Response {
+            id: response.id.clone(),
+            result: response.result,
+        })?;
+        self.server_pending.remove(&response.id);
         Ok(bytes)
     }
 

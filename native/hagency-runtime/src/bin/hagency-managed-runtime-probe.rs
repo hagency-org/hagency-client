@@ -32,6 +32,12 @@ fn main() -> io::Result<()> {
             history.response(root, &v)?;
             continue;
         }
+        if mode.starts_with("text-question") && v.get("method").is_none() {
+            // The host's one answer to the model's question: record it and
+            // finish the turn with exactly what was answered.
+            question_answered(root, &v)?;
+            continue;
+        }
         let Some(method) = v["method"].as_str() else {
             continue;
         };
@@ -170,6 +176,11 @@ fn main() -> io::Result<()> {
                 history.begin()?;
                 continue;
             }
+            if mode.starts_with("text-question") {
+                println!("{}", json!({"id":"question-1","method":"item/tool/requestUserInput","params":question_params(&mode)}));
+                io::stdout().flush()?;
+                continue;
+            }
             if mode.ends_with("interrupt-usage") { continue; }
             if matches!(&*mode, "text-block" | "text-renew") {
                 let deadline = std::time::Instant::now()
@@ -290,4 +301,34 @@ fn main() -> io::Result<()> {
         io::stdout().flush()?;
     }
     Ok(())
+}
+
+/// The model's question for the `text-question*` modes (Codex 0.166 shape).
+fn question_params(mode: &str) -> Value {
+    let database = json!({"id":"db","header":"Database","question":"Which database should the service use?","isOther":true,"isSecret":false,
+        "options":[{"label":"Postgres (Recommended)","description":"Durable and familiar."},{"label":"SQLite","description":"Simplest to run."}]});
+    let token = json!({"id":"token","header":"Token","question":"Paste the deploy token","isOther":false,"isSecret":true,"options":null});
+    let questions = match mode {
+        "text-question-secret" => json!([database, token]),
+        "text-question-only-secret" => json!([token]),
+        _ => json!([database]),
+    };
+    json!({"threadId":"text-thread","turnId":"text-turn","itemId":"ask-1","isBlocking":true,"autoResolutionMs":null,"questions":questions})
+}
+
+fn question_answered(root: &Path, response: &Value) -> io::Result<()> {
+    if response["id"] != "question-1" {
+        return Err(io::Error::other("answer for an unknown question"));
+    }
+    let result = &response["result"];
+    fs::write(root.join("question-response.json"), serde_json::to_vec(result)?)?;
+    let answer = format!("Answer: {}", serde_json::to_string(&result["answers"])?);
+    let usage = json!({"totalTokens":300,"inputTokens":200,"cachedInputTokens":100,"cacheWriteInputTokens":20,"outputTokens":100,"reasoningOutputTokens":0});
+    println!("{}", json!({"method":"serverRequest/resolved","params":{"threadId":"text-thread","requestId":"question-1"}}));
+    println!("{}", json!({"method":"thread/tokenUsage/updated","params":{"threadId":"text-thread","turnId":"text-turn","tokenUsage":{"total":usage,"last":usage,"modelContextWindow":10000}}}));
+    println!("{}", json!({"method":"item/started","params":{"threadId":"text-thread","turnId":"text-turn","startedAtMs":1,"item":{"type":"agentMessage","id":"answer","text":"","phase":"final_answer"}}}));
+    println!("{}", json!({"method":"item/agentMessage/delta","params":{"threadId":"text-thread","turnId":"text-turn","itemId":"answer","delta":answer}}));
+    println!("{}", json!({"method":"item/completed","params":{"threadId":"text-thread","turnId":"text-turn","completedAtMs":2,"item":{"type":"agentMessage","id":"answer","text":answer,"phase":"final_answer"}}}));
+    println!("{}", json!({"method":"turn/completed","params":{"threadId":"text-thread","turn":{"id":"text-turn","status":"completed","items":[]}}}));
+    io::stdout().flush()
 }

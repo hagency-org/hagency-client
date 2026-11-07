@@ -105,6 +105,10 @@ pub enum Command {
     RespondApproval {
         response: super::approval::ApprovalResponse,
     },
+    /// The one answer frame for one `item/tool/requestUserInput` request.
+    RespondUserInput {
+        response: super::session::UserInputResponse,
+    },
     RejectServerRequest {
         id: RequestId,
     },
@@ -205,6 +209,10 @@ impl<R, W, E> Driver<R, W, E> {
     /// `serverRequest/resolved` was parsed for the id.
     pub(super) fn prepared_admissible(&self, id: &RequestId) -> bool {
         self.connection.has_prepared_approval(id)
+    }
+    /// Whether the connection still holds this server request unanswered.
+    pub(super) fn server_request_open(&self, id: &RequestId) -> bool {
+        self.connection.server_request_open(id)
     }
 
     /// Read-only progress of the frame currently in the transport's write
@@ -537,6 +545,10 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> Driver<R
             Command::RespondApproval { response } => self
                 .connection
                 .respond_approval(response, now)
+                .map(|bytes| (None, bytes)),
+            Command::RespondUserInput { response } => self
+                .connection
+                .respond_user_input(response, now)
                 .map(|bytes| (None, bytes)),
             Command::RejectServerRequest { id } => self
                 .connection

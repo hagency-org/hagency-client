@@ -352,6 +352,8 @@ impl OwnedSession {
 /// delta. Hosts cannot manufacture or rebind this event from JSON.
 pub struct SharedTextEvent {
     history_call: Option<crate::codex::session::RoomHistoryCall>,
+    user_input: Option<crate::codex::session::UserInputRequest>,
+    user_input_resolved: Option<crate::codex::RequestId>,
     history_tool: bool,
     hosted_web: bool,
     tools: bool,
@@ -362,6 +364,10 @@ pub struct SharedTextEvent {
 }
 impl SharedTextEvent {
     pub fn room_history_call(&self) -> Option<&crate::codex::session::RoomHistoryCall> { self.history_call.as_ref() }
+    /// The model's question, on a session whose host opted in to ask it.
+    pub fn user_input(&self) -> Option<&crate::codex::session::UserInputRequest> { self.user_input.as_ref() }
+    /// Codex withdrew a question the host has not answered yet.
+    pub fn user_input_resolved(&self) -> Option<&crate::codex::RequestId> { self.user_input_resolved.as_ref() }
     /// Only an actual webSearch item on a qualified live-web process.
     pub fn approval(&self) -> Option<&crate::codex::approval::ApprovalRequest> {self.approval.as_ref()}
     pub fn is_authorized_tool(&self) -> bool {self.hosted_web || self.tools || self.history_tool}
@@ -398,6 +404,8 @@ impl OwnedSession {
     }
     pub fn shared_event(&self, update: crate::codex::session::Update, observation: crate::codex::session::Observation) -> Result<SharedTextEvent, Error> {
         let history_call = match &update { crate::codex::session::Update::RoomHistory(call) => Some(call.clone()), _ => None };
+        let user_input = match &update { crate::codex::session::Update::UserInput(request) => Some(request.clone()), _ => None };
+        let user_input_resolved = match &update { crate::codex::session::Update::UserInputResolved { id } => Some(id.clone()), _ => None };
         let history_tool = self.shared_room_history_enabled()
             && matches!(&update, crate::codex::session::Update::Item { kind, .. } if kind == "dynamicToolCall");
         let tools=self.text_source.state.lock().map_err(|_|Error::State)?.tools;
@@ -413,7 +421,7 @@ impl OwnedSession {
             None
         };
         Ok(SharedTextEvent {
-            history_call, history_tool,
+            history_call, history_tool, user_input, user_input_resolved,
             hosted_web, tools, approval,
             source: self.text_source.clone(),
             observation,

@@ -30,6 +30,8 @@ mod live_startup;
 mod unknown_tolerance;
 #[path = "session/room_history.rs"]
 mod room_history;
+#[path = "session/user_input.rs"]
+mod user_input;
 
 type Session = SessionDriver<DuplexStream, DuplexStream, DuplexStream>;
 struct Peer {
@@ -1387,10 +1389,10 @@ async fn native_codex_session_outcomes_unowned_requests_are_answered_and_named()
     // A RECOGNIZED request nobody can own keeps its named refusal; the fixed
     // shape label still names the method (never the payload). Board #94's
     // tolerance is for a method this build does NOT know — asserted after the
-    // loop, where the turn goes on.
+    // loop, where the turn goes on. The model's own questions
+    // (`item/tool/requestUserInput`) have their own path: session/user_input.rs.
     for (method, label) in [
         ("item/commandExecution/requestApproval", "command_approval"),
-        ("item/tool/requestUserInput", "tool_user_input"),
         ("mcpServer/elicitation/request", "mcp_elicitation"),
         ("item/tool/call", "dynamic_tool_call"),
         ("account/chatgptAuthTokens/refresh", "auth_refresh"),
