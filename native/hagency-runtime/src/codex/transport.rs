@@ -338,10 +338,14 @@ impl<R, W, E> Driver<R, W, E> {
                 .as_ref()
                 .is_some_and(|clock| clock().is_some_and(|until| Instant::now() < until))
     }
+    /// A retired or lapsed lease is already over. It reads as the transport's
+    /// own start, never as "now": `check` compares a fresh `Instant::now()`
+    /// against this, and a later "now" would let every check pass, so a wait
+    /// (a person deciding, or answering a question) could outlive the lease.
     fn effective_lifetime(&self) -> Instant {
         self.shared_activity
             .as_ref()
-            .map_or(self.lifetime, |clock| clock().unwrap_or_else(Instant::now))
+            .map_or(self.lifetime, |clock| clock().unwrap_or(self.origin))
     }
     pub(in crate::codex) fn enter_warm_idle(&mut self, until: Instant) -> Result<(), Error> {
         if self.warm_state != WarmState::Preparing
