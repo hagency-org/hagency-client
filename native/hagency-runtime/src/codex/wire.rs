@@ -235,6 +235,12 @@ impl Decoder {
             .position(|&byte| byte == b'\n');
         let length = end.unwrap_or(input.len());
         if length > MAX_FRAME_BYTES.saturating_sub(self.bytes.len()) {
+            tracing::warn!(
+                buffered = self.bytes.len(),
+                incoming = length,
+                limit = MAX_FRAME_BYTES,
+                "Codex frame exceeds the protocol limit"
+            );
             return self.fail(Error::Capacity);
         }
         if length > 0 && self.since.is_none() {

@@ -25,7 +25,9 @@ use serde_json::{Value, json};
 use std::path::{Component, PathBuf};
 
 pub const MAX_TEXT_BYTES: usize = 64 * 1024;
-pub const MAX_ITEMS: usize = 128;
+/// Items in one turn, as listed by `turn/completed`. Every command, web search,
+/// reasoning step and message is an item; research turns exceeded 128.
+pub const MAX_ITEMS: usize = 2048;
 // Streaming deltas count as events; a valid bounded research answer can exceed
 // 4096 notifications. Text, item, queue and lifetime bounds remain independent.
 pub const MAX_EVENTS: usize = 65_536;

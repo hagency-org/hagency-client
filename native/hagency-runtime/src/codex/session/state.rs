@@ -162,6 +162,16 @@ impl State {
     }
 
     pub fn notification(&mut self, method: &str, params: &Value) -> Result<Update, Error> {
+        let result = self.notification_inner(method, params);
+        if let Err(error) = &result {
+            // The method name and phase only, so a refused event can be traced
+            // to its cause; never params or content.
+            tracing::warn!(method, phase = ?self.phase, ?error, "Codex notification refused by the session state");
+        }
+        result
+    }
+
+    fn notification_inner(&mut self, method: &str, params: &Value) -> Result<Update, Error> {
         if self.phase == Phase::Ended {
             return Err(Error::Scope);
         }
@@ -248,12 +258,30 @@ impl State {
             | "item/reasoning/summaryPartAdded"
             | "item/reasoning/textDelta" => {
                 let item_id = id(params, "itemId")?;
-                let item = self.items.get(item_id).ok_or(Error::Scope)?;
-                if item.phase != ItemPhase::Active {
+                let kind = method.split('/').nth(1).ok_or(Error::Malformed)?;
+                // A unified-exec terminal outlives the command item that
+                // opened it: Codex keeps reporting its output and stdin
+                // interaction after that item completed. That is progress for
+                // an earlier command, never permission or completion, so it is
+                // ignored instead of ending the run as a scope violation.
+                let late_terminal = matches!(
+                    method,
+                    "item/commandExecution/outputDelta" | "item/commandExecution/terminalInteraction"
+                );
+                let Some(item) = self.items.get(item_id) else {
+                    if late_terminal {
+                        tracing::debug!(method, "Codex terminal progress for an unknown command item ignored");
+                        return Ok(Update::Progress);
+                    }
+                    return Err(Error::Scope);
+                };
+                if item.kind != kind {
                     return Err(Error::Scope);
                 }
-                let kind = method.split('/').nth(1).ok_or(Error::Malformed)?;
-                if item.kind != kind {
+                if item.phase != ItemPhase::Active {
+                    if late_terminal {
+                        return Ok(Update::Progress);
+                    }
                     return Err(Error::Scope);
                 }
                 if method == "item/commandExecution/terminalInteraction" {
@@ -468,6 +496,7 @@ impl State {
             .and_then(Value::as_array)
             .ok_or(Error::Malformed)?;
         if items.len() > MAX_ITEMS {
+            tracing::warn!(items = items.len(), limit = MAX_ITEMS, "Codex turn exceeds the item limit");
             return Err(Error::Capacity);
         }
         let mut seen = BTreeSet::new();

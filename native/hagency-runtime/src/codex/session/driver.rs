@@ -742,7 +742,17 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> SessionD
                 if self.phase() != Phase::Running
                     || params["threadId"].as_str() != self.thread_id()
                     || params["turnId"].as_str() != self.turn_id()
-                { return Err(Error::Scope); }
+                {
+                    let other_thread = params["threadId"].as_str() != self.thread_id();
+                    let other_turn = params["turnId"].as_str() != self.turn_id();
+                    tracing::warn!(
+                        phase = ?self.phase(),
+                        other_thread,
+                        other_turn,
+                        "Codex room history call outside the running turn"
+                    );
+                    return Err(Error::Scope);
+                }
                 let call = super::RoomHistoryCall::parse(id.clone(), &params)?;
                 if !self.history_pending.insert(id) { return Err(Error::Scope); }
                 self.observation_kind = super::ObservationKind::Ignored;
@@ -767,6 +777,14 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> SessionD
                 let parsed = if params.get("threadId").and_then(Value::as_str) != self.thread_id()
                     || params.get("turnId").and_then(Value::as_str) != self.turn_id()
                 {
+                    let other_thread = params.get("threadId").and_then(Value::as_str) != self.thread_id();
+                    let other_turn = params.get("turnId").and_then(Value::as_str) != self.turn_id();
+                    tracing::warn!(
+                        method = %method_name,
+                        other_thread,
+                        other_turn,
+                        "Codex server request outside the running turn"
+                    );
                     Err(Error::Scope)
                 } else if elicitation {
                     self.mcp.request(id, params)

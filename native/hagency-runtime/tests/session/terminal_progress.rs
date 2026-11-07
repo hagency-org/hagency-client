@@ -82,38 +82,45 @@ async fn native_codex_session_terminal_progress() {
         let expected = match case {
             "thread" => {
                 event["params"]["threadId"] = "other".into();
-                Error::Scope
+                Some(Error::Scope)
             }
             "turn" => {
                 event["params"]["turnId"] = "other".into();
-                Error::Scope
+                Some(Error::Scope)
             }
+            // A unified-exec terminal outlives the command item that opened it
+            // (observed live with Codex 0.166): late interaction for an unknown
+            // or finished command is ignored progress, never a scope failure
+            // that ends the run.
             "item" => {
                 event["params"]["itemId"] = "other".into();
-                Error::Scope
+                None
             }
-            "absent" | "completed" | "wrong_kind" => Error::Scope,
+            "absent" | "completed" => None,
+            "wrong_kind" => Some(Error::Scope),
             "process" => {
                 event["params"]["processId"] = json!(321);
-                Error::Malformed
+                Some(Error::Malformed)
             }
             "stdin" => {
                 event["params"]["stdin"] = Value::Null;
-                Error::Malformed
+                Some(Error::Malformed)
             }
             "large" => {
                 event["params"]["stdin"] = json!("x".repeat(MAX_TEXT_BYTES + 1));
-                Error::Capacity
+                Some(Error::Capacity)
             }
             _ => unreachable!("every listed case is matched above"),
         };
-        assert_eq!(
-            update(&mut session, &mut peer, event).await.err(),
-            Some(expected),
-            "{case}"
-        );
-        unknown(&session, expected);
-        assert_eq!(session.refused_notification(), Some("terminal_interaction"));
+        let result = update(&mut session, &mut peer, event).await;
+        match expected {
+            Some(expected) => {
+                assert_eq!(result.err(), Some(expected), "{case}");
+                unknown(&session, expected);
+                assert_eq!(session.refused_notification(), Some("terminal_interaction"));
+            }
+            None => assert!(result.is_ok(), "{case}: late terminal progress is ignored"),
+        }
     }
     // Board #94: an invented notification method during an active command is
     // logged and ignored; the command's own scope checks above stay strict.

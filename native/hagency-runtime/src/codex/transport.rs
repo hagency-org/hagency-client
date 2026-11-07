@@ -15,7 +15,9 @@ use tokio::time::Instant;
 pub const READ_BYTES: usize = 16 * 1024;
 pub const STDERR_BYTES: usize = 16 * 1024;
 pub const MAX_EVENTS: usize = 16;
-pub const MAX_EVENT_BYTES: usize = 2 * 1024 * 1024;
+/// Total bytes of queued events. Above `codex::MAX_FRAME_BYTES`, so one maximal
+/// frame always fits; with `MAX_EVENTS` this still bounds the queue.
+pub const MAX_EVENT_BYTES: usize = 40 * 1024 * 1024;
 
 pub(super) fn event_bytes(event: &Event) -> Result<usize, Error> {
     buffers::charge(event)

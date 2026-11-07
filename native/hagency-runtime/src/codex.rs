@@ -10,7 +10,11 @@ pub use connection::{Connection, Event, Phase, TurnScope};
 pub use wire::{Decoder, Message, RequestId, RpcError, encode};
 
 /// Includes every byte preceding LF (including CR for CRLF input).
-pub const MAX_FRAME_BYTES: usize = 1_048_576;
+/// Codex sends each command's full output in `item/completed`, and
+/// `turn/completed` carries every item of the turn. A research turn with tens
+/// of commands and web searches exceeded the former 1 MiB, and the decoder
+/// ended the run just as its answer was ready. Still a hard bound.
+pub const MAX_FRAME_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_DEPTH: usize = crate::json::MAX_DEPTH;
 pub const MAX_PENDING: usize = 32;
 pub const MAX_SERVER_IDS: usize = 1024;

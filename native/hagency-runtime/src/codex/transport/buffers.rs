@@ -119,6 +119,13 @@ impl EventQueue {
         let charge = charge(&event)?;
         let total = self.bytes.checked_add(charge).ok_or(Error::Capacity)?;
         if self.events.len() >= MAX_EVENTS || total > MAX_EVENT_BYTES {
+            tracing::warn!(
+                events = self.events.len(),
+                bytes = total,
+                event_limit = MAX_EVENTS,
+                byte_limit = MAX_EVENT_BYTES,
+                "Codex transport event queue is full"
+            );
             return Err(Error::Capacity);
         }
         self.events.push_back((event, charge));

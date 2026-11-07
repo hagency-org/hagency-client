@@ -473,7 +473,9 @@ async fn native_codex_transport_pressure_stderr_tail_during_blocked_write() {
 
 #[tokio::test(start_paused = true)]
 async fn native_codex_transport_pressure_event_count_and_bytes() {
-    for (count, payload) in [(MAX_EVENTS + 1, 0), (3, 800_000)] {
+    // Two events of just over half the queue's byte bound overflow it, while
+    // each still fits one protocol frame.
+    for (count, payload) in [(MAX_EVENTS + 1, 0), (2, MAX_EVENT_BYTES / 2 + 1024)] {
         let (mut driver, mut peer) = fixture(256, limits());
         ready(&mut driver, &mut peer).await;
         let producer = tokio::spawn(async move {
@@ -499,6 +501,7 @@ async fn native_codex_transport_pressure_event_count_and_bytes() {
         joined(producer).await;
     }
     const {
-        assert!(3 * 800_000 > MAX_EVENT_BYTES);
+        assert!(2 * (MAX_EVENT_BYTES / 2 + 1024) > MAX_EVENT_BYTES);
+        assert!(MAX_EVENT_BYTES / 2 + 4096 < hagency_runtime::codex::MAX_FRAME_BYTES);
     }
 }
