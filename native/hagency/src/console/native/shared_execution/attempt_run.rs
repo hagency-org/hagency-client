@@ -56,7 +56,9 @@ pub(super) async fn upload_end(
 ) -> Result<bool, NativeError> {
     match upload_process(b, d, until, receipt).await {
         Ok(_) => Ok(true),
-        Err(e) if receipt.reason.is_some() && e.code == "shared_attempt_timeout_pending" => Ok(false),
+        Err(e) if receipt.reason.is_some() && e.code == "shared_attempt_timeout_pending" => {
+            Ok(false)
+        }
         Err(e) => Err(e),
     }
 }
@@ -248,14 +250,20 @@ async fn maybe_renew(
 // local preparation, before admitting the one model call.
 #[allow(clippy::too_many_arguments)]
 async fn prepare_while_active<T>(
-    io: &Io, r: &OwnerResourceRegistry, sink: &Arc<SharedAttemptProcessSink>,
-    control: &SharedTextActivityControl, a: &mut Activity,
+    io: &Io,
+    r: &OwnerResourceRegistry,
+    sink: &Arc<SharedAttemptProcessSink>,
+    control: &SharedTextActivityControl,
+    a: &mut Activity,
     cancel: &mut watch::Receiver<bool>,
     preparation: impl std::future::Future<Output = Result<T, NativeError>>,
 ) -> Result<T, NativeError> {
     tokio::pin!(preparation);
     loop {
-        let wake = a.until.checked_sub(Duration::from_secs(20)).unwrap_or_else(Instant::now);
+        let wake = a
+            .until
+            .checked_sub(Duration::from_secs(20))
+            .unwrap_or_else(Instant::now);
         tokio::select! { biased;
             _ = cancel.changed() => return Err(failure(409, "shared_execution_closed")),
             _ = tokio::time::sleep_until(a.until.into()) => return Err(failure(409, "shared_execution_expired")),
@@ -273,8 +281,11 @@ async fn prepare_while_active<T>(
 // renewal failure, retain it briefly so final usage can still attach and drain.
 #[allow(clippy::too_many_arguments)]
 async fn start_while_active(
-    io: &Io, r: &OwnerResourceRegistry, sink: &Arc<SharedAttemptProcessSink>,
-    control: &SharedTextActivityControl, a: &mut Activity,
+    io: &Io,
+    r: &OwnerResourceRegistry,
+    sink: &Arc<SharedAttemptProcessSink>,
+    control: &SharedTextActivityControl,
+    a: &mut Activity,
     cancel: &mut watch::Receiver<bool>,
     start: impl std::future::Future<Output = Result<(), NativeError>>,
 ) -> Result<Option<NativeError>, NativeError> {
@@ -283,7 +294,10 @@ async fn start_while_active(
     }
     tokio::pin!(start);
     loop {
-        let wake = a.until.checked_sub(Duration::from_secs(20)).unwrap_or_else(Instant::now);
+        let wake = a
+            .until
+            .checked_sub(Duration::from_secs(20))
+            .unwrap_or_else(Instant::now);
         let error = tokio::select! { biased;
             _ = cancel.changed() => failure(409, "shared_execution_closed"),
             _ = tokio::time::sleep_until(a.until.into()) => failure(409, "shared_execution_expired"),
@@ -297,7 +311,7 @@ async fn start_while_active(
             }
         };
         if sink.source().turn_dispatch_started() && Instant::now() < a.until {
-            let deadline = a.until.min(Instant::now()+Duration::from_secs(3));
+            let deadline = a.until.min(Instant::now() + Duration::from_secs(3));
             if let Ok(Ok(())) = tokio::time::timeout_at(deadline.into(), start.as_mut()).await {
                 return Ok(Some(error));
             }
@@ -336,14 +350,20 @@ pub(super) async fn run(
         }
     };
     let result = guarded(&mut cancel, until, || async {
-        io.check_running(&d.command.original_runtime_command).await?;
+        io.check_running(&d.command.original_runtime_command)
+            .await?;
         process
             .initialize()
             .await
             .map_err(|_| failure(409, "shared_execution_initialize_failed"))?;
-        io.check_running(&d.command.original_runtime_command).await?;
+        io.check_running(&d.command.original_runtime_command)
+            .await?;
         let observation = process
-            .qualify_shared_tools(launch.instructions(), d.command.web_search, d.command.tool_policy.as_ref().map(|p|p.mode.as_str()))
+            .qualify_shared_tools(
+                launch.instructions(),
+                d.command.web_search,
+                d.command.tool_policy.as_ref().map(|p| p.mode.as_str()),
+            )
             .await
             .map_err(|_| failure(409, "shared_execution_identity_failed"))?;
         let receipt = sink.record(observation).await.map_err(store)?;
@@ -443,15 +463,14 @@ async fn work_loop(
             guarded(cancel, a.until, || async {
                 tokio::time::sleep(Duration::from_millis(250)).await;
                 Ok(())
-            }).await?;
+            })
+            .await?;
             continue;
         };
         let (b, verified) = proof(io, r, sink, a).await?;
-        let reply: Timed<WorkReply> = guarded(
-            cancel,
-            a.until,
-            || b.upload(Action::WorkPoll(a.lease.authority.clone()), a.until),
-        )
+        let reply: Timed<WorkReply> = guarded(cancel, a.until, || {
+            b.upload(Action::WorkPoll(a.lease.authority.clone()), a.until)
+        })
         .await?;
         if let Some(w) = reply.value.work {
             w.validate().map_err(store)?;
@@ -482,8 +501,10 @@ async fn work_loop(
                 work_id: w.id.clone(),
                 work_digest: digest(&w)?,
             };
-            let ack: Timed<AckReply> =
-                guarded(cancel, a.until, || b.upload(Action::WorkAck(input), a.until)).await?;
+            let ack: Timed<AckReply> = guarded(cancel, a.until, || {
+                b.upload(Action::WorkAck(input), a.until)
+            })
+            .await?;
             if !ack.value.acknowledged {
                 return Err(invalid());
             }
@@ -496,61 +517,152 @@ async fn work_loop(
         })
         .await?;
     };
-    guarded(cancel,a.until,|| maybe_renew(io,r,sink,control,a)).await?;
-    let (b,p)=proof(io,r,sink,a).await?;
-    let mut history=prepare_while_active(io,r,sink,control,a,cancel,super::history::Reader::new(io,&b,&work)).await?;
-    let input=if cfg!(feature="shared-context") && work.encrypted {
-        let text = prepare_while_active(io,r,sink,control,a,cancel,super::e2ee::input(io,&b,&work)).await?;
-        let text = if let Some(history)=history.as_mut() {
-            prepare_while_active(io,r,sink,control,a,cancel,async { Ok(history.prompt(text).await) }).await?
-        } else {text};
-        let (_,fresh) = proof(io,r,sink,a).await?;
-        Some(if history.is_some() {r.prepare_shared_room_input(fresh,work.clone(),text).await} else {r.prepare_shared_decrypted_input(fresh,work.clone(),text).await}.map_err(store)?)
-    } else if cfg!(feature="shared-context") {
-        Some(guarded(cancel,a.until,|| super::context_io::prepare(io,&b,r,p,&work,a.lease.authority.clone(),a.until)).await?)
-    }else{None};
+    guarded(cancel, a.until, || maybe_renew(io, r, sink, control, a)).await?;
+    let (b, p) = proof(io, r, sink, a).await?;
+    let mut history = prepare_while_active(
+        io,
+        r,
+        sink,
+        control,
+        a,
+        cancel,
+        super::history::Reader::new(io, &b, &work),
+    )
+    .await?;
+    let input = if cfg!(feature = "shared-context") && work.encrypted {
+        let text = prepare_while_active(
+            io,
+            r,
+            sink,
+            control,
+            a,
+            cancel,
+            super::e2ee::input(io, &b, &work),
+        )
+        .await?;
+        let text = if let Some(history) = history.as_mut() {
+            prepare_while_active(io, r, sink, control, a, cancel, async {
+                Ok(history.prompt(text).await)
+            })
+            .await?
+        } else {
+            text
+        };
+        let (_, fresh) = proof(io, r, sink, a).await?;
+        Some(
+            if history.is_some() {
+                r.prepare_shared_room_input(fresh, work.clone(), text).await
+            } else {
+                r.prepare_shared_decrypted_input(fresh, work.clone(), text)
+                    .await
+            }
+            .map_err(store)?,
+        )
+    } else if cfg!(feature = "shared-context") {
+        Some(
+            guarded(cancel, a.until, || {
+                super::context_io::prepare(io, &b, r, p, &work, a.lease.authority.clone(), a.until)
+            })
+            .await?,
+        )
+    } else {
+        None
+    };
     // Opening a provider thread does not run the model. Finish it before
     // recording call admission, so startup failure cannot reserve the budget.
-    prepare_while_active(io,r,sink,control,a,cancel,async {
-        io.check_running(&sink.command().original_runtime_command).await?;
-        if history.is_some() { process.enable_shared_room_history().map_err(|_|failure(409,"shared_history_tool_unavailable"))?; }
+    prepare_while_active(io, r, sink, control, a, cancel, async {
+        io.check_running(&sink.command().original_runtime_command)
+            .await?;
+        if history.is_some() {
+            process
+                .enable_shared_room_history()
+                .map_err(|_| failure(409, "shared_history_tool_unavailable"))?;
+        }
         super::questions::offer(process);
-        process.start_shared_text_thread_for_room(&work.room_id).await.map_err(|error| {
-            tracing::warn!(?error, "Shared Agent thread setup failed before call admission");
-            failure(409, "shared_execution_thread_unknown")
-        })?;
-        io.check_running(&sink.command().original_runtime_command).await
-    }).await?;
-    guarded(cancel,a.until,|| maybe_renew(io,r,sink,control,a)).await?;
-    let (_,p)=proof(io,r,sink,a).await?;
-    let call=if let Some(input)=&input {r.prepare_shared_input_call(p,work.clone(),input.clone()).await} else {r.prepare_shared_call(p,work.clone()).await}.map_err(store)?;
+        process
+            .start_shared_text_thread_for_room(&work.room_id)
+            .await
+            .map_err(|error| {
+                tracing::warn!(
+                    ?error,
+                    "Shared Agent thread setup failed before call admission"
+                );
+                failure(409, "shared_execution_thread_unknown")
+            })?;
+        io.check_running(&sink.command().original_runtime_command)
+            .await
+    })
+    .await?;
+    guarded(cancel, a.until, || maybe_renew(io, r, sink, control, a)).await?;
+    let (_, p) = proof(io, r, sink, a).await?;
+    let call = if let Some(input) = &input {
+        r.prepare_shared_input_call(p, work.clone(), input.clone())
+            .await
+    } else {
+        r.prepare_shared_call(p, work.clone()).await
+    }
+    .map_err(store)?;
     let call_id = call.call_id.clone();
-    let (b,p)=proof(io,r,sink,a).await?;
-    let attempt=if let Some(input)=&input {r.begin_shared_input_start(p,work.clone(),call.call_id,input.clone()).await} else {r.begin_shared_start(p,work.clone(),call.call_id).await}.map_err(store)?;
-    let issued=guarded(cancel,a.until,|| super::context_io::start(&b,r,attempt,&work,input.as_ref(),a.lease.authority.clone(),a.until)).await?;
+    let (b, p) = proof(io, r, sink, a).await?;
+    let attempt = if let Some(input) = &input {
+        r.begin_shared_input_start(p, work.clone(), call.call_id, input.clone())
+            .await
+    } else {
+        r.begin_shared_start(p, work.clone(), call.call_id).await
+    }
+    .map_err(store)?;
+    let issued = guarded(cancel, a.until, || {
+        super::context_io::start(
+            &b,
+            r,
+            attempt,
+            &work,
+            input.as_ref(),
+            a.lease.authority.clone(),
+            a.until,
+        )
+    })
+    .await?;
     // Central admission and the original custody already checked current
     // authority. Do not insert another network round trip before the effect
     // boundary; start_turn checks that exact proof synchronously before send.
-    let start_stop = match start_while_active(io,r,sink,control,a,cancel,async {
+    let start_stop = match start_while_active(io, r, sink, control, a, cancel, async {
         issued.start_turn(process).await.map_err(store)
-    }).await {
+    })
+    .await
+    {
         Ok(stop) => stop,
         Err(error) => {
             match issued.finish_failed_start().await {
                 Ok(receipt) => {
-                    let _ = tokio::time::timeout(Duration::from_secs(1), report_work(io,r,sink.command(),&work,&receipt)).await;
+                    let _ = tokio::time::timeout(
+                        Duration::from_secs(1),
+                        report_work(io, r, sink.command(), &work, &receipt),
+                    )
+                    .await;
                 }
-                Err(record_error) => tracing::error!(?record_error, work_id=%work.id, "Failed to persist original call start failure"),
+                Err(record_error) => {
+                    tracing::error!(?record_error, work_id=%work.id, "Failed to persist original call start failure")
+                }
             }
             return Err(error);
         }
     };
     turn.started();
     let mut capture = issued.bind_started_turn(process).await.map_err(store)?;
-    let mut usage = telemetry.shared_turn(&sink.command().original_runtime_command, &work, &call_id, process);
-    let approvals_enabled=sink.command().tool_policy.as_ref().is_some_and(|p|p.mode=="standard");
-    let mut approvals=super::approvals::Approvals::default();
-    let mut questions=super::questions::Questions::default();
+    let mut usage = telemetry.shared_turn(
+        &sink.command().original_runtime_command,
+        &work,
+        &call_id,
+        process,
+    );
+    let approvals_enabled = sink
+        .command()
+        .tool_policy
+        .as_ref()
+        .is_some_and(|p| p.mode == "standard");
+    let mut approvals = super::approvals::Approvals::default();
+    let mut questions = super::questions::Questions::default();
     let terminal_result: Result<SharedWorkReceipt, NativeError> = async {
       if approvals_enabled && start_stop.is_none() {super::approvals::enable(process)?;}
       if start_stop.is_none() {super::questions::enable(process)?;}
@@ -596,7 +708,10 @@ async fn work_loop(
                 // Answers and expiries; the lease keeps renewing meanwhile.
                 let ready=prepare_while_active(io,r,sink,control,a,cancel,Box::pin(questions.collect(io))).await?;
                 for response in ready {
-                    guarded(cancel,a.until,||async{ super::questions::answer(process,response).await }).await?;
+                    let id = response.request_id().clone();
+                    let delivered = guarded(cancel,a.until,||async{ super::questions::answer(process,response).await }).await;
+                    questions.delivered(&id, delivered.as_ref().is_ok_and(|accepted| *accepted));
+                    delivered?;
                 }
                 prepare_while_active(io,r,sink,control,a,cancel,Box::pin(questions.publish())).await?;
             }
@@ -605,12 +720,17 @@ async fn work_loop(
             let b=io.bound().await?;
             let receipt=guarded(cancel,a.until,|| approvals.poll(io,&b,&work,&a.lease.authority,a.until,process,&mut capture,&mut usage)).await?;
             // Question updates that arrived while a decision was being sent.
-            let (asked,withdrawn)=approvals.take_questions();
+            let updates=approvals.take_questions();
             if let Some(receipt)=receipt {break receipt;}
-            for id in withdrawn { questions.withdrawn(&id); }
-            for request in asked {
-                if let Some(response)=prepare_while_active(io,r,sink,control,a,cancel,Box::pin(questions.ask(io,&work,request))).await? {
-                    guarded(cancel,a.until,||async{ super::questions::answer(process,response).await }).await?;
+            // In arrival order: a question withdrawn in the same batch is never shown.
+            for update in super::questions::in_order(updates) {
+                match update {
+                    super::questions::QuestionUpdate::Withdrawn(id) => questions.withdrawn(&id),
+                    super::questions::QuestionUpdate::Asked(request) => {
+                        if let Some(response)=prepare_while_active(io,r,sink,control,a,cancel,Box::pin(questions.ask(io,&work,request))).await? {
+                            guarded(cancel,a.until,||async{ super::questions::answer(process,response).await }).await?;
+                        }
+                    }
                 }
             }
             continue;
@@ -667,9 +787,14 @@ async fn work_loop(
     let terminal = match terminal_result {
         Ok(receipt) => receipt,
         Err(error) => {
-            let receipt = super::stop_capture::settle(process, &mut capture, &mut usage, a.until).await;
+            let receipt =
+                super::stop_capture::settle(process, &mut capture, &mut usage, a.until).await;
             if let Some(receipt) = receipt {
-                let _ = tokio::time::timeout(Duration::from_secs(1), report_work(io, r, sink.command(), &work, &receipt)).await;
+                let _ = tokio::time::timeout(
+                    Duration::from_secs(1),
+                    report_work(io, r, sink.command(), &work, &receipt),
+                )
+                .await;
             } else {
                 let _ = capture.record_unknown().await;
             }
@@ -680,18 +805,27 @@ async fn work_loop(
     };
     if questions.busy() {
         // Cosmetic only: never hold the reply back for long.
-        let _ = tokio::time::timeout(Duration::from_secs(10),
-            prepare_while_active(io,r,sink,control,a,cancel,Box::pin(questions.publish()))).await;
+        let _ = tokio::time::timeout(
+            Duration::from_secs(10),
+            prepare_while_active(
+                io,
+                r,
+                sink,
+                control,
+                a,
+                cancel,
+                Box::pin(questions.publish()),
+            ),
+        )
+        .await;
     }
     // Reply delivery uses the central durable Matrix transaction. Keep this same
     // process/activity alive while it is pending; do not make a successor turn.
     loop {
         guarded(cancel, a.until, || maybe_renew(io, r, sink, control, a)).await?;
-        let status = match guarded(
-            cancel,
-            a.until,
-            || report_work(io, r, sink.command(), &work, &terminal),
-        )
+        let status = match guarded(cancel, a.until, || {
+            report_work(io, r, sink.command(), &work, &terminal)
+        })
         .await
         {
             Ok(status) => status,
@@ -820,7 +954,8 @@ pub(super) async fn report_work(
     if digest(&saved)? != digest(receipt)? {
         return Err(invalid());
     }
-    let wire_receipt = super::e2ee::wire_receipt(io, &b, r, &c.original_runtime_command, work, receipt).await?;
+    let wire_receipt =
+        super::e2ee::wire_receipt(io, &b, r, &c.original_runtime_command, work, receipt).await?;
     let receipt = &wire_receipt;
     let started = Instant::now();
     let reply: Timed<TicketReply> = b
@@ -844,7 +979,9 @@ pub(super) async fn report_work(
         if digest(&old)? != digest(receipt)? {
             return Err(invalid());
         }
-        if !work.encrypted && t.reply_state.as_deref()==Some("sent") {super::context_io::observe_delivery(&b,r,&c.original_runtime_command,work).await?;}
+        if !work.encrypted && t.reply_state.as_deref() == Some("sent") {
+            super::context_io::observe_delivery(&b, r, &c.original_runtime_command, work).await?;
+        }
         return Ok(t.reply_state);
     }
     let until = io::window(
@@ -872,6 +1009,8 @@ pub(super) async fn report_work(
     {
         return Err(invalid());
     }
-    if !work.encrypted && ack.value.reply_state.as_deref()==Some("sent") {super::context_io::observe_delivery(&b,r,&c.original_runtime_command,work).await?;}
+    if !work.encrypted && ack.value.reply_state.as_deref() == Some("sent") {
+        super::context_io::observe_delivery(&b, r, &c.original_runtime_command, work).await?;
+    }
     Ok(ack.value.reply_state)
 }

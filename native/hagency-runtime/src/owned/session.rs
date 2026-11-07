@@ -32,7 +32,9 @@ pub struct OwnedSession {
     unproven: bool,
 }
 impl OwnedSession {
-    pub fn shared_workspace(&self) -> &Path {Path::new(self.session.settings().cwd())}
+    pub fn shared_workspace(&self) -> &Path {
+        Path::new(self.session.settings().cwd())
+    }
     pub(super) fn shared_settings_match(&self, mode: Option<&str>) -> bool {
         self.session.settings().shared_mode_matches(mode)
     }
@@ -163,7 +165,9 @@ impl OwnedSession {
     }
     /// The host's canonical resource model, checked by the actual upstream
     /// thread response before the running turn was accepted.
-    pub fn running_model(&self)->Option<&str> {self.session.running_model()}
+    pub fn running_model(&self) -> Option<&str> {
+        self.session.running_model()
+    }
     pub fn matches_observation_source(&self, source: &session::ObservationSource) -> bool {
         self.session.matches_observation_source(source)
     }
@@ -393,23 +397,39 @@ impl OwnedSession {
         let operation = Operation::new(self)?;
         let result = async {
             let directory = super::room_workspace::open(
-                Path::new(operation.runner.session.settings().cwd()), room,
+                Path::new(operation.runner.session.settings().cwd()),
+                room,
             )?;
             operation.runner.session.bind_shared_workspace(directory)?;
             operation.runner.session.start_thread().await
-        }.await;
+        }
+        .await;
         operation.finish(result)
     }
     /// The host has bound a read-only history reader to this admitted room.
     pub fn enable_shared_room_history(&mut self) -> Result<(), session::Error> {
-        if !self.text_source.has_live_activity() { return Err(session::Error::State); }
+        if !self.text_source.has_live_activity() {
+            return Err(session::Error::State);
+        }
         self.session.enable_room_history()
     }
-    pub(super) fn shared_room_history_enabled(&self) -> bool { self.session.settings().room_history_enabled() }
-    pub async fn respond_shared_room_history(&mut self, call: &session::RoomHistoryCall, content: String) -> Result<(), session::Error> {
-        if !self.text_source.has_live_activity() { return Err(session::Error::State); }
+    pub(super) fn shared_room_history_enabled(&self) -> bool {
+        self.session.settings().room_history_enabled()
+    }
+    pub async fn respond_shared_room_history(
+        &mut self,
+        call: &session::RoomHistoryCall,
+        content: String,
+    ) -> Result<(), session::Error> {
+        if !self.text_source.has_live_activity() {
+            return Err(session::Error::State);
+        }
         let operation = Operation::new(self)?;
-        let result = operation.runner.session.respond_room_history(call, content).await;
+        let result = operation
+            .runner
+            .session
+            .respond_room_history(call, content)
+            .await;
         operation.finish(result)
     }
     /// Before the thread starts: the host will show this run's questions to
@@ -430,14 +450,18 @@ impl OwnedSession {
         }
         self.session.enable_user_input()
     }
-    /// One answer to one question this turn asked. `false`: Codex had already
-    /// withdrawn it and nothing was written.
+    /// One answer to one question this turn asked. `false`: the answer is
+    /// moot (Codex withdrew the question, or its turn is over) and nothing was
+    /// written. A moot answer never stops the process.
     pub async fn respond_shared_user_input(
         &mut self,
         response: session::UserInputResponse,
     ) -> Result<bool, session::Error> {
         if !self.text_source.has_live_activity() {
             return Err(session::Error::State);
+        }
+        if self.session.user_input_moot(&response)? {
+            return Ok(false);
         }
         let operation = Operation::new(self)?;
         let result = operation.runner.session.respond_user_input(response).await;

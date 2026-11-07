@@ -14,13 +14,13 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 #[cfg(feature = "resource-adoption")]
-pub(crate) mod history;
-#[cfg(feature = "resource-adoption")]
-pub(crate) mod reader;
-#[cfg(feature = "resource-adoption")]
 pub(crate) mod canonical;
 #[cfg(feature = "resource-adoption")]
 pub(crate) mod current;
+#[cfg(feature = "resource-adoption")]
+pub(crate) mod history;
+#[cfg(feature = "resource-adoption")]
+pub(crate) mod reader;
 #[cfg(feature = "resource-adoption")]
 pub(crate) mod recipients;
 pub(crate) mod transitions;
@@ -199,7 +199,7 @@ fn iso_from_millis(millis: u64) -> String {
         day_secs % 60,
     )
 }
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
+pub(crate) fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = (z - era * 146_097) as u64;
@@ -448,8 +448,14 @@ struct StoreInner {
 
 impl GraphStore {
     pub(crate) fn open(dir: &Path) -> Result<Self, GraphError> {
-        let writer = hagency_platform::legacy_writer::LegacyWriterAdmission::acquire_for_legacy_startup()
-            .map_err(|_| graph_error("graph_writer_unavailable", "legacy task graph writer is unavailable"))?;
+        let writer =
+            hagency_platform::legacy_writer::LegacyWriterAdmission::acquire_for_legacy_startup()
+                .map_err(|_| {
+                    graph_error(
+                        "graph_writer_unavailable",
+                        "legacy task graph writer is unavailable",
+                    )
+                })?;
         Self::with_writer(dir, writer)
     }
 
@@ -653,9 +659,10 @@ impl GraphStore {
         let mut inner = self.inner.lock().map_err(|_| {
             graph_error("graph_persistence_failed", "task graph persistence failed")
         })?;
-        let graph = inner.graphs.get(id).ok_or_else(|| {
-            graph_error("graph_not_found", format!("graph not found: {id}"))
-        })?;
+        let graph = inner
+            .graphs
+            .get(id)
+            .ok_or_else(|| graph_error("graph_not_found", format!("graph not found: {id}")))?;
         let transition = transitions::patch_node(graph, node_id, patch, &iso_now())?;
         if transition.changed {
             let mut next = inner.graphs.clone();

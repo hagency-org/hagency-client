@@ -8,10 +8,19 @@ use crate::console::{
 use hagency_agent_local::inbox::Dispatch;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::{collections::HashMap, io::Read, path::{Path, PathBuf}, sync::LazyLock};
+use std::{
+    collections::HashMap,
+    io::Read,
+    path::{Path, PathBuf},
+    sync::LazyLock,
+};
 use tokio::sync::Mutex;
 
-static DEVICES: LazyLock<Mutex<HashMap<String, Arc<AgentDevice>>>> =
+/// One slot per Agent device. The map's own lock is held only to find a
+/// slot; a slot's lock serializes opening that one device, so a slow first
+/// sync for one Agent never holds up another.
+type DeviceSlot = Arc<Mutex<Option<Arc<AgentDevice>>>>;
+static DEVICES: LazyLock<std::sync::Mutex<HashMap<String, DeviceSlot>>> =
     LazyLock::new(Default::default);
 static SENDS: Mutex<()> = Mutex::const_new(());
 // A process-local hint, never execution authority. Every subscriber still
@@ -97,15 +106,69 @@ fn root(io: &Io, b: &Bound) -> Result<PathBuf, NativeError> {
     hagency_store::private::directory(&root).map_err(store)?;
     Ok(root)
 }
-pub(super) async fn device(io: &Io, b: &Bound, assignment: &str) -> Result<Arc<AgentDevice>, NativeError> {
-    let root = root(io, b)?;
-    let key = format!(
+fn device_key(root: &Path, b: &Bound, assignment: &str) -> String {
+    format!(
         "{}:{assignment}:{}",
         root.display(),
         b.scope.device.generation()
-    );
-    let mut devices = DEVICES.lock().await;
-    if let Some(d) = devices.get(&key)
+    )
+}
+fn slot(key: &str) -> DeviceSlot {
+    let mut devices = DEVICES.lock().unwrap_or_else(|e| e.into_inner());
+    devices.entry(key.to_owned()).or_default().clone()
+}
+/// Where this Agent's posted question cards are recorded, so a restart can
+/// still close them.
+pub(super) fn question_records(
+    io: &Io,
+    b: &Bound,
+    assignment: &str,
+) -> Result<PathBuf, NativeError> {
+    Ok(root(io, b)?
+        .join("agent-question-cards")
+        .join(format!("{}.json", sha(assignment))))
+}
+/// The Agent's device when it is open already, without opening one: never a
+/// device login or a first sync. `None` while it is being opened.
+pub(super) fn opened(
+    io: &Io,
+    b: &Bound,
+    assignment: &str,
+) -> Result<Option<Arc<AgentDevice>>, NativeError> {
+    let key = device_key(&root(io, b)?, b, assignment);
+    let slot = DEVICES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&key)
+        .cloned();
+    Ok(slot
+        .and_then(|slot| slot.try_lock().ok().and_then(|d| d.clone()))
+        .filter(|d| !d.is_revoked()))
+}
+pub(super) async fn device(
+    io: &Io,
+    b: &Bound,
+    assignment: &str,
+) -> Result<Arc<AgentDevice>, NativeError> {
+    let device = open_device(io, b, assignment).await?;
+    // Card outcomes this Agent still owes its rooms go out while it is in use.
+    if let Ok(records) = question_records(io, b, assignment) {
+        super::questions::device_ready(
+            Arc::new(super::questions::Source::Device(device.clone())),
+            Some(records),
+        );
+    }
+    Ok(device)
+}
+async fn open_device(
+    io: &Io,
+    b: &Bound,
+    assignment: &str,
+) -> Result<Arc<AgentDevice>, NativeError> {
+    let root = root(io, b)?;
+    let slot = slot(&device_key(&root, b, assignment));
+    let mut slot = slot.lock().await;
+    if let Some(d) = slot.as_ref()
         && !d.is_revoked()
     {
         return Ok(d.clone());
@@ -113,11 +176,14 @@ pub(super) async fn device(io: &Io, b: &Bound, assignment: &str) -> Result<Arc<A
     let generation = b.scope.device.generation();
     // First open in this process: reuse the grant an earlier daemon saved, so a
     // restart costs no Matrix login. A revoked device always takes a new grant.
-    if !devices.contains_key(&key) {
+    if slot.is_none() {
         if let Some(saved) = load_grant(&root, assignment, b.scope.device.origin(), generation) {
-            if let Ok(d) = AgentDevice::open_notifying(saved, &root, assignment, Some(WORK_CHANGED.clone())).await {
+            if let Ok(d) =
+                AgentDevice::open_notifying(saved, &root, assignment, Some(WORK_CHANGED.clone()))
+                    .await
+            {
                 let d = Arc::new(d);
-                devices.insert(key, d.clone());
+                *slot = Some(d.clone());
                 return Ok(d);
             }
             forget_grant(&root, assignment);
@@ -162,7 +228,7 @@ pub(super) async fn device(io: &Io, b: &Bound, assignment: &str) -> Result<Arc<A
             .map_err(|_| failure(503, "shared_crypto_device_unavailable"))?,
     );
     save_grant(&root, assignment, &saved, generation);
-    devices.insert(key, d.clone());
+    *slot = Some(d.clone());
     Ok(d)
 }
 impl SharedExecutionTransport {
@@ -217,11 +283,13 @@ impl SharedExecutionTransport {
                         Ok(message) => message,
                         Err(_) => continue, // Missing keys retain the original event for retry.
                     };
-                    let mentioned = message.as_ref().is_some_and(|m| m.mentions.contains(&scope.puppet_mxid));
+                    let mentioned = message
+                        .as_ref()
+                        .is_some_and(|m| m.mentions.contains(&scope.puppet_mxid));
                     // The server uses fresh membership to decide whether this
                     // owner's original conversation is still one-to-one.
-                    let addressed = message.is_some() && (mentioned
-                        || scope.direct && event.sender_mxid == scope.manager_mxid);
+                    let addressed = message.is_some()
+                        && (mentioned || scope.direct && event.sender_mxid == scope.manager_mxid);
                     let thread = message.as_ref().and_then(|m| m.thread_root.clone());
                     let _: Timed<Value> = b
                         .request(
@@ -253,7 +321,10 @@ pub(super) async fn input(io: &Io, b: &Bound, w: &SharedWorkItem) -> Result<Stri
     #[cfg(test)]
     if let Some(fixture) = &io.crypto_fixture {
         tokio::time::sleep(fixture.input_delay).await;
-        return fixture.input.clone().ok_or_else(|| failure(503, "shared_room_keys_pending"));
+        return fixture
+            .input
+            .clone()
+            .ok_or_else(|| failure(503, "shared_room_keys_pending"));
     }
     let d = device(io, b, &w.assignment_id).await?;
     let m = d
@@ -285,14 +356,25 @@ fn dispatch(w: &SharedWorkItem) -> Dispatch {
     }
 }
 
-async fn send_reply(io: &Io, b: &Bound, w: &SharedWorkItem, body: &str) -> Result<String, NativeError> {
+async fn send_reply(
+    io: &Io,
+    b: &Bound,
+    w: &SharedWorkItem,
+    body: &str,
+) -> Result<String, NativeError> {
     #[cfg(test)]
     if let Some(fixture) = &io.crypto_fixture {
-        fixture.sent.lock().unwrap().push((w.id.clone(), body.into()));
+        fixture
+            .sent
+            .lock()
+            .unwrap()
+            .push((w.id.clone(), body.into()));
         return Ok(format!("$encrypted_reply_{}:test", w.id));
     }
-    device(io, b, &w.assignment_id).await?
-        .send_shared_reply(&dispatch(w), body).await
+    device(io, b, &w.assignment_id)
+        .await?
+        .send_shared_reply(&dispatch(w), body)
+        .await
         .map_err(|_| failure(503, "shared_encrypted_send_pending"))
 }
 
@@ -309,31 +391,63 @@ pub(super) struct CryptoFixture {
 #[cfg(test)]
 impl SharedExecutionTransport {
     pub(in crate::console::native) fn with_crypto_fixture(
-        mut self, input: Option<String>,
+        mut self,
+        input: Option<String>,
     ) -> (Self, Arc<std::sync::Mutex<Vec<(String, String)>>>) {
         let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
-        self.io.crypto_fixture = Some(Arc::new(CryptoFixture {input, input_delay: Duration::ZERO, sent: sent.clone(), history: None, questions: None}));
+        self.io.crypto_fixture = Some(Arc::new(CryptoFixture {
+            input,
+            input_delay: Duration::ZERO,
+            sent: sent.clone(),
+            history: None,
+            questions: None,
+        }));
         (self, sent)
     }
     pub(in crate::console::native) fn with_crypto_input_delay(mut self, delay: Duration) -> Self {
-        Arc::get_mut(self.io.crypto_fixture.as_mut().unwrap()).unwrap().input_delay = delay;
+        Arc::get_mut(self.io.crypto_fixture.as_mut().unwrap())
+            .unwrap()
+            .input_delay = delay;
         self
     }
     /// Question cards go to this fixture room; only `members` can answer, and
     /// each card waits `wait` before the model decides on its own.
     pub(in crate::console::native) fn with_question_fixture(
-        mut self, members: &[&str], wait: Duration,
+        self,
+        members: &[&str],
+        wait: Duration,
     ) -> (Self, Arc<super::questions::Fixture>) {
-        let questions = Arc::new(super::questions::Fixture::new(members, wait));
-        Arc::get_mut(self.io.crypto_fixture.as_mut().unwrap()).unwrap().questions = Some(questions.clone());
+        self.with_question_fixture_records(members, wait, None)
+    }
+    /// The same, with the Agent's posted cards recorded at `records`.
+    pub(in crate::console::native) fn with_question_fixture_records(
+        mut self,
+        members: &[&str],
+        wait: Duration,
+        records: Option<std::path::PathBuf>,
+    ) -> (Self, Arc<super::questions::Fixture>) {
+        let questions = Arc::new(super::questions::Fixture::new(members, wait, records));
+        Arc::get_mut(self.io.crypto_fixture.as_mut().unwrap())
+            .unwrap()
+            .questions = Some(questions.clone());
         (self, questions)
     }
     pub(in crate::console::native) fn with_history_fixture(
-        mut self, room: String, anchor: String, pages: Vec<Vec<Value>>,
+        mut self,
+        room: String,
+        anchor: String,
+        pages: Vec<Vec<Value>>,
     ) -> (Self, Arc<std::sync::Mutex<Vec<String>>>) {
         let reads = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let fixture = super::history::Fixture { room, anchor, pages, reads: reads.clone() };
-        Arc::get_mut(self.io.crypto_fixture.as_mut().unwrap()).unwrap().history = Some(Arc::new(fixture));
+        let fixture = super::history::Fixture {
+            room,
+            anchor,
+            pages,
+            reads: reads.clone(),
+        };
+        Arc::get_mut(self.io.crypto_fixture.as_mut().unwrap())
+            .unwrap()
+            .history = Some(Arc::new(fixture));
         (self, reads)
     }
 }
@@ -353,20 +467,31 @@ const MAX_SENT_BYTES: u64 = 640 * 1024;
 fn read_sent(path: &Path) -> Result<Option<Sent>, NativeError> {
     let file = match hagency_store::private::open(path, false) {
         Ok(file) => file,
-        Err(hagency_store::Error::Io(error))
-            if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(hagency_store::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(None);
+        }
         Err(error) => return Err(store(error)),
     };
-    if file.metadata().map_err(hagency_store::Error::from).map_err(store)?.len() > MAX_SENT_BYTES {
+    if file
+        .metadata()
+        .map_err(hagency_store::Error::from)
+        .map_err(store)?
+        .len()
+        > MAX_SENT_BYTES
+    {
         return Err(invalid());
     }
     let mut bytes = Vec::new();
-    file.take(MAX_SENT_BYTES + 1).read_to_end(&mut bytes)
-        .map_err(hagency_store::Error::from).map_err(store)?;
+    file.take(MAX_SENT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(hagency_store::Error::from)
+        .map_err(store)?;
     if bytes.len() as u64 > MAX_SENT_BYTES {
         return Err(invalid());
     }
-    serde_json::from_slice(&bytes).map(Some).map_err(|_| invalid())
+    serde_json::from_slice(&bytes)
+        .map(Some)
+        .map_err(|_| invalid())
 }
 
 fn encode_sent(sent: &Sent) -> Result<Vec<u8>, NativeError> {
@@ -403,9 +528,7 @@ pub(super) async fn wire_receipt(
                 .request(CryptoAction::Send { work: w.id.clone() }.into(), false)
                 .await;
             let event = match authorized {
-                Ok(_) => {
-                    Some(send_reply(io, b, w, body).await?)
-                }
+                Ok(_) => Some(send_reply(io, b, w, body).await?),
                 // The model already ran. Preserve usage even when permission to
                 // publish was revoked; do not claim an uncertain send never ran.
                 Err(e) if matches!(e.status, 401 | 403 | 409) => None,
@@ -453,12 +576,7 @@ pub(super) async fn wire_receipt(
             receipt,
         };
         registry
-            .record_shared_reply_delivery(
-                b.cleanup(registry, command)
-                    .await?,
-                w.clone(),
-                record,
-            )
+            .record_shared_reply_delivery(b.cleanup(registry, command).await?, w.clone(), record)
             .await
             .map_err(store)?;
     }
@@ -497,11 +615,16 @@ mod delivery_file_tests {
     fn encrypted_delivery_record_accepts_maximum_escaped_content_and_rejects_oversize() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("sent");
-        let original = saved(json!({"msgtype":"m.text","body":"\u{0000}".repeat(32*1024),"formatted_body":"\u{0000}".repeat(64*1024),"format":"org.matrix.custom.html"}));
+        let original = saved(
+            json!({"msgtype":"m.text","body":"\u{0000}".repeat(32*1024),"formatted_body":"\u{0000}".repeat(64*1024),"format":"org.matrix.custom.html"}),
+        );
         let bytes = encode_sent(&original).unwrap();
         assert!(bytes.len() > 576 * 1024);
         hagency_store::private::write_new(&path, &bytes).unwrap();
-        assert_eq!(encode_sent(&read_sent(&path).unwrap().unwrap()).unwrap(), bytes);
+        assert_eq!(
+            encode_sent(&read_sent(&path).unwrap().unwrap()).unwrap(),
+            bytes
+        );
         let oversized = saved(json!({"body":"x".repeat(MAX_SENT_BYTES as usize)}));
         assert!(encode_sent(&oversized).is_err());
         hagency_store::private::replace(&path, &vec![b' '; MAX_SENT_BYTES as usize + 1]).unwrap();
@@ -515,11 +638,44 @@ mod delivery_file_tests {
         use std::os::unix::fs::{PermissionsExt, symlink};
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("sent");
-        hagency_store::private::write_new(&path, &encode_sent(&saved(json!({"body":"done"}))).unwrap()).unwrap();
+        hagency_store::private::write_new(
+            &path,
+            &encode_sent(&saved(json!({"body":"done"}))).unwrap(),
+        )
+        .unwrap();
         let link = root.path().join("link");
         symlink(&path, &link).unwrap();
         assert!(read_sent(&link).is_err());
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(read_sent(&path).is_err());
+    }
+}
+
+#[cfg(test)]
+mod device_slot_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn one_agent_device_opening_never_holds_up_another() {
+        // A first sync can retry for minutes while its own slot is held.
+        let first = slot("slot-test:first");
+        let _opening = first.lock().await;
+        let second = slot("slot-test:second");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), second.lock())
+                .await
+                .is_ok(),
+            "another Agent's device opens meanwhile"
+        );
+        assert!(
+            DEVICES.try_lock().is_ok(),
+            "the device map is never held across an open"
+        );
+        // The same Agent's callers wait for that one opening.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), slot("slot-test:first").lock())
+                .await
+                .is_err()
+        );
     }
 }

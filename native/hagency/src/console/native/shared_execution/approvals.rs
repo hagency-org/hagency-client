@@ -26,9 +26,9 @@ struct Pending {
 pub(super) struct Approvals {
     pending: Vec<Pending>,
     /// The model's questions, and Codex's withdrawals of them, that arrived
-    /// while a decision was being sent. The driver hands them on.
-    questions: Vec<hagency_runtime::codex::session::UserInputRequest>,
-    withdrawn: Vec<hagency_runtime::codex::RequestId>,
+    /// while a decision was being sent, in arrival order. The driver hands
+    /// them on.
+    questions: Vec<super::questions::QuestionUpdate>,
 }
 pub(super) fn enable(process: &mut OwnedSession) -> Result<(), NativeError> {
     process
@@ -41,13 +41,8 @@ pub(super) fn enable(process: &mut OwnedSession) -> Result<(), NativeError> {
 }
 impl Approvals {
     /// Question updates observed by `poll`, in order, each handed out once.
-    pub(super) fn take_questions(
-        &mut self,
-    ) -> (
-        Vec<hagency_runtime::codex::session::UserInputRequest>,
-        Vec<hagency_runtime::codex::RequestId>,
-    ) {
-        (std::mem::take(&mut self.questions), std::mem::take(&mut self.withdrawn))
+    pub(super) fn take_questions(&mut self) -> Vec<super::questions::QuestionUpdate> {
+        std::mem::take(&mut self.questions)
     }
     pub async fn register(
         &mut self,
@@ -290,8 +285,11 @@ impl Approvals {
                         if let Some(next) = next {
                             self.register(io, b, work, a, until, process, next).await?;
                         }
-                        self.questions.extend(question);
-                        self.withdrawn.extend(withdrawn);
+                        // One event is a question or a withdrawal, never both.
+                        self.questions
+                            .extend(question.map(super::questions::QuestionUpdate::Asked));
+                        self.questions
+                            .extend(withdrawn.map(super::questions::QuestionUpdate::Withdrawn));
                     }
                 }
             }
@@ -430,8 +428,19 @@ mod tests {
         let sibling = root.join("rooms/room_two");
         std::fs::create_dir_all(&room).unwrap();
         std::fs::create_dir_all(&sibling).unwrap();
-        for (path, allowed) in [(room.join("new.txt"), true), (sibling.join("new.txt"), false), (root.join("legacy.txt"), false)] {
-            assert_eq!(within_workspace("item/permissions/requestApproval", &json!({"permissions":{"fileSystem":{"write":[path]}}}), &room), allowed);
+        for (path, allowed) in [
+            (room.join("new.txt"), true),
+            (sibling.join("new.txt"), false),
+            (root.join("legacy.txt"), false),
+        ] {
+            assert_eq!(
+                within_workspace(
+                    "item/permissions/requestApproval",
+                    &json!({"permissions":{"fileSystem":{"write":[path]}}}),
+                    &room
+                ),
+                allowed
+            );
         }
     }
 }

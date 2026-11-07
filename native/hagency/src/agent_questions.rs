@@ -35,6 +35,9 @@ pub const ANSWER_EVENT: &str = "im.hagency.agent_question.answer";
 pub const VERSION: u64 = 1;
 /// How long the room has to answer before the Agent continues on its own.
 pub const ANSWER_WAIT_MS: u64 = 600_000;
+/// Clock difference allowed between the Agent's host and the homeserver when
+/// a client checks a card's expiry against the card's own timestamp.
+pub const EXPIRY_SKEW_MS: u64 = 120_000;
 /// What one card shows. A request beyond it is answered with nothing.
 pub const MAX_CARD_QUESTIONS: usize = 3;
 pub const MAX_CARD_OPTIONS: usize = 4;
@@ -130,33 +133,67 @@ fn is_zero(value: &u64) -> bool {
     *value == 0
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64)
-}
-
 fn hex64(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 fn is_event_id(value: &str) -> bool {
-    value.starts_with('$') && value.len() > 1 && value.len() <= 255 && !value.chars().any(char::is_control)
+    value.starts_with('$')
+        && value.len() > 1
+        && value.len() <= 255
+        && !value.chars().any(char::is_control)
 }
 fn user_id(value: &str) -> bool {
-    value.starts_with('@') && value.contains(':') && value.len() <= 255 && !value.chars().any(char::is_control)
+    value.starts_with('@')
+        && value.contains(':')
+        && value.len() <= 255
+        && !value.chars().any(char::is_control)
 }
 fn prose(value: &str, max: usize) -> bool {
     !value.trim().is_empty()
         && value.len() <= max
-        && !value.chars().any(|c| c.is_control() && c != '\n' && c != '\t')
+        && !value
+            .chars()
+            .any(|c| c.is_control() && c != '\n' && c != '\t')
 }
 fn identifier(value: &str) -> bool {
     !value.is_empty() && value.len() <= 255 && !value.chars().any(char::is_control)
 }
 
-/// Whether `user` is a Hagency Agent puppet. Only an Agent's card is drawn.
+/// Whether `user` is a Hagency Agent puppet on any server. No Agent ever
+/// answers a card, whichever server it is on.
 pub fn is_agent(user: &str) -> bool {
-    user.strip_prefix('@').is_some_and(|rest| rest.starts_with("_hagency_agt_")) && user_id(user)
+    user.strip_prefix('@')
+        .is_some_and(|rest| rest.starts_with("_hagency_agt_"))
+        && user_id(user)
+}
+
+/// The server part of a user or room ID (`@local:server`, `!opaque:server`).
+pub fn server_name(id: &str) -> Option<&str> {
+    id.split_once(':')
+        .map(|(_, server)| server)
+        .filter(|server| !server.is_empty())
+}
+
+/// Whether `user` is an Agent on `server`, the room's own homeserver. Only
+/// such an Agent's card is drawn: another server could name any account
+/// `_hagency_agt_…`.
+pub fn is_agent_on(user: &str, server: &str) -> bool {
+    is_agent(user) && server_name(user) == Some(server)
+}
+
+/// `YYYY-MM-DD HH:MM UTC`, the same instant for every reader.
+fn utc_minute(ms: u64) -> String {
+    let secs = ms / 1000;
+    let (year, month, day) = crate::operator_graphs::civil_from_days((secs / 86_400) as i64);
+    let day_secs = secs % 86_400;
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02} UTC",
+        day_secs / 3600,
+        (day_secs % 3600) / 60
+    )
 }
 
 impl Card {
@@ -169,6 +206,11 @@ impl Card {
         expires_at_ms: u64,
         questions: &[UserInputQuestion],
     ) -> Option<Self> {
+        // Never project an approval into a room card, including a mixed
+        // request where its permission question would otherwise be withheld.
+        if questions.iter().any(UserInputQuestion::is_codex_approval) {
+            return None;
+        }
         let withheld = questions.iter().filter(|q| q.is_secret).count() as u64;
         let shown: Vec<CardQuestion> = questions
             .iter()
@@ -181,7 +223,10 @@ impl Card {
                     .options
                     .iter()
                     .flatten()
-                    .map(|o| CardOption { label: o.label.clone(), description: o.description.clone() })
+                    .map(|o| CardOption {
+                        label: o.label.clone(),
+                        description: o.description.clone(),
+                    })
                     .collect(),
                 other: q.accepts_text(),
             })
@@ -283,6 +328,11 @@ impl Card {
     pub fn is_open(&self, now_ms: u64) -> bool {
         self.state == CardState::Pending && now_ms < self.expires_at_ms
     }
+    /// A card can wait at most one run's whole answer budget from when it was
+    /// posted (`origin_server_ts`). A later expiry is not one an executor sets.
+    pub fn expiry_plausible(&self, origin_server_ts: u64) -> bool {
+        self.expires_at_ms <= origin_server_ts.saturating_add(ANSWER_WAIT_MS + EXPIRY_SKEW_MS)
+    }
 
     /// What clients without Hagency's card show: the questions and choices,
     /// and how to answer. It never contains a secret question.
@@ -328,9 +378,10 @@ impl Card {
             }
         }
         if self.state == CardState::Pending {
-            let minutes = self.expires_at_ms.saturating_sub(now_ms()).div_ceil(60_000).max(1);
+            // An absolute time: the message may be read long after it was sent.
+            let by = utc_minute(self.expires_at_ms);
             text.push_str(&format!(
-                "\nAnswer with the buttons in Hagency within {minutes} min. A text reply is a new message, not an answer.\n请在 {minutes} 分钟内用 Hagency 中的按钮回答；文字回复会作为新消息，不算回答。"
+                "\nAnswer with the buttons in Hagency by {by}. A text reply is a new message, not an answer.\n请在 {by} 前用 Hagency 中的按钮回答；文字回复会作为新消息，不算回答。"
             ));
         }
         text.trim_end().to_owned()
@@ -434,11 +485,13 @@ pub struct Received {
 }
 impl Received {
     /// Whether this event can be an answer at all, before membership: never
-    /// the Agent's own, and in an encrypted room only when Megolm
-    /// authenticates its sender. A plaintext event in an encrypted room, as a
-    /// homeserver could inject, is not.
+    /// from an Agent (this one or any other), and in an encrypted room only
+    /// when Megolm authenticates its sender. A plaintext event in an encrypted
+    /// room, as a homeserver could inject, is not.
     pub fn admissible(&self, encrypted_room: bool, own_user: Option<&str>) -> bool {
-        own_user != Some(self.sender.as_str()) && (!encrypted_room || self.authentic == Some(true))
+        own_user != Some(self.sender.as_str())
+            && !is_agent(&self.sender)
+            && (!encrypted_room || self.authentic == Some(true))
     }
 }
 struct Undecrypted {
@@ -460,7 +513,10 @@ struct Entries {
 const RETAIN: Duration = Duration::from_millis(ANSWER_WAIT_MS + 120_000);
 const MAX_ENTRIES: usize = 256;
 
-fn authentic(info: &EncryptionInfo, sender: &str) -> bool {
+/// Whether Megolm authenticates `sender` for an event: the device that set up
+/// the session belongs to the sender, is known, and broke no verification.
+/// (`EncryptionInfo::sender` is the event's own claim, never proof.)
+pub fn authentic(info: &EncryptionInfo, sender: &str) -> bool {
     info.sender.as_str() == sender
         && !matches!(
             info.verification_state,
@@ -478,7 +534,10 @@ impl Entries {
         self.undecrypted.retain(|e| e.received.elapsed() < RETAIN);
         while self.answers.len() + self.undecrypted.len() > MAX_ENTRIES {
             if self.undecrypted.is_empty()
-                || self.answers.first().is_some_and(|a| a.order < self.undecrypted[0].order)
+                || self
+                    .answers
+                    .first()
+                    .is_some_and(|a| a.order < self.undecrypted[0].order)
             {
                 self.answers.remove(0);
             } else {
@@ -491,8 +550,15 @@ impl Entries {
     }
     /// Record one timeline event if it is an answer, or an encrypted event
     /// that refers to some message and may be an answer once its keys arrive.
-    fn observe(&mut self, room_id: &str, value: &Value, info: Option<&EncryptionInfo>, order: Option<u64>) {
-        let (Some(event_id), Some(sender)) = (value["event_id"].as_str(), value["sender"].as_str()) else {
+    fn observe(
+        &mut self,
+        room_id: &str,
+        value: &Value,
+        info: Option<&EncryptionInfo>,
+        order: Option<u64>,
+    ) {
+        let (Some(event_id), Some(sender)) = (value["event_id"].as_str(), value["sender"].as_str())
+        else {
             return;
         };
         if !is_event_id(event_id) || !user_id(sender) || self.taken.contains(event_id) {
@@ -571,7 +637,10 @@ impl Inbox {
                     let Ok(value) = event.deserialize_as::<Value>() else {
                         return;
                     };
-                    if !matches!(value["type"].as_str(), Some(ANSWER_EVENT | "m.room.encrypted")) {
+                    if !matches!(
+                        value["type"].as_str(),
+                        Some(ANSWER_EVENT | "m.room.encrypted")
+                    ) {
                         return;
                     }
                     if let Ok(mut entries) = shared.lock() {
@@ -598,7 +667,8 @@ impl Inbox {
             if due.len() < limit
                 && e.room_id == room_id
                 && e.card_event_id == card_event_id
-                && e.tried.is_none_or(|t| t.elapsed() >= Duration::from_secs(5))
+                && e.tried
+                    .is_none_or(|t| t.elapsed() >= Duration::from_secs(5))
             {
                 e.tried = Some(Instant::now());
                 due.push(e.event_id.clone());
@@ -615,7 +685,12 @@ impl Inbox {
         let Some(event_id) = value["event_id"].as_str() else {
             return;
         };
-        let Some(order) = entries.undecrypted.iter().find(|e| e.event_id == event_id).map(|e| e.order) else {
+        let Some(order) = entries
+            .undecrypted
+            .iter()
+            .find(|e| e.event_id == event_id)
+            .map(|e| e.order)
+        else {
             return;
         };
         if value["type"] == ANSWER_EVENT {
@@ -677,8 +752,14 @@ mod tests {
                 header: "Database".into(),
                 question: "Which database should the service use?".into(),
                 options: Some(vec![
-                    UserInputOption { label: "Postgres (Recommended)".into(), description: "Durable.".into() },
-                    UserInputOption { label: "SQLite".into(), description: "Simplest to run.".into() },
+                    UserInputOption {
+                        label: "Postgres (Recommended)".into(),
+                        description: "Durable.".into(),
+                    },
+                    UserInputOption {
+                        label: "SQLite".into(),
+                        description: "Simplest to run.".into(),
+                    },
                 ]),
                 is_other: true,
                 is_secret: false,
@@ -694,7 +775,14 @@ mod tests {
         ]
     }
     fn card() -> Card {
-        Card::ask(format!("aq_{}", "a".repeat(64)), "$trigger".into(), "$root".into(), 1_800_000_000_000, &questions()).unwrap()
+        Card::ask(
+            format!("aq_{}", "a".repeat(64)),
+            "$trigger".into(),
+            "$root".into(),
+            1_800_000_000_000,
+            &questions(),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -709,6 +797,31 @@ mod tests {
     }
 
     #[test]
+    fn approval_questions_never_become_cards_even_when_mixed_or_withheld() {
+        for id in [
+            "mcp_tool_call_approval_call",
+            "skill_mcp_dependency_install",
+        ] {
+            for secret in [false, true] {
+                let mut questions = questions();
+                questions[1].id = id.into();
+                questions[1].is_secret = secret;
+                assert!(
+                    Card::ask(
+                        format!("aq_{}", "a".repeat(64)),
+                        "$t".into(),
+                        "$r".into(),
+                        1,
+                        &questions
+                    )
+                    .is_none(),
+                    "{id}, secret: {secret}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn card_message_has_a_text_fallback_and_round_trips() {
         let card = card();
         let content = card.message_content();
@@ -716,20 +829,58 @@ mod tests {
         assert_eq!(content["m.relates_to"]["rel_type"], "m.thread");
         assert_eq!(content["m.relates_to"]["event_id"], "$root");
         let body = content["body"].as_str().unwrap();
-        assert!(body.contains("Which database") && body.contains("SQLite — Simplest to run.") && body.contains("Other"));
+        assert!(
+            body.contains("Which database")
+                && body.contains("SQLite — Simplest to run.")
+                && body.contains("Other")
+        );
         assert!(body.contains("text reply is a new message"));
+        // The deadline is an instant, not a duration the reader cannot anchor.
+        assert!(
+            body.contains("by 2027-01-15 08:00 UTC")
+                && body.contains("请在 2027-01-15 08:00 UTC 前"),
+            "{body}"
+        );
+        assert!(!body.contains(" min."));
         assert_eq!(Card::from_content(&content), Some(card.clone()));
-        let answered = card.answered("@alice:example.test", BTreeMap::from([("db".into(), AnswerValue::Option("SQLite".into()))]));
+        let answered = card.answered(
+            "@alice:example.test",
+            BTreeMap::from([("db".into(), AnswerValue::Option("SQLite".into()))]),
+        );
         let edit = answered.edit_content("$card");
-        assert_eq!(edit["m.relates_to"], json!({"rel_type":"m.replace","event_id":"$card"}));
-        assert_eq!(Card::from_content(&edit["m.new_content"]), Some(answered.clone()));
-        assert!(edit["m.new_content"]["body"].as_str().unwrap().contains("Answered by @alice:example.test"));
-        assert!(edit["m.new_content"]["body"].as_str().unwrap().contains("→ SQLite"));
+        assert_eq!(
+            edit["m.relates_to"],
+            json!({"rel_type":"m.replace","event_id":"$card"})
+        );
+        assert_eq!(
+            Card::from_content(&edit["m.new_content"]),
+            Some(answered.clone())
+        );
+        assert!(
+            edit["m.new_content"]["body"]
+                .as_str()
+                .unwrap()
+                .contains("Answered by @alice:example.test")
+        );
+        assert!(
+            edit["m.new_content"]["body"]
+                .as_str()
+                .unwrap()
+                .contains("→ SQLite")
+        );
         let expired = card.expired().edit_content("$card");
-        assert!(expired["m.new_content"]["body"].as_str().unwrap().starts_with("⌛"));
+        assert!(
+            expired["m.new_content"]["body"]
+                .as_str()
+                .unwrap()
+                .starts_with("⌛")
+        );
         let mut forged = content.clone();
         forged[MSGTYPE]["state"] = json!("answered");
-        assert!(Card::from_content(&forged).is_none(), "an answered card names who answered");
+        assert!(
+            Card::from_content(&forged).is_none(),
+            "an answered card names who answered"
+        );
         let mut other = content;
         other["msgtype"] = json!("m.text");
         assert!(Card::from_content(&other).is_none());
@@ -740,7 +891,10 @@ mod tests {
         let card = card();
         let answers = BTreeMap::from([("db".into(), AnswerValue::Option("SQLite".into()))]);
         let content = card.answer_content("$card", &answers).unwrap();
-        assert_eq!(content["m.relates_to"], json!({"rel_type":"m.reference","event_id":"$card"}));
+        assert_eq!(
+            content["m.relates_to"],
+            json!({"rel_type":"m.reference","event_id":"$card"})
+        );
         assert_eq!(content["answers"], json!({"db":{"option":"SQLite"}}));
         assert_eq!(card.parse_answer("$card", &content), Some(answers));
         assert!(card.parse_answer("$other", &content).is_none());
@@ -771,27 +925,98 @@ mod tests {
             "content":{"m.relates_to":{"rel_type":"m.reference","event_id":"$card"}}});
         entries.observe("!room:test", &event, None, None);
         let mut answer = entries.answers.remove(0);
-        assert!(answer.admissible(false, Some("@agent:example.test")), "plaintext room, plaintext answer");
-        assert!(!answer.admissible(true, Some("@agent:example.test")), "plaintext answer in an encrypted room");
+        assert!(
+            answer.admissible(false, Some("@agent:example.test")),
+            "plaintext room, plaintext answer"
+        );
+        assert!(
+            !answer.admissible(true, Some("@agent:example.test")),
+            "plaintext answer in an encrypted room"
+        );
         answer.authentic = Some(false);
-        assert!(!answer.admissible(true, None), "Megolm sender is not the event sender");
+        assert!(
+            !answer.admissible(true, None),
+            "Megolm sender is not the event sender"
+        );
         answer.authentic = Some(true);
         assert!(answer.admissible(true, None));
-        assert!(!answer.admissible(true, Some("@alice:example.test")), "the Agent never answers itself");
+        assert!(
+            !answer.admissible(true, Some("@alice:example.test")),
+            "the Agent never answers itself"
+        );
+        // No Agent answers any card, on any server, encrypted or not.
+        for agent in [
+            "@_hagency_agt_other:example.test",
+            "@_hagency_agt_remote:elsewhere.test",
+        ] {
+            answer.sender = agent.into();
+            assert!(
+                !answer.admissible(true, Some("@_hagency_agt_asking:example.test")),
+                "{agent}"
+            );
+            assert!(!answer.admissible(false, None), "{agent}");
+        }
+    }
+
+    #[test]
+    fn only_an_agent_of_the_rooms_server_posts_cards_and_expiry_is_bounded() {
+        assert_eq!(server_name("!room:example.test"), Some("example.test"));
+        assert_eq!(
+            server_name("@_hagency_agt_a:example.test:8448"),
+            Some("example.test:8448")
+        );
+        assert_eq!(server_name("!opaque"), None);
+        assert!(is_agent_on("@_hagency_agt_a:example.test", "example.test"));
+        assert!(
+            !is_agent_on("@_hagency_agt_a:elsewhere.test", "example.test"),
+            "another server's lookalike"
+        );
+        assert!(!is_agent_on("@alice:example.test", "example.test"));
+        let mut card = card();
+        let posted = card.expires_at_ms - ANSWER_WAIT_MS;
+        assert!(card.expiry_plausible(posted));
+        assert!(card.expiry_plausible(posted - EXPIRY_SKEW_MS), "clock skew");
+        assert!(!card.expiry_plausible(posted - EXPIRY_SKEW_MS - 1));
+        card.expires_at_ms = u64::MAX;
+        assert!(
+            !card.expiry_plausible(posted),
+            "a card cannot wait for days"
+        );
     }
 
     #[test]
     fn inbox_keeps_arrival_order_and_late_decryptions_keep_their_place() {
         let mut entries = Entries::default();
-        let event = |id: &str, kind: &str| json!({"type":kind,"event_id":id,"sender":"@alice:example.test",
-            "content":{"m.relates_to":{"rel_type":"m.reference","event_id":"$card"}}});
-        entries.observe("!room:test", &event("$late", "m.room.encrypted"), None, None);
+        let event = |id: &str, kind: &str| {
+            json!({"type":kind,"event_id":id,"sender":"@alice:example.test",
+            "content":{"m.relates_to":{"rel_type":"m.reference","event_id":"$card"}}})
+        };
+        entries.observe(
+            "!room:test",
+            &event("$late", "m.room.encrypted"),
+            None,
+            None,
+        );
         entries.observe("!room:test", &event("$second", ANSWER_EVENT), None, None);
-        entries.observe("!room:test", &event("$thread", "m.room.message"), None, None);
+        entries.observe(
+            "!room:test",
+            &event("$thread", "m.room.message"),
+            None,
+            None,
+        );
         let order = entries.undecrypted[0].order;
-        entries.observe("!room:test", &event("$late", ANSWER_EVENT), None, Some(order));
+        entries.observe(
+            "!room:test",
+            &event("$late", ANSWER_EVENT),
+            None,
+            Some(order),
+        );
         assert!(entries.undecrypted.is_empty());
-        let ids: Vec<_> = entries.answers.iter().map(|e| e.event_id.as_str()).collect();
+        let ids: Vec<_> = entries
+            .answers
+            .iter()
+            .map(|e| e.event_id.as_str())
+            .collect();
         assert_eq!(ids, ["$late", "$second"]);
         let mut unrelated = event("$x", ANSWER_EVENT);
         unrelated["content"]["m.relates_to"]["rel_type"] = json!("m.thread");

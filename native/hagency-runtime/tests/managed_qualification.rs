@@ -50,7 +50,11 @@ fn config(path: &Path) -> Value {
 fn fixture(mode: &str, change: impl FnMut(&mut Value)) -> (tempfile::TempDir, OwnedSession) {
     fixture_policy(mode, change, None)
 }
-fn fixture_policy(mode: &str, mut change: impl FnMut(&mut Value), tools: Option<bool>) -> (tempfile::TempDir, OwnedSession) {
+fn fixture_policy(
+    mode: &str,
+    mut change: impl FnMut(&mut Value),
+    tools: Option<bool>,
+) -> (tempfile::TempDir, OwnedSession) {
     let t = tempfile::tempdir().unwrap();
     let root = t.path().canonicalize().unwrap();
     let instructions = root.join(MANAGED_INSTRUCTIONS_FILE);
@@ -72,7 +76,10 @@ fn fixture_policy(mode: &str, mut change: impl FnMut(&mut Value), tools: Option<
         require_crash_containment: false,
     };
     let settings = Settings::new(root, "fixture".into(), "medium".into()).unwrap();
-    let settings = match tools { Some(yolo) => settings.with_execution_policy(yolo), None => settings.read_only() };
+    let settings = match tools {
+        Some(yolo) => settings.with_execution_policy(yolo),
+        None => settings.read_only(),
+    };
     let session = OwnedSession::spawn(
         binary,
         &launch,
@@ -344,53 +351,125 @@ fn text_fixture() -> (tempfile::TempDir, OwnedSession, std::path::PathBuf) {
 async fn shared_room_workspace_binds_thread_turn_and_approval_scope_without_changing_permissions() {
     use hagency_runtime::owned::{SHARED_TEXT_INSTRUCTIONS, SHARED_TOOLS_INSTRUCTIONS};
     use sha2::{Digest, Sha256};
-    for (mode, tools) in [(None, None), (Some("standard"), Some(false)), (Some("yolo"), Some(true))] {
+    for (mode, tools) in [
+        (None, None),
+        (Some("standard"), Some(false)),
+        (Some("yolo"), Some(true)),
+    ] {
         let probe_mode = format!("text-workspace-{}", mode.unwrap_or("readonly"));
         let (t, mut process) = fixture_policy(&probe_mode, |_| {}, tools);
         let root = t.path().canonicalize().unwrap();
         let instructions = root.join("room-instructions.md");
-        std::fs::write(&instructions, if tools.is_some() { SHARED_TOOLS_INSTRUCTIONS } else { SHARED_TEXT_INSTRUCTIONS }).unwrap();
+        std::fs::write(
+            &instructions,
+            if tools.is_some() {
+                SHARED_TOOLS_INSTRUCTIONS
+            } else {
+                SHARED_TEXT_INSTRUCTIONS
+            },
+        )
+        .unwrap();
         let mut c = config(&instructions);
         if tools.is_some() {
-            for key in ["shell_tool", "unified_exec", "code_mode_host"] { c["features"][key] = true.into(); }
+            for key in ["shell_tool", "unified_exec", "code_mode_host"] {
+                c["features"][key] = true.into();
+            }
         }
         std::fs::write(root.join("config.json"), serde_json::to_vec(&c).unwrap()).unwrap();
         process.initialize().await.unwrap();
-        process.qualify_shared_tools(&instructions, false, mode).await.unwrap();
-        assert!(process.start_shared_text_thread_for_room("!unadmitted:server").await.is_err());
+        process
+            .qualify_shared_tools(&instructions, false, mode)
+            .await
+            .unwrap();
+        assert!(
+            process
+                .start_shared_text_thread_for_room("!unadmitted:server")
+                .await
+                .is_err()
+        );
         assert!(!root.join("rooms").exists());
         let now = std::time::Instant::now();
-        process.install_shared_text_activity(1, now + Duration::from_secs(5), now + Duration::from_secs(10)).unwrap();
+        process
+            .install_shared_text_activity(
+                1,
+                now + Duration::from_secs(5),
+                now + Duration::from_secs(10),
+            )
+            .unwrap();
         let room = "!actual-work-room:server:19443";
-        let expected = root.join("rooms").join(format!("room_{:x}", Sha256::digest(room.as_bytes())));
-        process.start_shared_text_thread_for_room(room).await.unwrap();
+        let expected = root
+            .join("rooms")
+            .join(format!("room_{:x}", Sha256::digest(room.as_bytes())));
+        process
+            .start_shared_text_thread_for_room(room)
+            .await
+            .unwrap();
         // This accessor is also what host approval checks use.
         assert_eq!(process.shared_workspace(), expected);
-        process.start_shared_text_turn("Offline room request".into()).await.unwrap();
+        process
+            .start_shared_text_turn("Offline room request".into())
+            .await
+            .unwrap();
         loop {
             let event = process.next_shared_text_event().await.unwrap();
-            if matches!(event.observation().kind(), hagency_runtime::codex::session::ObservationKind::TurnEnded(_)) { break; }
+            if matches!(
+                event.observation().kind(),
+                hagency_runtime::codex::session::ObservationKind::TurnEnded(_)
+            ) {
+                break;
+            }
         }
-        let thread: Value = serde_json::from_slice(&std::fs::read(root.join("thread-request.json")).unwrap()).unwrap();
-        let turn: Value = serde_json::from_slice(&std::fs::read(root.join("turn-request.json")).unwrap()).unwrap();
+        let thread: Value =
+            serde_json::from_slice(&std::fs::read(root.join("thread-request.json")).unwrap())
+                .unwrap();
+        let turn: Value =
+            serde_json::from_slice(&std::fs::read(root.join("turn-request.json")).unwrap())
+                .unwrap();
         assert_eq!(thread["cwd"], json!(expected));
         assert_eq!(turn["cwd"], json!(expected));
-        assert_eq!(turn["approvalPolicy"], if tools == Some(true) { "never" } else { "on-request" });
+        assert_eq!(
+            turn["approvalPolicy"],
+            if tools == Some(true) {
+                "never"
+            } else {
+                "on-request"
+            }
+        );
         match tools {
-            None => assert_eq!(turn["sandboxPolicy"], json!({"type":"readOnly","networkAccess":false})),
-            Some(false) => assert_eq!(turn["sandboxPolicy"], json!({"type":"workspaceWrite","writableRoots":[expected],"networkAccess":false})),
+            None => assert_eq!(
+                turn["sandboxPolicy"],
+                json!({"type":"readOnly","networkAccess":false})
+            ),
+            Some(false) => assert_eq!(
+                turn["sandboxPolicy"],
+                json!({"type":"workspaceWrite","writableRoots":[expected],"networkAccess":false})
+            ),
             Some(true) => assert_eq!(turn["sandboxPolicy"], json!({"type":"dangerFullAccess"})),
         }
-        assert!(process.start_shared_text_thread_for_room("!other:server").await.is_err());
+        assert!(
+            process
+                .start_shared_text_thread_for_room("!other:server")
+                .await
+                .is_err()
+        );
         assert_eq!(process.shared_workspace(), expected);
-        assert_eq!(process.stop_shared_text_observation().state(), ManagedProcessState::Stopped);
+        assert_eq!(
+            process.stop_shared_text_observation().state(),
+            ManagedProcessState::Stopped
+        );
     }
 }
 
 #[tokio::test]
 async fn shared_live_web_qualification_is_explicit_and_keeps_other_tools_disabled() {
     use hagency_runtime::owned::{SHARED_WEB_INSTRUCTIONS, shared_text_policy};
-    for bad in [None, Some("shell_tool"), Some("hooks"), Some("future_tool"), Some("mcp")] {
+    for bad in [
+        None,
+        Some("shell_tool"),
+        Some("hooks"),
+        Some("future_tool"),
+        Some("mcp"),
+    ] {
         let (t, mut p, path) = text_fixture();
         std::fs::write(&path, SHARED_WEB_INSTRUCTIONS).unwrap();
         let mut c = config(&path);
@@ -398,15 +477,30 @@ async fn shared_live_web_qualification_is_explicit_and_keeps_other_tools_disable
         c["features"]["standalone_web_search"] = true.into();
         c["features"]["code_mode_host"] = true.into();
         if let Some(feature) = bad {
-            if feature == "mcp" { c["mcp_servers"]["test"] = json!({"enabled":true}); }
-            else { c["features"][feature] = true.into(); }
+            if feature == "mcp" {
+                c["mcp_servers"]["test"] = json!({"enabled":true});
+            } else {
+                c["features"][feature] = true.into();
+            }
         }
-        std::fs::write(t.path().join("config.json"), serde_json::to_vec(&c).unwrap()).unwrap();
+        std::fs::write(
+            t.path().join("config.json"),
+            serde_json::to_vec(&c).unwrap(),
+        )
+        .unwrap();
         p.initialize().await.unwrap();
         let result = p.qualify_shared_text_with_web(&path, true).await;
-        if bad.is_some() { assert!(result.is_err()); }
-        else {
-            assert_eq!(result.unwrap().policy_digest(), Some(hagency_core::canonical::digest(&json!({"policy":shared_text_policy(true)})).unwrap().as_str()));
+        if bad.is_some() {
+            assert!(result.is_err());
+        } else {
+            assert_eq!(
+                result.unwrap().policy_digest(),
+                Some(
+                    hagency_core::canonical::digest(&json!({"policy":shared_text_policy(true)}))
+                        .unwrap()
+                        .as_str()
+                )
+            );
         }
         p.stop();
     }
@@ -415,11 +509,18 @@ async fn shared_live_web_qualification_is_explicit_and_keeps_other_tools_disable
     let mut c = config(&path);
     c["web_search"] = "live".into();
     c["features"]["standalone_web_search"] = true.into();
-        c["features"]["code_mode_host"] = true.into();
+    c["features"]["code_mode_host"] = true.into();
     c["features"]["future_default"] = true.into();
-    std::fs::write(t.path().join("config.json"), serde_json::to_vec(&c).unwrap()).unwrap();
+    std::fs::write(
+        t.path().join("config.json"),
+        serde_json::to_vec(&c).unwrap(),
+    )
+    .unwrap();
     p.initialize().await.unwrap();
-    let overrides = p.discover_shared_text_policy_with_web(&path, true).await.unwrap();
+    let overrides = p
+        .discover_shared_text_policy_with_web(&path, true)
+        .await
+        .unwrap();
     assert_eq!(overrides.values(), &["features.future_default=false"]);
     assert!(p.qualify_shared_text(&path).await.is_err());
 }
@@ -442,8 +543,8 @@ fn text_fixture_mode(mode: &str) -> (tempfile::TempDir, OwnedSession, std::path:
 
 #[tokio::test]
 async fn shared_live_web_events_require_the_actual_enabled_process() {
-    use hagency_runtime::owned::SHARED_WEB_INSTRUCTIONS;
     use hagency_runtime::codex::session::ObservationKind;
+    use hagency_runtime::owned::SHARED_WEB_INSTRUCTIONS;
     for web in [false, true] {
         let (t, mut p, path) = text_fixture_mode("text-web");
         if web {
@@ -451,15 +552,26 @@ async fn shared_live_web_events_require_the_actual_enabled_process() {
             let mut c = config(&path);
             c["web_search"] = "live".into();
             c["features"]["standalone_web_search"] = true.into();
-        c["features"]["code_mode_host"] = true.into();
-            std::fs::write(t.path().join("config.json"), serde_json::to_vec(&c).unwrap()).unwrap();
+            c["features"]["code_mode_host"] = true.into();
+            std::fs::write(
+                t.path().join("config.json"),
+                serde_json::to_vec(&c).unwrap(),
+            )
+            .unwrap();
         }
         p.initialize().await.unwrap();
         p.qualify_shared_text_with_web(&path, web).await.unwrap();
         let now = std::time::Instant::now();
-        p.install_shared_text_activity(1, now + Duration::from_secs(5), now + Duration::from_secs(10)).unwrap();
+        p.install_shared_text_activity(
+            1,
+            now + Duration::from_secs(5),
+            now + Duration::from_secs(10),
+        )
+        .unwrap();
         p.start_shared_text_thread().await.unwrap();
-        p.start_shared_text_turn("Beijing weather".into()).await.unwrap();
+        p.start_shared_text_turn("Beijing weather".into())
+            .await
+            .unwrap();
         let mut searches = 0;
         loop {
             let event = p.next_shared_text_event().await.unwrap();
@@ -467,11 +579,62 @@ async fn shared_live_web_events_require_the_actual_enabled_process() {
                 searches += 1;
                 assert_eq!(event.is_authorized_web_search(), web);
             }
-            if matches!(event.observation().kind(), ObservationKind::TurnEnded(_)) { break; }
+            if matches!(event.observation().kind(), ObservationKind::TurnEnded(_)) {
+                break;
+            }
         }
         assert_eq!(searches, 2);
         p.stop();
     }
+}
+#[tokio::test]
+async fn shared_text_answer_to_a_withdrawn_question_is_moot_and_keeps_the_process() {
+    use hagency_runtime::codex::session::ObservationKind;
+    let (t, mut p, instructions) = text_fixture_mode("text-question-withdrawn");
+    p.initialize().await.unwrap();
+    p.qualify_shared_text(&instructions).await.unwrap();
+    let now = std::time::Instant::now();
+    p.install_shared_text_activity(
+        1,
+        now + Duration::from_secs(10),
+        now + Duration::from_secs(30),
+    )
+    .unwrap();
+    p.start_shared_text_thread().await.unwrap();
+    p.start_shared_text_turn("Offline question request".into())
+        .await
+        .unwrap();
+    p.enable_shared_user_input().unwrap();
+    let mut request = None;
+    let mut withdrawn = false;
+    loop {
+        let event = p.next_shared_text_event().await.unwrap();
+        if let Some(asked) = event.user_input() {
+            request = Some(asked.clone());
+        }
+        if event.user_input_resolved().is_some() {
+            withdrawn = true;
+            // The room's answer settles after Codex withdrew the question.
+            let response = request.as_ref().expect("asked first").unanswered();
+            assert!(
+                !p.respond_shared_user_input(response).await.unwrap(),
+                "moot, nothing written"
+            );
+        }
+        if matches!(event.observation().kind(), ObservationKind::TurnEnded(_)) {
+            break;
+        }
+    }
+    assert!(withdrawn);
+    assert!(
+        !t.path().join("question-response.json").exists(),
+        "Codex never got a late answer"
+    );
+    // The process kept running through the moot answer to the end of the turn.
+    assert_eq!(
+        p.stop_shared_text_observation().state(),
+        ManagedProcessState::Stopped
+    );
 }
 #[tokio::test]
 async fn shared_text_actual_process_has_one_turn_and_separate_metadata_policy() {
@@ -620,12 +783,25 @@ async fn shared_text_renewal_keeps_the_original_pending_read_without_cancellatio
 #[tokio::test]
 async fn no_tools_qualification_still_rejects_standard_and_yolo_execution_settings() {
     for yolo in [false, true] {
-        let (t,mut process)=fixture_policy("normal",|_|{},Some(yolo));
+        let (t, mut process) = fixture_policy("normal", |_| {}, Some(yolo));
         process.initialize().await.unwrap();
-        let error=process.qualify_managed_no_tools(&t.path().canonicalize().unwrap().join(MANAGED_INSTRUCTIONS_FILE)).await.err().unwrap();
-        assert_eq!(error,Error::Policy);
+        let error = process
+            .qualify_managed_no_tools(
+                &t.path()
+                    .canonicalize()
+                    .unwrap()
+                    .join(MANAGED_INSTRUCTIONS_FILE),
+            )
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error, Error::Policy);
         assert!(!process.managed_process_source().is_live());
-        let methods=std::fs::read_to_string(t.path().join("methods")).unwrap();
-        assert!(methods.lines().all(|v|matches!(v,"initialize"|"initialized")));
+        let methods = std::fs::read_to_string(t.path().join("methods")).unwrap();
+        assert!(
+            methods
+                .lines()
+                .all(|v| matches!(v, "initialize" | "initialized"))
+        );
     }
 }

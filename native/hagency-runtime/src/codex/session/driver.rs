@@ -59,9 +59,20 @@ pub struct SessionDriver<R, W, E> {
     history_pending: BTreeSet<RequestId>,
     /// The host asks people the model's questions and answers each one.
     user_input_enabled: bool,
-    /// Every `item/tool/requestUserInput` this session saw, and whether it has
-    /// been answered. Its upstream resolution is never an approval callback.
-    user_input: BTreeMap<RequestId, bool>,
+    /// Every `item/tool/requestUserInput` this session saw, and where it
+    /// stands. Its upstream resolution is never an approval callback.
+    user_input: BTreeMap<RequestId, Asked>,
+}
+
+/// One model question this session saw.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Asked {
+    /// Handed to the host, which owes exactly one answer.
+    Waiting,
+    /// Answered once, by the host or by the session itself.
+    Answered,
+    /// Codex resolved it before any answer: an answer now is moot.
+    Withdrawn,
 }
 
 impl<R, W, E> SessionDriver<R, W, E> {
@@ -109,8 +120,8 @@ impl<R, W, E> SessionDriver<R, W, E> {
     }
     /// Model accepted by the thread/start scope check for the running turn.
     /// Metadata-only or failed/unstarted sessions have no measured model.
-    pub fn running_model(&self)->Option<&str> {
-        (self.phase()==Phase::Running).then(||self.settings.model())
+    pub fn running_model(&self) -> Option<&str> {
+        (self.phase() == Phase::Running).then(|| self.settings.model())
     }
     /// Latest sanitized `account/rateLimits/*` metadata seen on this process.
     pub fn provider_rate_limits(&self) -> Option<&super::RateLimitSnapshot> {
@@ -129,16 +140,29 @@ impl<R, W, E> SessionDriver<R, W, E> {
     /// Shared execution chooses a room only after work admission. Keep model,
     /// permissions and activity custody fixed; cwd also drives turn sandbox
     /// roots and the host's approval scope. Never change an active thread.
-    pub(crate) fn bind_shared_workspace(&mut self, directory: std::path::PathBuf) -> Result<(), Error> {
-        if self.phase() != Phase::Ready || self.wire.is_warm_idle() || self.settings.task_mcp.is_some() {
+    pub(crate) fn bind_shared_workspace(
+        &mut self,
+        directory: std::path::PathBuf,
+    ) -> Result<(), Error> {
+        if self.phase() != Phase::Ready
+            || self.wire.is_warm_idle()
+            || self.settings.task_mcp.is_some()
+        {
             return Err(Error::State);
         }
         let root = std::path::Path::new(self.settings.cwd());
-        if directory == root || !directory.starts_with(root)
-            || directory.canonicalize().ok().as_ref() != Some(&directory) {
+        if directory == root
+            || !directory.starts_with(root)
+            || directory.canonicalize().ok().as_ref() != Some(&directory)
+        {
             return Err(Error::Scope);
         }
-        self.settings.cwd = Settings::new(directory, self.settings.model.clone(), self.settings.effort.clone())?.cwd;
+        self.settings.cwd = Settings::new(
+            directory,
+            self.settings.model.clone(),
+            self.settings.effort.clone(),
+        )?
+        .cwd;
         Ok(())
     }
     /// The acknowledgement budget for a startup RPC (`initialize`,
@@ -273,7 +297,28 @@ impl<R, W, E> SessionDriver<R, W, E> {
     }
     /// Questions this session handed to the host that are still unanswered.
     pub fn pending_user_input(&self) -> usize {
-        self.user_input.values().filter(|answered| !**answered).count()
+        self.user_input
+            .values()
+            .filter(|asked| **asked == Asked::Waiting)
+            .count()
+    }
+    /// Whether an answer to this question is moot, so nothing is written and
+    /// nothing is wrong: Codex already withdrew it, or the turn that asked it
+    /// is over. Refused (`Scope`) when the host never received the question
+    /// or already answered it.
+    pub fn user_input_moot(&self, response: &super::UserInputResponse) -> Result<bool, Error> {
+        if !self.user_input_enabled {
+            return Err(Error::State);
+        }
+        let asked = *self.user_input.get(&response.id).ok_or(Error::Scope)?;
+        if asked == Asked::Answered {
+            return Err(Error::Scope);
+        }
+        Ok(asked == Asked::Withdrawn
+            || self.phase() != Phase::Running
+            || self.thread_id() != Some(response.thread_id.as_str())
+            || self.turn_id() != Some(response.turn_id.as_str())
+            || !self.wire.server_request_open(&response.id))
     }
     pub fn phase(&self) -> Phase {
         self.state.phase
@@ -561,7 +606,9 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> SessionD
         self.open_thread(None).await
     }
     pub fn enable_room_history(&mut self) -> Result<(), Error> {
-        if self.phase() != Phase::Ready { return Err(Error::State); }
+        if self.phase() != Phase::Ready {
+            return Err(Error::State);
+        }
         self.settings.room_history = true;
         // Long room summaries cross many bounded read/compaction items. Text,
         // event, transport, time and funded usage ceilings remain independent.
@@ -574,16 +621,31 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> SessionD
     /// with `enable_user_input` once the turn runs, and without that the
     /// session answers each one with no answers.
     pub fn offer_user_input_tool(&mut self) -> Result<(), Error> {
-        if self.phase() != Phase::Ready { return Err(Error::State); }
+        if self.phase() != Phase::Ready {
+            return Err(Error::State);
+        }
         self.settings.user_input_tool = true;
         Ok(())
     }
-    pub async fn respond_room_history(&mut self, call: &super::RoomHistoryCall, content: String) -> Result<(), Error> {
-        if self.phase() != Phase::Running || !self.settings.room_history
+    pub async fn respond_room_history(
+        &mut self,
+        call: &super::RoomHistoryCall,
+        content: String,
+    ) -> Result<(), Error> {
+        if self.phase() != Phase::Running
+            || !self.settings.room_history
             || !self.history_pending.contains(&call.id)
             || content.len() > super::ROOM_HISTORY_RESULT_BYTES
-        { return Err(Error::Scope); }
-        self.wire.send(transport::Command::RespondRoomHistory { id: call.id.clone(), content }).await.map_err(Error::Transport)?;
+        {
+            return Err(Error::Scope);
+        }
+        self.wire
+            .send(transport::Command::RespondRoomHistory {
+                id: call.id.clone(),
+                content,
+            })
+            .await
+            .map_err(Error::Transport)?;
         self.history_pending.remove(&call.id);
         Ok(())
     }
@@ -737,33 +799,28 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> SessionD
     /// Answer one question this session handed to the host, exactly once. The
     /// response comes only from that request, so it names its own callback,
     /// thread and turn; anything else is refused without a write. `false`:
-    /// Codex had already withdrawn the question, so nothing was written and
-    /// nothing is owed.
+    /// the answer is moot (Codex withdrew the question, or its turn is over),
+    /// so nothing was written and nothing is owed.
     pub async fn respond_user_input(
         &mut self,
         response: super::UserInputResponse,
     ) -> Result<bool, Error> {
-        if self.phase() != Phase::Running || !self.user_input_enabled {
-            return Err(Error::State);
-        }
-        if self.thread_id() != Some(response.thread_id.as_str())
-            || self.turn_id() != Some(response.turn_id.as_str())
-            || self.user_input.get(&response.id) != Some(&false)
-        {
-            return Err(Error::Scope);
-        }
-        let id = response.id.clone();
         // The connection drops a request as soon as it parses Codex's own
         // resolution, which can be queued behind this answer.
-        if !self.wire.server_request_open(&id) {
-            self.user_input.insert(id, true);
+        if self.user_input_moot(&response)? {
+            if let Some(asked) = self.user_input.get_mut(&response.id)
+                && *asked == Asked::Waiting
+            {
+                *asked = Asked::Withdrawn;
+            }
             return Ok(false);
         }
+        let id = response.id.clone();
         self.wire
             .send(transport::Command::RespondUserInput { response })
             .await
             .map_err(Error::Transport)?;
-        self.user_input.insert(id, true);
+        self.user_input.insert(id, Asked::Answered);
         Ok(true)
     }
 
@@ -807,8 +864,11 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> SessionD
                 self.last_server_request_method = Some(bounded_method(&method));
                 return self.user_input(id, params).await;
             }
-            Event::ServerRequest { id, method, params: Some(params) }
-                if method == "item/tool/call" && self.settings.room_history => {
+            Event::ServerRequest {
+                id,
+                method,
+                params: Some(params),
+            } if method == "item/tool/call" && self.settings.room_history => {
                 if self.phase() != Phase::Running
                     || params["threadId"].as_str() != self.thread_id()
                     || params["turnId"].as_str() != self.turn_id()
@@ -824,7 +884,9 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> SessionD
                     return Err(Error::Scope);
                 }
                 let call = super::RoomHistoryCall::parse(id.clone(), &params)?;
-                if !self.history_pending.insert(id) { return Err(Error::Scope); }
+                if !self.history_pending.insert(id) {
+                    return Err(Error::Scope);
+                }
                 self.observation_kind = super::ObservationKind::Ignored;
                 return Ok(Update::RoomHistory(call));
             }
@@ -847,7 +909,8 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> SessionD
                 let parsed = if params.get("threadId").and_then(Value::as_str) != self.thread_id()
                     || params.get("turnId").and_then(Value::as_str) != self.turn_id()
                 {
-                    let other_thread = params.get("threadId").and_then(Value::as_str) != self.thread_id();
+                    let other_thread =
+                        params.get("threadId").and_then(Value::as_str) != self.thread_id();
                     let other_turn = params.get("turnId").and_then(Value::as_str) != self.turn_id();
                     tracing::warn!(
                         method = %method_name,
@@ -983,10 +1046,12 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> SessionD
             let id: RequestId =
                 serde_json::from_value(params.get("requestId").ok_or(Error::Malformed)?.clone())
                     .map_err(|_| Error::Malformed)?;
-            if let Some(answered) = self.user_input.remove(&id) {
+            if let Some(asked) = self.user_input.get_mut(&id) {
                 // A question is never an approval callback. Codex withdrawing
-                // one the host still holds tells the host to stop waiting.
-                if !answered {
+                // one the host still holds tells the host to stop waiting; an
+                // answer the host sends later is moot, not an error.
+                if *asked == Asked::Waiting {
+                    *asked = Asked::Withdrawn;
                     update = Update::UserInputResolved { id };
                 }
             } else if self.approvals_enabled && !self.policy_declined.remove(&id) {
@@ -1081,7 +1146,9 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> SessionD
         // `SettlementUnknown` is owed).
         // A question still unanswered when the turn ended is moot: the turn
         // that asked it is over, and the host stops waiting for it.
-        if self.wire.pending_server_requests() > self.pending_user_input() && !self.approvals_enabled {
+        if self.wire.pending_server_requests() > self.pending_user_input()
+            && !self.approvals_enabled
+        {
             return Err(Error::UnsupportedRequest);
         }
         Ok(())
@@ -1111,10 +1178,17 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> SessionD
         }
         self.observation_kind = super::ObservationKind::Ignored;
         let parsed = super::UserInputRequest::parse(id.clone(), &params);
+        // Codex also asks its own tool approvals this way (an MCP tool call,
+        // a skill's MCP install). Those belong to the owner's approval flow,
+        // never to whoever answers the room: no answer declines them.
+        let approval = parsed
+            .as_ref()
+            .is_ok_and(super::UserInputRequest::is_codex_approval);
         if self.user_input_enabled
+            && !approval
             && let Ok(request) = parsed
         {
-            self.user_input.insert(id, false);
+            self.user_input.insert(id, Asked::Waiting);
             return Ok(Update::UserInput(request));
         }
         match &parsed {
@@ -1122,15 +1196,23 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: AsyncRead + Unpin> SessionD
                 ?error,
                 "Codex question refused by the adapter; answering with no answers"
             ),
-            Ok(_) => tracing::debug!("Codex question with no host to ask; answering with no answers"),
+            Ok(_) if approval => tracing::warn!(
+                "Codex asked for a tool approval as a question; declined with no answers"
+            ),
+            Ok(_) => {
+                tracing::debug!("Codex question with no host to ask; answering with no answers")
+            }
         }
-        let (thread, turn) = (thread.unwrap_or_default().to_owned(), turn.unwrap_or_default().to_owned());
+        let (thread, turn) = (
+            thread.unwrap_or_default().to_owned(),
+            turn.unwrap_or_default().to_owned(),
+        );
         let response = super::UserInputResponse::unanswered(id.clone(), &thread, &turn);
         self.wire
             .send(transport::Command::RespondUserInput { response })
             .await
             .map_err(Error::Transport)?;
-        self.user_input.insert(id, true);
+        self.user_input.insert(id, Asked::Answered);
         Ok(Update::Notice)
     }
 

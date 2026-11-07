@@ -22,6 +22,11 @@ const MAX_REQUEST_BYTES: usize = 64 * 1024;
 /// note alone. Hosts send the same words so the model reads one convention.
 pub const OTHER_ANSWER_LABEL: &str = "None of the above";
 const NOTE_PREFIX: &str = "user_note: ";
+/// Question ids of Codex's own approval prompts that reach a client as
+/// questions (0.166): an MCP tool call when MCP elicitation is off
+/// (`mcp_tool_call_approval_<call>`), and a skill's MCP server install.
+const CODEX_APPROVAL_PREFIX: &str = "mcp_tool_call_approval";
+const CODEX_INSTALL_PROMPT: &str = "skill_mcp_dependency_install";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UserInputOption {
@@ -41,6 +46,12 @@ pub struct UserInputQuestion {
     pub is_secret: bool,
 }
 impl UserInputQuestion {
+    /// Codex's own tool/install permission prompt, never a question a room
+    /// member may answer. The ids are protocol markers, not displayed text.
+    pub fn is_codex_approval(&self) -> bool {
+        self.id.starts_with(CODEX_APPROVAL_PREFIX) || self.id == CODEX_INSTALL_PROMPT
+    }
+
     /// A typed answer is accepted for an "Other" choice or a free-form question.
     pub fn accepts_text(&self) -> bool {
         self.is_other || self.options.as_ref().is_none_or(Vec::is_empty)
@@ -106,27 +117,31 @@ impl UserInputResponse {
             return false;
         };
         object.len() == 1
-            && object.get("answers").and_then(Value::as_object).is_some_and(|answers| {
-                answers.len() <= MAX_USER_INPUT_QUESTIONS
-                    && answers.iter().all(|(id, answer)| {
-                        valid_id(id).is_ok()
-                            && answer.as_object().is_some_and(|answer| {
-                                answer.len() == 1
-                                    && answer.get("answers").and_then(Value::as_array).is_some_and(
-                                        |values| {
-                                            values.len() <= 2
-                                                && values.iter().all(|v| {
-                                                    v.as_str().is_some_and(|s| {
-                                                        s.len()
-                                                            <= MAX_USER_INPUT_TEXT_BYTES
-                                                                + NOTE_PREFIX.len()
+            && object
+                .get("answers")
+                .and_then(Value::as_object)
+                .is_some_and(|answers| {
+                    answers.len() <= MAX_USER_INPUT_QUESTIONS
+                        && answers.iter().all(|(id, answer)| {
+                            valid_id(id).is_ok()
+                                && answer.as_object().is_some_and(|answer| {
+                                    answer.len() == 1
+                                        && answer
+                                            .get("answers")
+                                            .and_then(Value::as_array)
+                                            .is_some_and(|values| {
+                                                values.len() <= 2
+                                                    && values.iter().all(|v| {
+                                                        v.as_str().is_some_and(|s| {
+                                                            s.len()
+                                                                <= MAX_USER_INPUT_TEXT_BYTES
+                                                                    + NOTE_PREFIX.len()
+                                                        })
                                                     })
-                                                })
-                                        },
-                                    )
-                            })
-                    })
-            })
+                                            })
+                                })
+                        })
+                })
     }
 }
 
@@ -150,6 +165,14 @@ impl UserInputRequest {
     pub fn is_blocking(&self) -> bool {
         self.blocking
     }
+    /// Codex asking for one of its own approvals, not the model asking a
+    /// question. Answering "Allow" would grant it, so it is never shown to
+    /// people who may answer questions; no answers declines it.
+    pub fn is_codex_approval(&self) -> bool {
+        self.questions
+            .iter()
+            .any(UserInputQuestion::is_codex_approval)
+    }
 
     pub(super) fn parse(id: RequestId, params: &Value) -> Result<Self, Error> {
         if serde_json::to_vec(params)
@@ -160,7 +183,10 @@ impl UserInputRequest {
             return Err(Error::Capacity);
         }
         let identity = |key: &str| -> Result<String, Error> {
-            let value = params.get(key).and_then(Value::as_str).ok_or(Error::Malformed)?;
+            let value = params
+                .get(key)
+                .and_then(Value::as_str)
+                .ok_or(Error::Malformed)?;
             valid_id(value)?;
             Ok(value.to_owned())
         };
@@ -218,6 +244,12 @@ impl UserInputRequest {
         &self,
         answers: &BTreeMap<String, UserInputAnswer>,
     ) -> Result<UserInputResponse, Error> {
+        // Keep the boundary here as well as at session dispatch: no caller
+        // can turn a parsed approval (even mixed with ordinary questions)
+        // into an approval response through this public question API.
+        if self.is_codex_approval() {
+            return Err(Error::Policy);
+        }
         if answers.is_empty() {
             return Err(Error::Malformed);
         }
@@ -271,7 +303,12 @@ impl UserInputRequest {
 }
 
 fn question(value: &Value) -> Result<UserInputQuestion, Error> {
-    let string = |key: &str| value.get(key).and_then(Value::as_str).ok_or(Error::Malformed);
+    let string = |key: &str| {
+        value
+            .get(key)
+            .and_then(Value::as_str)
+            .ok_or(Error::Malformed)
+    };
     let flag = |key: &str| match value.get(key) {
         None | Some(Value::Null) => Ok(false),
         Some(Value::Bool(flag)) => Ok(*flag),
@@ -284,7 +321,8 @@ fn question(value: &Value) -> Result<UserInputQuestion, Error> {
     valid_id(id)?;
     let header = string("header")?;
     let text = string("question")?;
-    if (!header.is_empty() && !prose(header, MAX_LABEL_BYTES)) || !prose(text, MAX_USER_INPUT_TEXT_BYTES)
+    if (!header.is_empty() && !prose(header, MAX_LABEL_BYTES))
+        || !prose(text, MAX_USER_INPUT_TEXT_BYTES)
     {
         return Err(Error::Malformed);
     }
@@ -297,7 +335,10 @@ fn question(value: &Value) -> Result<UserInputQuestion, Error> {
             let mut labels = BTreeSet::new();
             let mut options = Vec::with_capacity(raw.len());
             for option in raw {
-                let label = option.get("label").and_then(Value::as_str).ok_or(Error::Malformed)?;
+                let label = option
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .ok_or(Error::Malformed)?;
                 let description = option
                     .get("description")
                     .and_then(Value::as_str)
@@ -333,7 +374,9 @@ fn question(value: &Value) -> Result<UserInputQuestion, Error> {
 fn prose(value: &str, max: usize) -> bool {
     !value.trim().is_empty()
         && value.len() <= max
-        && !value.chars().any(|c| c.is_control() && c != '\n' && c != '\t')
+        && !value
+            .chars()
+            .any(|c| c.is_control() && c != '\n' && c != '\t')
 }
 
 #[cfg(test)]
@@ -342,12 +385,12 @@ mod tests {
 
     fn params() -> Value {
         json!({"threadId":"thread","turnId":"turn","itemId":"call","isBlocking":true,"autoResolutionMs":null,
-            "questions":[
-                {"id":"db","header":"Database","question":"Which database?","isOther":true,"isSecret":false,
-                 "options":[{"label":"Postgres (Recommended)","description":"Durable."},{"label":"SQLite","description":"Simple."}]},
-                {"id":"name","header":"Name","question":"What should it be called?","options":null},
-                {"id":"token","header":"Token","question":"Paste the token","isSecret":true,"options":null}
-            ]})
+        "questions":[
+            {"id":"db","header":"Database","question":"Which database?","isOther":true,"isSecret":false,
+             "options":[{"label":"Postgres (Recommended)","description":"Durable."},{"label":"SQLite","description":"Simple."}]},
+            {"id":"name","header":"Name","question":"What should it be called?","options":null},
+            {"id":"token","header":"Token","question":"Paste the token","isSecret":true,"options":null}
+        ]})
     }
 
     #[test]
@@ -358,7 +401,10 @@ mod tests {
         let request = UserInputRequest::parse(RequestId::Number(4), &p).unwrap();
         assert_eq!(request.questions().len(), 3);
         assert!(request.questions()[0].accepts_text());
-        assert!(request.questions()[1].accepts_text(), "a free-form question takes text");
+        assert!(
+            request.questions()[1].accepts_text(),
+            "a free-form question takes text"
+        );
         assert!(request.questions()[2].is_secret);
         assert!(request.is_blocking());
         assert_eq!(request.item_id(), "call");
@@ -372,24 +418,39 @@ mod tests {
             ("/questions", json!([])),
             ("/questions/0/id", json!("")),
             ("/questions/0/question", json!("\u{0007}bell")),
-            ("/questions/0/options/1/label", json!("Postgres (Recommended)")),
+            (
+                "/questions/0/options/1/label",
+                json!("Postgres (Recommended)"),
+            ),
             ("/questions/0/options", json!("Postgres")),
             ("/questions/0/isOther", json!("true")),
             ("/autoResolutionMs", json!(-1)),
         ] {
             let mut p = params();
             *p.pointer_mut(path).unwrap() = value;
-            assert!(UserInputRequest::parse(RequestId::Number(4), &p).is_err(), "{path}");
+            assert!(
+                UserInputRequest::parse(RequestId::Number(4), &p).is_err(),
+                "{path}"
+            );
         }
         let mut p = params();
         p["questions"][1]["id"] = json!("db");
-        assert!(UserInputRequest::parse(RequestId::Number(4), &p).is_err(), "duplicate ids");
+        assert!(
+            UserInputRequest::parse(RequestId::Number(4), &p).is_err(),
+            "duplicate ids"
+        );
         let mut p = params();
-        p["questions"] = json!(vec![p["questions"][0].clone(); MAX_USER_INPUT_QUESTIONS + 1]);
+        p["questions"] = json!(vec![
+            p["questions"][0].clone();
+            MAX_USER_INPUT_QUESTIONS + 1
+        ]);
         assert!(UserInputRequest::parse(RequestId::Number(4), &p).is_err());
         let mut p = params();
         p["questions"][0]["question"] = json!("x".repeat(MAX_REQUEST_BYTES));
-        assert_eq!(UserInputRequest::parse(RequestId::Number(4), &p).err(), Some(Error::Capacity));
+        assert_eq!(
+            UserInputRequest::parse(RequestId::Number(4), &p).err(),
+            Some(Error::Capacity)
+        );
     }
 
     #[test]
@@ -406,21 +467,38 @@ mod tests {
         );
         assert!(UserInputResponse::well_formed(response.result()));
         let other = request
-            .answer(&BTreeMap::from([("db".to_owned(), UserInputAnswer::Text("MySQL".into()))]))
+            .answer(&BTreeMap::from([(
+                "db".to_owned(),
+                UserInputAnswer::Text("MySQL".into()),
+            )]))
             .unwrap();
         assert_eq!(
             other.result()["answers"]["db"]["answers"],
             json!([OTHER_ANSWER_LABEL, "user_note: MySQL"])
         );
         for (id, answer, error) in [
-            ("token", UserInputAnswer::Text("secret".into()), Error::Policy),
+            (
+                "token",
+                UserInputAnswer::Text("secret".into()),
+                Error::Policy,
+            ),
             ("db", UserInputAnswer::Option("Mongo".into()), Error::Scope),
-            ("missing", UserInputAnswer::Option("SQLite".into()), Error::Scope),
+            (
+                "missing",
+                UserInputAnswer::Option("SQLite".into()),
+                Error::Scope,
+            ),
             ("db", UserInputAnswer::Text("   ".into()), Error::Malformed),
-            ("db", UserInputAnswer::Text("x".repeat(MAX_USER_INPUT_TEXT_BYTES + 1)), Error::Malformed),
+            (
+                "db",
+                UserInputAnswer::Text("x".repeat(MAX_USER_INPUT_TEXT_BYTES + 1)),
+                Error::Malformed,
+            ),
         ] {
             assert_eq!(
-                request.answer(&BTreeMap::from([(id.to_owned(), answer)])).err(),
+                request
+                    .answer(&BTreeMap::from([(id.to_owned(), answer)]))
+                    .err(),
                 Some(error),
                 "{id}"
             );
@@ -432,10 +510,55 @@ mod tests {
         let closed = UserInputRequest::parse(RequestId::Number(4), &closed).unwrap();
         assert_eq!(
             closed
-                .answer(&BTreeMap::from([("db".to_owned(), UserInputAnswer::Text("MySQL".into()))]))
+                .answer(&BTreeMap::from([(
+                    "db".to_owned(),
+                    UserInputAnswer::Text("MySQL".into())
+                )]))
                 .err(),
             Some(Error::Malformed),
             "text needs an Other choice when the question offers options"
+        );
+    }
+
+    #[test]
+    fn approval_requests_never_build_answers_even_when_mixed_or_secret() {
+        for id in [
+            "mcp_tool_call_approval_call",
+            "skill_mcp_dependency_install",
+        ] {
+            for secret in [false, true] {
+                let mut p = params();
+                p["questions"][1]["id"] = json!(id);
+                p["questions"][1]["isSecret"] = json!(secret);
+                let request = UserInputRequest::parse(RequestId::Number(4), &p).unwrap();
+                assert!(request.is_codex_approval());
+                // Even an answer only to the ordinary question is refused:
+                // the entire approval request belongs to the owner flow.
+                let ordinary =
+                    BTreeMap::from([("db".into(), UserInputAnswer::Option("SQLite".into()))]);
+                assert_eq!(
+                    request.answer(&ordinary).err(),
+                    Some(Error::Policy),
+                    "{id}, secret: {secret}"
+                );
+                let approval = BTreeMap::from([(id.into(), UserInputAnswer::Text("Allow".into()))]);
+                assert_eq!(request.answer(&approval).err(), Some(Error::Policy));
+                assert_eq!(request.unanswered().result(), &json!({"answers":{}}));
+            }
+        }
+        // A normal question mentioning an MCP tool is still just a question;
+        // prompts are classified by Codex's reserved ids, not prose/labels.
+        let mut p = params();
+        p["questions"][0]["question"] = json!("Which MCP tool should the service describe?");
+        let request = UserInputRequest::parse(RequestId::Number(4), &p).unwrap();
+        assert!(!request.is_codex_approval());
+        assert!(
+            request
+                .answer(&BTreeMap::from([(
+                    "db".into(),
+                    UserInputAnswer::Option("SQLite".into())
+                )]))
+                .is_ok()
         );
     }
 

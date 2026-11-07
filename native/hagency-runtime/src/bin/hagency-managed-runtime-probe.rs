@@ -46,16 +46,25 @@ fn main() -> io::Result<()> {
         if method == "initialized" {
             continue;
         }
-        if (mode.starts_with("text-workspace") || mode.starts_with("text-question") || mode == "text-room-history-usage")
+        if (mode.starts_with("text-workspace")
+            || mode.starts_with("text-question")
+            || mode == "text-room-history-usage")
             && matches!(method, "thread/start" | "turn/start")
         {
-            let name = if method == "thread/start" { "thread-request.json" } else { "turn-request.json" };
+            let name = if method == "thread/start" {
+                "thread-request.json"
+            } else {
+                "turn-request.json"
+            };
             fs::write(root.join(name), serde_json::to_vec(&v["params"])?)?;
         }
-        if mode == "text-room-history-usage" && method == "thread/start"
+        if mode == "text-room-history-usage"
+            && method == "thread/start"
             && v["params"]["dynamicTools"][0]["name"] != "read_room_history"
         {
-            return Err(io::Error::other("room history tool was not registered by the execution driver"));
+            return Err(io::Error::other(
+                "room history tool was not registered by the execution driver",
+            ));
         }
         if (mode == "delay" && method == "account/rateLimits/read")
             || (mode == "delay-config" && method == "config/read")
@@ -111,12 +120,15 @@ fn main() -> io::Result<()> {
                         .ok_or(io::Error::other("fixture override"))?;
                     let keys: Vec<_> = key.split('.').collect();
                     match keys.as_slice() {
-                        ["features", name] if matches!(value,"false"|"true") => config["features"][*name] = (value=="true").into(),
-                        ["mcp_servers", name, "enabled"] if value=="false" => {
+                        ["features", name] if matches!(value, "false" | "true") => {
+                            config["features"][*name] = (value == "true").into()
+                        }
+                        ["mcp_servers", name, "enabled"] if value == "false" => {
                             config["mcp_servers"][*name]["enabled"] = false.into()
                         }
                         ["web_search" | "model_instructions_file"] => {
-                            let value:String=serde_json::from_str(value).map_err(io::Error::other)?;
+                            let value: String =
+                                serde_json::from_str(value).map_err(io::Error::other)?;
                             config[key] = value.into();
                         }
                         _ => return Err(io::Error::other("fixture override")),
@@ -133,14 +145,19 @@ fn main() -> io::Result<()> {
             }
             "thread/start" if mode.starts_with("text-workspace") => {
                 let sandbox = match mode.as_ref() {
-                    "text-workspace-standard" | "text-workspace-standard-usage" => json!({"type":"workspaceWrite","writableRoots":[v["params"]["cwd"]],"networkAccess":false}),
-                    "text-workspace-yolo" | "text-workspace-yolo-usage" => json!({"type":"dangerFullAccess"}),
+                    "text-workspace-standard" | "text-workspace-standard-usage" => {
+                        json!({"type":"workspaceWrite","writableRoots":[v["params"]["cwd"]],"networkAccess":false})
+                    }
+                    "text-workspace-yolo" | "text-workspace-yolo-usage" => {
+                        json!({"type":"dangerFullAccess"})
+                    }
                     _ => json!({"type":"readOnly","networkAccess":false}),
                 };
                 json!({"thread":{"id":"text-thread","cwd":v["params"]["cwd"],"status":{"type":"idle"},"turns":[]},"cwd":v["params"]["cwd"],"model":v["params"]["model"],"modelProvider":"openai","approvalPolicy":v["params"]["approvalPolicy"],"approvalsReviewer":"user","sandbox":sandbox})
             }
             "turn/start" if mode.starts_with("text-workspace") => {
-                let thread: Value = serde_json::from_slice(&fs::read(root.join("thread-request.json"))?)?;
+                let thread: Value =
+                    serde_json::from_slice(&fs::read(root.join("thread-request.json"))?)?;
                 if v["params"]["cwd"] != thread["cwd"] {
                     return Err(io::Error::other("room workspace changed within turn"));
                 }
@@ -166,9 +183,15 @@ fn main() -> io::Result<()> {
         };
         println!("{}", json!({"id":v["id"],"result":value}));
         if method == "turn/interrupt" && mode.ends_with("interrupt-usage") {
-            let usage=json!({"totalTokens":27,"inputTokens":20,"cachedInputTokens":0,"cacheWriteInputTokens":0,"outputTokens":7,"reasoningOutputTokens":0});
-            println!("{}",json!({"method":"thread/tokenUsage/updated","params":{"threadId":"text-thread","turnId":"text-turn","tokenUsage":{"total":usage,"last":usage,"modelContextWindow":10000}}}));
-            println!("{}",json!({"method":"turn/completed","params":{"threadId":"text-thread","turn":{"id":"text-turn","status":"interrupted","items":[]}}}));
+            let usage = json!({"totalTokens":27,"inputTokens":20,"cachedInputTokens":0,"cacheWriteInputTokens":0,"outputTokens":7,"reasoningOutputTokens":0});
+            println!(
+                "{}",
+                json!({"method":"thread/tokenUsage/updated","params":{"threadId":"text-thread","turnId":"text-turn","tokenUsage":{"total":usage,"last":usage,"modelContextWindow":10000}}})
+            );
+            println!(
+                "{}",
+                json!({"method":"turn/completed","params":{"threadId":"text-thread","turn":{"id":"text-turn","status":"interrupted","items":[]}}})
+            );
             io::stdout().flush()?;
             continue;
         }
@@ -179,11 +202,21 @@ fn main() -> io::Result<()> {
                 continue;
             }
             if mode.starts_with("text-question") {
-                println!("{}", json!({"id":"question-1","method":"item/tool/requestUserInput","params":question_params(&mode)}));
+                println!(
+                    "{}",
+                    json!({"id":"question-1","method":"item/tool/requestUserInput","params":question_params(&mode)})
+                );
+                if mode == "text-question-withdrawn" {
+                    // Codex withdraws the question before any answer and
+                    // finishes the turn on its own.
+                    finish_question_turn("Answer: withdrawn")?;
+                }
                 io::stdout().flush()?;
                 continue;
             }
-            if mode.ends_with("interrupt-usage") { continue; }
+            if mode.ends_with("interrupt-usage") {
+                continue;
+            }
             if matches!(&*mode, "text-block" | "text-renew") {
                 let deadline = std::time::Instant::now()
                     + std::time::Duration::from_secs(if mode == "text-renew" { 12 } else { 5 });
@@ -195,18 +228,31 @@ fn main() -> io::Result<()> {
                 }
             }
             if mode == "text-web" {
-                for (method, timestamp) in [("item/started", "startedAtMs"), ("item/completed", "completedAtMs")] {
+                for (method, timestamp) in [
+                    ("item/started", "startedAtMs"),
+                    ("item/completed", "completedAtMs"),
+                ] {
                     let mut params = json!({"threadId":"text-thread","turnId":"text-turn","item":{"type":"webSearch","id":"weather-search","query":"Beijing weather"}});
                     params[timestamp] = 1.into();
                     println!("{}", json!({"method":method,"params":params}));
                 }
             }
             if mode == "text-context-workspace" {
-                let cwd = Path::new(v["params"]["cwd"].as_str().ok_or_else(|| io::Error::other("missing cwd"))?);
+                let cwd = Path::new(
+                    v["params"]["cwd"]
+                        .as_str()
+                        .ok_or_else(|| io::Error::other("missing cwd"))?,
+                );
                 let marker = cwd.join("room-turn-count");
-                let previous = fs::read_to_string(&marker).unwrap_or_default().parse::<u64>().unwrap_or(0);
+                let previous = fs::read_to_string(&marker)
+                    .unwrap_or_default()
+                    .parse::<u64>()
+                    .unwrap_or(0);
                 fs::write(marker, (previous + 1).to_string())?;
-                let mut paths = fs::OpenOptions::new().create(true).append(true).open(root.join("room-paths"))?;
+                let mut paths = fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(root.join("room-paths"))?;
                 writeln!(paths, "{}", serde_json::to_string(cwd)?)?;
             }
             let answer = if mode.starts_with("text-context") {
@@ -240,13 +286,26 @@ fn main() -> io::Result<()> {
             } else if mode == "text-escaped" {
                 "\n".repeat(32 * 1024)
             } else if mode == "text-items" {
-                "## 调研结果\n\n**完成**\n\n".to_owned()+&"正文\n\n".repeat(1200)
+                "## 调研结果\n\n**完成**\n\n".to_owned() + &"正文\n\n".repeat(1200)
             } else {
                 "Offline answer.".into()
             };
             if matches!(
                 &*mode,
-                "text-workspace-standard-usage" | "text-workspace-yolo-usage" | "text-start-renew" | "text-small-usage" | "text-usage" | "text-long" | "text-overflow" | "text-stream" | "text-escaped" | "text-items" | "text-renew" | "text-overrun" | "text-context" | "text-context-workspace"
+                "text-workspace-standard-usage"
+                    | "text-workspace-yolo-usage"
+                    | "text-start-renew"
+                    | "text-small-usage"
+                    | "text-usage"
+                    | "text-long"
+                    | "text-overflow"
+                    | "text-stream"
+                    | "text-escaped"
+                    | "text-items"
+                    | "text-renew"
+                    | "text-overrun"
+                    | "text-context"
+                    | "text-context-workspace"
             ) {
                 let usage = if mode == "text-overrun" {
                     json!({"totalTokens":4813,"inputTokens":4713,"cachedInputTokens":0,"cacheWriteInputTokens":0,"outputTokens":100,"reasoningOutputTokens":0})
@@ -260,28 +319,45 @@ fn main() -> io::Result<()> {
                     json!({"method":"thread/tokenUsage/updated","params":{"threadId":"text-thread","turnId":"text-turn","tokenUsage":{"total":usage,"last":usage,"modelContextWindow":10000}}})
                 );
             }
-            if mode=="text-items" {
-                println!("{}",json!({"method":"item/started","params":{"threadId":"text-thread","turnId":"text-turn","startedAtMs":1,"item":{"type":"agentMessage","id":"progress","text":"","phase":"commentary"}}}));
+            if mode == "text-items" {
+                println!(
+                    "{}",
+                    json!({"method":"item/started","params":{"threadId":"text-thread","turnId":"text-turn","startedAtMs":1,"item":{"type":"agentMessage","id":"progress","text":"","phase":"commentary"}}})
+                );
                 for delta in ["正在", "调研。"] {
-                    println!("{}",json!({"method":"item/agentMessage/delta","params":{"threadId":"text-thread","turnId":"text-turn","itemId":"progress","delta":delta}}));
+                    println!(
+                        "{}",
+                        json!({"method":"item/agentMessage/delta","params":{"threadId":"text-thread","turnId":"text-turn","itemId":"progress","delta":delta}})
+                    );
                 }
-                println!("{}",json!({"method":"item/completed","params":{"threadId":"text-thread","turnId":"text-turn","completedAtMs":2,"item":{"type":"agentMessage","id":"progress","text":"正在调研。","phase":"commentary"}}}));
+                println!(
+                    "{}",
+                    json!({"method":"item/completed","params":{"threadId":"text-thread","turnId":"text-turn","completedAtMs":2,"item":{"type":"agentMessage","id":"progress","text":"正在调研。","phase":"commentary"}}})
+                );
             }
             println!(
                 "{}",
                 json!({"method":"item/started","params":{"threadId":"text-thread","turnId":"text-turn","startedAtMs":1,"item":{"type":"agentMessage","id":"answer","text":"","phase":"final_answer"}}})
             );
-            let long_prefix=if mode=="text-long" || mode=="text-overflow" {
-                let count=if mode=="text-long" {6000}else{12000};
+            let long_prefix = if mode == "text-long" || mode == "text-overflow" {
+                let count = if mode == "text-long" { 6000 } else { 12000 };
                 for _ in 0..count {
-                    println!("{}",json!({"method":"item/agentMessage/delta","params":{"threadId":"text-thread","turnId":"text-turn","itemId":"answer","delta":"研"}}));
+                    println!(
+                        "{}",
+                        json!({"method":"item/agentMessage/delta","params":{"threadId":"text-thread","turnId":"text-turn","itemId":"answer","delta":"研"}})
+                    );
                 }
                 "研".repeat(count)
-            }else{String::new()};
+            } else {
+                String::new()
+            };
             if mode == "text-stream" {
                 // Continuous output has no five-second idle gap for a renewal.
                 for _ in 0..60 {
-                    println!("{}", json!({"method":"item/agentMessage/delta","params":{"threadId":"text-thread","turnId":"text-turn","itemId":"answer","delta":"x"}}));
+                    println!(
+                        "{}",
+                        json!({"method":"item/agentMessage/delta","params":{"threadId":"text-thread","turnId":"text-turn","itemId":"answer","delta":"x"}})
+                    );
                     io::stdout().flush()?;
                     std::thread::sleep(std::time::Duration::from_millis(600));
                 }
@@ -290,7 +366,12 @@ fn main() -> io::Result<()> {
                 "{}",
                 json!({"method":"item/agentMessage/delta","params":{"threadId":"text-thread","turnId":"text-turn","itemId":"answer","delta":answer}})
             );
-            let answer = long_prefix + &if mode == "text-stream" { "x".repeat(60) + &answer } else { answer };
+            let answer = long_prefix
+                + &if mode == "text-stream" {
+                    "x".repeat(60) + &answer
+                } else {
+                    answer
+                };
             println!(
                 "{}",
                 json!({"method":"item/completed","params":{"threadId":"text-thread","turnId":"text-turn","completedAtMs":2,"item":{"type":"agentMessage","id":"answer","text":answer,"phase":"final_answer"}}})
@@ -311,9 +392,13 @@ fn question_params(mode: &str) -> Value {
     let database = json!({"id":"db","header":"Database","question":"Which database should the service use?","isOther":true,"isSecret":false,
         "options":[{"label":"Postgres (Recommended)","description":"Durable and familiar."},{"label":"SQLite","description":"Simplest to run."}]});
     let token = json!({"id":"token","header":"Token","question":"Paste the deploy token","isOther":false,"isSecret":true,"options":null});
+    // Codex 0.166 asks an MCP tool approval this way when MCP elicitation is off.
+    let approval = json!({"id":"mcp_tool_call_approval_call-1","header":"Approve app tool call?","question":"Allow the deploy tool to run?","isOther":false,"isSecret":false,
+        "options":[{"label":"Allow","description":"Run the tool and continue."},{"label":"Cancel","description":"Cancel this tool call"}]});
     let questions = match mode {
         "text-question-secret" => json!([database, token]),
         "text-question-only-secret" => json!([token]),
+        "text-question-mcp-approval" => json!([approval]),
         _ => json!([database]),
     };
     json!({"threadId":"text-thread","turnId":"text-turn","itemId":"ask-1","isBlocking":false,"autoResolutionMs":null,"questions":questions})
@@ -324,14 +409,42 @@ fn question_answered(root: &Path, response: &Value) -> io::Result<()> {
         return Err(io::Error::other("answer for an unknown question"));
     }
     let result = &response["result"];
-    fs::write(root.join("question-response.json"), serde_json::to_vec(result)?)?;
-    let answer = format!("Answer: {}", serde_json::to_string(&result["answers"])?);
+    fs::write(
+        root.join("question-response.json"),
+        serde_json::to_vec(result)?,
+    )?;
+    finish_question_turn(&format!(
+        "Answer: {}",
+        serde_json::to_string(&result["answers"])?
+    ))
+}
+
+/// Codex's resolution of the question, then the rest of the turn.
+fn finish_question_turn(answer: &str) -> io::Result<()> {
     let usage = json!({"totalTokens":300,"inputTokens":200,"cachedInputTokens":100,"cacheWriteInputTokens":20,"outputTokens":100,"reasoningOutputTokens":0});
-    println!("{}", json!({"method":"serverRequest/resolved","params":{"threadId":"text-thread","requestId":"question-1"}}));
-    println!("{}", json!({"method":"thread/tokenUsage/updated","params":{"threadId":"text-thread","turnId":"text-turn","tokenUsage":{"total":usage,"last":usage,"modelContextWindow":10000}}}));
-    println!("{}", json!({"method":"item/started","params":{"threadId":"text-thread","turnId":"text-turn","startedAtMs":1,"item":{"type":"agentMessage","id":"answer","text":"","phase":"final_answer"}}}));
-    println!("{}", json!({"method":"item/agentMessage/delta","params":{"threadId":"text-thread","turnId":"text-turn","itemId":"answer","delta":answer}}));
-    println!("{}", json!({"method":"item/completed","params":{"threadId":"text-thread","turnId":"text-turn","completedAtMs":2,"item":{"type":"agentMessage","id":"answer","text":answer,"phase":"final_answer"}}}));
-    println!("{}", json!({"method":"turn/completed","params":{"threadId":"text-thread","turn":{"id":"text-turn","status":"completed","items":[]}}}));
+    println!(
+        "{}",
+        json!({"method":"serverRequest/resolved","params":{"threadId":"text-thread","requestId":"question-1"}})
+    );
+    println!(
+        "{}",
+        json!({"method":"thread/tokenUsage/updated","params":{"threadId":"text-thread","turnId":"text-turn","tokenUsage":{"total":usage,"last":usage,"modelContextWindow":10000}}})
+    );
+    println!(
+        "{}",
+        json!({"method":"item/started","params":{"threadId":"text-thread","turnId":"text-turn","startedAtMs":1,"item":{"type":"agentMessage","id":"answer","text":"","phase":"final_answer"}}})
+    );
+    println!(
+        "{}",
+        json!({"method":"item/agentMessage/delta","params":{"threadId":"text-thread","turnId":"text-turn","itemId":"answer","delta":answer}})
+    );
+    println!(
+        "{}",
+        json!({"method":"item/completed","params":{"threadId":"text-thread","turnId":"text-turn","completedAtMs":2,"item":{"type":"agentMessage","id":"answer","text":answer,"phase":"final_answer"}}})
+    );
+    println!(
+        "{}",
+        json!({"method":"turn/completed","params":{"threadId":"text-thread","turn":{"id":"text-turn","status":"completed","items":[]}}})
+    );
     io::stdout().flush()
 }

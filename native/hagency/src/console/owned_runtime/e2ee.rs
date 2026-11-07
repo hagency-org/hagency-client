@@ -182,7 +182,7 @@ pub(super) async fn pump_candidates<T: Transport>(
             Err(error) => {
                 tracing::debug!(stage = "encrypted_candidate", room_id = %c.room_id, event_id = %c.event_id, %error, "Encrypted candidate is not ready; preserving it for retry");
                 continue;
-            },
+            }
         };
         let (mentions, thread_root) = message
             .map(|m| (m.mentions.into_iter().collect(), m.thread_root))
@@ -279,7 +279,12 @@ pub(in crate::console) fn load_grant(
 }
 
 /// Best effort: a grant that cannot be saved only costs a login next start.
-pub(in crate::console) fn save_grant(directory: &Path, agent: &str, grant: &E2eeDeviceGrant, generation: u64) {
+pub(in crate::console) fn save_grant(
+    directory: &Path,
+    agent: &str,
+    grant: &E2eeDeviceGrant,
+    generation: u64,
+) {
     let saved = SavedGrant {
         version: 1,
         generation,
@@ -313,7 +318,9 @@ pub(in crate::console) struct DecryptedRequest {
     pub thread_root: Option<String>,
 }
 impl AgentDevice {
-    pub(in crate::console) fn approval_client(&self) -> &Client { &self.client }
+    pub(in crate::console) fn approval_client(&self) -> &Client {
+        &self.client
+    }
     pub(in crate::console) fn is_revoked(&self) -> bool {
         self.revoked.load(Ordering::Acquire)
     }
@@ -507,7 +514,11 @@ impl AgentDevice {
             .get_room(&room_id)
             .ok_or(RuntimeError::Transport)?;
         let txn: OwnedTransactionId = txn.into();
-        match room.send_raw("m.room.message", content).with_transaction_id(&txn).await {
+        match room
+            .send_raw("m.room.message", content)
+            .with_transaction_id(&txn)
+            .await
+        {
             Ok(sent) => Ok(sent.response.event_id.to_string()),
             Err(error) => {
                 if unknown_token(&error) {
@@ -535,13 +546,23 @@ impl AgentDevice {
             .ok_or(RuntimeError::Transport)?;
         // Room keys can arrive after the answer: retry undecryptable references.
         // Each pass is bounded; anything left waits for the next pass.
-        for id in self.questions.due_undecrypted(room_id.as_str(), card_event_id, 4) {
-            let Ok(event_id) = OwnedEventId::try_from(id.as_str()) else { continue };
-            if let Ok(Ok(event)) = tokio::time::timeout(Duration::from_secs(2), room.event(&event_id, None)).await
+        for id in self
+            .questions
+            .due_undecrypted(room_id.as_str(), card_event_id, 4)
+        {
+            let Ok(event_id) = OwnedEventId::try_from(id.as_str()) else {
+                continue;
+            };
+            if let Ok(Ok(event)) =
+                tokio::time::timeout(Duration::from_secs(2), room.event(&event_id, None)).await
                 && let TimelineEventKind::Decrypted(decrypted) = &event.kind
                 && let Ok(value) = decrypted.event.deserialize_as::<serde_json::Value>()
             {
-                self.questions.decrypted(room_id.as_str(), &value, Some(&decrypted.encryption_info));
+                self.questions.decrypted(
+                    room_id.as_str(),
+                    &value,
+                    Some(&decrypted.encryption_info),
+                );
             }
         }
         let encrypted = room
@@ -556,7 +577,9 @@ impl AgentDevice {
             if !received.admissible(encrypted, own.as_deref()) {
                 continue;
             }
-            let Ok(user) = OwnedUserId::try_from(received.sender.as_str()) else { continue };
+            let Ok(user) = OwnedUserId::try_from(received.sender.as_str()) else {
+                continue;
+            };
             match tokio::time::timeout(Duration::from_secs(2), room.get_member(&user)).await {
                 Ok(Ok(Some(member)))
                     if *member.membership()
@@ -572,6 +595,33 @@ impl AgentDevice {
         }
         self.questions.requeue(unsure);
         Ok(answers)
+    }
+
+    /// One event of a room this device can read, as its JSON (`sender`,
+    /// `type`, `content`), decrypted where the room is encrypted. A restarted
+    /// executor closes a card it posted earlier from the card's own event.
+    pub(in crate::console) async fn room_event(
+        &self,
+        room: &str,
+        event: &str,
+    ) -> Result<serde_json::Value, RuntimeError> {
+        let room_id = OwnedRoomId::try_from(room).map_err(|_| RuntimeError::Request)?;
+        let event_id = OwnedEventId::try_from(event).map_err(|_| RuntimeError::Request)?;
+        let room = self
+            .client
+            .get_room(&room_id)
+            .ok_or(RuntimeError::Transport)?;
+        let event = tokio::time::timeout(Duration::from_secs(10), room.event(&event_id, None))
+            .await
+            .map_err(|_| RuntimeError::Transport)?
+            .map_err(|_| RuntimeError::Transport)?;
+        let encrypted = room
+            .latest_encryption_state()
+            .await
+            .map_err(|_| RuntimeError::Transport)?
+            .is_encrypted();
+        question_recovery_event(&event.kind, encrypted, room_id.as_str(), event_id.as_str())
+            .ok_or(RuntimeError::Transport)
     }
 
     pub(in crate::console) async fn send_shared_reply(
@@ -611,6 +661,37 @@ impl AgentDevice {
             .send(dispatch, txn("hagency_unreadable", &dispatch.id), content)
             .await;
     }
+}
+
+/// Recovery has the same sender requirement as live answers. A homeserver
+/// cannot replace a saved answer or card with an unauthenticated envelope.
+fn question_recovery_event(
+    kind: &TimelineEventKind,
+    encrypted: bool,
+    room_id: &str,
+    event_id: &str,
+) -> Option<serde_json::Value> {
+    let (value, info): (serde_json::Value, _) = match kind {
+        TimelineEventKind::Decrypted(decrypted) => (
+            decrypted.event.deserialize_as().ok()?,
+            Some(&*decrypted.encryption_info),
+        ),
+        TimelineEventKind::PlainText { event } if !encrypted => {
+            (event.deserialize_as().ok()?, None)
+        }
+        _ => return None,
+    };
+    let sender = value["sender"].as_str()?;
+    if value["event_id"].as_str() != Some(event_id)
+        || value
+            .get("room_id")
+            .is_some_and(|room| room.as_str() != Some(room_id))
+        || value["type"] == "m.room.encrypted"
+        || info.is_some_and(|info| !crate::agent_questions::authentic(info, sender))
+    {
+        return None;
+    }
+    Some(value)
 }
 
 /// Same shape as the server's replies: top-level owner DMs stay flat.
@@ -715,7 +796,11 @@ async fn sync(client: Client, revoked: Arc<AtomicBool>, changed: Option<watch::S
 
 fn sync_has_work(response: &matrix_sdk::sync::SyncResponse) -> bool {
     !response.to_device.is_empty()
-        || response.rooms.joined.values().any(|room| !room.timeline.events.is_empty())
+        || response
+            .rooms
+            .joined
+            .values()
+            .any(|room| !room.timeline.events.is_empty())
         || !response.rooms.left.is_empty()
 }
 
@@ -725,12 +810,19 @@ mod tests {
 
     #[test]
     fn shared_work_sync_wakes_for_late_keys_but_not_empty_polls() {
-        let mut response=matrix_sdk::sync::SyncResponse::default();
+        let mut response = matrix_sdk::sync::SyncResponse::default();
         assert!(!sync_has_work(&response));
-        let raw=matrix_sdk::ruma::serde::Raw::from_json_string(serde_json::json!({"type":"m.room_key","sender":"@member:example.test","content":{}}).to_string()).unwrap();
-        response.to_device.push(matrix_sdk::deserialized_responses::ProcessedToDeviceEvent::PlainText(raw));
+        let raw = matrix_sdk::ruma::serde::Raw::from_json_string(
+            serde_json::json!({"type":"m.room_key","sender":"@member:example.test","content":{}})
+                .to_string(),
+        )
+        .unwrap();
+        response
+            .to_device
+            .push(matrix_sdk::deserialized_responses::ProcessedToDeviceEvent::PlainText(raw));
         assert!(sync_has_work(&response));
-        response.to_device.clear();assert!(!sync_has_work(&response));
+        response.to_device.clear();
+        assert!(!sync_has_work(&response));
     }
 
     fn dispatch(thread_root: &str) -> inbox::Dispatch {
@@ -797,6 +889,101 @@ mod tests {
     }
 
     #[test]
+    fn question_recovery_requires_authenticated_events_in_encrypted_rooms() {
+        use matrix_sdk::deserialized_responses::{
+            AlgorithmInfo, DeviceLinkProblem, EncryptionInfo,
+        };
+        let raw = serde_json::json!({"type":"m.room.message","event_id":"$card","room_id":"!room:example.test",
+            "sender":"@_hagency_agt_one:example.test","origin_server_ts":1,"content":{"msgtype":"m.text","body":"Question"}});
+        let plain = TimelineEventKind::PlainText {
+            event: serde_json::from_value(raw.clone()).unwrap(),
+        };
+        assert!(question_recovery_event(&plain, false, "!room:example.test", "$card").is_some());
+        assert!(
+            question_recovery_event(&plain, true, "!room:example.test", "$card").is_none(),
+            "no plaintext injection during recovery"
+        );
+        let mut decrypted = DecryptedRoomEvent {
+            event: serde_json::from_value(raw.clone()).unwrap(),
+            encryption_info: Arc::new(EncryptionInfo {
+                sender: "@_hagency_agt_one:example.test".try_into().unwrap(),
+                sender_device: Some("AGENT".into()),
+                forwarder: None,
+                algorithm_info: AlgorithmInfo::MegolmV1AesSha2 {
+                    curve25519_key: "key".into(),
+                    sender_claimed_keys: Default::default(),
+                    session_id: Some("session".into()),
+                },
+                verification_state: VerificationState::Verified,
+            }),
+            unsigned_encryption_info: None,
+        };
+        assert!(
+            question_recovery_event(
+                &TimelineEventKind::Decrypted(decrypted.clone()),
+                true,
+                "!room:example.test",
+                "$card"
+            )
+            .is_some()
+        );
+        // Even an authentic event from this sender is not a replacement for
+        // the exact answer/card recorded before restart.
+        let authenticated = TimelineEventKind::Decrypted(decrypted.clone());
+        assert!(
+            question_recovery_event(&authenticated, true, "!room:example.test", "$different")
+                .is_none(),
+            "another authentic event ID is rejected"
+        );
+        assert!(
+            question_recovery_event(&authenticated, true, "!different:example.test", "$card")
+                .is_none(),
+            "another room is rejected"
+        );
+        let mut without_room = raw.clone();
+        without_room.as_object_mut().unwrap().remove("room_id");
+        let mut roomless = decrypted.clone();
+        roomless.event = serde_json::from_value(without_room).unwrap();
+        assert!(
+            question_recovery_event(
+                &TimelineEventKind::Decrypted(roomless),
+                true,
+                "!room:example.test",
+                "$card"
+            )
+            .is_some(),
+            "sync events may omit their room ID"
+        );
+        Arc::make_mut(&mut decrypted.encryption_info).verification_state =
+            VerificationState::Unverified(VerificationLevel::None(
+                DeviceLinkProblem::InsecureSource,
+            ));
+        assert!(
+            question_recovery_event(
+                &TimelineEventKind::Decrypted(decrypted.clone()),
+                true,
+                "!room:example.test",
+                "$card"
+            )
+            .is_none()
+        );
+        Arc::make_mut(&mut decrypted.encryption_info).verification_state =
+            VerificationState::Verified;
+        Arc::make_mut(&mut decrypted.encryption_info).sender =
+            "@intruder:example.test".try_into().unwrap();
+        assert!(
+            question_recovery_event(
+                &TimelineEventKind::Decrypted(decrypted),
+                true,
+                "!room:example.test",
+                "$card"
+            )
+            .is_none(),
+            "the envelope sender is not proof"
+        );
+    }
+
+    #[test]
     fn agent_question_cards_and_answers_never_become_encrypted_requests() {
         use matrix_sdk::deserialized_responses::{AlgorithmInfo, EncryptionInfo};
         let event = |sender: &str, raw: serde_json::Value| DecryptedRoomEvent {
@@ -820,12 +1007,24 @@ mod tests {
             "sender":"@member:example.test","origin_server_ts":1,"content":{"version":1,"cardId":"aq_x",
             "answers":{"db":{"option":"SQLite"}},"body":"@agent SQLite","m.mentions":{"user_ids":["@agent:example.test"]},
             "m.relates_to":{"rel_type":"m.reference","event_id":"$card"}}});
-        assert!(request_message(&event("@member:example.test", answer), "@member:example.test").is_none());
+        assert!(
+            request_message(
+                &event("@member:example.test", answer),
+                "@member:example.test"
+            )
+            .is_none()
+        );
         // Nor is another Agent's card, whatever its fallback text says.
         let card = serde_json::json!({"type":"m.room.message","event_id":"$card","room_id":"!room:example.test",
             "sender":"@_hagency_agt_other:example.test","origin_server_ts":1,"content":{"msgtype":crate::agent_questions::MSGTYPE,
             "body":"@agent please answer","m.mentions":{"user_ids":["@agent:example.test"]}}});
-        assert!(request_message(&event("@_hagency_agt_other:example.test", card), "@_hagency_agt_other:example.test").is_none());
+        assert!(
+            request_message(
+                &event("@_hagency_agt_other:example.test", card),
+                "@_hagency_agt_other:example.test"
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -917,7 +1116,11 @@ mod tests {
         let loaded = load_grant(directory, "agent", "https://example.test/", 3).unwrap();
         assert_eq!(
             (loaded.user_id, loaded.device_id, loaded.access_token),
-            (grant.user_id.clone(), grant.device_id.clone(), grant.access_token.clone())
+            (
+                grant.user_id.clone(),
+                grant.device_id.clone(),
+                grant.access_token.clone()
+            )
         );
         // A new device generation or another homeserver never reuses it.
         assert!(load_grant(directory, "agent", "https://example.test/", 4).is_none());
