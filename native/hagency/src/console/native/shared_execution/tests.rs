@@ -214,7 +214,9 @@ pub(crate) fn management(path: &str, body: &Value, s: &mut super::State) -> Opti
     if path.ends_with("/work/poll") {
         let mut w = serde_json::to_value(w).unwrap();
         if s.shared.forged_work {
-            w["requesterMxid"] = json!("@other:test");
+            // Any Room member may send work (9088313c). Work for another
+            // Room is still foreign and must be refused before it is acked.
+            w["roomId"] = json!("!other:test");
         }
         return Some(json!({"work":w,"observedAtMs":at}));
     }
@@ -520,7 +522,9 @@ async fn native_shared_execution_uncertain_or_replayed_start_never_runs_model() 
             .await
             .unwrap();
         let methods = std::fs::read_to_string(f._root.path().join("shared-probe/methods")).unwrap();
-        assert!(!methods.contains("turn/start") && !methods.contains("thread/start"));
+        // The provider thread opens before call admission (fc198648); that
+        // does not run the model. Only turn/start would.
+        assert!(!methods.lines().any(|m| m == "turn/start"));
         assert_eq!(f.state.lock().unwrap().shared.starts, 1);
         assert_eq!(rows(&f, "owner_managed_calls"), 1);
         assert_eq!(f.state.lock().unwrap().shared.work_writes, 0);
@@ -597,6 +601,7 @@ async fn native_shared_execution_foreign_request_is_denied_before_call_hold() {
         .await
         .unwrap();
     stopped(&f).await;
+    assert_eq!(rows(&f, "owner_shared_work_inbox"), 0);
     assert_eq!(rows(&f, "owner_managed_calls"), 0);
     assert_eq!(f.state.lock().unwrap().shared.starts, 0);
     let methods = std::fs::read_to_string(f._root.path().join("shared-probe/methods")).unwrap();
