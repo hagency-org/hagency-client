@@ -1,41 +1,28 @@
 [English](README.md) | [中文](README.zh-CN.md)
 
-# Hagency client
+# Hagency Client — archived
 
-[Hagency](https://github.com/hagency-org/hagency-client) is a native desktop
-application for Windows, macOS and Linux. It combines Matrix chat, Project
-workspaces and locally executed AI Agents. Download it from
-[Client Releases](https://github.com/hagency-org/hagency-client/releases/latest).
+Hagency Client is now maintained as part of [Hagency Desktop](https://github.com/hagency-org/hagency-desktop). This repository is retained for historical source, releases and discussion; it no longer accepts development work.
 
-Sign in to your Hagency server through Pasion, then manage Projects and Agents
-inside the application. See the [desktop quick start](crates/hagency-app/docs/hagency-quickstart.md)
-and [application guide](crates/hagency-app/README.md).
+- [Download Hagency Desktop](https://github.com/hagency-org/hagency-desktop/releases)
+- [Report issues and request features](https://github.com/hagency-org/hagency-desktop/issues)
+- [Contribute to the native client libraries](https://github.com/hagency-org/hagency-desktop/tree/main/crates/hagency-client)
+- [Desktop build and development instructions](https://github.com/hagency-org/hagency-desktop#readme)
 
-The application and its local Rust engine share one Cargo workspace. The default
-package is `hagency-app`, whose executable is `hagency`. `crates/hagency` is an
-engine library used directly in process. The former CLI Web console, static
-prototype pages and headless service installer have been removed. The desktop's
-loopback OAuth callback remains; it exposes no management pages or APIs.
+Desktop owns the 18-crate native library workspace, daemon integration, tests and release pipeline. The import was merged in [Desktop PR #11](https://github.com/hagency-org/hagency-desktop/pull/11); the old standalone UI is retired. New fixes belong in Desktop rather than this repository.
 
-## Development
+The remaining open issues were transferred with their discussion history:
 
-On Windows, build outputs, dependency caches and temporary files stay on D:.
-The wrapper configures them and verifies Cargo's actual target directory:
+| Former Client issue | Desktop issue |
+| --- | --- |
+| #4 — macOS updates | [#44](https://github.com/hagency-org/hagency-desktop/issues/44) |
+| #23 — button text and icon alignment | [#45](https://github.com/hagency-org/hagency-desktop/issues/45) |
+| #24 — room encryption options | [#46](https://github.com/hagency-org/hagency-desktop/issues/46) |
+| #25 — Matrix verification and recovery | [#47](https://github.com/hagency-org/hagency-desktop/issues/47) |
+| #29 — mobile build gaps | [#48](https://github.com/hagency-org/hagency-desktop/issues/48) |
 
-```powershell
-./tools/dev.ps1
-./tools/dev.ps1 check --locked -p hagency-app --lib
-./tools/dev.ps1 test --locked -p hagency-app --lib
-```
+Client [PR #52](https://github.com/hagency-org/hagency-client/pull/52), recovery of partially created owner-private rooms, is carried forward in [Desktop PR #49](https://github.com/hagency-org/hagency-desktop/pull/49).
 
-On macOS/Linux, follow the [native dependencies guide](crates/hagency-app/docs/local-development.md)
-and run `cargo run --locked -p hagency-app --bin hagency`. No Node page build or
-separate local console process is required. See [workspace and packaging](docs/workspace.md).
+A previously uncommitted, test-only change is preserved on [`archive/startbug-test-corrections-20261110`](https://github.com/hagency-org/hagency-client/tree/archive/startbug-test-corrections-20261110). It is a historical patch, not a tested Desktop release change.
 
-The historical `hagency-org/hagency-desktop` repository preserves earlier sources
-and releases; current development belongs here. Historical Fleet and CLI documents
-record retired behavior and are not current setup instructions.
-
-## License
-
-Apache 2.0. Retain [LICENSE](LICENSE) and [NOTICE](NOTICE); see [licensing](docs/LICENSING.md).
+Historical releases remain available for reference. Use Desktop for current downloads and support. The original license and notices remain in this repository.
